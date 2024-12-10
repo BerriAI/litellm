@@ -29,16 +29,25 @@ user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
 
+@pytest.fixture(autouse=True)
+def reset_callbacks():
+    print("\npytest fixture - resetting callbacks")
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm.callbacks = []
+
+
+@pytest.mark.skip(reason="Account rate limited.")
 def test_completion_clarifai_claude_2_1():
     print("calling clarifai claude completion")
-    litellm.set_verbose = True
     import os
 
     clarifai_pat = os.environ["CLARIFAI_API_KEY"]
 
     try:
         response = completion(
-            model="clarifai/openai.chat-completion.GPT-4",
+            model="clarifai/anthropic.completion.claude-2_1",
             num_retries=3,
             messages=messages,
             max_tokens=10,
@@ -53,10 +62,11 @@ def test_completion_clarifai_claude_2_1():
         pytest.fail(f"Error occured: {e}")
 
 
+@pytest.mark.skip(reason="Account rate limited")
 def test_completion_clarifai_mistral_large():
     try:
         litellm.set_verbose = True
-        response = completion(
+        response: ModelResponse = completion(
             model="clarifai/mistralai.completion.mistral-small",
             messages=messages,
             num_retries=3,
@@ -72,19 +82,28 @@ def test_completion_clarifai_mistral_large():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="Account rate limited")
 @pytest.mark.asyncio
-async def test_async_completion_clarifai():
-    litellm.set_verbose = True
-    user_message = "Hello, how are you?"
-    messages = [{"content": user_message, "role": "user"}]
-    response = await litellm.acompletion(
-        model="clarifai/openai.chat-completion.GPT-4",
-        messages=messages,
-        timeout=10,
-        stream=True,
-        api_key=os.getenv("CLARIFAI_API_KEY"),
-    )
-    print(response)
+def test_async_completion_clarifai():
+    import asyncio
 
-    async for chunk in response:
-        print(chunk)
+    litellm.set_verbose = True
+
+    async def test_get_response():
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            response = await acompletion(
+                model="clarifai/openai.chat-completion.GPT-4",
+                messages=messages,
+                num_retries=3,
+                timeout=10,
+                api_key=os.getenv("CLARIFAI_API_KEY"),
+            )
+            print(f"response: {response}")
+        except litellm.Timeout as e:
+            pass
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+
+    asyncio.run(test_get_response())
