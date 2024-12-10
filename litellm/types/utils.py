@@ -33,7 +33,7 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
-class LiteLLMBase(BaseModel):
+class LiteLLMPydanticObjectBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
     """

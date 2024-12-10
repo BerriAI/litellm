@@ -11,7 +11,7 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import LiteLLMBase
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class LowestCostLoggingHandler(CustomLogger):

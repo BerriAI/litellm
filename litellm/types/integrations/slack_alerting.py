@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Set, TypedDict
 
 from pydantic import BaseModel, Field
 
-from litellm.types.utils import LiteLLMBase
+from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class BaseOutageModel(TypedDict):
@@ -40,7 +40,7 @@ class SlackAlertingArgsEnum(Enum):
     max_outage_alert_list_size = 1 * 10
 
 
-class SlackAlertingArgs(LiteLLMBase):
+class SlackAlertingArgs(LiteLLMPydanticObjectBase):
     daily_report_frequency: int = Field(
         default=int(
             os.getenv(
@@ -80,7 +80,7 @@ class SlackAlertingArgs(LiteLLMBase):
     )  # prevent memory leak
 
 
-class DeploymentMetrics(LiteLLMBase):
+class DeploymentMetrics(LiteLLMPydanticObjectBase):
     """
     Metrics per deployment, stored in cache
 
