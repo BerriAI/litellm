@@ -937,6 +937,8 @@ def client(original_function):  # noqa: PLR0915
                     kwargs["retry_policy"] = (
                         reset_retry_policy()
                     )  # prevent infinite loops
+                    kwargs["max_retries"] = 0
+                    kwargs["num_retries"] = 0
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1169,6 +1171,8 @@ def client(original_function):  # noqa: PLR0915
                         retry_policy=kwargs.get("retry_policy"),
                     )
                     kwargs["retry_policy"] = reset_retry_policy()
+                    kwargs["max_retries"] = 0
+                    kwargs["num_retries"] = 0
 
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
