@@ -389,7 +389,8 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
     }
     if api_key is not None:
         _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
-    with httpx.stream(**_request) as response:
+    httpx_client = litellm.client_session or httpx
+    with httpx_client.stream(**_request) as response:
         try:
             if response.status_code != 200:
                 raise OllamaError(
