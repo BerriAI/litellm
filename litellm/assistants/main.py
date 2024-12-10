@@ -35,7 +35,7 @@ azure_assistants_api = AzureAssistantsAPI()
 
 
 async def aget_assistants(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> AsyncCursorPage[Assistant]:
@@ -72,7 +72,7 @@ async def aget_assistants(
 
 
 def get_assistants(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     client: Optional[Any] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -203,7 +203,7 @@ def get_assistants(
 
 
 async def acreate_assistants(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> Assistant:
@@ -242,7 +242,7 @@ async def acreate_assistants(
 
 
 def create_assistants(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     model: str,
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -396,7 +396,7 @@ def create_assistants(
 
 
 async def adelete_assistant(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> AssistantDeleted:
@@ -434,7 +434,7 @@ async def adelete_assistant(
 
 
 def delete_assistant(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     assistant_id: str,
     client: Optional[Any] = None,
     api_key: Optional[str] = None,
@@ -574,7 +574,7 @@ def delete_assistant(
 
 
 async def acreate_thread(
-    custom_llm_provider: Literal["openai", "azure"], **kwargs
+    custom_llm_provider: Literal["openai", "azure"] = "openai", **kwargs
 ) -> Thread:
     loop = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -609,7 +609,7 @@ async def acreate_thread(
 
 
 def create_thread(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     messages: Optional[Iterable[OpenAICreateThreadParamsMessage]] = None,
     metadata: Optional[dict] = None,
     tool_resources: Optional[OpenAICreateThreadParamsToolResources] = None,
@@ -750,7 +750,7 @@ def create_thread(
 
 
 async def aget_thread(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
@@ -788,7 +788,7 @@ async def aget_thread(
 
 
 def get_thread(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     client=None,
     **kwargs,
@@ -906,7 +906,7 @@ def get_thread(
 
 
 async def a_add_message(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     role: Literal["user", "assistant"],
     content: str,
@@ -959,7 +959,7 @@ async def a_add_message(
 
 
 def add_message(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     role: Literal["user", "assistant"],
     content: str,
@@ -1088,7 +1088,7 @@ def add_message(
 
 
 async def aget_messages(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
@@ -1133,7 +1133,7 @@ async def aget_messages(
 
 
 def get_messages(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     client: Optional[Any] = None,
     **kwargs,
@@ -1255,7 +1255,7 @@ def arun_thread_stream(
 
 
 async def arun_thread(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     assistant_id: str,
     additional_instructions: Optional[str] = None,
@@ -1322,7 +1322,7 @@ def run_thread_stream(
 
 
 def run_thread(
-    custom_llm_provider: Literal["openai", "azure"],
+    custom_llm_provider: Literal["openai", "azure"] = "openai",
     thread_id: str,
     assistant_id: str,
     additional_instructions: Optional[str] = None,
