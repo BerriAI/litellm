@@ -1064,7 +1064,7 @@ from .llms.anthropic.completion import AnthropicTextConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
-from .llms.replicate import ReplicateConfig
+from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.completion import AI21Config

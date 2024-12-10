@@ -95,7 +95,6 @@ from .llms import (
     openrouter,
     palm,
     petals,
-    replicate,
     vllm,
 )
 from .llms.ai21 import completion as ai21
@@ -134,6 +133,7 @@ from .llms.prompt_templates.factory import (
     prompt_factory,
     stringify_json_tool_call_content,
 )
+from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
@@ -1623,7 +1623,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or model in litellm.replicate_models
         ):
             # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
-            replicate_key = None
             replicate_key = (
                 api_key
                 or litellm.replicate_key
@@ -1641,7 +1640,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            model_response = replicate.completion(  # type: ignore
+            model_response = replicate_chat_completion(  # type: ignore
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1655,6 +1654,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
                 acompletion=acompletion,
+                headers=headers,
             )
 
             if optional_params.get("stream", False) is True:

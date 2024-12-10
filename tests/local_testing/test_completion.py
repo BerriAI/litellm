@@ -3216,19 +3216,20 @@ async def test_completion_replicate_llama3(sync_mode):
             response = completion(
                 model=model_name,
                 messages=messages,
+                max_tokens=10,
             )
         else:
             response = await litellm.acompletion(
                 model=model_name,
                 messages=messages,
+                max_tokens=10,
             )
             print(f"ASYNC REPLICATE RESPONSE - {response}")
-        print(response)
+        print(f"REPLICATE RESPONSE - {response}")
         # Add any assertions here to check the response
         assert isinstance(response, litellm.ModelResponse)
+        assert len(response.choices[0].message.content.strip()) > 0
         response_format_tests(response=response)
-    except litellm.APIError as e:
-        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

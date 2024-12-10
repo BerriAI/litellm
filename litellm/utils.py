@@ -2893,22 +2893,16 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if stream:
-            optional_params["stream"] = stream
-            # return optional_params
-        if max_tokens is not None:
-            if "vicuna" in model or "flan" in model:
-                optional_params["max_length"] = max_tokens
-            elif "meta/codellama-13b" in model:
-                optional_params["max_tokens"] = max_tokens
-            else:
-                optional_params["max_new_tokens"] = max_tokens
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stop is not None:
-            optional_params["stop_sequences"] = stop
+        optional_params = litellm.ReplicateConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "predibase":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6248,6 +6242,8 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+        elif litellm.LlmProviders.REPLICATE == provider:
+            return litellm.ReplicateConfig()
 
         return litellm.OpenAIGPTConfig()
 
