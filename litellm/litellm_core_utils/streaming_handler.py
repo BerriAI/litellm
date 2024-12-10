@@ -1753,6 +1753,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "text-completion-codestral"
                 or self.custom_llm_provider == "azure_text"
                 or self.custom_llm_provider == "cohere_chat"
+                or self.custom_llm_provider == "cohere"
                 or self.custom_llm_provider == "anthropic"
                 or self.custom_llm_provider == "anthropic_text"
                 or self.custom_llm_provider == "huggingface"
