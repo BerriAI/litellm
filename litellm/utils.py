@@ -6298,6 +6298,8 @@ class ProviderConfigManager:
             return litellm.SambanovaConfig()
         elif litellm.LlmProviders.MARITALK == provider:
             return litellm.MaritalkConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareChatConfig()
         return litellm.OpenAIGPTConfig()
 
 
