@@ -62,7 +62,7 @@ async def test_chat_completion_cohere_stream(sync_mode):
         ]
         if sync_mode is False:
             response = await litellm.acompletion(
-                model="cohere_chat/command-nightly",
+                model="cohere/command-nightly",
                 messages=messages,
                 max_tokens=10,
                 stream=True,
@@ -72,7 +72,7 @@ async def test_chat_completion_cohere_stream(sync_mode):
                 print(chunk)
         else:
             response = completion(
-                model="cohere_chat/command-nightly",
+                model="cohere/command-nightly",
                 messages=messages,
                 max_tokens=10,
                 stream=True,
