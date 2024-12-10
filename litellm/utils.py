@@ -717,6 +717,13 @@ def client(original_function):  # noqa: PLR0915
 
             return result
 
+        if "retry_policy" in kwargs:
+            # If max_retries and num_retries are `None`, certain providers (e.g. OpenAI) will
+            # implement their own retry policy that applies on top of the retry policy specified
+            # by the user. To prevent this, we set `max_retries` and `num_retries` to 0
+            kwargs["max_retries"] = 0
+            kwargs["num_retries"] = 0
+
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
@@ -973,6 +980,13 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
+        if "retry_policy" in kwargs:
+            # If max_retries and num_retries are `None`, certain providers (e.g. OpenAI) will
+            # implement their own retry policy that applies on top of the retry policy specified
+            # by the user. To prevent this, we set `max_retries` and `num_retries` to 0
+            kwargs["max_retries"] = 0
+            kwargs["num_retries"] = 0
+
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None

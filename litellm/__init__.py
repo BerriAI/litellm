@@ -1067,8 +1067,8 @@ from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
-from .llms.ai21.completion import AI21Config
-from .llms.ai21.chat import AI21ChatConfig
+# from .llms.ai21.completion import AI21Config
+# from .llms.ai21.chat import AI21ChatConfig
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
@@ -1161,7 +1161,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
-from .llms.ai21.chat import AI21ChatConfig
+# from .llms.ai21.chat import AI21ChatConfig
 from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
