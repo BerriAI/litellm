@@ -2830,7 +2830,6 @@ def completion(  # type: ignore # noqa: PLR0915
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
-                fake_stream=True,  # clarifai does not support streaming, we fake it
                 messages=messages,
                 acompletion=acompletion,
                 api_base=api_base,
