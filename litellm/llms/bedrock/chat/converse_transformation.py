@@ -99,6 +99,9 @@ class AmazonConverseConfig:
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
+        if base_model.startswith("amazon.nova"):
+            supported_params.append("top_k")
+
         return supported_params
 
     def map_tool_choice_values(
@@ -344,10 +347,15 @@ class AmazonConverseConfig:
                 additional_request_keys.append(k)
         for key in additional_request_keys:
             inference_params.pop(key, None)
+            # Add Support for Amazon Nova topK: https://docs.aws.amazon.com/nova/latest/userguide/complete-request-schema.html
+            if key == "top_k":
+                additional_request_params['inferenceConfig'] = {'topK': additional_request_params.pop("top_k")}
+
+
 
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
-            inference_params.pop("tools", [])
-        )
+                inference_params.pop("tools", [])
+            )
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
