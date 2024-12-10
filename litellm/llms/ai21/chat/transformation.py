@@ -7,10 +7,10 @@ this is OpenAI compatible - no translation needed / occurs
 import types
 from typing import Optional, Union
 
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
-class AI21ChatConfig(OpenAIGPTConfig):
+class AI21ChatConfig(OpenAILikeChatConfig):
     """
     Reference: https://docs.ai21.com/reference/jamba-15-api-ref#request-parameters
 

@@ -96,3 +96,24 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
         return returned_response
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict:
+        mapped_params = super().map_openai_params(
+            non_default_params, optional_params, model, drop_params
+        )
+        if (
+            "max_completion_tokens" in non_default_params
+            and replace_max_completion_tokens_with_max_tokens
+        ):
+            mapped_params["max_tokens"] = non_default_params[
+                "max_completion_tokens"
+            ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
+            mapped_params.pop("max_completion_tokens", None)
+        return mapped_params
