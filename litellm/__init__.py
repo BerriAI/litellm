@@ -1065,9 +1065,8 @@ from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
-from .llms.cohere.completion import CohereConfig
-from .llms.cohere.chat.transformation import CohereChatConfig
-from .llms.clarifai import ClarifaiConfig
+from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
+from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.completion import AI21Config
 from .llms.ai21.chat import AI21ChatConfig
 from .llms.together_ai.chat import TogetherAIConfig
@@ -1127,6 +1126,7 @@ from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
+from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.OpenAI.openai import (
     OpenAIConfig,

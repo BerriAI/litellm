@@ -117,6 +117,7 @@ class CohereChatConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
         """
@@ -142,8 +143,21 @@ class CohereChatConfig(BaseConfig):
             headers["Authorization"] = f"bearer {api_key}"
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list:
-        return []
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+            "n",
+            "tools",
+            "tool_choice",
+            "seed",
+            "extra_headers",
+        ]
 
     def map_openai_params(
         self,
@@ -152,7 +166,28 @@ class CohereChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return {}
+        for param, value in non_default_params.items():
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "max_tokens":
+                optional_params["max_tokens"] = value
+            if param == "n":
+                optional_params["num_generations"] = value
+            if param == "top_p":
+                optional_params["p"] = value
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
+            if param == "stop":
+                optional_params["stop_sequences"] = value
+            if param == "tools":
+                optional_params["tools"] = value
+            if param == "seed":
+                optional_params["seed"] = value
+        return optional_params
 
     def transform_request(
         self,
@@ -193,7 +228,7 @@ class CohereChatConfig(BaseConfig):
     def transform_response(
         self,
         model: str,
-        httpx_response: httpx.Response,
+        raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
@@ -201,22 +236,23 @@ class CohereChatConfig(BaseConfig):
         optional_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
 
         try:
-            raw_response = httpx_response.json()
-            model_response.choices[0].message.content = raw_response["text"]  # type: ignore
+            raw_response_json = raw_response.json()
+            model_response.choices[0].message.content = raw_response_json["text"]  # type: ignore
         except Exception:
             raise CohereError(
-                message=httpx_response.text, status_code=httpx_response.status_code
+                message=raw_response.text, status_code=raw_response.status_code
             )
 
         ## ADD CITATIONS
-        if "citations" in raw_response:
-            setattr(model_response, "citations", raw_response["citations"])
+        if "citations" in raw_response_json:
+            setattr(model_response, "citations", raw_response_json["citations"])
 
         ## Tool calling response
-        cohere_tools_response = raw_response.get("tool_calls", None)
+        cohere_tools_response = raw_response_json.get("tool_calls", None)
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
             tool_calls = []
@@ -240,7 +276,7 @@ class CohereChatConfig(BaseConfig):
             model_response.choices[0].message = _message  # type: ignore
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
-        billed_units = raw_response.get("meta", {}).get("billed_units", {})
+        billed_units = raw_response_json.get("meta", {}).get("billed_units", {})
 
         prompt_tokens = billed_units.get("input_tokens", 0)
         completion_tokens = billed_units.get("output_tokens", 0)
@@ -330,23 +366,6 @@ class CohereChatConfig(BaseConfig):
 
         return cohere_tool
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
-    def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: Optional[httpx.Headers] = None,
-    ) -> BaseLLMException:
-        return CohereError(
-            status_code=status_code,
-            message=error_message,
-            headers=headers,
-        )
-
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str]],
@@ -358,6 +377,16 @@ class CohereChatConfig(BaseConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return CohereError(status_code=status_code, message=error_message)
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        raise NotImplementedError
 
 
 class ModelResponseIterator:

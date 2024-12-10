@@ -16,6 +16,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
@@ -68,6 +69,25 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
     Note: Please make sure to modify the default parameters as required for your use case.
     """
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        data = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
+        return data
 
     @classmethod
     def is_supported_model(

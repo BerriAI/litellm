@@ -33,7 +33,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "ollama_chat":
         return litellm.OllamaChatConfig().get_supported_openai_params()
     elif custom_llm_provider == "anthropic":
-        return litellm.AnthropicConfig().get_supported_openai_params()
+        return litellm.AnthropicConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "fireworks_ai":
         if request_type == "embeddings":
             return litellm.FireworksAIEmbeddingConfig().get_supported_openai_params(
@@ -75,33 +75,9 @@ def get_supported_openai_params(  # noqa: PLR0915
             "tool_choice",
         ]
     elif custom_llm_provider == "cohere":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "logit_bias",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-            "extra_headers",
-        ]
+        return litellm.CohereConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere_chat":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "stop",
-            "n",
-            "tools",
-            "tool_choice",
-            "seed",
-            "extra_headers",
-        ]
+        return litellm.CohereChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "maritalk":
         return [
             "stream",
@@ -194,7 +170,9 @@ def get_supported_openai_params(  # noqa: PLR0915
                     litellm.MistralTextCompletionConfig().get_supported_openai_params()
                 )
             if model.startswith("claude"):
-                return litellm.VertexAIAnthropicConfig().get_supported_openai_params()
+                return litellm.VertexAIAnthropicConfig().get_supported_openai_params(
+                    model=model
+                )
             return litellm.VertexAIConfig().get_supported_openai_params()
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()

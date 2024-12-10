@@ -4,7 +4,16 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Union,
+)
 
 import httpx
 
@@ -81,6 +90,7 @@ class BaseConfig(ABC):
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
         pass
@@ -106,7 +116,7 @@ class BaseConfig(ABC):
     def transform_response(
         self,
         model: str,
-        httpx_response: httpx.Response,
+        raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
@@ -114,15 +124,13 @@ class BaseConfig(ABC):
         optional_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         pass
 
     @abstractmethod
     def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: Optional[httpx.Headers] = None,
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         pass
 

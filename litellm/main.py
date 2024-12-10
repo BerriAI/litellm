@@ -86,7 +86,6 @@ from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms import (
     aleph_alpha,
     baseten,
-    clarifai,
     cloudflare,
     maritalk,
     nlp_cloud,
@@ -111,7 +110,8 @@ from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
-from .llms.cohere import completion as cohere_completion  # type: ignore
+from .llms.clarifai.chat import handler
+from .llms.cohere.completion import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
@@ -1688,8 +1688,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("CLARIFAI_API_BASE")
                 or "https://api.clarifai.com/v2"
             )
+            api_base = litellm.ClarifaiConfig()._convert_model_to_url(model, api_base)
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = clarifai.completion(
+            model_response = handler.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1792,6 +1793,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     headers=headers,
                     timeout=timeout,
                     client=client,
+                    custom_llm_provider=custom_llm_provider,
                 )
             if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING

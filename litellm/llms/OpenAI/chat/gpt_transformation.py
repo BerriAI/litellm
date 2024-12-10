@@ -82,21 +82,7 @@ class OpenAIGPTConfig(BaseConfig):
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params = [
@@ -201,14 +187,15 @@ class OpenAIGPTConfig(BaseConfig):
     def transform_response(
         self,
         model: str,
-        raw_response: dict,
+        raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
-        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         encoding: str,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
         Transform the response from the API.
@@ -229,9 +216,10 @@ class OpenAIGPTConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError

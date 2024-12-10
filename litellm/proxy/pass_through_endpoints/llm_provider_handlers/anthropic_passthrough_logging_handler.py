@@ -43,21 +43,19 @@ class AnthropicPassthroughLoggingHandler:
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
         model = response_body.get("model", "")
-        litellm_model_response: litellm.ModelResponse = (
-            AnthropicConfig._process_response(
-                response=httpx_response,
-                model_response=litellm.ModelResponse(),
-                model=model,
-                stream=False,
-                messages=[],
-                logging_obj=logging_obj,
-                optional_params={},
-                api_key="",
-                data={},
-                print_verbose=litellm.print_verbose,
-                encoding=None,
-                json_mode=False,
-            )
+        litellm_model_response: (
+            litellm.ModelResponse
+        ) = AnthropicConfig().transform_response(
+            raw_response=httpx_response,
+            model_response=litellm.ModelResponse(),
+            model=model,
+            messages=[],
+            logging_obj=logging_obj,
+            optional_params={},
+            api_key="",
+            request_data={},
+            encoding=litellm.encoding,
+            json_mode=False,
         )
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(

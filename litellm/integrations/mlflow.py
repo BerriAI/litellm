@@ -65,7 +65,7 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                span.add_event(SpanEvent.from_exception(exception))
+                span.add_event(SpanEvent.from_exception(exception))  # type: ignore
 
             self._end_span_or_trace(
                 span=span,
