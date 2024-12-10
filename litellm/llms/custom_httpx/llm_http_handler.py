@@ -317,9 +317,12 @@ class BaseLLMHTTPHandler:
         async_httpx_client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders(custom_llm_provider)
         )
+        stream = True
+        if fake_stream is True:
+            stream = False
         try:
             response = await async_httpx_client.post(
-                api_base, headers=headers, data=data, stream=True, timeout=timeout
+                api_base, headers=headers, data=data, stream=stream, timeout=timeout
             )
         except httpx.HTTPStatusError as e:
             raise self._handle_error(
@@ -340,10 +343,14 @@ class BaseLLMHTTPHandler:
                 status_code=response.status_code,
                 message=str(response.read()),
             )
-
-        completion_stream = provider_config.get_model_response_iterator(
-            streaming_response=response.aiter_lines(), sync_stream=False
-        )
+        if fake_stream is True:
+            completion_stream = provider_config.get_model_response_iterator(
+                streaming_response=response.json(), sync_stream=False
+            )
+        else:
+            completion_stream = provider_config.get_model_response_iterator(
+                streaming_response=response.aiter_lines(), sync_stream=False
+            )
         # LOGGING
         logging_obj.post_call(
             input=messages,
