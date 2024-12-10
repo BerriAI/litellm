@@ -265,7 +265,7 @@ class CohereTextConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str]],
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ):
