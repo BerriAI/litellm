@@ -96,6 +96,15 @@ class BaseConfig(ABC):
         pass
 
     @abstractmethod
+    def get_complete_url(self, api_base: str, model: str) -> str:
+        """
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        return api_base
+
+    @abstractmethod
     def transform_request(
         self,
         model: str,
