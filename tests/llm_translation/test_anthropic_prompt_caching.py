@@ -120,6 +120,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
         }
 
         expected_json = {
+            "model": "claude-3-5-sonnet-20240620",
             "messages": [
                 {
                     "role": "user",
@@ -134,8 +135,6 @@ async def test_litellm_anthropic_prompt_caching_tools():
             "tools": [
                 {
                     "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "cache_control": {"type": "ephemeral"},
                     "input_schema": {
                         "type": "object",
                         "properties": {
@@ -150,14 +149,18 @@ async def test_litellm_anthropic_prompt_caching_tools():
                         },
                         "required": ["location"],
                     },
+                    "description": "Get the current weather in a given location",
+                    "cache_control": {"type": "ephemeral"},
                 }
             ],
             "max_tokens": 4096,
-            "model": "claude-3-5-sonnet-20240620",
         }
 
         mock_post.assert_called_once_with(
-            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
+            url=expected_url,
+            data=json.dumps(expected_json),
+            headers=expected_headers,
+            timeout=600.0,
         )
 
 
@@ -546,7 +549,7 @@ async def test_litellm_anthropic_prompt_caching_system():
         )
 
         # Print what was called on the mock
-        print("call args=", mock_post.call_args)
+        print("call args=", json.dumps(mock_post.call_args, indent=4))
 
         expected_url = "https://api.anthropic.com/v1/messages"
         expected_headers = {
@@ -558,17 +561,7 @@ async def test_litellm_anthropic_prompt_caching_system():
         }
 
         expected_json = {
-            "system": [
-                {
-                    "type": "text",
-                    "text": "You are an AI assistant tasked with analyzing legal documents.",
-                },
-                {
-                    "type": "text",
-                    "text": "Here is the full text of a complex legal agreement",
-                    "cache_control": {"type": "ephemeral"},
-                },
-            ],
+            "model": "claude-3-5-sonnet-20240620",
             "messages": [
                 {
                     "role": "user",
@@ -580,12 +573,25 @@ async def test_litellm_anthropic_prompt_caching_system():
                     ],
                 }
             ],
+            "system": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant tasked with analyzing legal documents.",
+                },
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
             "max_tokens": 4096,
-            "model": "claude-3-5-sonnet-20240620",
         }
 
         mock_post.assert_called_once_with(
-            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
+            url=expected_url,
+            data=json.dumps(expected_json),
+            headers=expected_headers,
+            timeout=600.0,
         )
 
 
