@@ -3274,10 +3274,16 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if stream is not None:
-            optional_params["stream"] = stream
+        optional_params = litellm.CloudflareChatConfig().map_openai_params(
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "ollama":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6248,6 +6254,8 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            return litellm.CloudflareChatConfig()
 
         return litellm.OpenAIGPTConfig()
 
