@@ -67,7 +67,7 @@ class BaseLLMHTTPHandler:
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
-        return provider_config.transform_response(
+        model_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -79,6 +79,10 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=litellm_params.get("json_mode", False),
         )
+        model_response._hidden_params["additional_headers"] = (
+            provider_config.transform_response_headers(headers=response.headers)
+        )
+        return model_response
 
     def completion(
         self,
@@ -210,7 +214,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
             )
 
-        return provider_config.transform_response(
+        model_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -222,6 +226,10 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=litellm_params.get("json_mode", False),
         )
+        model_response._hidden_params["additional_headers"] = (
+            provider_config.transform_response_headers(headers=response.headers)
+        )
+        return model_response
 
     def make_sync_call(
         self,

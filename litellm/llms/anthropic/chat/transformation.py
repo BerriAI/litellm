@@ -580,9 +580,6 @@ class AnthropicConfig(BaseConfig):
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         _hidden_params: Dict = {}
-        _hidden_params["additional_headers"] = process_anthropic_headers(
-            dict(raw_response.headers)
-        )
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -766,6 +763,18 @@ class AnthropicConfig(BaseConfig):
 
         headers = {**headers, **anthropic_headers}
         return headers
+
+    def transform_response_headers(self, headers: Union[httpx.Headers, dict]) -> dict:
+        """
+        Transform the response headers from Anthropic API to the OpenAI API format
+
+        OpenAI Headers are:
+        `x-ratelimit-limit-requests`
+        `x-ratelimit-remaining-requests`
+        `x-ratelimit-limit-tokens`
+        `x-ratelimit-remaining-tokens`
+        """
+        return process_anthropic_headers(headers)
 
     def get_model_response_iterator(
         self,
