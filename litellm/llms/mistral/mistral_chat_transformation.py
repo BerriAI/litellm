@@ -10,6 +10,9 @@ import types
 from typing import List, Literal, Optional, Tuple, Union
 
 from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.prompt_templates.common_utils import (
+    handle_messages_with_content_list_to_str_conversion,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -154,48 +157,35 @@ class MistralConfig(OpenAIGPTConfig):
 
         Motivation: mistral api doesn't support content as a list
         """
-        new_messages = []
+        ## 1. If 'image_url' in content, then return as is
         for m in messages:
-            special_keys = ["role", "content", "tool_calls", "function_call"]
-            extra_args = {}
-            if isinstance(m, dict):
-                for k, v in m.items():
-                    if k not in special_keys:
-                        extra_args[k] = v
-            texts = ""
-            _content = m.get("content")
-            if _content is not None and isinstance(_content, list):
-                for c in _content:
-                    _text: Optional[str] = c.get("text")
-                    if c["type"] == "image_url":
+            _content_block = m.get("content")
+            if _content_block and isinstance(_content_block, list):
+                for c in _content_block:
+                    if c.get("type") == "image_url":
                         return messages
-                    elif c["type"] == "text" and isinstance(_text, str):
-                        texts += _text
-            elif _content is not None and isinstance(_content, str):
-                texts = _content
 
-            new_m = {"role": m["role"], "content": texts, **extra_args}
+        ## 2. If content is list, then convert to string
+        messages = handle_messages_with_content_list_to_str_conversion(messages)
 
-            if m.get("tool_calls"):
-                new_m["tool_calls"] = m.get("tool_calls")
+        ## 3. Handle name in message
+        new_messages: List[AllMessageValues] = []
+        for m in messages:
+            m = MistralConfig._handle_name_in_message(m)
+            new_messages.append(m)
 
-            new_m = MistralConfig._handle_name_in_message(new_m)
-
-            new_messages.append(new_m)
         return new_messages
 
     @classmethod
-    def _handle_name_in_message(cls, message: dict) -> dict:
+    def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
         """
         Mistral API only supports `name` in tool messages
 
         If role == tool, then we keep `name`
         Otherwise, we drop `name`
         """
-        if message.get("name") is not None:
-            if message["role"] == "tool":
-                message["name"] = message.get("name")
-            else:
-                message.pop("name", None)
+        _name = message.get("name")  # type: ignore
+        if _name is not None and message["role"] != "tool":
+            message.pop("name", None)  # type: ignore
 
         return message

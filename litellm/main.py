@@ -1773,7 +1773,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.nlpcloud.io/v1/gpu/"
             )
 
-            response = nlp_cloud_chat_completion.completion(
+            response = nlp_cloud_chat_completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1962,6 +1962,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 api_key=maritalk_key,
                 logging_obj=logging,
+                custom_llm_provider="maritalk",
+                custom_prompt_dict=custom_prompt_dict,
             )
 
             response = model_response
@@ -1981,7 +1983,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model=model,
                 messages=messages,
                 api_base=api_base,  # type: ignore
-                headers=hf_headers,
+                headers=hf_headers or {},
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,

@@ -275,13 +275,15 @@ class Huggingface(BaseLLM):
                 llm_provider=litellm.LlmProviders.HUGGINGFACE
             )
             ### ASYNC COMPLETION
-            response = await http_client.post(
+            http_response = await http_client.post(
                 url=api_base, headers=headers, data=json.dumps(data), timeout=timeout
             )
 
+            response = http_response
+
             return hf_chat_config.transform_response(
                 model=model,
-                raw_response=response,
+                raw_response=http_response,
                 model_response=model_response,
                 logging_obj=logging_obj,
                 api_key=api_key,
