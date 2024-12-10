@@ -5,7 +5,7 @@ from typing import AsyncIterator, Iterator, List, Optional, Union
 import httpx
 
 import litellm
-from litellm.llms.base_llm.base_model_iterator import ModelResponseIterator
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.transformation import (
     BaseConfig,
     BaseLLMException,
@@ -171,7 +171,7 @@ class CloudflareChatConfig(BaseConfig):
         )
 
 
-class CloudflareChatResponseIterator(ModelResponseIterator):
+class CloudflareChatResponseIterator(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             text = ""

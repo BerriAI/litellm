@@ -12,7 +12,7 @@ from litellm.types.utils import (
 )
 
 
-class ModelResponseIterator:
+class BaseModelResponseIterator:
     def __init__(
         self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
     ):
