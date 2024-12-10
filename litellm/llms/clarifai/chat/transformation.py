@@ -1,5 +1,5 @@
 import types
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -104,11 +104,11 @@ class ClarifaiConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         headers = {
             "accept": "application/json",
@@ -125,7 +125,7 @@ class ClarifaiConfig(BaseConfig):
         raise NotImplementedError
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return ClarifaiError(message=error_message, status_code=status_code)
 
@@ -135,11 +135,11 @@ class ClarifaiConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         encoding: str,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> litellm.ModelResponse:
         logging_obj.post_call(
