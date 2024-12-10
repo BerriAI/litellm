@@ -92,8 +92,6 @@ from .llms import (
     ollama,
     ollama_chat,
     oobabooga,
-    openrouter,
-    palm,
     petals,
     vllm,
 )
@@ -116,6 +114,7 @@ from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
+from .llms.deprecated_providers import palm
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
@@ -2176,7 +2175,7 @@ def completion(  # type: ignore # noqa: PLR0915
             headers = openrouter_headers
 
             ## Load Config
-            config = openrouter.OpenrouterConfig.get_config()
+            config = litellm.OpenrouterConfig.get_config()
             for k, v in config.items():
                 if k == "extra_body":
                     # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
@@ -2220,30 +2219,9 @@ def completion(  # type: ignore # noqa: PLR0915
             """
             pass
         elif custom_llm_provider == "palm":
-            palm_api_key = api_key or get_secret("PALM_API_KEY") or litellm.api_key
-
-            # palm does not support streaming as yet :(
-            model_response = palm.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=palm_api_key,
-                logging_obj=logging,
+            raise ValueError(
+                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
-            # fake palm streaming
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # fake streaming for palm
-                resp_string = model_response["choices"][0]["message"]["content"]
-                response = CustomStreamWrapper(
-                    resp_string, model, custom_llm_provider="palm", logging_obj=logging
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)

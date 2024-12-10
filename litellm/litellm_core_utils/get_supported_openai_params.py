@@ -97,22 +97,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         else:
             return litellm.AzureOpenAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "openrouter":
-        return [
-            "temperature",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "repetition_penalty",
-            "seed",
-            "max_tokens",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "response_format",
-            "stop",
-            "tools",
-            "tool_choice",
-        ]
+        return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
@@ -124,7 +109,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "replicate":
         return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":
-        return litellm.HuggingfaceConfig().get_supported_openai_params()
+        return litellm.HuggingfaceConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "jina_ai":
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
@@ -147,7 +132,9 @@ def get_supported_openai_params(  # noqa: PLR0915
         elif request_type == "embeddings":
             return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
-        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params()
+        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "vertex_ai":
         if request_type == "chat_completion":
             if model.startswith("meta/"):
@@ -167,7 +154,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
-            return litellm.VertexGeminiConfig().get_supported_openai_params()
+            return litellm.VertexGeminiConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "sagemaker":

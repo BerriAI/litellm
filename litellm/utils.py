@@ -3549,55 +3549,17 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
 
-        if functions is not None:
-            optional_params["functions"] = functions
-        if function_call is not None:
-            optional_params["function_call"] = function_call
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if n is not None:
-            optional_params["n"] = n
-        if stream is not None:
-            optional_params["stream"] = stream
-        if stop is not None:
-            optional_params["stop"] = stop
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if logit_bias is not None:
-            optional_params["logit_bias"] = logit_bias
-        if user is not None:
-            optional_params["user"] = user
-        if response_format is not None:
-            optional_params["response_format"] = response_format
-        if seed is not None:
-            optional_params["seed"] = seed
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if max_retries is not None:
-            optional_params["max_retries"] = max_retries
-
-        # OpenRouter-only parameters
-        extra_body = {}
-        transforms = passed_params.pop("transforms", None)
-        models = passed_params.pop("models", None)
-        route = passed_params.pop("route", None)
-        if transforms is not None:
-            extra_body["transforms"] = transforms
-        if models is not None:
-            extra_body["models"] = models
-        if route is not None:
-            extra_body["route"] = route
-        optional_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
+        optional_params = litellm.OpenrouterConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
+
     elif custom_llm_provider == "watsonx":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6253,6 +6215,12 @@ class ProviderConfigManager:
             return litellm.ReplicateConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingfaceConfig()
+        elif litellm.LlmProviders.TOGETHER_AI == provider:
+            return litellm.TogetherAIConfig()
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            return litellm.GoogleAIStudioGeminiConfig()
         return litellm.OpenAIGPTConfig()
 
 

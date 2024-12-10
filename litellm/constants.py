@@ -18,7 +18,6 @@ LITELLM_CHAT_PROVIDERS = [
     "openrouter",
     "vertex_ai",
     "vertex_ai_beta",
-    "palm",
     "gemini",
     "ai21",
     "baseten",

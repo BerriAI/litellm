@@ -852,7 +852,6 @@ class LlmProviders(str, Enum):
     OPENROUTER = "openrouter"
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
-    PALM = "palm"
     GEMINI = "gemini"
     AI21 = "ai21"
     BASETEN = "baseten"
@@ -1057,7 +1056,8 @@ from .llms.custom_llm import CustomLLM
 from .llms.huggingface.chat.transformation import (
     HuggingfaceChatConfig as HuggingfaceConfig,
 )
-from .llms.anthropic.chat.handler import AnthropicConfig
+from .llms.openrouter.chat.transformation import OpenrouterConfig
+from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.experimental_pass_through.transformation import (
     AnthropicExperimentalPassThroughConfig,
 )
@@ -1073,8 +1073,9 @@ from .llms.ai21.completion import AI21Config
 from .llms.ai21.chat import AI21ChatConfig
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
-from .llms.palm import PalmConfig
-from .llms.gemini import GeminiConfig
+from .llms.deprecated_providers.palm import (
+    PalmConfig,
+)  # here to prevent breaking changes
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
@@ -1082,7 +1083,9 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
     VertexGeminiConfig,
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
+    GoogleAIStudioGeminiConfig as GeminiConfig,
 )
+
 
 from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,

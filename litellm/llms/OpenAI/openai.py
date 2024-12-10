@@ -35,6 +35,7 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from ..prompt_templates.factory import custom_prompt, prompt_factory
+from .chat.gpt_transformation import OpenAIGPTConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 
 
@@ -535,7 +536,8 @@ class OpenAIChatCompletion(BaseLLM):
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
-                messages = provider_config._transform_messages(messages)
+                if isinstance(provider_config, OpenAIGPTConfig):
+                    messages = provider_config._transform_messages(messages)
 
             for _ in range(
                 2
