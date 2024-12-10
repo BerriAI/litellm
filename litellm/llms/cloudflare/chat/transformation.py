@@ -1,17 +1,24 @@
+import json
 import time
-import types
-from typing import List, Optional, Union
+from typing import AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_model_iterator import ModelResponseIterator
 from litellm.llms.base_llm.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    GenericStreamingChunk,
+    ModelResponse,
+    Usage,
+)
 
 
 class CloudflareError(BaseLLMException):
@@ -150,3 +157,46 @@ class CloudflareChatConfig(BaseConfig):
         self, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
         raise NotImplementedError
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return CloudflareChatResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class CloudflareChatResponseIterator(ModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields = None
+
+            index = int(chunk.get("index", 0))
+
+            if "response" in chunk:
+                text = chunk["response"]
+
+            returned_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+                provider_specific_fields=provider_specific_fields,
+            )
+
+            return returned_chunk
+
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")

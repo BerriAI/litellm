@@ -4184,14 +4184,17 @@ def test_completion_together_ai_stream():
 # Cloud flare AI test
 def test_completion_cloudflare():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         response = completion(
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
             messages=[{"content": "what llm are you", "role": "user"}],
             max_tokens=15,
             num_retries=3,
+            stream=True,
         )
         print(response)
+        for chunk in response:
+            print(chunk)
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
