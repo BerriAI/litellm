@@ -163,7 +163,7 @@ def test_all_model_configs():
         {"max_completion_tokens": 10}, {}, "llama3"
     ) == {"max_tokens": 10}
 
-    from litellm.llms.huggingface_restapi import HuggingfaceConfig
+    from litellm.llms.huggingface.chat.handler import HuggingfaceConfig
 
     assert "max_completion_tokens" in HuggingfaceConfig().get_supported_openai_params()
     assert HuggingfaceConfig().map_openai_params({"max_completion_tokens": 10}, {}) == {
@@ -220,7 +220,7 @@ def test_all_model_configs():
         optional_params={},
     ) == {"max_tokens": 10}
 
-    from litellm.llms.ai21.chat import AI21ChatConfig
+    from litellm.llms.ai21.chat.transformation import AI21ChatConfig
 
     assert "max_completion_tokens" in AI21ChatConfig().get_supported_openai_params(
         "jamba-1.5-mini@001"
