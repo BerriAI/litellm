@@ -173,7 +173,7 @@ class BaseLLMHTTPHandler:
         if stream is True:
             if fake_stream is not True:
                 data["stream"] = stream
-            completion_stream, headers = self.make_sync_call(
+            completion_stream, response_headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
                 headers=headers,  # type: ignore
@@ -190,6 +190,9 @@ class BaseLLMHTTPHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=provider_config.transform_response_headers(
+                    headers=response_headers
+                ),
             )
 
         sync_httpx_client = _get_httpx_client()
@@ -298,7 +301,7 @@ class BaseLLMHTTPHandler:
         litellm_params: dict,
         fake_stream: bool = False,
     ):
-        completion_stream, _response_headers = await self.make_async_call(
+        completion_stream, response_headers = await self.make_async_call(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
             api_base=api_base,
@@ -315,6 +318,9 @@ class BaseLLMHTTPHandler:
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
+            _response_headers=provider_config.transform_response_headers(
+                headers=response_headers
+            ),
         )
         return streamwrapper
 
