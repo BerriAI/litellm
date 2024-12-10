@@ -32,10 +32,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
-
-from .types import DD_ERRORS, DatadogPayload, DataDogStatus
-from .utils import make_json_serializable
+from litellm.types.utils import StandardLoggingPayload
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
 
@@ -106,20 +106,20 @@ class DataDogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "Datadog: Logging - Enters logging function for model %s", kwargs
             )
-            dd_payload = self.create_datadog_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
-            self.log_queue.append(dd_payload)
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
             verbose_logger.debug(
-                f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+                "Datadog: Logging - Enters logging function for model %s", kwargs
             )
-
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
             verbose_logger.exception(
@@ -178,15 +178,20 @@ class DataDogLogger(CustomBatchLogger):
         - instantly logs it on DD API
         """
         try:
-            verbose_logger.debug(
-                "Datadog: Logging - Enters logging function for model %s", kwargs
-            )
-            dd_payload = self.create_datadog_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            if litellm.datadog_use_v1 is True:
+                dd_payload = self._create_v0_logging_payload(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            else:
+                dd_payload = self.create_datadog_logging_payload(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
 
             response = self.sync_client.post(
                 url=self.intake_url,
@@ -215,6 +220,23 @@ class DataDogLogger(CustomBatchLogger):
             pass
         pass
 
+    async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+
+        dd_payload = self.create_datadog_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        self.log_queue.append(dd_payload)
+        verbose_logger.debug(
+            f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+        )
+
+        if len(self.log_queue) >= self.batch_size:
+            await self.async_send_batch()
+
     def create_datadog_logging_payload(
         self,
         kwargs: Union[dict, Any],
@@ -236,73 +258,33 @@ class DataDogLogger(CustomBatchLogger):
         """
         import json
 
-        litellm_params = kwargs.get("litellm_params", {})
-        metadata = (
-            litellm_params.get("metadata", {}) or {}
-        )  # if litellm_params['metadata'] == None
-        messages = kwargs.get("messages")
-        optional_params = kwargs.get("optional_params", {})
-        call_type = kwargs.get("call_type", "litellm.completion")
-        cache_hit = kwargs.get("cache_hit", False)
-        usage = response_obj["usage"]
-        id = response_obj.get("id", str(uuid.uuid4()))
-        usage = dict(usage)
-        try:
-            response_time = (end_time - start_time).total_seconds() * 1000
-        except Exception:
-            response_time = None
+        from litellm.litellm_core_utils.litellm_logging import (
+            truncate_standard_logging_payload_content,
+        )
 
-        try:
-            response_obj = dict(response_obj)
-        except Exception:
-            response_obj = response_obj
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+        if standard_logging_object is None:
+            raise ValueError("standard_logging_object not found in kwargs")
 
-        # Clean Metadata before logging - never log raw metadata
-        # the raw metadata can contain circular references which leads to infinite recursion
-        # we clean out all extra litellm metadata params before logging
-        clean_metadata = {}
-        if isinstance(metadata, dict):
-            for key, value in metadata.items():
-                # clean litellm metadata before logging
-                if key in [
-                    "endpoint",
-                    "caching_groups",
-                    "previous_models",
-                ]:
-                    continue
-                else:
-                    clean_metadata[key] = value
+        status = DataDogStatus.INFO
+        if standard_logging_object.get("status") == "failure":
+            status = DataDogStatus.ERROR
 
         # Build the initial payload
-        payload = {
-            "id": id,
-            "call_type": call_type,
-            "cache_hit": cache_hit,
-            "start_time": start_time,
-            "end_time": end_time,
-            "response_time": response_time,
-            "model": kwargs.get("model", ""),
-            "user": kwargs.get("user", ""),
-            "model_parameters": optional_params,
-            "spend": kwargs.get("response_cost", 0),
-            "messages": messages,
-            "response": response_obj,
-            "usage": usage,
-            "metadata": clean_metadata,
-        }
-
-        make_json_serializable(payload)
-        json_payload = json.dumps(payload)
+        truncate_standard_logging_payload_content(standard_logging_object)
+        json_payload = json.dumps(standard_logging_object)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
         dd_payload = DatadogPayload(
-            ddsource=os.getenv("DD_SOURCE", "litellm"),
-            ddtags="",
-            hostname="",
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
             message=json_payload,
-            service="litellm-server",
-            status=DataDogStatus.INFO,
+            service=self._get_datadog_service(),
+            status=status,
         )
         return dd_payload
 
@@ -382,3 +364,107 @@ class DataDogLogger(CustomBatchLogger):
         No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
         """
         return
+
+    def _create_v0_logging_payload(
+        self,
+        kwargs: Union[dict, Any],
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> DatadogPayload:
+        """
+        Note: This is our V1 Version of DataDog Logging Payload
+
+
+        (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
+        """
+        import json
+
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = (
+            litellm_params.get("metadata", {}) or {}
+        )  # if litellm_params['metadata'] == None
+        messages = kwargs.get("messages")
+        optional_params = kwargs.get("optional_params", {})
+        call_type = kwargs.get("call_type", "litellm.completion")
+        cache_hit = kwargs.get("cache_hit", False)
+        usage = response_obj["usage"]
+        id = response_obj.get("id", str(uuid.uuid4()))
+        usage = dict(usage)
+        try:
+            response_time = (end_time - start_time).total_seconds() * 1000
+        except Exception:
+            response_time = None
+
+        try:
+            response_obj = dict(response_obj)
+        except Exception:
+            response_obj = response_obj
+
+        # Clean Metadata before logging - never log raw metadata
+        # the raw metadata can contain circular references which leads to infinite recursion
+        # we clean out all extra litellm metadata params before logging
+        clean_metadata = {}
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                # clean litellm metadata before logging
+                if key in [
+                    "endpoint",
+                    "caching_groups",
+                    "previous_models",
+                ]:
+                    continue
+                else:
+                    clean_metadata[key] = value
+
+        # Build the initial payload
+        payload = {
+            "id": id,
+            "call_type": call_type,
+            "cache_hit": cache_hit,
+            "start_time": start_time,
+            "end_time": end_time,
+            "response_time": response_time,
+            "model": kwargs.get("model", ""),
+            "user": kwargs.get("user", ""),
+            "model_parameters": optional_params,
+            "spend": kwargs.get("response_cost", 0),
+            "messages": messages,
+            "response": response_obj,
+            "usage": usage,
+            "metadata": clean_metadata,
+        }
+
+        json_payload = json.dumps(payload)
+
+        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
+
+        dd_payload = DatadogPayload(
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
+            message=json_payload,
+            service=self._get_datadog_service(),
+            status=DataDogStatus.INFO,
+        )
+        return dd_payload
+
+    @staticmethod
+    def _get_datadog_tags():
+        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')}"
+
+    @staticmethod
+    def _get_datadog_source():
+        return os.getenv("DD_SOURCE", "litellm")
+
+    @staticmethod
+    def _get_datadog_service():
+        return os.getenv("DD_SERVICE", "litellm-server")
+
+    @staticmethod
+    def _get_datadog_hostname():
+        return ""
+
+    @staticmethod
+    def _get_datadog_env():
+        return os.getenv("DD_ENV", "unknown")

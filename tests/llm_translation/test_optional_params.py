@@ -411,7 +411,9 @@ def test_dynamic_drop_params(drop_params):
 
 
 def test_dynamic_drop_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -457,7 +459,9 @@ def test_dynamic_drop_params_parallel_tool_calls():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -498,7 +502,9 @@ def test_dynamic_drop_additional_params(drop_params):
 
 
 def test_dynamic_drop_additional_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",

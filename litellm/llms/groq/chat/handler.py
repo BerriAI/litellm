@@ -40,7 +40,7 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         custom_endpoint: Optional[bool] = None,
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
-        fake_stream: bool = False
+        fake_stream: bool = False,
     ):
         messages = GroqChatConfig()._transform_messages(messages)  # type: ignore
 

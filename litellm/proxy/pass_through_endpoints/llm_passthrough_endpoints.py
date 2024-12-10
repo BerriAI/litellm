@@ -56,7 +56,7 @@ def create_request_copy(request: Request):
 
 @router.api_route(
     "/gemini/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Google AI Studio Pass-through", "pass-through"],
 )
 async def gemini_proxy_route(
@@ -122,7 +122,7 @@ async def gemini_proxy_route(
 
 @router.api_route(
     "/cohere/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Cohere Pass-through", "pass-through"],
 )
 async def cohere_proxy_route(
@@ -171,7 +171,7 @@ async def cohere_proxy_route(
 
 @router.api_route(
     "/anthropic/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Anthropic Pass-through", "pass-through"],
 )
 async def anthropic_proxy_route(
@@ -224,7 +224,7 @@ async def anthropic_proxy_route(
 
 @router.api_route(
     "/bedrock/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Bedrock Pass-through", "pass-through"],
 )
 async def bedrock_proxy_route(
@@ -305,7 +305,7 @@ async def bedrock_proxy_route(
 
 @router.api_route(
     "/azure/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Azure Pass-through", "pass-through"],
 )
 async def azure_proxy_route(

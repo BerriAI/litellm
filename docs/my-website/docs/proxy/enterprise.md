@@ -507,6 +507,11 @@ curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: 
 ## Enforce Required Params for LLM Requests
 Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
 
+
+<Tabs>
+
+<TabItem value="config" label="Set on Config">
+
 **Step 1** Define all Params you want to enforce on config.yaml
 
 This means `["user"]` and `["metadata]["generation_name"]` are required in all LLM Requests to LiteLLM
@@ -518,8 +523,21 @@ general_settings:
     - user
     - metadata.generation_name
 ```
+</TabItem>
 
-Start LiteLLM Proxy
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "enforced_params": ["user", "metadata.generation_name"]
+}'
+```
+
+</TabItem>
+</Tabs>
 
 **Step 2 Verify if this works**
 

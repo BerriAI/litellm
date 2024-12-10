@@ -37,6 +37,22 @@ def handle_messages_with_content_list_to_str_conversion(
     return messages
 
 
+def strip_name_from_messages(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    """
+    Removes 'name' from messages
+    """
+    new_messages = []
+    for message in messages:
+        msg_role = message.get("role")
+        msg_copy = message.copy()
+        if msg_role == "user":
+            msg_copy.pop("name", None)  # type: ignore
+        new_messages.append(msg_copy)
+    return new_messages
+
+
 def convert_content_list_to_str(message: AllMessageValues) -> str:
     """
     - handles scenario where content is list and not string

@@ -980,3 +980,26 @@ class RedisCache(BaseCache):
                 str(e),
             )
             raise e
+
+    async def async_get_ttl(self, key: str) -> Optional[int]:
+        """
+        Get the remaining TTL of a key in Redis
+
+        Args:
+            key (str): The key to get TTL for
+
+        Returns:
+            Optional[int]: The remaining TTL in seconds, or None if key doesn't exist
+
+        Redis ref: https://redis.io/docs/latest/commands/ttl/
+        """
+        try:
+            _redis_client = await self.init_async_client()
+            async with _redis_client as redis_client:
+                ttl = await redis_client.ttl(key)
+                if ttl <= -1:  # -1 means the key does not exist, -2 key does not exist
+                    return None
+                return ttl
+        except Exception as e:
+            verbose_logger.debug(f"Redis TTL Error: {e}")
+            return None

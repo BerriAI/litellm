@@ -297,6 +297,83 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
 
 @pytest.mark.parametrize(
+    "callback_vars",
+    [
+        {
+            "turn_off_message_logging": True,
+        },
+        {
+            "turn_off_message_logging": False,
+        },
+    ],
+)
+def test_dynamic_turn_off_message_logging(callback_vars):
+    user_api_key_dict = UserAPIKeyAuth(
+        token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
+        key_name="sk-...63Fg",
+        key_alias=None,
+        spend=0.000111,
+        max_budget=None,
+        expires=None,
+        models=[],
+        aliases={},
+        config={},
+        user_id=None,
+        team_id="ishaan-special-team_e02dd54f-f790-4755-9f93-73734f415898",
+        max_parallel_requests=None,
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "datadog",
+                    "callback_vars": callback_vars,
+                }
+            ]
+        },
+        tpm_limit=None,
+        rpm_limit=None,
+        budget_duration=None,
+        budget_reset_at=None,
+        allowed_cache_controls=[],
+        permissions={},
+        model_spend={},
+        model_max_budget={},
+        soft_budget_cooldown=False,
+        litellm_budget_table=None,
+        org_id=None,
+        team_spend=0.000132,
+        team_alias=None,
+        team_tpm_limit=None,
+        team_rpm_limit=None,
+        team_max_budget=None,
+        team_models=[],
+        team_blocked=False,
+        soft_budget=None,
+        team_model_aliases=None,
+        team_member_spend=None,
+        team_member=None,
+        team_metadata={},
+        end_user_id=None,
+        end_user_tpm_limit=None,
+        end_user_rpm_limit=None,
+        end_user_max_budget=None,
+        last_refreshed_at=1726101560.967527,
+        api_key="7c305cc48fe72272700dc0d67dc691c2d1f2807490ef5eb2ee1d3a3ca86e12b1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_model_region=None,
+        parent_otel_span=None,
+        rpm_limit_per_model=None,
+        tpm_limit_per_model=None,
+    )
+    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+
+    assert callbacks is not None
+    assert (
+        callbacks.callback_vars["turn_off_message_logging"]
+        == callback_vars["turn_off_message_logging"]
+    )
+
+
+@pytest.mark.parametrize(
     "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
 )
 def test_is_request_body_safe_global_enabled(
@@ -444,7 +521,7 @@ def test_foward_litellm_user_info_to_backend_llm_call():
 
 def test_update_internal_user_params():
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_internal_user_params,
+        _update_internal_new_user_params,
     )
     from litellm.proxy._types import NewUserRequest
 
@@ -456,7 +533,7 @@ def test_update_internal_user_params():
 
     data = NewUserRequest(user_role="internal_user", user_email="krrish3@berri.ai")
     data_json = data.model_dump()
-    updated_data_json = _update_internal_user_params(data_json, data)
+    updated_data_json = _update_internal_new_user_params(data_json, data)
     assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
     assert (
         updated_data_json["max_budget"]
@@ -530,7 +607,7 @@ def test_prepare_key_update_data():
 
     data = UpdateKeyRequest(key="test_key", metadata=None)
     updated_data = prepare_key_update_data(data, existing_key_row)
-    assert updated_data["metadata"] == None
+    assert updated_data["metadata"] is None
 
 
 @pytest.mark.parametrize(
@@ -574,3 +651,237 @@ def test_get_docs_url(env_vars, expected_url):
 
     result = _get_docs_url()
     assert result == expected_url
+
+
+@pytest.mark.parametrize(
+    "request_tags, tags_to_add, expected_tags",
+    [
+        (None, None, []),  # both None
+        (["tag1", "tag2"], None, ["tag1", "tag2"]),  # tags_to_add is None
+        (None, ["tag3", "tag4"], ["tag3", "tag4"]),  # request_tags is None
+        (
+            ["tag1", "tag2"],
+            ["tag3", "tag4"],
+            ["tag1", "tag2", "tag3", "tag4"],
+        ),  # both have unique tags
+        (
+            ["tag1", "tag2"],
+            ["tag2", "tag3"],
+            ["tag1", "tag2", "tag3"],
+        ),  # overlapping tags
+        ([], [], []),  # both empty lists
+        ("not_a_list", ["tag1"], ["tag1"]),  # request_tags invalid type
+        (["tag1"], "not_a_list", ["tag1"]),  # tags_to_add invalid type
+        (
+            ["tag1"],
+            ["tag1", "tag2"],
+            ["tag1", "tag2"],
+        ),  # duplicate tags in inputs
+    ],
+)
+def test_merge_tags(request_tags, tags_to_add, expected_tags):
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    result = LiteLLMProxyRequestSetup._merge_tags(
+        request_tags=request_tags, tags_to_add=tags_to_add
+    )
+
+    assert isinstance(result, list)
+    assert sorted(result) == sorted(expected_tags)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_tags, request_tags, expected_tags",
+    [
+        # exact duplicates
+        (["tag1", "tag2", "tag3"], ["tag1", "tag2", "tag3"], ["tag1", "tag2", "tag3"]),
+        # partial duplicates
+        (
+            ["tag1", "tag2", "tag3"],
+            ["tag2", "tag3", "tag4"],
+            ["tag1", "tag2", "tag3", "tag4"],
+        ),
+        # duplicates within key tags
+        (["tag1", "tag2"], ["tag3", "tag4"], ["tag1", "tag2", "tag3", "tag4"]),
+        # duplicates within request tags
+        (["tag1", "tag2"], ["tag2", "tag3", "tag4"], ["tag1", "tag2", "tag3", "tag4"]),
+        # case sensitive duplicates
+        (["Tag1", "TAG2"], ["tag1", "tag2"], ["Tag1", "TAG2", "tag1", "tag2"]),
+    ],
+)
+async def test_add_litellm_data_to_request_duplicate_tags(
+    key_tags, request_tags, expected_tags
+):
+    """
+    Test to verify duplicate tags between request and key metadata are handled correctly
+
+
+    Aggregation logic when checking spend can be impacted if duplicate tags are not handled correctly.
+
+    User feedback:
+    "If I register my key with tag1 and
+    also pass the same tag1 when using the key
+    then I see tag1 twice in the
+    LiteLLM_SpendLogs table request_tags column. This can mess up aggregation logic"
+    """
+    mock_request = Mock(spec=Request)
+    mock_request.url.path = "/chat/completions"
+    mock_request.query_params = {}
+    mock_request.headers = {}
+
+    # Setup key with tags in metadata
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        metadata={"tags": key_tags},
+    )
+
+    # Setup request data with tags
+    data = {"metadata": {"tags": request_tags}}
+
+    # Process request
+    proxy_config = Mock()
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=mock_request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
+    )
+
+    # Verify results
+    assert "metadata" in result
+    assert "tags" in result["metadata"]
+    assert sorted(result["metadata"]["tags"]) == sorted(
+        expected_tags
+    ), f"Expected {expected_tags}, got {result['metadata']['tags']}"
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_api_key_dict, expected_enforced_params",
+    [
+        (
+            {"enforced_params": ["param1", "param2"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            ["param1", "param2"],
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            ["param1", "param2"],
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["param3", "param4"]},
+            ),
+            ["param1", "param2", "param3", "param4"],
+        ),
+    ],
+)
+def test_get_enforced_params(
+    general_settings, user_api_key_dict, expected_enforced_params
+):
+    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
+
+    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
+    assert enforced_params == expected_enforced_params
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_api_key_dict, request_body, expected_error",
+    [
+        (
+            {"enforced_params": ["param1", "param2"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            True,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            True,
+        ),
+        (
+            {},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["user"]},
+            ),
+            {},
+            True,
+        ),
+        (
+            {},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["user"]},
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"enforced_params": ["user"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"enforced_params": ["metadata.generation_name"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"metadata": {}},
+            True,
+        ),
+        (
+            {"enforced_params": ["metadata.generation_name"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"metadata": {"generation_name": "test_generation_name"}},
+            False,
+        ),
+    ],
+)
+def test_enforced_params_check(
+    general_settings, user_api_key_dict, request_body, expected_error
+):
+    from litellm.proxy.litellm_pre_call_utils import _enforced_params_check
+
+    if expected_error:
+        with pytest.raises(ValueError):
+            _enforced_params_check(
+                request_body=request_body,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                premium_user=True,
+            )
+    else:
+        _enforced_params_check(
+            request_body=request_body,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            premium_user=True,
+        )

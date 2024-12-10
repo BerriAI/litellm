@@ -7,6 +7,7 @@ from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
+from .integrations.datadog.datadog import DataDogLogger
 from .integrations.prometheus_services import PrometheusServicesLogger
 from .types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -134,9 +135,7 @@ class ServiceLogging(CustomLogger):
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
-            elif callback == "datadog":
-                from litellm.integrations.datadog.datadog import DataDogLogger
-
+            elif callback == "datadog" or isinstance(callback, DataDogLogger):
                 await self.init_datadog_logger_if_none()
                 await self.dd_logger.async_service_success_hook(
                     payload=payload,
@@ -237,6 +236,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
         )
+
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -244,7 +244,7 @@ class ServiceLogging(CustomLogger):
                     payload=payload,
                     error=error,
                 )
-            elif callback == "datadog":
+            elif callback == "datadog" or isinstance(callback, DataDogLogger):
                 await self.init_datadog_logger_if_none()
                 await self.dd_logger.async_service_failure_hook(
                     payload=payload,

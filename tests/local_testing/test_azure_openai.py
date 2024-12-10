@@ -33,7 +33,7 @@ from litellm.router import Router
 
 @pytest.mark.asyncio()
 @pytest.mark.respx()
-async def test_azure_tenant_id_auth(respx_mock: MockRouter):
+async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
     """
 
     Tests when we set  tenant_id, client_id, client_secret they don't get sent with the request

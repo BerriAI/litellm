@@ -208,7 +208,7 @@ async def test_get_router_response():
 # @pytest.mark.skip(
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
-@pytest.mark.flaky(retries=3, delay=1)
+# @pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai_anthropic():
     model = "claude-3-sonnet@20240229"
 
@@ -2398,7 +2398,7 @@ def test_get_token_url():
 
 @pytest.mark.asyncio
 async def test_completion_fine_tuned_model():
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     mock_response = AsyncMock()
 
     def return_val():

@@ -106,6 +106,9 @@ class ModelInfo(TypedDict, total=False):
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
     supports_audio_output: Optional[bool]
+    supports_pdf_input: Optional[bool]
+    tpm: Optional[int]
+    rpm: Optional[int]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -141,6 +144,7 @@ class CallTypes(Enum):
     rerank = "rerank"
     arerank = "arerank"
     arealtime = "_arealtime"
+    pass_through = "pass_through_endpoint"
 
 
 CallTypesLiteral = Literal[
@@ -1602,6 +1606,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_api_key: Optional[str]
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
+
+    # Logging settings
+    turn_off_message_logging: Optional[bool]  # when true will not log messages
 
 
 class KeyGenerationConfig(TypedDict, total=False):

@@ -134,28 +134,9 @@ general_settings:
 | content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
 | context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
 | cache | boolean | If true, enables caching. [Further docs](./caching) |
-| cache_params | object | Parameters for the cache. [Further docs](./caching) |
-| cache_params.type | string | The type of cache to initialize. Can be one of ["local", "redis", "redis-semantic", "s3", "disk", "qdrant-semantic"]. Defaults to "redis". [Furher docs](./caching) |
-| cache_params.host | string | The host address for the Redis cache. Required if type is "redis". |
-| cache_params.port | integer | The port number for the Redis cache. Required if type is "redis". |
-| cache_params.password | string | The password for the Redis cache. Required if type is "redis". |
-| cache_params.namespace | string | The namespace for the Redis cache. |
-| cache_params.redis_startup_nodes | array of objects | Redis Cluster Settings. [Further docs](./caching) |
-| cache_params.service_name | string | Redis Sentinel Settings. [Further docs](./caching) |
-| cache_params.sentinel_nodes | array of arrays | Redis Sentinel Settings. [Further docs](./caching) |
-| cache_params.ttl | integer | The time (in seconds) to store entries in cache. |
-| cache_params.qdrant_semantic_cache_embedding_model | string | The embedding model to use for qdrant semantic cache. |
-| cache_params.qdrant_collection_name | string | The name of the collection to use for qdrant semantic cache. |
-| cache_params.qdrant_quantization_config | string | The quantization configuration for the qdrant semantic cache. |
-| cache_params.similarity_threshold | float | The similarity threshold for the semantic cache. |
-| cache_params.s3_bucket_name | string | The name of the S3 bucket to use for the semantic cache. |
-| cache_params.s3_region_name | string | The region name for the S3 bucket. |
-| cache_params.s3_aws_access_key_id | string | The AWS access key ID for the S3 bucket. |
-| cache_params.s3_aws_secret_access_key | string | The AWS secret access key for the S3 bucket. |
-| cache_params.s3_endpoint_url | string | Optional - The endpoint URL for the S3 bucket. |
-| cache_params.supported_call_types | array of strings | The types of calls to cache. [Further docs](./caching) |
-| cache_params.mode | string | The mode of the cache. [Further docs](./caching) |
+| cache_params | object | Parameters for the cache. [Further docs](./caching#supported-cache_params-on-proxy-configyaml) |
 | disable_end_user_cost_tracking | boolean | If true, turns off end user cost tracking on prometheus metrics + litellm spend logs table on proxy. |
+| disable_end_user_cost_tracking_prometheus_only | boolean | If true, turns off end user cost tracking on prometheus metrics only. |
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 
 ### general_settings - Reference
@@ -279,7 +260,31 @@ router_settings:
 | retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
 | allowed_fails | integer | The number of failures allowed before cooling down a model. [More information here](reliability) |
 | allowed_fails_policy | object | Specifies the number of allowed failures for different error types before cooling down a deployment. [More information here](reliability) |
-
+| default_max_parallel_requests | Optional[int] | The default maximum number of parallel requests for a deployment. |
+| default_priority | (Optional[int]) | The default priority for a request. Only for '.scheduler_acompletion()'. Default is None. | 
+| polling_interval | (Optional[float]) | frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms. |
+| max_fallbacks | Optional[int] | The maximum number of fallbacks to try before exiting the call. Defaults to 5. |
+| default_litellm_params | Optional[dict] | The default litellm parameters to add to all requests (e.g. `temperature`, `max_tokens`). |
+| timeout | Optional[float] | The default timeout for a request. |
+| debug_level | Literal["DEBUG", "INFO"] | The debug level for the logging library in the router. Defaults to "INFO". |
+| client_ttl | int | Time-to-live for cached clients in seconds. Defaults to 3600. |
+| cache_kwargs | dict | Additional keyword arguments for the cache initialization. |
+| routing_strategy_args | dict | Additional keyword arguments for the routing strategy - e.g. lowest latency routing default ttl |
+| model_group_alias | dict | Model group alias mapping. E.g. `{"claude-3-haiku": "claude-3-haiku-20240229"}` |
+| num_retries | int | Number of retries for a request. Defaults to 3. |
+| default_fallbacks | Optional[List[str]] | Fallbacks to try if no model group-specific fallbacks are defined. |
+| caching_groups | Optional[List[tuple]] | List of model groups for caching across model groups. Defaults to None. - e.g. caching_groups=[("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")]|
+| alerting_config | AlertingConfig | [SDK-only arg] Slack alerting configuration. Defaults to None. [Further Docs](../routing.md#alerting-) |
+| assistants_config | AssistantsConfig | Set on proxy via `assistant_settings`. [Further docs](../assistants.md) |
+| set_verbose | boolean | [DEPRECATED PARAM - see debug docs](./debugging.md) If true, sets the logging level to verbose. |
+| retry_after | int | Time to wait before retrying a request in seconds. Defaults to 0. If `x-retry-after` is received from LLM API, this value is overridden. |
+| provider_budget_config | ProviderBudgetConfig | Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None. [Further Docs](./provider_budget_routing.md) |
+| enable_pre_call_checks | boolean | If true, checks if a call is within the model's context window before making the call. [More information here](reliability) |
+| model_group_retry_policy | Dict[str, RetryPolicy] | [SDK-only arg] Set retry policy for model groups. |
+| context_window_fallbacks | List[Dict[str, List[str]]] | Fallback models for context window violations. |
+| redis_url | str | URL for Redis server. **Known performance issue with Redis URL.** |
+| cache_responses | boolean | Flag to enable caching LLM Responses, if cache set under `router_settings`. If true, caches responses. Defaults to False. |
+| router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
 
 ### environment variables - Reference
 
@@ -335,6 +340,8 @@ router_settings:
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
 | DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
+| DD_SERVICE | Service identifier for Datadog logs. Defaults to "litellm-server"
+| DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI

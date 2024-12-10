@@ -3,13 +3,26 @@ Support for gpt model family
 """
 
 import types
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+
+import httpx
 
 import litellm
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.utils import ModelResponse
+
+from ..common_utils import OpenAIError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
-class OpenAIGPTConfig:
+class OpenAIGPTConfig(BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
 
@@ -69,21 +82,7 @@ class OpenAIGPTConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params = [
@@ -168,3 +167,59 @@ class OpenAIGPTConfig:
         self, messages: List[AllMessageValues]
     ) -> List[AllMessageValues]:
         return messages
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform the overall request to be sent to the API.
+
+        Returns:
+            dict: The transformed request. Sent as the body of the API call.
+        """
+        raise NotImplementedError
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        encoding: str,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        """
+        Transform the response from the API.
+
+        Returns:
+            dict: The transformed response.
+        """
+        raise NotImplementedError
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return OpenAIError(
+            status_code=status_code,
+            message=error_message,
+            headers=cast(httpx.Headers, headers),
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        raise NotImplementedError

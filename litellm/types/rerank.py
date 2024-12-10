@@ -36,9 +36,14 @@ class RerankResponseMeta(TypedDict, total=False):
     tokens: RerankTokens
 
 
+class RerankResponseResult(TypedDict):
+    index: int
+    relevance_score: float
+
+
 class RerankResponse(BaseModel):
     id: str
-    results: List[dict]  # Contains index and relevance_score
+    results: List[RerankResponseResult]  # Contains index and relevance_score
     meta: Optional[RerankResponseMeta] = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr

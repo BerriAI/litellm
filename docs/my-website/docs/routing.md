@@ -1130,7 +1130,7 @@ router_settings:
 
 If a call fails after num_retries, fall back to another model group. 
 
-### Quick Start 
+#### Quick Start 
 
 ```python
 from litellm import Router 
@@ -1365,6 +1365,7 @@ litellm --config /path/to/config.yaml
 
 </TabItem>
 </Tabs>
+
 
 ### Caching
 
@@ -1890,4 +1891,23 @@ router = Router(
     set_verbose=True,
     debug_level="DEBUG"  # defaults to INFO
 )
+```
+
+## Router General Settings
+
+### Usage 
+
+```python
+router = Router(model_list=..., router_general_settings=RouterGeneralSettings(async_only_mode=True))
+```
+
+### Spec 
+```python
+class RouterGeneralSettings(BaseModel):
+    async_only_mode: bool = Field(
+        default=False
+    )  # this will only initialize async clients. Good for memory utils
+    pass_through_all_models: bool = Field(
+        default=False
+    )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding
 ```

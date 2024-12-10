@@ -143,12 +143,14 @@ def construct_target_url(
 
 @router.api_route(
     "/vertex-ai/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Vertex AI Pass-through", "pass-through"],
     include_in_schema=False,
 )
 @router.api_route(
-    "/vertex_ai/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"], tags=["Vertex AI Pass-through", "pass-through"]
+    "/vertex_ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
 )
 async def vertex_proxy_route(
     endpoint: str,

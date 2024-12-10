@@ -58,7 +58,7 @@ def get_logging_payload(
     usage = response_obj.get("usage", None) or {}
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
-    id = response_obj.get("id", kwargs.get("litellm_call_id"))
+    id = response_obj.get("id") or kwargs.get("litellm_call_id")
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
@@ -153,6 +153,7 @@ def get_logging_payload(
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
+            custom_llm_provider=kwargs.get("custom_llm_provider", ""),
         )
 
         verbose_proxy_logger.debug(

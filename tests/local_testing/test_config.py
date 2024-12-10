@@ -288,3 +288,35 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
             assert len(llm_router.model_list) == len(model_list)
         else:
             assert len(llm_router.model_list) == len(model_list) + prev_llm_router_val
+
+
+# def test_provider_config_manager():
+#     from litellm import LITELLM_CHAT_PROVIDERS, LlmProviders
+#     from litellm.utils import ProviderConfigManager
+#     from litellm.llms.base_llm.transformation import BaseConfig
+#     from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+
+#     for provider in LITELLM_CHAT_PROVIDERS:
+#         assert isinstance(
+#             ProviderConfigManager.get_provider_chat_config(
+#                 model="gpt-3.5-turbo", provider=LlmProviders(provider)
+#             ),
+#             BaseConfig,
+#         ), f"Provider {provider} is not a subclass of BaseConfig"
+
+#         config = ProviderConfigManager.get_provider_chat_config(
+#             model="gpt-3.5-turbo", provider=LlmProviders(provider)
+#         )
+
+#         if (
+#             provider != litellm.LlmProviders.OPENAI
+#             and provider != litellm.LlmProviders.OPENAI_LIKE
+#             and provider != litellm.LlmProviders.CUSTOM_OPENAI
+#         ):
+#             assert (
+#                 config.__class__.__name__ != "OpenAIGPTConfig"
+#             ), f"Provider {provider} is an instance of OpenAIGPTConfig"
+
+#         assert (
+#             "_abc_impl" not in config.get_config()
+#         ), f"Provider {provider} has _abc_impl"

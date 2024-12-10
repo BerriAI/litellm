@@ -116,7 +116,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -187,7 +187,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -337,7 +337,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}

@@ -2,13 +2,25 @@ import json
 import time
 import types
 from re import A
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 import requests
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
@@ -43,8 +55,15 @@ from litellm.utils import (
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-class AnthropicConfig:
+    LoggingClass = LiteLLMLoggingObj
+else:
+    LoggingClass = Any
+
+
+class AnthropicConfig(BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
 
@@ -80,23 +99,9 @@ class AnthropicConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str):
         return [
             "stream",
             "stop",
@@ -297,8 +302,9 @@ class AnthropicConfig:
         self,
         non_default_params: dict,
         optional_params: dict,
-        messages: Optional[List[AllMessageValues]] = None,
-    ):
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -347,25 +353,6 @@ class AnthropicConfig:
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
-        ## VALIDATE REQUEST
-        """
-        Anthropic doesn't support tool calling without `tools=` param specified.
-        """
-        if (
-            "tools" not in non_default_params
-            and messages is not None
-            and has_tool_call_blocks(messages)
-        ):
-            if litellm.modify_params:
-                optional_params["tools"] = self._map_tools(
-                    add_dummy_tool(custom_llm_provider="anthropic")
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="anthropic",
-                )
 
         return optional_params
 
@@ -436,7 +423,7 @@ class AnthropicConfig:
                 and isinstance(message["content"], list)
             ):
                 for content in message["content"]:
-                    if "type" in content:
+                    if "type" in content and content["type"] != "text":
                         return True
         return False
 
@@ -493,19 +480,37 @@ class AnthropicConfig:
 
         return anthropic_system_message_list
 
-    def _transform_request(
+    def transform_request(
         self,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-        _is_function_call: bool,
-        is_vertex_request: bool,
     ) -> dict:
         """
         Translate messages to anthropic format.
         """
+        ## VALIDATE REQUEST
+        """
+        Anthropic doesn't support tool calling without `tools=` param specified.
+        """
+        if (
+            "tools" not in optional_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params["tools"] = self._map_tools(
+                    add_dummy_tool(custom_llm_provider="anthropic")
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="anthropic",
+                )
+
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
         # Handling anthropic API Prompt Caching
@@ -546,57 +551,55 @@ class AnthropicConfig:
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
         data = {
+            "model": model,
             "messages": anthropic_messages,
             **optional_params,
         }
-        if not is_vertex_request:
-            data["model"] = model
+
         return data
 
-    @staticmethod
-    def _process_response(
+    def transform_response(
+        self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        raw_response: httpx.Response,
         model_response: ModelResponse,
-        stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
-        optional_params: dict,
-        api_key: str,
-        data: Union[dict, str],
-        messages: List,
-        print_verbose,
-        encoding,
-        json_mode: bool,
+        logging_obj: LoggingClass,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
-            dict(response.headers)
+            dict(raw_response.headers)
         )
         ## LOGGING
         logging_obj.post_call(
             input=messages,
             api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
         )
-        print_verbose(f"raw model_response: {response.text}")
+
         ## RESPONSE OBJECT
         try:
-            completion_response = response.json()
+            completion_response = raw_response.json()
         except Exception as e:
-            response_headers = getattr(response, "headers", None)
+            response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
                 message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), response.text
+                    str(e), raw_response.text
                 ),
-                status_code=response.status_code,
+                status_code=raw_response.status_code,
                 headers=response_headers,
             )
         if "error" in completion_response:
-            response_headers = getattr(response, "headers", None)
+            response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
                 message=str(completion_response["error"]),
-                status_code=response.status_code,
+                status_code=raw_response.status_code,
                 headers=response_headers,
             )
         else:
@@ -625,7 +628,7 @@ class AnthropicConfig:
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call
-            if json_mode and len(tool_calls) == 1:
+            if json_mode is True and len(tool_calls) == 1:
                 json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
                     "arguments"
                 )
@@ -711,3 +714,47 @@ class AnthropicConfig:
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
         return None
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        return messages
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return AnthropicError(
+            status_code=status_code,
+            message=error_message,
+            headers=cast(httpx.Headers, headers),
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> Dict:
+        if api_key is None:
+            raise litellm.AuthenticationError(
+                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
+                llm_provider="anthropic",
+                model=model,
+            )
+
+        tools = optional_params.get("tools")
+        prompt_caching_set = self.is_cache_control_set(messages=messages)
+        computer_tool_used = self.is_computer_tool_used(tools=tools)
+        pdf_used = self.is_pdf_used(messages=messages)
+        anthropic_headers = self.get_anthropic_headers(
+            computer_tool_used=computer_tool_used,
+            prompt_caching_set=prompt_caching_set,
+            pdf_used=pdf_used,
+            api_key=api_key,
+            is_vertex_request=False,
+        )
+
+        headers = {**headers, **anthropic_headers}
+        return headers

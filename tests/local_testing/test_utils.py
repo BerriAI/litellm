@@ -6,6 +6,8 @@ from unittest import mock
 
 from dotenv import load_dotenv
 
+from litellm.types.utils import StandardCallbackDynamicParams
+
 load_dotenv()
 import os
 
@@ -545,6 +547,92 @@ def test_redact_msgs_from_logs():
     print("Test passed")
 
 
+def test_redact_msgs_from_logs_with_dynamic_params():
+    """
+    Tests redaction behavior based on standard_callback_dynamic_params setting:
+    In all tests litellm.turn_off_message_logging is True
+
+
+    1. When standard_callback_dynamic_params.turn_off_message_logging is False (or not set): No redaction should occur. User has opted out of redaction.
+    2. When standard_callback_dynamic_params.turn_off_message_logging is True: Redaction should occur. User has opted in to redaction.
+    3. standard_callback_dynamic_params.turn_off_message_logging not set, litellm.turn_off_message_logging is True: Redaction should occur.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+
+    litellm.turn_off_message_logging = True
+    test_content = "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
+    response_obj = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": test_content,
+                    "role": "assistant",
+                },
+            }
+        ]
+    )
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    # Test Case 1: standard_callback_dynamic_params = False (or not set)
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        turn_off_message_logging=False
+    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+    # Assert no redaction occurred
+    assert _redacted_response_obj.choices[0].message.content == test_content
+
+    # Test Case 2: standard_callback_dynamic_params = True
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        turn_off_message_logging=True
+    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+    # Assert redaction occurred
+    assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
+
+    # Test Case 3: standard_callback_dynamic_params does not override litellm.turn_off_message_logging
+    # since litellm.turn_off_message_logging is True redaction should occur
+    standard_callback_dynamic_params = StandardCallbackDynamicParams()
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+    # Assert no redaction occurred
+    assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
+
+    # Reset settings
+    litellm.turn_off_message_logging = False
+    print("Test passed")
+
+
 @pytest.mark.parametrize(
     "duration, unit",
     [("7s", "s"), ("7m", "m"), ("7h", "h"), ("7d", "d"), ("7mo", "mo")],
@@ -1005,7 +1093,10 @@ def test_models_by_provider():
             continue
         elif k == "sample_spec":
             continue
-        elif v["litellm_provider"] == "sagemaker":
+        elif (
+            v["litellm_provider"] == "sagemaker"
+            or v["litellm_provider"] == "bedrock_converse"
+        ):
             continue
         else:
             providers.add(v["litellm_provider"])
@@ -1030,5 +1121,29 @@ def test_get_end_user_id_for_cost_tracking(
     litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
     assert (
         get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
+        == expected_end_user_id
+    )
+
+
+@pytest.mark.parametrize(
+    "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
+    [
+        ({}, False, None),
+        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
+        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+    ],
+)
+def test_get_end_user_id_for_cost_tracking_prometheus_only(
+    litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id
+):
+    from litellm.utils import get_end_user_id_for_cost_tracking
+
+    litellm.disable_end_user_cost_tracking_prometheus_only = (
+        disable_end_user_cost_tracking_prometheus_only
+    )
+    assert (
+        get_end_user_id_for_cost_tracking(
+            litellm_params=litellm_params, service_type="prometheus"
+        )
         == expected_end_user_id
     )

@@ -102,3 +102,48 @@ def test_get_model_info_ollama_chat():
         print(mock_client.call_args.kwargs)
 
         assert mock_client.call_args.kwargs["json"]["name"] == "mistral"
+
+
+def test_get_model_info_gemini():
+    """
+    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_map = litellm.model_cost
+    for model, info in model_map.items():
+        if model.startswith("gemini/") and not "gemma" in model:
+            assert info.get("tpm") is not None, f"{model} does not have tpm"
+            assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+def test_get_model_info_bedrock_region():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    args = {
+        "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "custom_llm_provider": "bedrock",
+    }
+    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+    info = litellm.get_model_info(**args)
+    print("info", info)
+    assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    assert info["litellm_provider"] == "bedrock"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        "ft:gpt-4-0613:my-org:custom_suffix:id",
+        "ft:davinci-002:my-org:custom_suffix:id",
+        "ft:gpt-4-0613:my-org:custom_suffix:id",
+        "ft:babbage-002:my-org:custom_suffix:id",
+        "gpt-35-turbo",
+        "ada",
+    ],
+)
+def test_get_model_info_completion_cost_unit_tests(model):
+    info = litellm.get_model_info(model)
+    print("info", info)

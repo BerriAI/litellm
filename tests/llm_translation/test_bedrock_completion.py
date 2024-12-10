@@ -1,3 +1,7 @@
+"""
+Tests Bedrock Completion + Rerank endpoints
+"""
+
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
 import sys
@@ -30,6 +34,8 @@ from litellm import (
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
+from base_llm_unit_tests import BaseLLMChatTest
+from base_rerank_unit_tests import BaseLLMRerankTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -1243,6 +1249,19 @@ def test_bedrock_cross_region_inference(model):
     )
 
 
+@pytest.mark.parametrize(
+    "model, expected_base_model",
+    [
+        (
+            "apac.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        ),
+    ],
+)
+def test_bedrock_get_base_model(model, expected_base_model):
+    assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
+
+
 from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
 
 
@@ -1921,3 +1940,169 @@ def test_bedrock_completion_test_4(modify_params):
         with pytest.raises(Exception) as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
+
+
+def test_bedrock_context_window_error():
+    with pytest.raises(litellm.ContextWindowExceededError) as e:
+        litellm.completion(
+            model="bedrock/claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response=Exception("prompt is too long"),
+        )
+
+
+def test_bedrock_converse_route():
+    litellm.set_verbose = True
+    litellm.completion(
+        model="bedrock/converse/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+
+def test_bedrock_mapped_converse_models():
+    litellm.set_verbose = True
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+    litellm.completion(
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+
+def test_bedrock_base_model_helper():
+    model = "us.amazon.nova-pro-v1:0"
+    litellm.AmazonConverseConfig()._get_base_model(model)
+    assert model == "us.amazon.nova-pro-v1:0"
+
+
+@pytest.mark.parametrize(
+    "messages, expected_cache_control",
+    [
+        (
+            [  # test system prompt cache
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are an AI assistant tasked with analyzing legal documents.",
+                        },
+                        {
+                            "type": "text",
+                            "text": "Here is the full text of a complex legal agreement",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "what are the key terms and conditions in this agreement?",
+                },
+            ],
+            True,
+        ),
+        (
+            [  # test user prompt cache
+                {
+                    "role": "user",
+                    "content": "what are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            True,
+        ),
+    ],
+)
+def test_bedrock_prompt_caching_message(messages, expected_cache_control):
+    import litellm
+    import json
+
+    transformed_messages = litellm.AmazonConverseConfig()._transform_request(
+        model="bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+    )
+    if expected_cache_control:
+        assert "cachePoint" in json.dumps(transformed_messages)
+    else:
+        assert "cachePoint" not in json.dumps(transformed_messages)
+
+
+@pytest.mark.parametrize(
+    "model, expected_supports_tool_call",
+    [
+        ("bedrock/us.amazon.nova-pro-v1:0", True),
+        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
+        ("bedrock/meta.llama3-1-8b-instruct:0", True),
+        ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/amazon.titan-embed-text-v1:0", False),
+    ],
+)
+def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
+    supported_openai_params = (
+        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    )
+    if expected_supports_tool_call:
+        assert "tools" in supported_openai_params
+    else:
+        assert "tools" not in supported_openai_params
+
+
+class TestBedrockConverseChat(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    def test_multilingual_requests(self):
+        """
+        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass
+
+    def test_prompt_caching(self):
+        """
+        Remove override once we have access to Bedrock prompt caching
+        """
+        pass
+
+    def test_completion_cost(self):
+        """
+        Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
+        """
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        litellm.model_cost.pop(bedrock_model, None)
+        model = f"bedrock/{bedrock_model}"
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
+        cost = completion_cost(response)
+
+        assert cost > 0
+
+
+class TestBedrockRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+        }

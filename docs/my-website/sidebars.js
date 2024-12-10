@@ -32,7 +32,7 @@ const sidebars = {
         {
           "type": "category", 
           "label": "Config.yaml",
-          "items": ["proxy/configs", "proxy/config_settings"]
+          "items": ["proxy/configs", "proxy/config_management", "proxy/config_settings"]
         },
         {
           type: "category",
@@ -65,12 +65,6 @@ const sidebars = {
           items: [
             "proxy/user_keys",
             "proxy/response_headers", 
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/langfuse"
           ],
         },
         {
@@ -177,6 +171,7 @@ const sidebars = {
         "providers/ollama", 
         "providers/perplexity", 
         "providers/friendliai",
+        "providers/galadriel",
         "providers/groq", 
         "providers/github", 
         "providers/deepseek", 
@@ -210,6 +205,7 @@ const sidebars = {
         "completion/provider_specific_params",
         "guides/finetuned_models",
         "completion/audio",
+        "completion/document_understanding",
         "completion/vision",
         "completion/json_mode",
         "completion/prompt_caching",
@@ -246,6 +242,7 @@ const sidebars = {
             "completion/usage",
           ],
         },
+        "text_completion",
         "embedding/supported_embedding",
         "image_generation",
         {
@@ -256,16 +253,24 @@ const sidebars = {
             "text_to_speech",
           ]
         },
+        {
+          type: "category",
+          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
+          items: [
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse",
+          ],
+        },
         "rerank",
         "assistants",
         "batches",
         "realtime",
         "fine_tuning",
-        {
-          type: "link",
-          label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
-          href: "/docs/pass_through/vertex_ai",
-        },
+        "moderation",
       ],
     },
     {
@@ -277,7 +282,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing", "wildcard_routing"],
     },
     {
       type: "category",
@@ -313,6 +318,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/mlflow",
         "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",

@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Proxy Config.yaml
+# Overview
 Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
 
 | Param Name           | Description                                                   |
@@ -355,77 +355,6 @@ Confirm this via
 curl --location 'http://0.0.0.0:4000/v1/model/info' \
 --header 'Authorization: Bearer ${LITELLM_KEY}' \
 --data ''
-```
-
- 
-### Provider specific wildcard routing 
-**Proxy all models from a provider**
-
-Use this if you want to **proxy all models from a specific provider without defining them on the config.yaml**
-
-**Step 1** - define provider specific routing on config.yaml
-```yaml
-model_list:
-  # provider specific wildcard routing
-  - model_name: "anthropic/*"
-    litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: "groq/*"
-    litellm_params:
-      model: "groq/*"
-      api_key: os.environ/GROQ_API_KEY
-  - model_name: "fo::*:static::*" # all requests matching this pattern will be routed to this deployment, example: model="fo::hi::static::hi" will be routed to deployment: "openai/fo::*:static::*"
-    litellm_params:
-      model: "openai/fo::*:static::*"
-      api_key: os.environ/OPENAI_API_KEY
-```
-
-Step 2 - Run litellm proxy 
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-Step 3 Test it 
-
-Test with `anthropic/` - all models with `anthropic/` prefix will get routed to `anthropic/*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "anthropic/claude-3-sonnet-20240229",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
-Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "groq/llama3-8b-8192",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
-Test with `fo::*::static::*` - all requests matching this pattern will be routed to `openai/fo::*:static::*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "fo::hi::static::hi",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
 ```
 
 ### Load Balancing 

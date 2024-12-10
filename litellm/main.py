@@ -77,7 +77,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_user_messages,
+    validate_chat_completion_messages,
 )
 
 from ._logging import verbose_logger
@@ -86,8 +86,6 @@ from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms import (
     aleph_alpha,
     baseten,
-    clarifai,
-    cloudflare,
     maritalk,
     nlp_cloud,
     ollama,
@@ -99,28 +97,29 @@ from .llms import (
     replicate,
     vllm,
 )
-from .llms.AI21 import completion as ai21
+from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
+from .llms.azure.audio_transcriptions import AzureAudioTranscription
+from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure_ai.chat import AzureAIChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.azure_text import AzureTextCompletion
-from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
-from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
-from .llms.AzureOpenAI.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
-from .llms.cohere import chat as cohere_chat
-from .llms.cohere import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
+from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
-from .llms.databricks.chat import DatabricksChatCompletion
+from .llms.databricks.chat.handler import DatabricksChatCompletion
+from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface_restapi import Huggingface
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
-from .llms.OpenAI.openai import OpenAIChatCompletion, OpenAITextCompletion
+from .llms.OpenAI.completion.handler import OpenAITextCompletion
+from .llms.OpenAI.openai import OpenAIChatCompletion
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.common_utils import get_completion_messages
@@ -230,6 +229,8 @@ watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
+databricks_embedding = DatabricksEmbeddingHandler()
+base_llm_http_handler = BaseLLMHTTPHandler()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -443,6 +444,8 @@ async def acompletion(
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "groq"
             or custom_llm_provider == "nvidia_nim"
+            or custom_llm_provider == "cohere_chat"
+            or custom_llm_provider == "cohere"
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
@@ -467,6 +470,7 @@ async def acompletion(
             or custom_llm_provider == "triton"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
+            or custom_llm_provider == "cloudflare"
             or custom_llm_provider in litellm.openai_compatible_providers
             or custom_llm_provider in litellm._custom_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
@@ -929,7 +933,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### VALIDATE USER MESSAGES ###
-        validate_chat_completion_user_messages(messages=messages)
+        messages = validate_chat_completion_messages(messages=messages)
 
         ### TIMEOUT LOGIC ###
         timeout = timeout or kwargs.get("request_timeout", 600) or 600
@@ -1532,12 +1536,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            openai.organization = (
+            organization = (
                 organization
                 or litellm.organization
                 or get_secret("OPENAI_ORGANIZATION")
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
+            openai.organization = organization
             # set API KEY
             api_key = (
                 api_key
@@ -1689,42 +1694,24 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("CLARIFAI_API_BASE")
                 or "https://api.clarifai.com/v2"
             )
-
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = clarifai.completion(
+            api_base = litellm.ClarifaiConfig()._convert_model_to_url(model, api_base)
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
+                fake_stream=True,  # clarifai does not support streaming, we fake it
                 messages=messages,
+                acompletion=acompletion,
                 api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                acompletion=acompletion,
-                logger_fn=logger_fn,
-                encoding=encoding,  # for calculating input/output tokens
+                custom_llm_provider="clarifai",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
                 api_key=clarifai_key,
-                logging_obj=logging,
-                custom_prompt_dict=custom_prompt_dict,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=model_response,
-                )
-
-            if optional_params.get("stream", False) or acompletion is True:
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=clarifai_key,
-                    original_response=model_response,
-                )
-            response = model_response
-
         elif custom_llm_provider == "anthropic":
             api_key = (
                 api_key
@@ -1794,6 +1781,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     headers=headers,
                     timeout=timeout,
                     client=client,
+                    custom_llm_provider=custom_llm_provider,
                 )
             if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
@@ -1914,44 +1902,35 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 headers.update(extra_headers)
 
-            model_response = cohere_completion.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
                 api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
+                custom_llm_provider="cohere",
+                timeout=timeout,
                 headers=headers,
+                encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="cohere",
-                    logging_obj=logging,
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "cohere_chat":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
-                or get_secret("COHERE_API_KEY")
-                or get_secret("CO_API_KEY")
+                or get_secret_str("COHERE_API_KEY")
+                or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
 
             api_base = (
                 api_base
                 or litellm.api_base
-                or get_secret("COHERE_API_BASE")
+                or get_secret_str("COHERE_API_BASE")
                 or "https://api.cohere.ai/v1/chat"
             )
 
@@ -1962,31 +1941,22 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 headers.update(extra_headers)
 
-            model_response = cohere_chat.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
                 api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                custom_llm_provider="cohere_chat",
+                timeout=timeout,
                 headers=headers,
-                logger_fn=logger_fn,
                 encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="cohere_chat",
-                    logging_obj=logging,
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
                 api_key
@@ -2607,7 +2577,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             base_model = litellm.AmazonConverseConfig()._get_base_model(model)
 
-            if base_model in litellm.BEDROCK_CONVERSE_MODELS:
+            if base_model in litellm.bedrock_converse_models or model.startswith(
+                "converse/"
+            ):
+                model = model.replace("converse/", "")
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
                     messages=messages,
@@ -2626,6 +2599,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_base=api_base,
                 )
             else:
+                model = model.replace("invoke/", "")
                 response = bedrock_chat_completion.completion(
                     model=model,
                     messages=messages,
@@ -2852,37 +2826,22 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = cloudflare.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
                 api_base=api_base,
-                custom_prompt_dict=litellm.custom_prompt_dict,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,  # for calculating input/output tokens
+                custom_llm_provider="cloudflare",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
                 api_key=api_key,
-                logging_obj=logging,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    response,
-                    model,
-                    custom_llm_provider="cloudflare",
-                    logging_obj=logging,
-                )
-
-            if optional_params.get("stream", False) or acompletion is True:
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=response,
-                )
-            response = response
         elif (
             custom_llm_provider == "baseten"
             or litellm.api_base == "https://app.baseten.co"
@@ -3274,6 +3233,7 @@ def embedding(  # noqa: PLR0915
     client = kwargs.pop("client", None)
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
+    max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     cooldown_time = kwargs.get("cooldown_time", None)
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
@@ -3424,6 +3384,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                max_retries=max_retries,
             )
         elif (
             model in litellm.open_ai_embedding_models
@@ -3468,6 +3429,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                max_retries=max_retries,
             )
         elif custom_llm_provider == "databricks":
             api_base = (
@@ -3483,7 +3445,7 @@ def embedding(  # noqa: PLR0915
             )  # type: ignore
 
             ## EMBEDDING CALL
-            response = databricks_chat_completions.embedding(
+            response = databricks_embedding.embedding(
                 model=model,
                 input=input,
                 api_base=api_base,
