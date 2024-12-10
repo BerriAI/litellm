@@ -9,14 +9,14 @@ load_dotenv()
 import io
 import os
 
-from .streaming_format_helper import streaming_format_tests
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
+from .streaming_format_helper import streaming_format_tests
+
 
 import pytest
 
