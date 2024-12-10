@@ -281,6 +281,18 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     type: Optional[str] = None
     index: int
 
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
 
 class HiddenParams(OpenAIObject):
     original_response: Optional[Union[str, Any]] = None
