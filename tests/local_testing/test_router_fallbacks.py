@@ -1298,10 +1298,9 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     if sync_mode:
-        client = HTTPHandler(concurrent_limit=1)
+        client = HTTPHandler
     else:
-        client = AsyncHTTPHandler(concurrent_limit=1)
-
+        client = AsyncHTTPHandler
     router = Router(
         model_list=[
             {
@@ -1322,14 +1321,17 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
         num_retries=0,
     )
 
-    with patch.object(client, "post", side_effect=mock_post_streaming) as mock_client:
+    with patch.object(
+        client,
+        "post",
+        side_effect=mock_post_streaming,
+    ) as mock_client:
         chunks = []
         if sync_mode:
             response = router.completion(
                 model="anthropic/claude-3-5-sonnet-20240620",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 stream=True,
-                client=client,
             )
             for chunk in response:
                 print(chunk)
@@ -1339,7 +1341,6 @@ async def test_anthropic_streaming_fallbacks(sync_mode):
                 model="anthropic/claude-3-5-sonnet-20240620",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 stream=True,
-                client=client,
             )
             async for chunk in response:
                 print(chunk)
