@@ -10,10 +10,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
-from litellm.llms.anthropic.chat.handler import (
-    ModelResponseIterator as AnthropicModelResponseIterator,
+from litellm.llms.anthropic.chat.transformation import (
+    AnthropicConfig,
+    AnthropicModelResponseIterator,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
 
