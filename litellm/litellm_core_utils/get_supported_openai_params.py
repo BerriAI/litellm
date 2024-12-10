@@ -31,7 +31,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params()
     elif custom_llm_provider == "ollama_chat":
-        return litellm.OllamaChatConfig().get_supported_openai_params()
+        return litellm.OllamaChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "anthropic":
         return litellm.AnthropicConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "fireworks_ai":
@@ -101,11 +101,15 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
-            return litellm.MistralConfig().get_supported_openai_params()
+            return litellm.MistralConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.MistralEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "text-completion-codestral":
-        return litellm.MistralTextCompletionConfig().get_supported_openai_params()
+        return litellm.MistralTextCompletionConfig().get_supported_openai_params(
+            model=model
+        )
+    elif custom_llm_provider == "sambanova":
+        return litellm.SambanovaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "replicate":
         return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":
@@ -129,10 +133,12 @@ def get_supported_openai_params(  # noqa: PLR0915
             if model.startswith("meta/"):
                 return litellm.VertexAILlama3Config().get_supported_openai_params()
             if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params()
+                return litellm.MistralConfig().get_supported_openai_params(model=model)
             if model.startswith("codestral"):
                 return (
-                    litellm.MistralTextCompletionConfig().get_supported_openai_params()
+                    litellm.MistralTextCompletionConfig().get_supported_openai_params(
+                        model=model
+                    )
                 )
             if model.startswith("claude"):
                 return litellm.VertexAIAnthropicConfig().get_supported_openai_params(
@@ -162,20 +168,11 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "cloudflare":
         return ["max_tokens", "stream"]
     elif custom_llm_provider == "nlp_cloud":
-        return [
-            "max_tokens",
-            "stream",
-            "temperature",
-            "top_p",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
+        return litellm.NLPCloudConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "petals":
         return ["max_tokens", "temperature", "top_p", "stream"]
     elif custom_llm_provider == "deepinfra":
-        return litellm.DeepInfraConfig().get_supported_openai_params()
+        return litellm.DeepInfraConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "perplexity":
         return [
             "temperature",

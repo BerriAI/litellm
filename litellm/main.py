@@ -88,10 +88,8 @@ from .llms import (
     baseten,
     cloudflare,
     maritalk,
-    nlp_cloud,
     ollama,
     ollama_chat,
-    oobabooga,
     petals,
     vllm,
 )
@@ -100,13 +98,13 @@ from .llms.anthropic.completion import AnthropicTextCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.chat import AzureAIChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
-from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
-from .llms.clarifai.chat import handler
+from .llms.clarifai.chat.handler import completion as clarifai_chat_completion
 from .llms.cohere.chat import handler as cohere_chat
 from .llms.cohere.completion import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
@@ -116,10 +114,13 @@ from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import palm
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.chat.handler import Huggingface
+from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
+from .llms.oobabooga.chat import oobabooga
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
 from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.completion.handler import OpenAITextCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion
+from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.common_utils import get_completion_messages
@@ -230,6 +231,7 @@ watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
+openai_like_chat_completion = OpenAILikeChatHandler()
 databricks_embedding = DatabricksEmbeddingHandler()
 ####### COMPLETION ENDPOINTS ################
 
@@ -1509,7 +1511,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
@@ -1686,7 +1687,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
             api_base = litellm.ClarifaiConfig()._convert_model_to_url(model, api_base)
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = handler.completion(
+            model_response = clarifai_chat_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1814,7 +1815,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.nlpcloud.io/v1/gpu/"
             )
 
-            response = nlp_cloud.completion(
+            response = nlp_cloud_chat_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1973,16 +1974,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
-            # if "stream" in optional_params and optional_params["stream"] is True:
-            #     # don't try to access stream object,
-            #     response = CustomStreamWrapper(
-            #         model_response,
-            #         model,
-            #         custom_llm_provider="cohere_chat",
-            #         logging_obj=logging,
-            #         _response_headers=headers,
-            #     )
-            #     return response
             response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
@@ -1996,10 +1987,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base
                 or litellm.api_base
                 or get_secret("MARITALK_API_BASE")
-                or "https://chat.maritaca.ai/api/chat/inference"
+                or "https://chat.maritaca.ai/api"
             )
 
-            model_response = maritalk.completion(
+            model_response = openai_like_chat_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2013,15 +2004,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
             )
 
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="maritalk",
-                    logging_obj=logging,
-                )
-                return response
             response = model_response
         elif custom_llm_provider == "huggingface":
             custom_llm_provider = "huggingface"

@@ -2,9 +2,10 @@ import types
 from typing import Literal, Optional, Union
 
 import litellm
+from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class VolcEngineConfig:
+class VolcEngineConfig(OpenAIGPTConfig):
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
@@ -38,21 +39,7 @@ class VolcEngineConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -79,7 +66,11 @@ class VolcEngineConfig:
         ]  # works across all models
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():

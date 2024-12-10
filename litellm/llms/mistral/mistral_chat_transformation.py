@@ -9,11 +9,12 @@ Docs - https://docs.mistral.ai/api/
 import types
 from typing import List, Literal, Optional, Tuple, Union
 
+from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 
-class MistralConfig:
+class MistralConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.mistral.ai/api/
 
@@ -67,23 +68,9 @@ class MistralConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "stream",
             "temperature",
@@ -104,7 +91,13 @@ class MistralConfig:
         else:  # openai 'tool_choice' object param not supported by Mistral API
             return "any"
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -150,8 +143,9 @@ class MistralConfig:
         )
         return api_base, dynamic_api_key
 
-    @classmethod
-    def _transform_messages(cls, messages: List[AllMessageValues]):
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
         """
         - handles scenario where content is list and not string
         - content list is just text, and no images
@@ -185,7 +179,7 @@ class MistralConfig:
             if m.get("tool_calls"):
                 new_m["tool_calls"] = m.get("tool_calls")
 
-            new_m = cls._handle_name_in_message(new_m)
+            new_m = MistralConfig._handle_name_in_message(new_m)
 
             new_messages.append(new_m)
         return new_messages

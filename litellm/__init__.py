@@ -869,7 +869,6 @@ class LlmProviders(str, Enum):
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
-    ANYSCALE = "anyscale"
     MISTRAL = "mistral"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
@@ -1056,6 +1055,8 @@ from .llms.custom_llm import CustomLLM
 from .llms.huggingface.chat.transformation import (
     HuggingfaceChatConfig as HuggingfaceConfig,
 )
+from .llms.oobabooga.chat.transformation import OobaboogaConfig
+from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.experimental_pass_through.transformation import (
@@ -1075,7 +1076,7 @@ from .llms.cloudflare import CloudflareConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
-from .llms.nlp_cloud import NLPCloudConfig
+from .llms.nlp_cloud.chat.handler import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1105,7 +1106,6 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transfor
 from .llms.sagemaker.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
-from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
@@ -1132,11 +1132,8 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.OpenAI.openai import (
-    OpenAIConfig,
-    MistralEmbeddingConfig,
-    DeepInfraConfig,
-)
+from .llms.OpenAI.openai import OpenAIConfig, MistralEmbeddingConfig
+from .llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.OpenAI.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
@@ -1180,6 +1177,7 @@ from .llms.azure.azure import (
 )
 
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig

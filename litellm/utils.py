@@ -3044,12 +3044,25 @@ def get_optional_params(  # noqa: PLR0915
         _check_valid_arg(supported_params=supported_params)
         if "codestral" in model:
             optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
-                non_default_params=non_default_params, optional_params=optional_params
+                model=model,
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
             )
         else:
             optional_params = litellm.MistralConfig().map_openai_params(
+                model=model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
             )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
         supported_params = get_supported_openai_params(
@@ -3253,29 +3266,28 @@ def get_optional_params(  # noqa: PLR0915
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "nlp_cloud":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.NLPCloudConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
 
-        if max_tokens is not None:
-            optional_params["max_length"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if n is not None:
-            optional_params["num_return_sequences"] = n
-        if stop is not None:
-            optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "petals":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3362,7 +3374,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.MistralConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "text-completion-codestral":
         supported_params = get_supported_openai_params(
@@ -3370,7 +3389,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
 
     elif custom_llm_provider == "databricks":
@@ -3397,6 +3423,11 @@ def get_optional_params(  # noqa: PLR0915
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "cerebras":
         supported_params = get_supported_openai_params(
@@ -3407,6 +3438,11 @@ def get_optional_params(  # noqa: PLR0915
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "xai":
         supported_params = get_supported_openai_params(
@@ -3452,6 +3488,11 @@ def get_optional_params(  # noqa: PLR0915
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "hosted_vllm":
         supported_params = get_supported_openai_params(
@@ -6190,6 +6231,39 @@ class ProviderConfigManager:
             return litellm.AI21ChatConfig()
         elif litellm.LlmProviders.AZURE == provider:
             return litellm.AzureOpenAIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            return litellm.AzureAIStudioConfig()
+        elif litellm.LlmProviders.AZURE_TEXT == provider:
+            return litellm.AzureOpenAITextConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMChatConfig()
+        elif litellm.LlmProviders.NLP_CLOUD == provider:
+            return litellm.NLPCloudConfig()
+        elif litellm.LlmProviders.OOBABOOGA == provider:
+            return litellm.OobaboogaConfig()
+        elif litellm.LlmProviders.OLLAMA_CHAT == provider:
+            return litellm.OllamaChatConfig()
+        elif litellm.LlmProviders.DEEPINFRA == provider:
+            return litellm.DeepInfraConfig()
+        elif litellm.LlmProviders.PERPLEXITY == provider:
+            return litellm.PerplexityChatConfig()
+        elif (
+            litellm.LlmProviders.MISTRAL == provider
+            or litellm.LlmProviders.CODESTRAL == provider
+        ):
+            return litellm.MistralConfig()
+        elif litellm.LlmProviders.NVIDIA_NIM == provider:
+            return litellm.NvidiaNimConfig()
+        elif litellm.LlmProviders.CEREBRAS == provider:
+            return litellm.CerebrasConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            return litellm.VolcEngineConfig()
+        elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
+            return litellm.MistralTextCompletionConfig()
+        elif litellm.LlmProviders.SAMBANOVA == provider:
+            return litellm.SambanovaConfig()
+        elif litellm.LlmProviders.MARITALK == provider:
+            return litellm.MaritalkConfig()
         return litellm.OpenAIGPTConfig()
 
 
