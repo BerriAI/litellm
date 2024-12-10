@@ -110,7 +110,6 @@ from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
-from .llms.clarifai.chat import handler
 from .llms.cohere.completion import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -1689,41 +1688,23 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.clarifai.com/v2"
             )
             api_base = litellm.ClarifaiConfig()._convert_model_to_url(model, api_base)
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = handler.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
+                fake_stream=True,  # clarifai does not support streaming, we fake it
                 messages=messages,
+                acompletion=acompletion,
                 api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                acompletion=acompletion,
-                logger_fn=logger_fn,
-                encoding=encoding,  # for calculating input/output tokens
+                custom_llm_provider="clarifai",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
                 api_key=clarifai_key,
-                logging_obj=logging,
-                custom_prompt_dict=custom_prompt_dict,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=model_response,
-                )
-
-            if optional_params.get("stream", False) or acompletion is True:
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=clarifai_key,
-                    original_response=model_response,
-                )
-            response = model_response
-
         elif custom_llm_provider == "anthropic":
             api_key = (
                 api_key

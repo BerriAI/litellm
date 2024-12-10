@@ -1,13 +1,23 @@
+import json
 import types
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_model_iterator import FakeStreamResponseIterator
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    Choices,
+    GenericStreamingChunk,
+    Message,
+    ModelResponse,
+    Usage,
+)
 from litellm.utils import token_counter
 
 from ..common_utils import ClarifaiError
@@ -199,3 +209,56 @@ class ClarifaiConfig(BaseConfig):
             ),
         )
         return model_response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return ClarifaiModelResponseIterator(
+            model_response=streaming_response,
+            json_mode=json_mode,
+        )
+
+
+class ClarifaiModelResponseIterator(FakeStreamResponseIterator):
+    def __init__(
+        self,
+        model_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        json_mode: Optional[bool] = False,
+    ):
+        super().__init__(
+            model_response=model_response,
+            json_mode=json_mode,
+        )
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields = None
+
+            text = (
+                chunk.get("outputs", "")[0]
+                .get("data", "")
+                .get("text", "")
+                .get("raw", "")
+            )
+
+            index: int = 0
+
+            return GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+                provider_specific_fields=provider_specific_fields,
+            )
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
