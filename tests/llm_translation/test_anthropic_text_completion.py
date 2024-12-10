@@ -1,5 +1,6 @@
 import asyncio
 import os
+from re import T
 import sys
 import traceback
 
@@ -24,10 +25,9 @@ import pytest
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["claude-2", "anthropic/claude-2"])
-async def test_acompletion_claude2_1(model):
+async def test_acompletion_claude2(model):
     try:
         litellm.set_verbose = True
-        print("claude2.1 test request")
         messages = [
             {
                 "role": "system",
@@ -45,5 +45,29 @@ async def test_acompletion_claude2_1(model):
         # print("new cost tracking")
     except litellm.InternalServerError:
         pytest.skip("model is overloaded.")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_claude2_stream():
+    try:
+        litellm.set_verbose = False
+        messages = [
+            {
+                "role": "system",
+                "content": "Your goal is generate a joke on the topic user gives.",
+            },
+            {"role": "user", "content": "Generate a 3 liner joke for me"},
+        ]
+        # test without max-tokens
+        response = await litellm.acompletion(
+            model="anthropic_text/claude-2",
+            messages=messages,
+            stream=True,
+            max_tokens=10,
+        )
+        async for chunk in response:
+            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
