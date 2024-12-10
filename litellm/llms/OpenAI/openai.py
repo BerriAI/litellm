@@ -190,6 +190,11 @@ class OpenAIConfig(BaseConfig):
                 optional_params[param] = value
         return optional_params
 
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        return messages
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -441,7 +446,9 @@ class OpenAIChatCompletion(BaseLLM):
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
-                if isinstance(provider_config, OpenAIGPTConfig):
+                if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
+                    provider_config, OpenAIConfig
+                ):
                     messages = provider_config._transform_messages(messages)
 
             for _ in range(
