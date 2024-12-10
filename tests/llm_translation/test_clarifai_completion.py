@@ -74,7 +74,7 @@ def test_completion_clarifai_mistral_large():
 
 @pytest.mark.asyncio
 async def test_async_completion_clarifai():
-    litellm.set_verbose = True
+    # litellm.set_verbose = True
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     response = completion(

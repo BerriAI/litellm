@@ -249,9 +249,15 @@ class BaseLLMHTTPHandler:
                 status_code=response.status_code,
                 message=str(response.read()),
             )
-        completion_stream = provider_config.get_model_response_iterator(
-            streaming_response=response.iter_lines(), sync_stream=True
-        )
+
+        if fake_stream is True:
+            completion_stream = provider_config.get_model_response_iterator(
+                streaming_response=response.json(), sync_stream=True
+            )
+        else:
+            completion_stream = provider_config.get_model_response_iterator(
+                streaming_response=response.iter_lines(), sync_stream=True
+            )
 
         # LOGGING
         logging_obj.post_call(
