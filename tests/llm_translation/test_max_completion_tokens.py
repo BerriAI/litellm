@@ -154,7 +154,7 @@ def test_all_model_configs():
         {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
-    from litellm.llms.fireworks_ai.chat.fireworks_ai_transformation import (
+    from litellm.llms.fireworks_ai.chat.transformation import (
         FireworksAIConfig,
     )
 
