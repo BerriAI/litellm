@@ -98,7 +98,6 @@ from .llms import (
     vllm,
 )
 from .llms.ai21 import completion as ai21
-from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
@@ -202,7 +201,6 @@ groq_chat_completions = GroqChatCompletion()
 together_ai_text_completions = TogetherAITextCompletion()
 azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
-anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
@@ -1745,7 +1743,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_key
                 or os.environ.get("ANTHROPIC_API_KEY")
             )
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            litellm_params["custom_prompt_dict"] = (
+                custom_prompt_dict or litellm.custom_prompt_dict
+            )
             # call /messages
             # default route for all anthropic models
             api_base = (
@@ -1759,33 +1759,22 @@ def completion(  # type: ignore # noqa: PLR0915
             if api_base is not None and not api_base.endswith("/v1/messages"):
                 api_base += "/v1/messages"
 
-            response = anthropic_chat_completions.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
-                api_base=api_base,
                 acompletion=acompletion,
-                custom_prompt_dict=litellm.custom_prompt_dict,
+                api_base=api_base,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,  # for calculating input/output tokens
-                api_key=api_key,
-                logging_obj=logging,
-                headers=headers,
-                timeout=timeout,
-                client=client,
                 custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-            if optional_params.get("stream", False) or acompletion is True:
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=response,
-                )
-            response = response
         elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key
