@@ -4172,26 +4172,6 @@ def test_completion_together_ai_stream():
 # test_completion_together_ai_stream()
 
 
-# Cloud flare AI tests
-@pytest.mark.skip(reason="Flaky test-cloudflare is very unstable")
-def test_completion_cloudflare():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
-            messages=[{"content": "what llm are you", "role": "user"}],
-            max_tokens=15,
-            num_retries=3,
-        )
-        print(response)
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_cloudflare()
-
-
 def test_moderation():
     response = litellm.moderation(input="i'm ishaan cto of litellm")
     print(response)

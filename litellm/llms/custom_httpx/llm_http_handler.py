@@ -13,7 +13,6 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import requests  # type: ignore
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
@@ -109,6 +108,11 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=messages,
             optional_params=optional_params,
+        )
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
         )
 
         data = provider_config.transform_request(

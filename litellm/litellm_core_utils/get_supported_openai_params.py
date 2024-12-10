@@ -166,7 +166,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             "stop",
         ]
     elif custom_llm_provider == "cloudflare":
-        return ["max_tokens", "stream"]
+        return litellm.CloudflareChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nlp_cloud":
         return litellm.NLPCloudConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "petals":
