@@ -6300,6 +6300,8 @@ class ProviderConfigManager:
             return litellm.MaritalkConfig()
         elif litellm.LlmProviders.CLOUDFLARE == provider:
             return litellm.CloudflareChatConfig()
+        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
+            return litellm.AnthropicTextConfig()
         return litellm.OpenAIGPTConfig()
 
 
