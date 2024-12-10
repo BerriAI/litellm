@@ -9,13 +9,17 @@ import os
 import time
 import types
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import Any, Dict, List, Optional, Union, cast
 
 import httpx
 import requests
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, LiteLLMLoggingObj
+from litellm.llms.base_llm.transformation import (
+    BaseConfig,
+    BaseLLMException,
+    LiteLLMLoggingObj,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -27,12 +31,7 @@ from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
-class AnthropicConstants(Enum):
-    HUMAN_PROMPT = "\n\nHuman: "
-    AI_PROMPT = "\n\nAssistant: "
-
-
-class AnthropicError(Exception):
+class AnthropicTextError(BaseLLMException):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
@@ -41,7 +40,10 @@ class AnthropicError(Exception):
         )
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
-            self.message
+            message=self.message,
+            status_code=self.status_code,
+            request=self.request,
+            response=self.response,
         )  # Call the base class constructor with the parameters it needs
 
 
@@ -136,6 +138,43 @@ class AnthropicTextConfig(BaseConfig):
 
         return data
 
+    def get_supported_openai_params(self, model: str):
+        """
+        Anthropic /complete API Ref: https://docs.anthropic.com/en/api/complete
+        """
+        return [
+            "stream",
+            "max_tokens",
+            "max_completion_tokens",
+            "stop",
+            "temperature",
+            "top_p",
+            "extra_headers",
+            "user",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        """
+        Follows the same logic as the AnthropicConfig.map_openai_params method (which is the Anthropic /messages API)
+
+        Note: the only difference is in the get supported openai params method between the AnthropicConfig and AnthropicTextConfig
+        API Ref: https://docs.anthropic.com/en/api/complete
+        """
+        return litellm.AnthropicConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
+        return optional_params
+
     def transform_response(
         self,
         model: str,
@@ -152,14 +191,14 @@ class AnthropicTextConfig(BaseConfig):
         try:
             completion_response = raw_response.json()
         except Exception:
-            raise AnthropicError(
+            raise AnthropicTextError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
         prompt = prompt_factory(
             model=model, messages=messages, custom_llm_provider="anthropic"
         )
         if "error" in completion_response:
-            raise AnthropicError(
+            raise AnthropicTextError(
                 message=str(completion_response["error"]),
                 status_code=raw_response.status_code,
             )
@@ -188,3 +227,17 @@ class AnthropicTextConfig(BaseConfig):
 
         setattr(model_response, "usage", usage)
         return model_response
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return AnthropicTextError(
+            status_code=status_code,
+            message=error_message,
+        )
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        "Not required"
+        raise NotImplementedError

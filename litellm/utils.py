@@ -6251,6 +6251,8 @@ class ProviderConfigManager:
             return litellm.ClarifaiConfig()
         elif litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicConfig()
+        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
+            return litellm.AnthropicTextConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
