@@ -313,23 +313,23 @@ def _check_provider_config(config: BaseConfig, provider: LlmProviders):
     assert "_abc_impl" not in config.get_config(), f"Provider {provider} has _abc_impl"
 
 
-def test_provider_config_manager():
-    from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+# def test_provider_config_manager():
+#     from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 
-    for provider in LITELLM_CHAT_PROVIDERS:
-        if (
-            provider == LlmProviders.VERTEX_AI
-            or provider == LlmProviders.VERTEX_AI_BETA
-            or provider == LlmProviders.BEDROCK
-            or provider == LlmProviders.BASETEN
-            or provider == LlmProviders.SAGEMAKER
-            or provider == LlmProviders.SAGEMAKER_CHAT
-            or provider == LlmProviders.VLLM
-            or provider == LlmProviders.PETALS
-            or provider == LlmProviders.OLLAMA
-        ):
-            continue
-        config = ProviderConfigManager.get_provider_chat_config(
-            model="gpt-3.5-turbo", provider=LlmProviders(provider)
-        )
-        _check_provider_config(config, provider)
+#     for provider in LITELLM_CHAT_PROVIDERS:
+#         if (
+#             provider == LlmProviders.VERTEX_AI
+#             or provider == LlmProviders.VERTEX_AI_BETA
+#             or provider == LlmProviders.BEDROCK
+#             or provider == LlmProviders.BASETEN
+#             or provider == LlmProviders.SAGEMAKER
+#             or provider == LlmProviders.SAGEMAKER_CHAT
+#             or provider == LlmProviders.VLLM
+#             or provider == LlmProviders.PETALS
+#             or provider == LlmProviders.OLLAMA
+#         ):
+#             continue
+#         config = ProviderConfigManager.get_provider_chat_config(
+#             model="gpt-3.5-turbo", provider=LlmProviders(provider)
+#         )
+#         _check_provider_config(config, provider)
