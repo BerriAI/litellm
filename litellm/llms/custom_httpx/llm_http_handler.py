@@ -69,7 +69,7 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
         return provider_config.transform_response(
             model=model,
-            httpx_response=response,
+            raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
@@ -105,6 +105,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
             model=model,
             messages=messages,
+            optional_params=optional_params,
         )
 
         data = provider_config.transform_request(
@@ -194,7 +195,7 @@ class BaseLLMHTTPHandler:
 
         return provider_config.transform_response(
             model=model,
-            httpx_response=response,
+            raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
