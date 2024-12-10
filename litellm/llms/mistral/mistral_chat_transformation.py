@@ -12,6 +12,7 @@ from typing import List, Literal, Optional, Tuple, Union
 from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
+    strip_none_values_from_message,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -172,6 +173,7 @@ class MistralConfig(OpenAIGPTConfig):
         new_messages: List[AllMessageValues] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
+            m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
         return new_messages
