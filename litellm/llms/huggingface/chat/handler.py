@@ -6,7 +6,18 @@ import os
 import time
 import types
 from enum import Enum
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, get_args
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_args,
+)
 
 import httpx
 import requests
@@ -30,36 +41,9 @@ from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, 
 
 from ...base import BaseLLM
 from ...prompt_templates.factory import custom_prompt, prompt_factory
-from ..common_utils import hf_task_list, hf_tasks
+from ..common_utils import HuggingfaceError, hf_task_list, hf_tasks
 
 hf_chat_config = HuggingfaceConfig()
-
-
-class HuggingfaceError(Exception):
-    def __init__(
-        self,
-        status_code,
-        message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-    ):
-        self.status_code = status_code
-        self.message = message
-        if request is not None:
-            self.request = request
-        else:
-            self.request = httpx.Request(
-                method="POST", url="https://api-inference.huggingface.co/models"
-            )
-        if response is not None:
-            self.response = response
-        else:
-            self.response = httpx.Response(
-                status_code=status_code, request=self.request
-            )
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
 
 
 hf_tasks_embeddings = Literal[  # pipeline tags + hf tei endpoints - https://huggingface.github.io/text-embeddings-inference/#/
@@ -113,6 +97,51 @@ async def async_get_hf_task_embedding_for_model(
     pipeline_tag: Optional[str] = model_info_dict.get("pipeline_tag", None)
 
     return pipeline_tag
+
+
+async def make_call(
+    client: Optional[AsyncHTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+    timeout: Optional[Union[float, httpx.Timeout]],
+    json_mode: bool,
+) -> Tuple[Any, httpx.Headers]:
+    if client is None:
+        client = litellm.module_level_aclient
+
+    try:
+        response = await client.post(
+            api_base, headers=headers, data=data, stream=True, timeout=timeout
+        )
+    except httpx.HTTPStatusError as e:
+        error_headers = getattr(e, "headers", None)
+        error_response = getattr(e, "response", None)
+        if error_headers is None and error_response:
+            error_headers = getattr(error_response, "headers", None)
+        raise HuggingfaceError(
+            status_code=e.response.status_code,
+            message=str(await e.response.aread()),
+            headers=cast(dict, error_headers) if error_headers else None,
+        )
+    except Exception as e:
+        for exception in litellm.LITELLM_EXCEPTION_TYPES:
+            if isinstance(e, exception):
+                raise e
+        raise HuggingfaceError(status_code=500, message=str(e))
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=response,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return response.aiter_lines(), response.headers
 
 
 class Huggingface(BaseLLM):
@@ -178,7 +207,7 @@ class Huggingface(BaseLLM):
             if acompletion is True:
                 ### ASYNC STREAMING
                 if optional_params.get("stream", False):
-                    return self.async_streaming(logging_obj=logging_obj, api_base=completion_url, data=data, headers=headers, model_response=model_response, model=model, timeout=timeout)  # type: ignore
+                    return self.async_streaming(logging_obj=logging_obj, api_base=completion_url, data=data, headers=headers, model_response=model_response, model=model, timeout=timeout, messages=messages)  # type: ignore
                 else:
                     ### ASYNC COMPLETION
                     return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, model=model, optional_params=optional_params, timeout=timeout, litellm_params=litellm_params)  # type: ignore
@@ -272,6 +301,7 @@ class Huggingface(BaseLLM):
                 raise HuggingfaceError(
                     status_code=500,
                     message=f"{str(e)}\n\nOriginal Response: {response.text}",
+                    headers=response.headers,
                 )
             else:
                 raise HuggingfaceError(status_code=500, message=f"{str(e)}")
@@ -283,67 +313,29 @@ class Huggingface(BaseLLM):
         data: dict,
         headers: dict,
         model_response: ModelResponse,
+        messages: List[AllMessageValues],
         model: str,
         timeout: float,
+        client: Optional[AsyncHTTPHandler] = None,
     ):
-        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-
-        async with httpx.AsyncClient(timeout=timeout, verify=ssl_verify) as client:
-            response = client.stream(
-                "POST", url=f"{api_base}", json=data, headers=headers
-            )
-            async with response as r:
-                if r.status_code != 200:
-                    text = await r.aread()
-                    raise HuggingfaceError(
-                        status_code=r.status_code,
-                        message=str(text),
-                    )
-                """
-                Check first chunk for error message. 
-                If error message, raise error. 
-                If not - add back to stream
-                """
-                # Async iterator over the lines in the response body
-                response_iterator = r.aiter_lines()
-
-                # Attempt to get the first line/chunk from the response
-                try:
-                    first_chunk = await response_iterator.__anext__()
-                except StopAsyncIteration:
-                    # Handle the case where there are no lines to read (empty response)
-                    first_chunk = ""
-
-                # Check the first chunk for an error message
-                if (
-                    "error" in first_chunk.lower()
-                ):  # Adjust this condition based on how error messages are structured
-                    raise HuggingfaceError(
-                        status_code=400,
-                        message=first_chunk,
-                    )
-
-                # Create a new async generator that begins with the first_chunk and includes the remaining items
-                async def custom_stream_with_first_chunk():
-                    yield first_chunk  # Yield back the first chunk
-                    async for (
-                        chunk
-                    ) in response_iterator:  # Continue yielding the rest of the chunks
-                        yield chunk
-
-                # Creating a new completion stream that starts with the first chunk
-                completion_stream = custom_stream_with_first_chunk()
-
-                streamwrapper = CustomStreamWrapper(
-                    completion_stream=completion_stream,
-                    model=model,
-                    custom_llm_provider="huggingface",
-                    logging_obj=logging_obj,
-                )
-
-                async for transformed_chunk in streamwrapper:
-                    yield transformed_chunk
+        completion_stream, _ = await make_call(
+            client=client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            json_mode=False,
+        )
+        streamwrapper = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model=model,
+            custom_llm_provider="huggingface",
+            logging_obj=logging_obj,
+        )
+        return streamwrapper
 
     def _transform_input_on_pipeline_tag(
         self, input: List, pipeline_tag: Optional[str]
