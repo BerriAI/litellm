@@ -8,6 +8,7 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import LlmProviders
+from litellm.main import base_llm_http_handler
 from litellm.utils import ModelResponse
 
 from ..vertex_llm_base import VertexBase
@@ -90,7 +91,6 @@ class VertexAIPartnerModels(VertexBase):
             import vertexai
             from google.cloud import aiplatform
 
-            from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.OpenAI.openai import OpenAIChatCompletion
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.text_completion_codestral import CodestralTextCompletion
@@ -122,7 +122,6 @@ class VertexAIPartnerModels(VertexBase):
 
             openai_like_chat_completions = OpenAILikeChatHandler()
             codestral_fim_completions = CodestralTextCompletion()
-            anthropic_chat_completions = AnthropicChatCompletion()
 
             ## CONSTRUCT API BASE
             stream: bool = optional_params.get("stream", False) or False
@@ -195,24 +194,21 @@ class VertexAIPartnerModels(VertexBase):
                         "is_vertex_request": True,
                     }
                 )
-                return anthropic_chat_completions.completion(
+                return base_llm_http_handler.completion(
                     model=model,
+                    stream=stream,
                     messages=messages,
-                    api_base=api_base,
                     acompletion=acompletion,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
+                    api_base=api_base,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,  # for calculating input/output tokens
-                    api_key=access_token,
-                    logging_obj=logging_obj,
-                    headers=headers,
-                    timeout=timeout,
-                    client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=access_token,
+                    logging_obj=logging_obj,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 )
 
             return openai_like_chat_completions.completion(
