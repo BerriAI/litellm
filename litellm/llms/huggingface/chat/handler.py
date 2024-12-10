@@ -243,6 +243,12 @@ class Huggingface(BaseLLM):
                     json_mode=None,
                     litellm_params=litellm_params,
                 )
+        except httpx.HTTPStatusError as e:
+            raise HuggingfaceError(
+                status_code=e.response.status_code,
+                message=e.response.text,
+                headers=e.response.headers,
+            )
         except HuggingfaceError as e:
             exception_mapping_worked = True
             raise e
