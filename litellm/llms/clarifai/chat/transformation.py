@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 import httpx
 
 import litellm
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_model_iterator import FakeStreamResponseIterator
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
 from litellm.types.llms.openai import AllMessageValues
@@ -212,24 +212,24 @@ class ClarifaiConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str]],
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:
         return ClarifaiModelResponseIterator(
-            streaming_response=streaming_response,
-            sync_stream=sync_stream,
+            model_response=streaming_response,
             json_mode=json_mode,
         )
 
 
-class ClarifaiModelResponseIterator(BaseModelResponseIterator):
+class ClarifaiModelResponseIterator(FakeStreamResponseIterator):
     def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
+        self,
+        model_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        json_mode: Optional[bool] = False,
     ):
         super().__init__(
-            streaming_response=streaming_response,
-            sync_stream=sync_stream,
+            model_response=model_response,
             json_mode=json_mode,
         )
 
