@@ -564,11 +564,11 @@ class AnthropicConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: Dict,
         messages: List[AllMessageValues],
         optional_params: Dict,
         encoding: Any,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         _hidden_params: Dict = {}
@@ -721,7 +721,7 @@ class AnthropicConfig(BaseConfig):
         return messages
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Dict
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
@@ -731,11 +731,11 @@ class AnthropicConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
-        headers: Dict,
+        headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> Dict:
         if api_key is None:
             raise litellm.AuthenticationError(

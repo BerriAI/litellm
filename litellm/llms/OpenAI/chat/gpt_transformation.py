@@ -15,11 +15,11 @@ from litellm.types.utils import ModelResponse
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingClass = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingClass = Any
+    LiteLLMLoggingObj = Any
 
 
 class OpenAIGPTConfig(BaseConfig):
@@ -189,12 +189,12 @@ class OpenAIGPTConfig(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
-        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: Any,
+        encoding: str,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
@@ -216,10 +216,10 @@ class OpenAIGPTConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError
