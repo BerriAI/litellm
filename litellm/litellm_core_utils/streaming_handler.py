@@ -803,49 +803,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_clarifai_completion_chunk(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                parsed_response = chunk
-            elif isinstance(chunk, (str, bytes)):
-                if isinstance(chunk, bytes):
-                    parsed_response = chunk.decode("utf-8")
-                else:
-                    parsed_response = chunk
-            else:
-                raise ValueError("Unable to parse streaming chunk")
-            if isinstance(parsed_response, dict):
-                data_json = parsed_response
-            else:
-                data_json = json.loads(parsed_response)
-            text = (
-                data_json.get("outputs", "")[0]
-                .get("data", "")
-                .get("text", "")
-                .get("raw", "")
-            )
-            len(
-                encoding.encode(
-                    data_json.get("outputs", "")[0]
-                    .get("input", "")
-                    .get("data", "")
-                    .get("text", "")
-                    .get("raw", "")
-                )
-            )
-            len(encoding.encode(text))
-            return {
-                "text": text,
-                "is_finished": True,
-            }
-        except Exception as e:
-            verbose_logger.exception(
-                "litellm.CustomStreamWrapper.handle_clarifai_chunk(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
-            return ""
-
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
     ):
@@ -1109,11 +1066,6 @@ class CustomStreamWrapper:
                 and self.custom_llm_provider == "anthropic_text"
             ):
                 response_obj = self.handle_anthropic_text_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider and self.custom_llm_provider == "clarifai":
-                response_obj = self.handle_clarifai_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
