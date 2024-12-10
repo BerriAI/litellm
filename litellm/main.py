@@ -111,7 +111,6 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.clarifai.chat import handler
-from .llms.cohere.completion import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
@@ -1923,7 +1922,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="cohere_chat",
+                custom_llm_provider="cohere",
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,
