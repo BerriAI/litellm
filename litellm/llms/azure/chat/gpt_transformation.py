@@ -268,7 +268,7 @@ class AzureOpenAIConfig(BaseConfig):
         ]
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | Headers
+        self, error_message: str, status_code: int, headers: Union[dict, Headers]
     ) -> BaseLLMException:
         return AzureOpenAIError(
             message=error_message, status_code=status_code, headers=headers
