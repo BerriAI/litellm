@@ -239,7 +239,7 @@ class AnthropicChatCompletion(BaseLLM):
         data: dict,
         optional_params: dict,
         json_mode: bool,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -283,6 +283,7 @@ class AnthropicChatCompletion(BaseLLM):
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )
@@ -460,6 +461,7 @@ class AnthropicChatCompletion(BaseLLM):
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )

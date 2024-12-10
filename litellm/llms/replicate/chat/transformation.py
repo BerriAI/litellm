@@ -131,7 +131,7 @@ class ReplicateConfig(BaseConfig):
         return messages
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return ReplicateError(
             status_code=status_code, message=error_message, headers=headers
@@ -229,12 +229,13 @@ class ReplicateConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         encoding: Any,
-        json_mode: bool | types.NoneType = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         logging_obj.post_call(
             input=messages,
@@ -298,11 +299,11 @@ class ReplicateConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         headers = {
             "Authorization": f"Token {api_key}",

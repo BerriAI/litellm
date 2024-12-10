@@ -84,6 +84,7 @@ def completion(
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 

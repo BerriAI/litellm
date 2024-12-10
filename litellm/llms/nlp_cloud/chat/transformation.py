@@ -1,6 +1,6 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -87,11 +87,11 @@ class NLPCloudConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         headers = {
             "accept": "application/json",
@@ -140,7 +140,7 @@ class NLPCloudConfig(BaseConfig):
         return optional_params
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return NLPCloudError(
             status_code=status_code, message=error_message, headers=headers
@@ -169,12 +169,12 @@ class NLPCloudConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         ## LOGGING

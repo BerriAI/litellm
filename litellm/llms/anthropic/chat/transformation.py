@@ -567,6 +567,7 @@ class AnthropicConfig(BaseConfig):
         request_data: Dict,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: dict,
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,

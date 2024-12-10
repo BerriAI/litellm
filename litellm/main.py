@@ -99,13 +99,11 @@ from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
-from .llms.azure_ai.chat import AzureAIChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.clarifai.chat.handler import completion as clarifai_chat_completion
-from .llms.cohere.chat import handler as cohere_chat
 from .llms.cohere.completion import completion as cohere_completion  # type: ignore
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -118,7 +116,6 @@ from .llms.huggingface.chat.handler import Huggingface
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.oobabooga.chat import oobabooga
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
-from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.completion.handler import OpenAITextCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
@@ -199,12 +196,10 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
-openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
 together_ai_text_completions = TogetherAITextCompletion()
-azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 anthropic_text_completions = AnthropicTextCompletion()
@@ -1315,7 +1310,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                response = azure_ai_chat_completions.completion(
+                response = openai_chat_completions.completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1560,46 +1555,25 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
-                    response = openai_o1_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        headers=headers,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        acompletion=acompletion,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        timeout=timeout,  # type: ignore
-                        custom_prompt_dict=custom_prompt_dict,
-                        client=client,  # pass AsyncOpenAI, OpenAI client
-                        organization=organization,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-                else:
-                    response = openai_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        headers=headers,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        acompletion=acompletion,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        timeout=timeout,  # type: ignore
-                        custom_prompt_dict=custom_prompt_dict,
-                        client=client,  # pass AsyncOpenAI, OpenAI client
-                        organization=organization,
-                        custom_llm_provider=custom_llm_provider,
-                    )
+                response = openai_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    organization=organization,
+                    custom_llm_provider=custom_llm_provider,
+                )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(

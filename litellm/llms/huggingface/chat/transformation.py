@@ -347,12 +347,12 @@ class HuggingfaceChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: Optional[str],
-        headers: Optional[dict],
+        headers: Dict,
         model: str,
         messages: List[AllMessageValues],
-        optional_params: dict,
-    ) -> dict:
+        optional_params: Dict,
+        api_key: Optional[str] = None,
+    ) -> Dict:
         default_headers = {
             "content-type": "application/json",
         }
@@ -386,7 +386,7 @@ class HuggingfaceChatConfig(BaseConfig):
         logging_obj: LoggingClass,
         model: str,
         data: dict,
-        api_key: str,
+        api_key: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         streamed_response = CustomStreamWrapper(
             completion_stream=response.iter_lines(),
@@ -532,12 +532,12 @@ class HuggingfaceChatConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: Dict,
         messages: List[AllMessageValues],
         optional_params: Dict,
         litellm_params: Dict,
         encoding: Any,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)

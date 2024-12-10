@@ -134,7 +134,6 @@ class Huggingface(BaseLLM):
         model: str,
         messages: list,
         api_base: Optional[str],
-        headers: Optional[dict],
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: float,
@@ -147,6 +146,7 @@ class Huggingface(BaseLLM):
         acompletion: bool = False,
         logger_fn=None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        headers: dict = {},
     ):
         super().completion()
         exception_mapping_worked = False

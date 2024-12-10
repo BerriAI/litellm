@@ -12,7 +12,7 @@ class VertexAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[Dict, httpx.Headers]],
+        headers: Optional[Union[Dict, httpx.Headers]] = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
 

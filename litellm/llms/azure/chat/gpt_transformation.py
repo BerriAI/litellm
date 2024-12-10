@@ -1,7 +1,7 @@
 import types
 from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
 
-from httpx._models import Response
+from httpx._models import Headers, Response
 
 import litellm
 from litellm.llms.base_llm.transformation import BaseLLMException
@@ -223,12 +223,12 @@ class AzureOpenAIConfig(BaseConfig):
         raw_response: Response,
         model_response: litellm.ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> litellm.ModelResponse:
         raise NotImplementedError(
@@ -268,7 +268,7 @@ class AzureOpenAIConfig(BaseConfig):
         ]
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: dict | Headers
     ) -> BaseLLMException:
         return AzureOpenAIError(
             message=error_message, status_code=status_code, headers=headers
@@ -276,11 +276,11 @@ class AzureOpenAIConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError(
             "Azure OpenAI has custom logic for validating environment, as it uses the OpenAI SDK."

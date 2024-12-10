@@ -750,12 +750,12 @@ class VertexGeminiConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: Dict,
         messages: List[AllMessageValues],
         optional_params: Dict,
         litellm_params: Dict,
         encoding: Any,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         ## LOGGING
@@ -919,7 +919,7 @@ class VertexGeminiConfig(BaseConfig):
         return _gemini_convert_messages_with_history(messages=messages)
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Dict
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
     ) -> BaseLLMException:
         return VertexAIError(
             message=error_message, status_code=status_code, headers=headers
@@ -939,11 +939,11 @@ class VertexGeminiConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: Optional[str],
         headers: Optional[Dict],
         model: str,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        api_key: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",

@@ -159,6 +159,7 @@ def completion(
             encoding=encoding,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             version_id=version_id,
             input_data=input_data,
             api_key=api_key,
@@ -212,6 +213,7 @@ def completion(
                 request_data=input_data,
                 messages=messages,
                 optional_params=optional_params,
+                litellm_params=litellm_params,
                 encoding=encoding,
             )
 
@@ -228,6 +230,7 @@ async def async_completion(
     messages: List[AllMessageValues],
     encoding,
     optional_params: dict,
+    litellm_params: dict,
     version_id,
     input_data,
     api_key,
@@ -271,6 +274,7 @@ async def async_completion(
             request_data=input_data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
     # Add a fallback return if no response is received after max retries

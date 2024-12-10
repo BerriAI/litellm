@@ -46,12 +46,13 @@ class OobaboogaConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         encoding: Any,
-        json_mode: bool | types.NoneType = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
@@ -94,11 +95,11 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        api_key: Optional[str],
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         headers = {
             "accept": "application/json",

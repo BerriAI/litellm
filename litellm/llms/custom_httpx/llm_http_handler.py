@@ -52,7 +52,8 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         messages: list,
         optional_params: dict,
-        encoding: str,
+        litellm_params: dict,
+        encoding: Any,
         api_key: Optional[str] = None,
     ):
         async_httpx_client = get_async_httpx_client(
@@ -76,6 +77,7 @@ class BaseLLMHTTPHandler:
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 
@@ -159,6 +161,7 @@ class BaseLLMHTTPHandler:
                     api_key=api_key,
                     messages=messages,
                     optional_params=optional_params,
+                    litellm_params=litellm_params,
                     encoding=encoding,
                 )
 
@@ -207,6 +210,7 @@ class BaseLLMHTTPHandler:
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 

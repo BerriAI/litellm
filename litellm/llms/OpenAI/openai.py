@@ -221,7 +221,7 @@ class OpenAIConfig(BaseConfig):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
@@ -245,13 +245,13 @@ class OpenAIConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: str,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        json_mode: bool | types.NoneType = None,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "OpenAI handler does this transformation as it uses the OpenAI SDK."
@@ -259,11 +259,11 @@ class OpenAIConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError(
             "OpenAI handler does this validation as it uses the OpenAI SDK."

@@ -56,6 +56,7 @@ class AnthropicPassthroughLoggingHandler:
             request_data={},
             encoding=litellm.encoding,
             json_mode=False,
+            litellm_params={},
         )
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
