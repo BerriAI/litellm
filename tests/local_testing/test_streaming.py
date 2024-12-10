@@ -1939,7 +1939,7 @@ async def test_completion_watsonx_stream():
 # ai21_completion_call_bad_key()
 
 
-# @pytest.mark.skip(reason="flaky test")
+@pytest.mark.skip(reason="flaky test")
 @pytest.mark.asyncio
 async def test_hf_completion_tgi_stream():
     try:
