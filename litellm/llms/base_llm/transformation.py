@@ -151,3 +151,17 @@ class BaseConfig(ABC):
         json_mode: Optional[bool] = False,
     ) -> Any:
         pass
+
+    def transform_response_headers(self, headers: Union[httpx.Headers, dict]) -> dict:
+        """
+        Transform the response headers from LLM API to the OpenAI API format
+
+        OpenAI Headers are:
+        `x-ratelimit-limit-requests`
+        `x-ratelimit-remaining-requests`
+        `x-ratelimit-limit-tokens`
+        `x-ratelimit-remaining-tokens`
+        """
+        if isinstance(headers, httpx.Headers):
+            headers = dict(headers)
+        return headers
