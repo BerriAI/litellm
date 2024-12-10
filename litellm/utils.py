@@ -2944,53 +2944,6 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "ai21":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-
-        if stream:
-            optional_params["stream"] = stream
-        if n is not None:
-            optional_params["numResults"] = n
-        if max_tokens is not None:
-            optional_params["maxTokens"] = max_tokens
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["topP"] = top_p
-        if stop is not None:
-            optional_params["stopSequences"] = stop
-        if frequency_penalty is not None:
-            optional_params["frequencyPenalty"] = {"scale": frequency_penalty}
-        if presence_penalty is not None:
-            optional_params["presencePenalty"] = {"scale": presence_penalty}
-    elif (
-        custom_llm_provider == "palm"
-    ):  # https://developers.generativeai.google/tutorials/curl_quickstart
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
-        if n is not None:
-            optional_params["candidate_count"] = n
-        if stop is not None:
-            if isinstance(stop, str):
-                optional_params["stop_sequences"] = [stop]
-            elif isinstance(stop, list):
-                optional_params["stop_sequences"] = stop
-        if max_tokens is not None:
-            optional_params["max_output_tokens"] = max_tokens
     elif custom_llm_provider == "vertex_ai" and (
         model in litellm.vertex_chat_models
         or model in litellm.vertex_code_chat_models
@@ -3465,7 +3418,7 @@ def get_optional_params(  # noqa: PLR0915
             non_default_params=non_default_params,
             optional_params=optional_params,
         )
-    elif custom_llm_provider == "ai21_chat":
+    elif custom_llm_provider == "ai21_chat" or custom_llm_provider == "ai21":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -3474,6 +3427,11 @@ def get_optional_params(  # noqa: PLR0915
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
@@ -3638,7 +3596,11 @@ def get_optional_params(  # noqa: PLR0915
                 optional_params=optional_params,
                 model=model,
                 api_version=api_version,  # type: ignore
-                drop_params=drop_params,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
             )
     else:  # assume passing in params for text-completion openai
         supported_params = get_supported_openai_params(
@@ -6221,6 +6183,13 @@ class ProviderConfigManager:
             return litellm.OpenrouterConfig()
         elif litellm.LlmProviders.GEMINI == provider:
             return litellm.GoogleAIStudioGeminiConfig()
+        elif (
+            litellm.LlmProviders.AI21 == provider
+            or litellm.LlmProviders.AI21_CHAT == provider
+        ):
+            return litellm.AI21ChatConfig()
+        elif litellm.LlmProviders.AZURE == provider:
+            return litellm.AzureOpenAIConfig()
         return litellm.OpenAIGPTConfig()
 
 

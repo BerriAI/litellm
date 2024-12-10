@@ -31,8 +31,18 @@ class BaseLLMException(Exception):
         self.status_code = status_code
         self.message: str = message
         self.headers = headers
-        self.request = httpx.Request(method="POST", url="https://docs.litellm.ai/docs")
-        self.response = httpx.Response(status_code=status_code, request=self.request)
+        if request:
+            self.request = request
+        else:
+            self.request = httpx.Request(
+                method="POST", url="https://docs.litellm.ai/docs"
+            )
+        if response:
+            self.response = response
+        else:
+            self.response = httpx.Response(
+                status_code=status_code, request=self.request
+            )
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs

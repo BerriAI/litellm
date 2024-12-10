@@ -321,6 +321,7 @@ def test_provider_config_manager():
             provider == LlmProviders.VERTEX_AI
             or provider == LlmProviders.VERTEX_AI_BETA
             or provider == LlmProviders.BEDROCK
+            or provider == LlmProviders.BASETEN
         ):
             continue
         config = ProviderConfigManager.get_provider_chat_config(

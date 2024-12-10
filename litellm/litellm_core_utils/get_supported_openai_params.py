@@ -50,7 +50,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "xai":
         return litellm.XAIChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "ai21_chat":
+    elif custom_llm_provider == "ai21_chat" or custom_llm_provider == "ai21":
         return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
@@ -95,7 +95,7 @@ def get_supported_openai_params(  # noqa: PLR0915
                 model=model
             )
         else:
-            return litellm.AzureOpenAIConfig().get_supported_openai_params()
+            return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openrouter":
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
@@ -115,17 +115,6 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "together_ai":
         return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "ai21":
-        return [
-            "stream",
-            "n",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "presence_penalty",
-        ]
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)
