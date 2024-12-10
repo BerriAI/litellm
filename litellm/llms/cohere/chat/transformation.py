@@ -199,11 +199,11 @@ class CohereChatConfig(BaseConfig):
     ) -> dict:
 
         ## Load Config
-        # for k, v in self.items():
-        #     if (
-        #         k not in optional_params
-        #     ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
-        #         optional_params[k] = v
+        for k, v in litellm.CohereChatConfig.get_config().items():
+            if (
+                k not in optional_params
+            ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
+                optional_params[k] = v
 
         most_recent_message, chat_history = cohere_messages_pt_v2(
             messages=messages, model=model, llm_provider="cohere_chat"
