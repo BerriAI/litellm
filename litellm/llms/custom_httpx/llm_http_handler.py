@@ -282,7 +282,6 @@ class BaseLLMHTTPHandler:
         data: dict,
         fake_stream: bool = False,
     ):
-        data["stream"] = True
         completion_stream, _response_headers = await self.make_async_call(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
