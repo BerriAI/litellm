@@ -1,78 +1,97 @@
 import json
 from abc import abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from litellm.types.utils import GenericStreamingChunk
+import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.types.utils import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    GenericStreamingChunk,
+    ModelResponse,
+)
 
 
-class BaseModelResponseIterator:
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
-        self.streaming_response = streaming_response
-        self.response_iterator = self.streaming_response
-        self.content_blocks: List = []
-        self.tool_index = -1
+class FakeStreamResponseIterator:
+    def __init__(self, model_response, json_mode: Optional[bool] = False):
+        self.model_response = model_response
         self.json_mode = json_mode
-
-    @abstractmethod
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
-        pass
+        self.is_done = False
 
     # Sync iterator
-    @abstractmethod
     def __iter__(self):
         return self
 
-    @abstractmethod
-    def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+    def _handle_json_mode_chunk(
+        self, text: str, tool_calls: Optional[List[ChatCompletionToolCallChunk]]
+    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
+        """
+        If JSON mode is enabled, convert the tool call to a message.
 
+        Bedrock returns the JSON schema as part of the tool call
+        OpenAI returns the JSON schema as part of the content, this handles placing it in the content
+
+        Args:
+            text: str
+            tool_use: Optional[ChatCompletionToolCallChunk]
+        Returns:
+            Tuple[str, Optional[ChatCompletionToolCallChunk]]
+
+            text: The text to use in the content
+            tool_use: The ChatCompletionToolCallChunk to use in the chunk response
+        """
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        if self.json_mode is True and tool_calls is not None:
+            message = litellm.AnthropicConfig()._convert_tool_response_to_message(
+                tool_calls=tool_calls
+            )
+            if message is not None:
+                text = message.content or ""
+                tool_use = None
+        elif tool_calls is not None and len(tool_calls) > 0:
+            tool_use = tool_calls[0]
+        return text, tool_use
+
+    def chunk_parser(self, chunk: ModelResponse) -> GenericStreamingChunk:
         try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
-            data_json = json.loads(str_line)
-            return self.chunk_parser(chunk=data_json)
-        except StopIteration:
+            chunk_usage: litellm.Usage = getattr(chunk, "usage")
+            text = chunk.choices[0].message.content or ""  # type: ignore
+            tool_use = None
+            if self.json_mode is True:
+                text, tool_use = self._handle_json_mode_chunk(
+                    text=text,
+                    tool_calls=chunk.choices[0].message.tool_calls,  # type: ignore
+                )
+            processed_chunk = GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=True,
+                finish_reason=map_finish_reason(
+                    finish_reason=chunk.choices[0].finish_reason or ""
+                ),
+                usage=ChatCompletionUsageBlock(
+                    prompt_tokens=chunk_usage.prompt_tokens,
+                    completion_tokens=chunk_usage.completion_tokens,
+                    total_tokens=chunk_usage.total_tokens,
+                ),
+                index=0,
+            )
+            return processed_chunk
+        except Exception as e:
+            raise ValueError(f"Failed to decode chunk: {chunk}. Error: {e}")
+
+    def __next__(self):
+        if self.is_done:
             raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+        self.is_done = True
+        return self.chunk_parser(self.model_response)
 
     # Async iterator
-    @abstractmethod
     def __aiter__(self):
-        self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
-    @abstractmethod
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
+        if self.is_done:
             raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
-
-            data_json = json.loads(str_line)
-            return self.chunk_parser(chunk=data_json)
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+        self.is_done = True
+        return self.chunk_parser(self.model_response)
