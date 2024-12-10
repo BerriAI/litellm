@@ -16,6 +16,8 @@ from litellm.types.utils import (
     Usage,
 )
 
+from ..common_utils import validate_environment as cohere_validate_environment
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -120,28 +122,13 @@ class CohereChatConfig(BaseConfig):
         optional_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
-        """
-        Return headers to use for cohere chat completion request
-
-        Cohere API Ref: https://docs.cohere.com/reference/chat
-        Expected headers:
-        {
-            "Request-Source": "unspecified:litellm",
-            "accept": "application/json",
-            "content-type": "application/json",
-            "Authorization": "bearer $CO_API_KEY"
-        }
-        """
-        headers.update(
-            {
-                "Request-Source": "unspecified:litellm",
-                "accept": "application/json",
-                "content-type": "application/json",
-            }
+        return cohere_validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
         )
-        if api_key:
-            headers["Authorization"] = f"bearer {api_key}"
-        return headers
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return [
