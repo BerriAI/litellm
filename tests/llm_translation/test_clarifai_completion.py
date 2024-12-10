@@ -77,11 +77,14 @@ async def test_async_completion_clarifai():
     litellm.set_verbose = True
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
-    response = await acompletion(
+    response = completion(
         model="clarifai/openai.chat-completion.GPT-4",
         messages=messages,
-        num_retries=3,
         timeout=10,
+        stream=True,
         api_key=os.getenv("CLARIFAI_API_KEY"),
     )
     print(response)
+
+    for chunk in response:
+        print(chunk)
