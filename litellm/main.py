@@ -1933,8 +1933,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-
-            response = model_response
         elif custom_llm_provider == "maritalk":
             maritalk_key = (
                 api_key
