@@ -25,10 +25,9 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
-
-from ..prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class AnthropicTextError(BaseLLMException):
@@ -107,21 +106,9 @@ class AnthropicTextConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        custom_prompt_dict = litellm.custom_prompt_dict
-        if model in custom_prompt_dict:
-            # check if the model has a registered custom prompt
-            model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
-            )
-        else:
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="anthropic"
-            )
-
+        prompt = self._get_anthropic_text_prompt_from_messages(
+            messages=messages, model=model
+        )
         ## Load Config
         config = litellm.AnthropicTextConfig.get_config()
         for k, v in config.items():
@@ -194,8 +181,8 @@ class AnthropicTextConfig(BaseConfig):
             raise AnthropicTextError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        prompt = prompt_factory(
-            model=model, messages=messages, custom_llm_provider="anthropic"
+        prompt = self._get_anthropic_text_prompt_from_messages(
+            messages=messages, model=model
         )
         if "error" in completion_response:
             raise AnthropicTextError(
@@ -235,6 +222,30 @@ class AnthropicTextConfig(BaseConfig):
             status_code=status_code,
             message=error_message,
         )
+
+    @staticmethod
+    def _is_anthropic_text_model(model: str) -> bool:
+        return model == "claude-2" or model == "claude-instant-1"
+
+    def _get_anthropic_text_prompt_from_messages(
+        self, messages: List[AllMessageValues], model: str
+    ) -> str:
+        custom_prompt_dict = litellm.custom_prompt_dict
+        if model in custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],
+                final_prompt_value=model_prompt_details["final_prompt_value"],
+                messages=messages,
+            )
+        else:
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="anthropic"
+            )
+
+        return str(prompt)
 
     def _transform_messages(
         self, messages: List[AllMessageValues]

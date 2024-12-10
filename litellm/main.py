@@ -462,6 +462,7 @@ async def acompletion(
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "sagemaker_chat"
             or custom_llm_provider == "anthropic"
+            or custom_llm_provider == "anthropic_text"
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "databricks"
@@ -1735,7 +1736,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,
-                api_key=cohere_key,
+                api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
         elif custom_llm_provider == "anthropic":
