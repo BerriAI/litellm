@@ -86,5 +86,5 @@ async def test_async_completion_clarifai():
     )
     print(response)
 
-    for chunk in response:
+    async for chunk in response:
         print(chunk)
