@@ -2839,7 +2839,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if model == "claude-instant-1" or model == "claude-2":
+        if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
             return anthropic_pt(messages=messages)
         return anthropic_messages_pt(
             messages=messages, model=model, llm_provider=custom_llm_provider

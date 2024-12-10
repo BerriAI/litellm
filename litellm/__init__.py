@@ -846,6 +846,7 @@ class LlmProviders(str, Enum):
     COHERE_CHAT = "cohere_chat"
     CLARIFAI = "clarifai"
     ANTHROPIC = "anthropic"
+    ANTHROPIC_TEXT = "anthropic_text"
     REPLICATE = "replicate"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
@@ -1063,7 +1064,7 @@ from .llms.anthropic.experimental_pass_through.transformation import (
     AnthropicExperimentalPassThroughConfig,
 )
 from .llms.groq.stt.transformation import GroqSTTConfig
-from .llms.anthropic.completion import AnthropicTextConfig
+from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
