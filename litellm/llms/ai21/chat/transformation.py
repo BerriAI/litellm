@@ -67,4 +67,5 @@ class AI21ChatConfig(OpenAILikeChatConfig):
             "n",
             "stream",
             "seed",
+            "tool_choice",
         ]
