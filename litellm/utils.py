@@ -2830,6 +2830,32 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "anthropic_text":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        optional_params = litellm.AnthropicTextConfig().map_openai_params(
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.AnthropicTextConfig().map_openai_params(
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -4208,7 +4234,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     if llm_provider == "openai" or llm_provider == "text-completion-openai":
         api_key = api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
     # anthropic
-    elif llm_provider == "anthropic":
+    elif llm_provider == "anthropic" or llm_provider == "anthropic_text":
         api_key = api_key or litellm.anthropic_key or get_secret("ANTHROPIC_API_KEY")
     # ai21
     elif llm_provider == "ai21":
@@ -6251,6 +6277,8 @@ class ProviderConfigManager:
             return litellm.ClarifaiConfig()
         elif litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicConfig()
+        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
+            return litellm.AnthropicTextConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 return litellm.VertexAIAnthropicConfig()

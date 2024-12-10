@@ -99,7 +99,6 @@ from .llms import (
 )
 from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
-from .llms.anthropic.completion import AnthropicTextCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
@@ -204,7 +203,6 @@ together_ai_text_completions = TogetherAITextCompletion()
 azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
-anthropic_text_completions = AnthropicTextCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
@@ -464,6 +462,7 @@ async def acompletion(
             or custom_llm_provider == "sagemaker"
             or custom_llm_provider == "sagemaker_chat"
             or custom_llm_provider == "anthropic"
+            or custom_llm_provider == "anthropic_text"
             or custom_llm_provider == "predibase"
             or custom_llm_provider == "bedrock"
             or custom_llm_provider == "databricks"
@@ -1705,6 +1704,41 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=clarifai_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
+        elif custom_llm_provider == "anthropic_text":
+            api_key = (
+                api_key
+                or litellm.anthropic_key
+                or litellm.api_key
+                or os.environ.get("ANTHROPIC_API_KEY")
+            )
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("ANTHROPIC_API_BASE")
+                or get_secret("ANTHROPIC_BASE_URL")
+                or "https://api.anthropic.com/v1/complete"
+            )
+
+            if api_base is not None and not api_base.endswith("/v1/complete"):
+                api_base += "/v1/complete"
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="anthropic_text",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+            )
         elif custom_llm_provider == "anthropic":
             api_key = (
                 api_key
@@ -1713,69 +1747,38 @@ def completion(  # type: ignore # noqa: PLR0915
                 or os.environ.get("ANTHROPIC_API_KEY")
             )
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            # call /messages
+            # default route for all anthropic models
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("ANTHROPIC_API_BASE")
+                or get_secret("ANTHROPIC_BASE_URL")
+                or "https://api.anthropic.com/v1/messages"
+            )
 
-            if (model == "claude-2") or (model == "claude-instant-1"):
-                # call anthropic /completion, only use this route for claude-2, claude-instant-1
-                api_base = (
-                    api_base
-                    or litellm.api_base
-                    or get_secret("ANTHROPIC_API_BASE")
-                    or get_secret("ANTHROPIC_BASE_URL")
-                    or "https://api.anthropic.com/v1/complete"
-                )
+            if api_base is not None and not api_base.endswith("/v1/messages"):
+                api_base += "/v1/messages"
 
-                if api_base is not None and not api_base.endswith("/v1/complete"):
-                    api_base += "/v1/complete"
-
-                response = anthropic_text_completions.completion(
-                    model=model,
-                    messages=messages,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,  # for calculating input/output tokens
-                    api_key=api_key,
-                    logging_obj=logging,
-                    headers=headers,
-                )
-            else:
-                # call /messages
-                # default route for all anthropic models
-                api_base = (
-                    api_base
-                    or litellm.api_base
-                    or get_secret("ANTHROPIC_API_BASE")
-                    or get_secret("ANTHROPIC_BASE_URL")
-                    or "https://api.anthropic.com/v1/messages"
-                )
-
-                if api_base is not None and not api_base.endswith("/v1/messages"):
-                    api_base += "/v1/messages"
-
-                response = anthropic_chat_completions.completion(
-                    model=model,
-                    messages=messages,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    custom_prompt_dict=litellm.custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,  # for calculating input/output tokens
-                    api_key=api_key,
-                    logging_obj=logging,
-                    headers=headers,
-                    timeout=timeout,
-                    client=client,
-                    custom_llm_provider=custom_llm_provider,
-                )
+            response = anthropic_chat_completions.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                acompletion=acompletion,
+                custom_prompt_dict=litellm.custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,  # for calculating input/output tokens
+                api_key=api_key,
+                logging_obj=logging,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+            )
             if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
                 logging.post_call(
