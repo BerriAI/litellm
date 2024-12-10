@@ -1868,13 +1868,15 @@ def mock_post(url, **kwargs):
 
 def test_hf_classifier_task():
     try:
-        with patch("requests.post", side_effect=mock_post):
+        client = HTTPHandler()
+        with patch.object(client, "post", side_effect=mock_post):
             litellm.set_verbose = True
             user_message = "I like you. I love you"
             messages = [{"content": user_message, "role": "user"}]
             response = completion(
                 model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier",
                 messages=messages,
+                client=client,
             )
             print(f"response: {response}")
             assert isinstance(response, litellm.ModelResponse)
