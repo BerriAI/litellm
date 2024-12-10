@@ -8,10 +8,12 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import LlmProviders
-from litellm.main import base_llm_http_handler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.utils import ModelResponse
 
 from ..vertex_llm_base import VertexBase
+
+base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 class VertexPartnerProvider(str, Enum):
