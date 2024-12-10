@@ -116,4 +116,5 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 "max_completion_tokens"
             ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
             mapped_params.pop("max_completion_tokens", None)
+
         return mapped_params
