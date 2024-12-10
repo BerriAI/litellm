@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 import litellm.types
 import litellm.types.utils
-from litellm.llms.anthropic.chat import ModelResponseIterator
 
 load_dotenv()
 import io
