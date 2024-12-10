@@ -17,6 +17,7 @@ import pytest
 
 import litellm
 from litellm import completion
+from litellm.llms.cohere.completion.transformation import CohereTextConfig
 
 
 @pytest.mark.asyncio
@@ -84,5 +85,100 @@ def test_completion_cohere_stream_bad_key():
 
     except litellm.AuthenticationError as e:
         pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_cohere_transform_request():
+    try:
+        config = CohereTextConfig()
+        messages = [
+            {"role": "system", "content": "You're a helpful bot"},
+            {"role": "user", "content": "Hello"},
+        ]
+        optional_params = {"max_tokens": 10, "temperature": 0.7}
+        headers = {}
+
+        transformed_request = config.transform_request(
+            model="command-nightly",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers=headers,
+        )
+
+        print("transformed_request", json.dumps(transformed_request, indent=4))
+
+        assert transformed_request["model"] == "command-nightly"
+        assert transformed_request["prompt"] == "You're a helpful bot Hello"
+        assert transformed_request["max_tokens"] == 10
+        assert transformed_request["temperature"] == 0.7
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_cohere_transform_request_with_tools():
+    try:
+        config = CohereTextConfig()
+        messages = [{"role": "user", "content": "What's the weather?"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        optional_params = {"tools": tools}
+
+        transformed_request = config.transform_request(
+            model="command-nightly",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        print("transformed_request", json.dumps(transformed_request, indent=4))
+        assert "tools" in transformed_request
+        assert transformed_request["tools"] == {"tools": tools}
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_cohere_map_openai_params():
+    try:
+        config = CohereTextConfig()
+        openai_params = {
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "n": 2,
+            "top_p": 0.9,
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.5,
+            "stop": ["END"],
+            "stream": True,
+        }
+
+        mapped_params = config.map_openai_params(
+            non_default_params=openai_params,
+            optional_params={},
+            model="command-nightly",
+            drop_params=False,
+        )
+
+        assert mapped_params["temperature"] == 0.7
+        assert mapped_params["max_tokens"] == 100
+        assert mapped_params["num_generations"] == 2
+        assert mapped_params["p"] == 0.9
+        assert mapped_params["frequency_penalty"] == 0.5
+        assert mapped_params["presence_penalty"] == 0.5
+        assert mapped_params["stop_sequences"] == ["END"]
+        assert mapped_params["stream"] == True
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
