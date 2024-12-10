@@ -1,3 +1,5 @@
+from typing import Optional
+
 from litellm.llms.base_llm.transformation import BaseLLMException
 
 
@@ -6,7 +8,7 @@ class CohereError(BaseLLMException):
         super().__init__(status_code=status_code, message=message)
 
 
-def validate_environment(*, api_key: str, headers: dict) -> dict:
+def validate_environment(*, api_key: Optional[str], headers: dict) -> dict:
     headers.update(
         {
             "Request-Source": "unspecified:litellm",

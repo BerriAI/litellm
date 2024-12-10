@@ -695,79 +695,6 @@ async def test_anthropic_no_content_error():
         pytest.fail(f"An unexpected error occurred - {str(e)}")
 
 
-def test_completion_cohere_command_r_plus_function_call():
-    litellm.set_verbose = True
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-    try:
-        # test without max tokens
-        response = completion(
-            model="command-r-plus",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
-        # Add any assertions, here to check response args
-        print(response)
-        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert isinstance(
-            response.choices[0].message.tool_calls[0].function.arguments, str
-        )
-
-        messages.append(
-            response.choices[0].message.model_dump()
-        )  # Add assistant tool invokes
-        tool_result = (
-            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
-        )
-        # Add user submitted tool results in the OpenAI format
-        messages.append(
-            {
-                "tool_call_id": response.choices[0].message.tool_calls[0].id,
-                "role": "tool",
-                "name": response.choices[0].message.tool_calls[0].function.name,
-                "content": tool_result,
-            }
-        )
-        # In the second response, Cohere should deduce answer from tool results
-        second_response = completion(
-            model="command-r-plus",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            force_single_step=True,
-        )
-        print(second_response)
-    except litellm.Timeout:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_parse_xml_params():
     from litellm.llms.prompt_templates.factory import parse_xml_params
 
@@ -2118,27 +2045,6 @@ def test_ollama_image():
 #         pytest.fail(f"Error occurred: {e}")
 
 # hf_test_error_logs()
-
-
-# def test_completion_cohere():  # commenting out,for now as the cohere endpoint is being flaky
-#     try:
-#         litellm.CohereConfig(max_tokens=10, stop_sequences=["a"])
-#         response = completion(
-#             model="command-nightly", messages=messages, logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#         response_str = response["choices"][0]["message"]["content"]
-#         response_str_2 = response.choices[0].message.content
-#         if type(response_str) != str:
-#             pytest.fail(f"Error occurred: {e}")
-#         if type(response_str_2) != str:
-#             pytest.fail(f"Error occurred: {e}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_cohere()
 
 
 def test_completion_openai():
@@ -3550,9 +3456,6 @@ def test_completion_bedrock_titan_null_response():
 # test_completion_bedrock_claude()
 
 
-# test_completion_bedrock_cohere()
-
-
 # def test_completion_bedrock_claude_stream():
 #     print("calling claude")
 #     litellm.set_verbose = False
@@ -3722,78 +3625,6 @@ def test_completion_anyscale_api():
 
 
 # test_completion_anyscale_api()
-
-
-# @pytest.mark.skip(reason="flaky test, times out frequently")
-@pytest.mark.flaky(retries=6, delay=1)
-def test_completion_cohere():
-    try:
-        # litellm.set_verbose=True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {"role": "assistant", "content": [{"text": "2", "type": "text"}]},
-            {"role": "assistant", "content": [{"text": "3", "type": "text"}]},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="command-r",
-            messages=messages,
-            extra_headers={"Helicone-Property-Locale": "ko"},
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# FYI - cohere_chat looks quite unstable, even when testing locally
-def test_chat_completion_cohere():
-    try:
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="cohere_chat/command-r",
-            messages=messages,
-            max_tokens=10,
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_chat_completion_cohere_stream():
-    try:
-        litellm.set_verbose = False
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="cohere_chat/command-r",
-            messages=messages,
-            max_tokens=10,
-            stream=True,
-        )
-        print(response)
-        for chunk in response:
-            print(chunk)
-    except litellm.APIConnectionError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_azure_cloudflare_api():
     litellm.set_verbose = True
     try:

@@ -1,13 +1,9 @@
 import types
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.llms.base_llm.transformation import (
-    BaseConfig,
-    BaseLLMException,
-    LoggingClass,
-)
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -15,11 +11,11 @@ from ..common_utils import CohereError
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingObj = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingObj = Any
+    LiteLLMLoggingObj = Any
 
 
 class CohereTextConfig(BaseConfig):
@@ -96,11 +92,11 @@ class CohereTextConfig(BaseConfig):
 
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         return cohere_validate_environment(api_key=api_key, headers=headers)
 
@@ -111,7 +107,7 @@ class CohereTextConfig(BaseConfig):
         raise NotImplementedError
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
 
@@ -172,12 +168,12 @@ class CohereTextConfig(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingObj,
-        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: Any,
+        encoding: str,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         raise NotImplementedError

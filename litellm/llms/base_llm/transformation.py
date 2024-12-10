@@ -4,7 +4,16 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Union,
+)
 
 import httpx
 
@@ -12,11 +21,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LoggingClass = LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LoggingClass = Any
+    LiteLLMLoggingObj = Any
 
 
 class BaseLLMException(Exception):
@@ -78,11 +87,11 @@ class BaseConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        api_key: str,
         headers: dict,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        api_key: Optional[str] = None,
     ) -> dict:
         pass
 
@@ -109,21 +118,26 @@ class BaseConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LoggingClass,
-        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: Any,
+        encoding: str,
+        api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         pass
 
     @abstractmethod
     def get_error_class(
-        self,
-        error_message: str,
-        status_code: int,
-        headers: dict,
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
+        pass
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str]],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
         pass
