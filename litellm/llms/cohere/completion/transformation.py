@@ -237,7 +237,7 @@ class CohereTextConfig(BaseConfig):
                 message=message_obj,
             )
             choices_list.append(choice_obj)
-        model_response.choices = choices_list
+        model_response.choices = choices_list  # type: ignore
 
         ## CALCULATING USAGE
         prompt_tokens = len(encoding.encode(prompt))
