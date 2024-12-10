@@ -3515,6 +3515,11 @@ def get_optional_params(  # noqa: PLR0915
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "volcengine":
         supported_params = get_supported_openai_params(
@@ -6284,6 +6289,8 @@ class ProviderConfigManager:
                 return litellm.VertexAIAnthropicConfig()
         elif litellm.LlmProviders.CLOUDFLARE == provider:
             return litellm.CloudflareChatConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIConfig()
 
         return litellm.OpenAIGPTConfig()
 

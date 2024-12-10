@@ -495,7 +495,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.FireworksAIConfig()._get_openai_compatible_provider_info(
-            model, api_base, api_key
+            model=model, api_base=api_base, api_key=api_key
         )
     elif custom_llm_provider == "azure_ai":
         (

@@ -3,10 +3,11 @@ from typing import Literal, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
 
+from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 from ..embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig
 
 
-class FireworksAIConfig:
+class FireworksAIConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
@@ -56,23 +57,9 @@ class FireworksAIConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str):
         return [
             "stream",
             "tools",
@@ -98,8 +85,10 @@ class FireworksAIConfig:
         non_default_params: dict,
         optional_params: dict,
         model: str,
+        drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params()
+
+        supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "tool_choice":
                 if value == "required":
