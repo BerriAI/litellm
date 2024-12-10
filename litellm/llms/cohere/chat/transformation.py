@@ -43,6 +43,75 @@ class CohereError(BaseLLMException):
 
 
 class CohereChatConfig(BaseConfig):
+    """
+    Configuration class for Cohere's API interface.
+
+    Args:
+        preamble (str, optional): When specified, the default Cohere preamble will be replaced with the provided one.
+        chat_history (List[Dict[str, str]], optional): A list of previous messages between the user and the model.
+        generation_id (str, optional): Unique identifier for the generated reply.
+        response_id (str, optional): Unique identifier for the response.
+        conversation_id (str, optional): An alternative to chat_history, creates or resumes a persisted conversation.
+        prompt_truncation (str, optional): Dictates how the prompt will be constructed. Options: 'AUTO', 'AUTO_PRESERVE_ORDER', 'OFF'.
+        connectors (List[Dict[str, str]], optional): List of connectors (e.g., web-search) to enrich the model's reply.
+        search_queries_only (bool, optional): When true, the response will only contain a list of generated search queries.
+        documents (List[Dict[str, str]], optional): A list of relevant documents that the model can cite.
+        temperature (float, optional): A non-negative float that tunes the degree of randomness in generation.
+        max_tokens (int, optional): The maximum number of tokens the model will generate as part of the response.
+        k (int, optional): Ensures only the top k most likely tokens are considered for generation at each step.
+        p (float, optional): Ensures that only the most likely tokens, with total probability mass of p, are considered for generation.
+        frequency_penalty (float, optional): Used to reduce repetitiveness of generated tokens.
+        presence_penalty (float, optional): Used to reduce repetitiveness of generated tokens.
+        tools (List[Dict[str, str]], optional): A list of available tools (functions) that the model may suggest invoking.
+        tool_results (List[Dict[str, Any]], optional): A list of results from invoking tools.
+        seed (int, optional): A seed to assist reproducibility of the model's response.
+    """
+
+    preamble: Optional[str] = None
+    chat_history: Optional[list] = None
+    generation_id: Optional[str] = None
+    response_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    prompt_truncation: Optional[str] = None
+    connectors: Optional[list] = None
+    search_queries_only: Optional[bool] = None
+    documents: Optional[list] = None
+    temperature: Optional[int] = None
+    max_tokens: Optional[int] = None
+    k: Optional[int] = None
+    p: Optional[int] = None
+    frequency_penalty: Optional[int] = None
+    presence_penalty: Optional[int] = None
+    tools: Optional[list] = None
+    tool_results: Optional[list] = None
+    seed: Optional[int] = None
+
+    def __init__(
+        self,
+        preamble: Optional[str] = None,
+        chat_history: Optional[list] = None,
+        generation_id: Optional[str] = None,
+        response_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        prompt_truncation: Optional[str] = None,
+        connectors: Optional[list] = None,
+        search_queries_only: Optional[bool] = None,
+        documents: Optional[list] = None,
+        temperature: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        k: Optional[int] = None,
+        p: Optional[int] = None,
+        frequency_penalty: Optional[int] = None,
+        presence_penalty: Optional[int] = None,
+        tools: Optional[list] = None,
+        tool_results: Optional[list] = None,
+        seed: Optional[int] = None,
+    ) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
     def validate_environment(
         self,
         headers: dict,
