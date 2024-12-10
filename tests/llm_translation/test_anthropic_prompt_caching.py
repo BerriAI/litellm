@@ -15,7 +15,7 @@ sys.path.insert(
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
-from .streaming_format_helper import streaming_format_tests
+from streaming_format_helper import streaming_format_tests
 
 
 import pytest
