@@ -368,7 +368,9 @@ def function_setup(  # noqa: PLR0915
                     removed_async_items.append(index)
                 elif callback in litellm._known_custom_logger_compatible_callbacks:
                     callback_class = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                        callback,
+                        internal_usage_cache=None,
+                        llm_router=None,  # type: ignore
                     )
 
                     # don't double add a callback
@@ -4100,7 +4102,6 @@ def get_api_base(
                 partner=VertexPartnerProvider.claude,
             )
         else:
-
             if stream:
                 _api_base = "{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent".format(
                     _optional_params.vertex_location,
@@ -6237,7 +6238,7 @@ from litellm.llms.base_llm.transformation import BaseConfig
 
 class ProviderConfigManager:
     @staticmethod
-    def get_provider_chat_config( # noqa: PLR0915
+    def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: litellm.LlmProviders
     ) -> BaseConfig:
         """
@@ -6357,6 +6358,8 @@ class ProviderConfigManager:
             return litellm.VLLMConfig()
         elif litellm.LlmProviders.OLLAMA == provider:
             return litellm.OllamaConfig()
+        elif litellm.LlmProviders.TRITON == provider:
+            return litellm.TritonConfig()
         return litellm.OpenAIGPTConfig()
 
 

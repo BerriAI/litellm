@@ -1,5 +1,5 @@
 import pytest
-from litellm.llms.triton import TritonChatCompletion
+from litellm.llms.triton.completion.handler import TritonChatCompletion
 
 
 def test_split_embedding_by_shape_passes():
@@ -11,7 +11,9 @@ def test_split_embedding_by_shape_passes():
                 "data": [1, 2, 3, 4, 5, 6],
             }
         ]
-        split_output_data = triton.split_embedding_by_shape(data[0]["data"], data[0]["shape"])
+        split_output_data = triton.split_embedding_by_shape(
+            data[0]["data"], data[0]["shape"]
+        )
         assert split_output_data == [[1, 2, 3], [4, 5, 6]]
     except Exception as e:
         pytest.fail(f"An exception occured: {e}")
@@ -43,7 +45,7 @@ def test_completion_triton():
                 max_tokens=10,
                 timeout=5,
                 client=client,
-                api_base="http://localhost:8000",
+                api_base="http://localhost:8000/generate",
             )
             print(response)
         except Exception as e:
