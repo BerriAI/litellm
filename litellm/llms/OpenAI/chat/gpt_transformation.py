@@ -182,7 +182,11 @@ class OpenAIGPTConfig(BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        raise NotImplementedError
+        return {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
 
     def transform_response(
         self,
