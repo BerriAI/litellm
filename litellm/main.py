@@ -88,7 +88,6 @@ from .llms import (
     baseten,
     maritalk,
     nlp_cloud,
-    ollama,
     ollama_chat,
     oobabooga,
     openrouter,
@@ -114,10 +113,11 @@ from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface_restapi import Huggingface
-from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
-from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
-from .llms.OpenAI.completion.handler import OpenAITextCompletion
-from .llms.OpenAI.openai import OpenAIChatCompletion
+from .llms.ollama.completion import handler as ollama
+from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openai.chat.o1_handler import OpenAIO1ChatCompletion
+from .llms.openai.completion.handler import OpenAITextCompletion
+from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.common_utils import get_completion_messages

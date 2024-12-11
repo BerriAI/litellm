@@ -33,7 +33,7 @@ LITELLM_CHAT_PROVIDERS = [
     # "nlp_cloud",
     # "petals",
     # "oobabooga",
-    # "ollama",
+    "ollama",
     # "ollama_chat",
     # "deepinfra",
     # "perplexity",

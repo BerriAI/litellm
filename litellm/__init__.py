@@ -1103,9 +1103,9 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transfor
     VertexAIAi21Config,
 )
 
+from .llms.ollama.completion.transformation import OllamaConfig
 from .llms.sagemaker.completion.transformation import SagemakerConfig
 from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock.chat.invoke_handler import (
@@ -1134,26 +1134,26 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.OpenAI.openai import (
+from .llms.openai.openai import (
     OpenAIConfig,
     MistralEmbeddingConfig,
     DeepInfraConfig,
 )
-from litellm.llms.OpenAI.completion.transformation import OpenAITextCompletionConfig
+from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
-from .llms.OpenAI.chat.o1_transformation import (
+from .llms.openai.chat.o1_transformation import (
     OpenAIO1Config,
 )
 
 openAIO1Config = OpenAIO1Config()
-from .llms.OpenAI.chat.gpt_transformation import (
+from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 
 openAIGPTConfig = OpenAIGPTConfig()
-from .llms.OpenAI.chat.gpt_audio_transformation import (
+from .llms.openai.chat.gpt_audio_transformation import (
     OpenAIGPTAudioConfig,
 )
 
