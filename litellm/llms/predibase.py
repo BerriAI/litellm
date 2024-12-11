@@ -26,7 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PredibaseError(Exception):

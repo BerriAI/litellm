@@ -14,7 +14,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_openai_message_to_only_content_messages,
     get_content_from_model_response,
 )

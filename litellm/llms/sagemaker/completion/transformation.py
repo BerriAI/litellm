@@ -14,7 +14,7 @@ from httpx._models import Headers, Response
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.llms.prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Usage
 

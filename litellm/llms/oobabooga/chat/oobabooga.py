@@ -9,7 +9,7 @@ import requests  # type: ignore
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
-from ...prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import OobaboogaError
 from .transformation import OobaboogaConfig
 
