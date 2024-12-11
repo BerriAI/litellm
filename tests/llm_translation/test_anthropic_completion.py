@@ -670,7 +670,7 @@ class TestAnthropicCompletion(BaseLLMChatTest):
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        from litellm.llms.prompt_templates.factory import (
+        from litellm.litellm_core_utils.prompt_templates.factory import (
             convert_to_anthropic_tool_invoke,
         )
 
@@ -767,7 +767,7 @@ def test_convert_tool_response_to_message_no_arguments():
 
 
 def test_anthropic_tool_with_image():
-    from litellm.llms.prompt_templates.factory import prompt_factory
+    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
     import json
 
     b64_data = "iVBORw0KGgoAAAANSUhEu6U3//C9t/fKv5wDgpP1r5796XwC4zyH1D565bHGDqbY85AMb0nIQe+u3J390Xbtb9XgXxcK0/aqRXpdYcwgARbCN03FJk"

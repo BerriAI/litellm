@@ -9,10 +9,10 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from typing import Union
 
-# from litellm.llms.prompt_templates.factory import prompt_factory
+# from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 import litellm
 from litellm import completion
-from litellm.llms.prompt_templates.factory import (
+from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     anthropic_messages_pt,
     anthropic_pt,
@@ -22,7 +22,7 @@ from litellm.llms.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
-from litellm.llms.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
@@ -327,7 +327,7 @@ def test_bedrock_parallel_tool_calling_pt(provider):
     """
     Make sure parallel tool call blocks are merged correctly - https://github.com/BerriAI/litellm/issues/5277
     """
-    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
     messages = [
@@ -678,7 +678,7 @@ def test_alternating_roles_e2e():
 
 
 def test_just_system_message():
-    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
 
     with pytest.raises(litellm.BadRequestError) as e:
         _bedrock_converse_messages_pt(
@@ -690,7 +690,7 @@ def test_just_system_message():
 
 
 def test_convert_generic_image_chunk_to_openai_image_obj():
-    from litellm.llms.prompt_templates.factory import (
+    from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_generic_image_chunk_to_openai_image_obj,
         convert_to_anthropic_image_obj,
     )

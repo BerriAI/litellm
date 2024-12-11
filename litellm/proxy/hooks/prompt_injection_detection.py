@@ -20,7 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
+from litellm.litellm_core_utils.prompt_templates.factory import prompt_injection_detection_default_pt
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.utils import get_formatted_prompt
 

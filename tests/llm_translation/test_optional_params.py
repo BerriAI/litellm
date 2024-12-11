@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.llms.prompt_templates.factory import map_system_message_pt
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
