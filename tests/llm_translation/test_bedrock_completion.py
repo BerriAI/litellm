@@ -1320,7 +1320,7 @@ def test_base_aws_llm_get_credentials():
 
     import boto3
 
-    from litellm.llms.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     start_time = time.time()
     session = boto3.Session(

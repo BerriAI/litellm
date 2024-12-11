@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper, get_secret
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 

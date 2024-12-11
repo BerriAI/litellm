@@ -52,7 +52,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ...prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
