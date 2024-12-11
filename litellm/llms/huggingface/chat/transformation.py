@@ -356,15 +356,12 @@ class HuggingfaceChatConfig(BaseConfig):
         default_headers = {
             "content-type": "application/json",
         }
-        if api_key is not None and headers is None:
+        if api_key is not None:
             default_headers["Authorization"] = (
                 f"Bearer {api_key}"  # Huggingface Inference Endpoint default is to accept bearer tokens
             )
-            headers = default_headers
-        elif headers:
-            headers = headers
-        else:
-            headers = default_headers
+
+        headers = {**headers, **default_headers}
         return headers
 
     def _transform_messages(
