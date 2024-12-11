@@ -78,7 +78,7 @@ def test_get_model_info_gemini_pro():
 
 
 def test_get_model_info_ollama_chat():
-    from litellm.llms.ollama import OllamaConfig
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
 
     with patch.object(
         litellm.module_level_client,
