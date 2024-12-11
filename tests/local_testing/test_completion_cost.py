@@ -165,10 +165,10 @@ def test_get_gpt3_tokens():
 # test_get_gpt3_tokens()
 
 
-def test_get_palm_tokens():
+def test_get_gemini_tokens():
     # # 🦄🦄🦄🦄🦄🦄🦄🦄
-    max_tokens = get_max_tokens("palm/chat-bison")
-    assert max_tokens == 4096
+    max_tokens = get_max_tokens("gemini/gemini-1.5-flash")
+    assert max_tokens == 8192
     print(max_tokens)
 
 

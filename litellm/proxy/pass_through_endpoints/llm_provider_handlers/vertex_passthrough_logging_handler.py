@@ -41,20 +41,19 @@ class VertexPassthroughLoggingHandler:
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()
             litellm_model_response: litellm.ModelResponse = (
-                instance_of_vertex_llm._transform_response(
+                instance_of_vertex_llm.transform_response(
                     model=model,
                     messages=[
                         {"role": "user", "content": "no-message-pass-through-endpoint"}
                     ],
-                    response=httpx_response,
+                    raw_response=httpx_response,
                     model_response=litellm.ModelResponse(),
                     logging_obj=logging_obj,
                     optional_params={},
                     litellm_params={},
                     api_key="",
-                    data={},
-                    print_verbose=litellm.print_verbose,
-                    encoding=None,
+                    request_data={},
+                    encoding=litellm.encoding,
                 )
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(

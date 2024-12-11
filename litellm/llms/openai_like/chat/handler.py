@@ -26,6 +26,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
+from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.OpenAI.openai import OpenAIConfig
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import (
     Choices,
@@ -280,7 +282,10 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
-            messages = provider_config._transform_messages(messages)
+            if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
+                provider_config, OpenAIConfig
+            ):
+                messages = provider_config._transform_messages(messages)
 
         data = {
             "model": model,

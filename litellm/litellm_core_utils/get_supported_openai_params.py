@@ -31,7 +31,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "ollama":
         return litellm.OllamaConfig().get_supported_openai_params()
     elif custom_llm_provider == "ollama_chat":
-        return litellm.OllamaChatConfig().get_supported_openai_params()
+        return litellm.OllamaChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "anthropic":
         return litellm.AnthropicConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "fireworks_ai":
@@ -50,7 +50,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "xai":
         return litellm.XAIChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "ai21_chat":
+    elif custom_llm_provider == "ai21_chat" or custom_llm_provider == "ai21":
         return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
@@ -95,79 +95,50 @@ def get_supported_openai_params(  # noqa: PLR0915
                 model=model
             )
         else:
-            return litellm.AzureOpenAIConfig().get_supported_openai_params()
+            return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openrouter":
-        return [
-            "temperature",
-            "top_p",
-            "frequency_penalty",
-            "presence_penalty",
-            "repetition_penalty",
-            "seed",
-            "max_tokens",
-            "logit_bias",
-            "logprobs",
-            "top_logprobs",
-            "response_format",
-            "stop",
-            "tools",
-            "tool_choice",
-        ]
+        return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
-            return litellm.MistralConfig().get_supported_openai_params()
+            return litellm.MistralConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.MistralEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "text-completion-codestral":
-        return litellm.MistralTextCompletionConfig().get_supported_openai_params()
+        return litellm.MistralTextCompletionConfig().get_supported_openai_params(
+            model=model
+        )
+    elif custom_llm_provider == "sambanova":
+        return litellm.SambanovaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "replicate":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "seed",
-            "tools",
-            "tool_choice",
-            "functions",
-            "function_call",
-        ]
+        return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":
-        return litellm.HuggingfaceConfig().get_supported_openai_params()
+        return litellm.HuggingfaceConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "jina_ai":
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "together_ai":
         return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "ai21":
-        return [
-            "stream",
-            "n",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "frequency_penalty",
-            "presence_penalty",
-        ]
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
-        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params()
+        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "vertex_ai":
         if request_type == "chat_completion":
             if model.startswith("meta/"):
                 return litellm.VertexAILlama3Config().get_supported_openai_params()
             if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params()
+                return litellm.MistralConfig().get_supported_openai_params(model=model)
             if model.startswith("codestral"):
                 return (
-                    litellm.MistralTextCompletionConfig().get_supported_openai_params()
+                    litellm.MistralTextCompletionConfig().get_supported_openai_params(
+                        model=model
+                    )
                 )
             if model.startswith("claude"):
                 return litellm.VertexAIAnthropicConfig().get_supported_openai_params(
@@ -178,7 +149,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
-            return litellm.VertexGeminiConfig().get_supported_openai_params()
+            return litellm.VertexGeminiConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "sagemaker":
@@ -197,20 +168,11 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "cloudflare":
         return litellm.CloudflareChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nlp_cloud":
-        return [
-            "max_tokens",
-            "stream",
-            "temperature",
-            "top_p",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
+        return litellm.NLPCloudConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "petals":
         return ["max_tokens", "temperature", "top_p", "stream"]
     elif custom_llm_provider == "deepinfra":
-        return litellm.DeepInfraConfig().get_supported_openai_params()
+        return litellm.DeepInfraConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "perplexity":
         return [
             "temperature",

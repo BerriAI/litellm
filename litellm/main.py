@@ -83,28 +83,13 @@ from litellm.utils import (
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import (
-    aleph_alpha,
-    baseten,
-    maritalk,
-    nlp_cloud,
-    ollama,
-    ollama_chat,
-    oobabooga,
-    openrouter,
-    palm,
-    petals,
-    replicate,
-    vllm,
-)
-from .llms.ai21 import completion as ai21
+from .llms import aleph_alpha, baseten, maritalk, ollama, ollama_chat, petals, vllm
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
-from .llms.azure_ai.chat import AzureAIChatCompletion
+from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
-from .llms.azure_text import AzureTextCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
@@ -113,12 +98,15 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
+from .llms.deprecated_providers import palm
 from .llms.groq.chat.handler import GroqChatCompletion
-from .llms.huggingface_restapi import Huggingface
+from .llms.huggingface.chat.handler import Huggingface
+from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
+from .llms.oobabooga.chat import oobabooga
 from .llms.OpenAI.audio_transcriptions import OpenAIAudioTranscription
-from .llms.OpenAI.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.OpenAI.completion.handler import OpenAITextCompletion
 from .llms.OpenAI.openai import OpenAIChatCompletion
+from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.predibase import PredibaseChatCompletion
 from .llms.prompt_templates.common_utils import get_completion_messages
@@ -130,6 +118,7 @@ from .llms.prompt_templates.factory import (
     prompt_factory,
     stringify_json_tool_call_content,
 )
+from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.sagemaker import SagemakerLLM
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
@@ -195,12 +184,10 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
-openai_o1_chat_completions = OpenAIO1ChatCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
 together_ai_text_completions = TogetherAITextCompletion()
-azure_ai_chat_completions = AzureAIChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -227,6 +214,7 @@ watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
+openai_like_chat_completion = OpenAILikeChatHandler()
 databricks_embedding = DatabricksEmbeddingHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 ####### COMPLETION ENDPOINTS ################
@@ -1312,7 +1300,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                response = azure_ai_chat_completions.completion(
+                response = openai_chat_completions.completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1511,7 +1499,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "ai21_chat"
             or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "codestral"
             or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
@@ -1558,46 +1545,25 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
-                    response = openai_o1_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        headers=headers,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        acompletion=acompletion,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        timeout=timeout,  # type: ignore
-                        custom_prompt_dict=custom_prompt_dict,
-                        client=client,  # pass AsyncOpenAI, OpenAI client
-                        organization=organization,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-                else:
-                    response = openai_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        headers=headers,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        acompletion=acompletion,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        timeout=timeout,  # type: ignore
-                        custom_prompt_dict=custom_prompt_dict,
-                        client=client,  # pass AsyncOpenAI, OpenAI client
-                        organization=organization,
-                        custom_llm_provider=custom_llm_provider,
-                    )
+                response = openai_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    organization=organization,
+                    custom_llm_provider=custom_llm_provider,
+                )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
@@ -1623,7 +1589,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or model in litellm.replicate_models
         ):
             # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
-            replicate_key = None
             replicate_key = (
                 api_key
                 or litellm.replicate_key
@@ -1641,7 +1606,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-            model_response = replicate.completion(  # type: ignore
+            model_response = replicate_chat_completion(  # type: ignore
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1655,6 +1620,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
                 acompletion=acompletion,
+                headers=headers,
             )
 
             if optional_params.get("stream", False) is True:
@@ -1802,7 +1768,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.nlpcloud.io/v1/gpu/"
             )
 
-            response = nlp_cloud.completion(
+            response = nlp_cloud_chat_completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1965,10 +1931,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base
                 or litellm.api_base
                 or get_secret("MARITALK_API_BASE")
-                or "https://chat.maritaca.ai/api/chat/inference"
+                or "https://chat.maritaca.ai/api"
             )
 
-            model_response = maritalk.completion(
+            model_response = openai_like_chat_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -1980,17 +1946,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 api_key=maritalk_key,
                 logging_obj=logging,
+                custom_llm_provider="maritalk",
+                custom_prompt_dict=custom_prompt_dict,
             )
 
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="maritalk",
-                    logging_obj=logging,
-                )
-                return response
             response = model_response
         elif custom_llm_provider == "huggingface":
             custom_llm_provider = "huggingface"
@@ -2008,7 +1967,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model=model,
                 messages=messages,
                 api_base=api_base,  # type: ignore
-                headers=hf_headers,
+                headers=hf_headers or {},
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -2020,6 +1979,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
                 timeout=timeout,  # type: ignore
+                client=client,
             )
             if (
                 "stream" in optional_params
@@ -2142,7 +2102,7 @@ def completion(  # type: ignore # noqa: PLR0915
             headers = openrouter_headers
 
             ## Load Config
-            config = openrouter.OpenrouterConfig.get_config()
+            config = litellm.OpenrouterConfig.get_config()
             for k, v in config.items():
                 if k == "extra_body":
                     # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
@@ -2186,30 +2146,9 @@ def completion(  # type: ignore # noqa: PLR0915
             """
             pass
         elif custom_llm_provider == "palm":
-            palm_api_key = api_key or get_secret("PALM_API_KEY") or litellm.api_key
-
-            # palm does not support streaming as yet :(
-            model_response = palm.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=palm_api_key,
-                logging_obj=logging,
+            raise ValueError(
+                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
-            # fake palm streaming
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # fake streaming for palm
-                resp_string = model_response["choices"][0]["message"]["content"]
-                response = CustomStreamWrapper(
-                    resp_string, model, custom_llm_provider="palm", logging_obj=logging
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
@@ -2471,48 +2410,6 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
-        elif custom_llm_provider == "ai21":
-            custom_llm_provider = "ai21"
-            ai21_key = (
-                api_key
-                or litellm.ai21_key
-                or os.environ.get("AI21_API_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("AI21_API_BASE")
-                or "https://api.ai21.com/studio/v1/"
-            )
-
-            model_response = ai21.completion(
-                model=model,
-                messages=messages,
-                api_base=api_base,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=ai21_key,
-                logging_obj=logging,
-            )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="ai21",
-                    logging_obj=logging,
-                )
-                return response
-
-            ## RESPONSE OBJECT
-            response = model_response
         elif (
             custom_llm_provider == "sagemaker"
             or custom_llm_provider == "sagemaker_chat"

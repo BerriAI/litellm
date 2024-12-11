@@ -193,7 +193,8 @@ class OpenAIGPTConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: str,
+        litellm_params: dict,
+        encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
