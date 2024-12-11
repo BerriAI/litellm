@@ -200,4 +200,6 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.OpenAITextCompletionConfig().get_supported_openai_params(
             model=model
         )
+    elif custom_llm_provider == "predibase":
+        return litellm.PredibaseConfig().get_supported_openai_params(model=model)
     return None
