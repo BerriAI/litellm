@@ -7,6 +7,10 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 import httpx  # type: ignore
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -25,7 +29,6 @@ from litellm.utils import (
 )
 
 from ...base import BaseLLM
-from ...prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import TritonError
 
 
