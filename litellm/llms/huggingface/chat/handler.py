@@ -40,7 +40,6 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from ...base import BaseLLM
-from ...prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import HuggingfaceError, hf_task_list, hf_tasks
 
 hf_chat_config = HuggingfaceConfig()

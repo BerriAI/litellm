@@ -57,7 +57,7 @@ from litellm.types.utils import Choices, GenericStreamingChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ...base import BaseLLM
-from ...prompt_templates.factory import (
+from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     custom_prompt,
     prompt_factory,

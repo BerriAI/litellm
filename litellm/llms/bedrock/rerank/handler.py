@@ -18,7 +18,7 @@ from litellm.types.llms.bedrock import BedrockPreparedRequest, BedrockRerankRequ
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRerankConfig
 

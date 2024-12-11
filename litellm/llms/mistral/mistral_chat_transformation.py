@@ -10,7 +10,7 @@ import types
 from typing import List, Literal, Optional, Tuple, Union
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.llms.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_none_values_from_message,
 )

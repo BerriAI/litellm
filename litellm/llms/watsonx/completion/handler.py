@@ -34,7 +34,7 @@ from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
 from ...base import BaseLLM
-from ...prompt_templates import factory as ptf
+from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
 from .transformation import IBMWatsonXAIConfig
 
