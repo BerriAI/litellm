@@ -64,6 +64,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
     Usage,
+    async_completion_with_fallbacks,
     async_mock_completion_streaming_obj,
     completion_with_fallbacks,
     convert_to_model_response_object,
@@ -364,6 +365,8 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
+    fallbacks = kwargs.get("fallbacks", None)
+
     loop = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     # Adjusted to use explicit arguments instead of *args and **kwargs
@@ -407,6 +410,18 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model, api_base=completion_kwargs.get("base_url", None)
         )
+
+    fallbacks = fallbacks or litellm.model_fallbacks
+    if fallbacks is not None:
+        response = await async_completion_with_fallbacks(
+            **completion_kwargs, kwargs={"fallbacks": fallbacks}
+        )
+        if response is None:
+            raise Exception(
+                "No response from fallbacks. Got none. Turn on `litellm.set_verbose=True` to see more details."
+            )
+        return response
+
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(completion, **completion_kwargs, **kwargs)
@@ -5137,7 +5152,15 @@ async def ahealth_check(  # noqa: PLR0915
                 cheapest_model = pick_cheapest_chat_model_from_llm_provider(
                     custom_llm_provider=custom_llm_provider
                 )
+                fallback_models: Optional[List] = None
+                if custom_llm_provider in litellm.models_by_provider:
+                    models = litellm.models_by_provider[custom_llm_provider]
+                    random.shuffle(models)  # Shuffle the models list in place
+                    fallback_models = models[
+                        :2
+                    ]  # Pick the first 2 models from the shuffled list
                 model_params["model"] = cheapest_model
+                model_params["fallbacks"] = fallback_models
                 await acompletion(**model_params)
                 response = {}  # args like remaining ratelimit etc.
             else:  # default to completion calls

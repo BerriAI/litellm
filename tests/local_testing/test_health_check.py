@@ -118,6 +118,7 @@ async def test_fireworks_health_check():
 
     ensure that provider wildcard model passes health check
     """
+    litellm.set_verbose = True
     response = await litellm.ahealth_check(
         model_params={
             "api_key": os.environ.get("FIREWORKS_AI_API_KEY"),
