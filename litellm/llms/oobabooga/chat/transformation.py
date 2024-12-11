@@ -8,8 +8,6 @@ import httpx
 import litellm
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
-from litellm.llms.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import token_counter
