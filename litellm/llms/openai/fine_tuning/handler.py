@@ -6,11 +6,10 @@ from openai.pagination import AsyncCursorPage
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
-from litellm.llms.base import BaseLLM
 from litellm.types.llms.openai import FineTuningJobCreate
 
 
-class OpenAIFineTuningAPI(BaseLLM):
+class OpenAIFineTuningAPI:
     """
     OpenAI methods to support for batches
     """

@@ -22,7 +22,7 @@ from litellm.utils import (
 )
 
 from ..llms.azure.assistants import AzureAssistantsAPI
-from ..llms.OpenAI.openai import OpenAIAssistantsAPI
+from ..llms.openai.openai import OpenAIAssistantsAPI
 from ..types.llms.openai import *
 from ..types.router import *
 from .utils import get_optional_params_add_message

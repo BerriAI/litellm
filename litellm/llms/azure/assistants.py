@@ -476,7 +476,7 @@ class AzureAssistantsAPI(BaseLLM):
         """
         Here's an example:
         ```
-        from litellm.llms.OpenAI.openai import OpenAIAssistantsAPI, MessageData
+        from litellm.llms.openai.openai import OpenAIAssistantsAPI, MessageData
 
         # create thread
         message: MessageData = {"role": "user", "content": "Hey, how's it going?"}
