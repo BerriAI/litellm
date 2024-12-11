@@ -8,7 +8,7 @@ sys.path.insert(
 
 import litellm
 
-ALLOWED_FILES_IN_LLMS_FOLDER = ["__init__", "base", "base_llm", "huggingface_llms_metadata"]
+ALLOWED_FILES_IN_LLMS_FOLDER = ["__init__", "base", "base_llm", "huggingface_llms_metadata", "custom_httpx", "custom_llm"]
 
 def get_unique_names_from_llms_dir(base_dir="./litellm/llms/"):
     """
@@ -39,9 +39,13 @@ def get_unique_names_from_llms_dir(base_dir="./litellm/llms/"):
 
 def run_lint_check(unique_names):
     _all_litellm_providers = [str(provider.value) for provider in litellm.LlmProviders]
+    violations = []
     for name in unique_names:
         if name.lower() not in _all_litellm_providers and name not in ALLOWED_FILES_IN_LLMS_FOLDER:
-            raise ValueError(f"Provider {name} not found in litellm.LlmProviders. all litellm providers: {_all_litellm_providers}")
+            violations.append(name)
+
+    if len(violations) > 0:
+        raise ValueError(f"There are {len(violations)} violations in the llms folder. \n\n {violations}. \n\n Valid providers: {_all_litellm_providers}")
 
 def main():
     llms_dir = "./litellm/llms/"  # Update this path if needed
