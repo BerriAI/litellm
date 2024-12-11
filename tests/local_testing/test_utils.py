@@ -37,6 +37,8 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
+from unittest.mock import AsyncMock, MagicMock, patch
+
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -1147,3 +1149,32 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         )
         == expected_end_user_id
     )
+
+
+def test_is_prompt_caching_enabled(anthropic_messages):
+    assert litellm.utils.is_prompt_caching_valid_prompt(
+        messages=anthropic_messages,
+        tools=None,
+        custom_llm_provider="anthropic",
+        model="anthropic/claude-3-5-sonnet-20240620",
+    )
+
+
+def test_is_prompt_caching_enabled_error_handling():
+    """
+    Assert that `is_prompt_caching_valid_prompt` safely handles errors in `token_counter`.
+    """
+    with patch(
+        "litellm.utils.token_counter",
+        side_effect=Exception(
+            "Mocked error, This should not raise an error. Instead is_prompt_caching_valid_prompt should return False."
+        ),
+    ):
+        result = litellm.utils.is_prompt_caching_valid_prompt(
+            messages=[{"role": "user", "content": "test"}],
+            tools=None,
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-3-5-sonnet-20240620",
+        )
+
+        assert result is False  # Should return False when an error occurs

@@ -589,15 +589,6 @@ async def test_litellm_anthropic_prompt_caching_system():
         )
 
 
-def test_is_prompt_caching_enabled(anthropic_messages):
-    assert litellm.utils.is_prompt_caching_valid_prompt(
-        messages=anthropic_messages,
-        tools=None,
-        custom_llm_provider="anthropic",
-        model="anthropic/claude-3-5-sonnet-20240620",
-    )
-
-
 @pytest.mark.parametrize(
     "messages, expected_model_id",
     [("anthropic_messages", True), ("normal_messages", False)],
