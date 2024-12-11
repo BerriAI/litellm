@@ -15,10 +15,10 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
 )

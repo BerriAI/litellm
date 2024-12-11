@@ -20,7 +20,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.azure.fine_tuning.handler import AzureOpenAIFineTuningAPI
 from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI, FineTuningJob, FineTuningJobCreate
-from litellm.llms.vertex_ai_and_google_ai_studio.fine_tuning.handler import VertexFineTuningAPI
+from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import Hyperparameters
 from litellm.types.router import *

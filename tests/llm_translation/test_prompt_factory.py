@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
 from unittest.mock import AsyncMock, MagicMock, patch

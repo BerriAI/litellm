@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
@@ -71,7 +71,7 @@ class VertexPassthroughLoggingHandler:
             }
 
         elif "predict" in url_route:
-            from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+            from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
                 VertexImageGeneration,
             )
             from litellm.types.utils import PassthroughCallTypes
