@@ -7,7 +7,7 @@ from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
-from litellm.llms.files_apis.azure import get_azure_openai_client
+from litellm.llms.azure.files.handler import get_azure_openai_client
 from litellm.types.llms.openai import FineTuningJobCreate
 
 
