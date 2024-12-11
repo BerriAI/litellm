@@ -5036,7 +5036,7 @@ async def ahealth_check_chat_models(
         model_params["fallbacks"] = fallback_models
         model_params["max_tokens"] = 1
         await acompletion(**model_params)
-        response = {}  # args like remaining ratelimit etc.
+        response: dict = {}  # args like remaining ratelimit etc.
     else:  # default to completion calls
         model_params["max_tokens"] = 1
         await acompletion(**model_params)
