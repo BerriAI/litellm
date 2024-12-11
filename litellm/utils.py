@@ -1420,65 +1420,25 @@ def calculate_tiles_needed(
     return total_tiles
 
 
-def get_image_type(image_data: bytes) -> Union[str, None]:
-    """take an image (really only the first ~100 bytes max are needed)
-    and return 'png' 'gif' 'jpeg' 'heic' or None. method added to
-    allow deprecation of imghdr in 3.13"""
-
-    if image_data[0:8] == b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a":
-        return "png"
-
-    if image_data[0:4] == b"GIF8" and image_data[5:6] == b"a":
-        return "gif"
-
-    if image_data[0:3] == b"\xff\xd8\xff":
-        return "jpeg"
-
-    if image_data[4:8] == b"ftyp":
-        return "heic"
-
-    return None
-
-
-def get_image_dimensions(data):
+def get_image_dimensions(data) -> Tuple[int, int]:
     img_data = None
+    from io import BytesIO
+
+    from PIL import Image
 
     try:
-        # Try to open as URL
         # Try to open as URL
         client = HTTPHandler(concurrent_limit=1)
         response = client.get(data)
         img_data = response.read()
     except Exception:
         # If not URL, assume it's base64
-        header, encoded = data.split(",", 1)
+        _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
-    img_type = get_image_type(img_data)
-
-    if img_type == "png":
-        w, h = struct.unpack(">LL", img_data[16:24])
-        return w, h
-    elif img_type == "gif":
-        w, h = struct.unpack("<HH", img_data[6:10])
-        return w, h
-    elif img_type == "jpeg":
-        with io.BytesIO(img_data) as fhandle:
-            fhandle.seek(0)
-            size = 2
-            ftype = 0
-            while not 0xC0 <= ftype <= 0xCF or ftype in (0xC4, 0xC8, 0xCC):
-                fhandle.seek(size, 1)
-                byte = fhandle.read(1)
-                while ord(byte) == 0xFF:
-                    byte = fhandle.read(1)
-                ftype = ord(byte)
-                size = struct.unpack(">H", fhandle.read(2))[0] - 2
-            fhandle.seek(1, 1)
-            h, w = struct.unpack(">HH", fhandle.read(4))
-        return w, h
-    else:
-        return None, None
+    _pil_image = Image.open(BytesIO(img_data))
+    width, height = _pil_image.size
+    return width, height
 
 
 def calculage_img_tokens(
