@@ -1429,6 +1429,9 @@ def get_image_type(image_data: bytes) -> Union[str, None]:
     if image_data[4:8] == b"ftyp":
         return "heic"
 
+    if image_data[0:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        return "webp"
+
     return None
 
 
@@ -1469,6 +1472,46 @@ def get_image_dimensions(data):
             fhandle.seek(1, 1)
             h, w = struct.unpack(">HH", fhandle.read(4))
         return w, h
+    elif img_type == "webp":
+        # WebP VP8 header parsing (starts at byte 12)
+        if img_data[12:16] == b"VP8 ":
+            # Simple VP8 format (lossy)
+            if img_data[23:26] != b'\x9d\x01\x2a':
+                 # Invalid magic bytes
+                 return None, None
+            width = struct.unpack("<H", img_data[26:28])[0] & 0x3fff
+            height = struct.unpack("<H", img_data[28:30])[0] & 0x3fff
+            return width, height
+        elif img_data[12:16] == b"VP8L":
+             # Lossless VP8 format
+             if img_data[20] != 0x2f:
+                 # Invalid signature byte
+                 return None, None
+             b1 = img_data[21]
+             b2 = img_data[22]
+             b3 = img_data[23]
+             b4 = img_data[24]
+             width = 1 + (((b2 & 0x3f) << 8) | b1)
+             height = 1 + (((b4 & 0xf) << 10) | (b3 << 2) | ((b2 & 0xc0) >> 6))
+             return width, height
+        elif img_data[12:16] == b"VP8X":
+            # Extended VP8 format
+            flags = img_data[20]
+
+            # Check for the presence of width and height information (bits 0-2 are not all set)
+            if (flags & 0b00000111) != 0b00000111:
+                width_bytes = img_data[24:27]
+                height_bytes = img_data[27:30]
+
+                # Calculate width and height (24-bit little-endian values)
+                width = 1 + int.from_bytes(width_bytes, byteorder='little')
+                height = 1 + int.from_bytes(height_bytes, byteorder='little')
+
+                return width, height
+            else:
+                return None, None
+        else:
+            return None, None
     else:
         return None, None
 
