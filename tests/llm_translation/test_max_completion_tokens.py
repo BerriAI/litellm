@@ -154,13 +154,18 @@ def test_all_model_configs():
         {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
-    from litellm.llms.fireworks_ai.chat.fireworks_ai_transformation import (
+    from litellm.llms.fireworks_ai.chat.transformation import (
         FireworksAIConfig,
     )
 
-    assert "max_completion_tokens" in FireworksAIConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in FireworksAIConfig().get_supported_openai_params(
+        model="llama3"
+    )
     assert FireworksAIConfig().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3"
+        model="llama3",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     from litellm.llms.huggingface_restapi import HuggingfaceConfig
