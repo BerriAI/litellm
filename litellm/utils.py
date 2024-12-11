@@ -4086,7 +4086,7 @@ def get_api_base(
         _optional_params.vertex_location is not None
         and _optional_params.vertex_project is not None
     ):
-        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexPartnerProvider,
             create_vertex_url,
         )
