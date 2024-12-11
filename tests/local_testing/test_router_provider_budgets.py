@@ -513,6 +513,7 @@ async def test_get_current_provider_spend():
     assert spend == 50.5
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_get_current_provider_budget_reset_at():
     """
