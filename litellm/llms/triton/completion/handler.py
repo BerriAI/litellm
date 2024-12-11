@@ -5,12 +5,12 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.utils import (
@@ -24,22 +24,9 @@ from litellm.utils import (
     map_finish_reason,
 )
 
-from .base import BaseLLM
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
-
-
-class TritonError(Exception):
-    def __init__(self, status_code: int, message: str) -> None:
-        self.status_code = status_code
-        self.message = message
-        self.request = httpx.Request(
-            method="POST",
-            url="https://api.anthropic.com/v1/messages",  # using anthropic api base since httpx requires a url
-        )
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+from ...base import BaseLLM
+from ...prompt_templates.factory import custom_prompt, prompt_factory
+from ..common_utils import TritonError
 
 
 class TritonChatCompletion(BaseLLM):
@@ -142,31 +129,29 @@ class TritonChatCompletion(BaseLLM):
     def completion(
         self,
         model: str,
-        messages: List[dict],
+        messages: List,
         timeout: float,
         api_base: str,
         logging_obj: Any,
         optional_params: dict,
+        litellm_params: dict,
         model_response: ModelResponse,
         api_key: Optional[str] = None,
-        client=None,
+        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         stream: Optional[bool] = False,
         acompletion: bool = False,
+        headers: Optional[dict] = None,
     ) -> ModelResponse:
         type_of_model = ""
         optional_params.pop("stream", False)
         if api_base.endswith("generate"):  ### This is a trtllm model
-            text_input = messages[0]["content"]
-            data_for_triton: Dict[str, Any] = {
-                "text_input": prompt_factory(model=model, messages=messages),
-                "parameters": {
-                    "max_tokens": int(optional_params.get("max_tokens", 2000)),
-                    "bad_words": [""],
-                    "stop_words": [""],
-                },
-                "stream": bool(stream),
-            }
-            data_for_triton["parameters"].update(optional_params)
+            data_for_triton = litellm.TritonConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers or {},
+            )
             type_of_model = "trtllm"
 
         elif api_base.endswith(
@@ -226,7 +211,13 @@ class TritonChatCompletion(BaseLLM):
                 },
             )
 
-        headers = {"Content-Type": "application/json"}
+        headers = litellm.TritonConfig().validate_environment(
+            headers=headers or {},
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+        )
         json_data_for_triton: str = json.dumps(data_for_triton)
 
         if acompletion:
@@ -240,8 +231,12 @@ class TritonChatCompletion(BaseLLM):
                 model_response=model_response,
                 type_of_model=type_of_model,
             )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            handler = _get_httpx_client()
         else:
-            handler = HTTPHandler()
+            handler = client
+
         if stream:
             return self._handle_stream(  # type: ignore
                 handler, api_base, json_data_for_triton, model, logging_obj
