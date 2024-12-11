@@ -32,7 +32,7 @@ from litellm.utils import (
     Usage,
 )
 
-from .base import BaseLLM
+from litellm.llms.base import BaseLLM
 from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
