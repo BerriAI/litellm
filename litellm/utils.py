@@ -369,8 +369,14 @@ def function_setup(  # noqa: PLR0915
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
                 elif callback in litellm._known_custom_logger_compatible_callbacks:
-                    callback_class = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    from litellm.litellm_core_utils.litellm_logging import (
+                        _init_custom_logger_compatible_class,
+                    )
+
+                    callback_class = _init_custom_logger_compatible_class(
+                        callback,  # type: ignore
+                        internal_usage_cache=None,
+                        llm_router=None,  # type: ignore
                     )
 
                     # don't double add a callback
@@ -2941,7 +2947,14 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.PredibaseConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params=optional_params
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "huggingface":
         ## check if unsupported param passed in
@@ -4102,7 +4115,6 @@ def get_api_base(
                 partner=VertexPartnerProvider.claude,
             )
         else:
-
             if stream:
                 _api_base = "{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/google/models/{}:streamGenerateContent".format(
                     _optional_params.vertex_location,
@@ -6359,6 +6371,8 @@ class ProviderConfigManager:
             return litellm.VLLMConfig()
         elif litellm.LlmProviders.OLLAMA == provider:
             return litellm.OllamaConfig()
+        elif litellm.LlmProviders.PREDIBASE == provider:
+            return litellm.PredibaseConfig()
         return litellm.OpenAIGPTConfig()
 
 
