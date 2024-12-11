@@ -2487,6 +2487,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                     _part = BedrockContentBlock(
                                         text=DEFAULT_USER_CONTINUE_MESSAGE["content"][0]["text"]
                                     )
+                                else:
+                                    _part = BedrockContentBlock(text="")
                                 _parts.append(_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -2517,6 +2519,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                         _part = BedrockContentBlock(
                             text=DEFAULT_USER_CONTINUE_MESSAGE["content"][0]["text"]
                         )
+                    else:
+                        _part = BedrockContentBlock(text="")
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
                         messages[msg_i], block_type="content_block"
@@ -2601,6 +2605,8 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                     assistants_part = BedrockContentBlock(
                                         text=DEFAULT_ASSISTANT_CONTINUE_MESSAGE["content"][0]["text"]
                                     )
+                                else:
+                                    assistants_part = BedrockContentBlock(text="")
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
