@@ -70,6 +70,14 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = {
     ],
 }  # similar to autogen. Only used if `litellm.modify_params=True`.
 
+DEFAULT_EMPTY_USER_CONTENT = {
+    "text": "Please continue.",
+} # Only used if `litellm.modify_params=True`.
+
+DEFAULT_EMPTY_ASSISTANT_CONTENT = {
+    "text": "Please continue.",
+} # Only used if `litellm.modify_params=True`.
+
 
 def map_system_message_pt(messages: list) -> list:
     """
@@ -2474,8 +2482,14 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
                         if element["type"] == "text":
-                            _part = BedrockContentBlock(text=element["text"])
-                            _parts.append(_part)
+                            if element["text"].strip():
+                                _part = BedrockContentBlock(text=element["text"])
+                            else:
+                                # if text is empty, insert a default text block
+                                _part = BedrockContentBlock(
+                                    text=DEFAULT_EMPTY_USER_CONTENT["text"]
+                                )
+                                _parts.append(_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -2494,7 +2508,13 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             else:
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                if messages[msg_i]["content"].strip():
+                    _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                else:
+                    # if text is empty, insert a default text block
+                    _part = BedrockContentBlock(
+                        text=DEFAULT_EMPTY_USER_CONTENT["text"]
+                    )
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
                         messages[msg_i], block_type="content_block"
