@@ -122,7 +122,7 @@ from .llms.prompt_templates.factory import (
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
-from .llms.text_completion_codestral import CodestralTextCompletion
+from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
 from .llms.vertex_ai_and_google_ai_studio import vertex_ai_non_gemini
