@@ -3685,18 +3685,27 @@ def test_mistral_anyscale_stream():
 #         error_str = traceback.format_exc()
 #         pytest.fail(f"Error occurred: {error_str}")
 
-# test_completion_with_fallbacks_multiple_keys()
-# def test_petals():
-#     try:
-#         response = completion(model="petals-team/StableBeluga2", messages=messages)
-#         # Add any assertions here to check the response
-#         print(response)
 
-#         response = completion(model="petals-team/StableBeluga2", messages=messages)
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+# test_completion_with_fallbacks_multiple_keys()
+def test_petals():
+    try:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+        with patch.object(client, "post") as mock_post:
+            try:
+                completion(
+                    model="petals-team/StableBeluga2",
+                    messages=messages,
+                    client=client,
+                    api_base="https://api.petals.dev",
+                )
+            except Exception as e:
+                print(f"Error occurred: {e}")
+            mock_post.assert_called_once()
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # def test_baseten():
 #     try:

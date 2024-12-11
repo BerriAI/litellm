@@ -56,8 +56,10 @@ from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_content_from_model_response,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_content_from_model_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
@@ -82,8 +84,17 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
+from .litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from .litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    function_call_prompt,
+    map_system_message_pt,
+    ollama_pt,
+    prompt_factory,
+    stringify_json_tool_call_content,
+)
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import aleph_alpha, baseten, maritalk, ollama_chat, petals
+from .llms import aleph_alpha, baseten, maritalk, ollama_chat
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -102,26 +113,18 @@ from .llms.deprecated_providers import palm
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
-from .llms.oobabooga.chat import oobabooga
 from .llms.ollama.completion import handler as ollama
-from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.openai import OpenAIChatCompletion
+from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
+from .llms.petals.completion import handler as petals_handler
 from .llms.predibase import PredibaseChatCompletion
-from .litellm_core_utils.prompt_templates.common_utils import get_completion_messages
-from .litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
-    function_call_prompt,
-    map_system_message_pt,
-    ollama_pt,
-    prompt_factory,
-    stringify_json_tool_call_content,
-)
+from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
-from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
@@ -2434,9 +2437,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## RESPONSE OBJECT
             response = model_response
-        elif (
-            custom_llm_provider == "sagemaker"
-        ):
+        elif custom_llm_provider == "sagemaker":
             # boto3 reads keys from .env
             model_response = sagemaker_llm.completion(
                 model=model,
@@ -2789,7 +2790,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             custom_llm_provider = "petals"
             stream = optional_params.pop("stream", False)
-            model_response = petals.completion(
+            model_response = petals_handler.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2800,6 +2801,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
+                client=client,
             )
             if stream is True:  ## [BETA]
                 # Fake streaming for petals
