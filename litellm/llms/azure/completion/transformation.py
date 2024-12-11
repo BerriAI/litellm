@@ -1,6 +1,6 @@
 from typing import Optional, Union
 
-from ...OpenAI.completion.transformation import OpenAITextCompletionConfig
+from ...openai.completion.transformation import OpenAITextCompletionConfig
 
 
 class AzureOpenAITextConfig(OpenAITextCompletionConfig):

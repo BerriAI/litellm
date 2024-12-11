@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.OpenAI.completion.transformation import OpenAITextCompletionConfig
+from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.llms.databricks import GenericStreamingChunk
 from litellm.utils import (
     Choices,

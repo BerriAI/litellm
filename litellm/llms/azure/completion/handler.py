@@ -20,8 +20,8 @@ from litellm.utils import (
 )
 
 from ...base import BaseLLM
-from ...OpenAI.completion.handler import OpenAITextCompletion
-from ...OpenAI.completion.transformation import OpenAITextCompletionConfig
+from ...openai.completion.handler import OpenAITextCompletion
+from ...openai.completion.transformation import OpenAITextCompletionConfig
 from ...prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import AzureOpenAIError
 

@@ -314,7 +314,7 @@ def _check_provider_config(config: BaseConfig, provider: LlmProviders):
 
 
 # def test_provider_config_manager():
-#     from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+#     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 #     for provider in LITELLM_CHAT_PROVIDERS:
 #         if (
