@@ -1178,3 +1178,38 @@ def test_is_prompt_caching_enabled_error_handling():
         )
 
         assert result is False  # Should return False when an error occurs
+
+
+def test_is_prompt_caching_enabled_return_default_image_dimensions():
+    """
+    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    when processing messages containing images
+
+    IMPORTANT: Ensures Get token counter does not make a GET request to the image url
+    """
+    with patch("litellm.utils.token_counter") as mock_token_counter:
+        litellm.utils.is_prompt_caching_valid_prompt(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                                "detail": "high",
+                            },
+                        },
+                    ],
+                }
+            ],
+            tools=None,
+            custom_llm_provider="openai",
+            model="gpt-4o-mini",
+        )
+
+        # Assert token_counter was called with use_default_image_token_count=True
+        args_to_mock_token_counter = mock_token_counter.call_args[1]
+        print("args_to_mock", args_to_mock_token_counter)
+        assert args_to_mock_token_counter["use_default_image_token_count"] is True

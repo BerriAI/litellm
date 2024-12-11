@@ -6312,7 +6312,12 @@ def is_prompt_caching_valid_prompt(
             custom_llm_provider
         ):
             model = custom_llm_provider + "/" + model
-        token_count = token_counter(messages=messages, tools=tools, model=model)
+        token_count = token_counter(
+            messages=messages,
+            tools=tools,
+            model=model,
+            use_default_image_token_count=True,
+        )
         return token_count >= 1024
     except Exception as e:
         verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
