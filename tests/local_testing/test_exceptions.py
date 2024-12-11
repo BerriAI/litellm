@@ -1075,8 +1075,10 @@ async def test_exception_with_headers_httpx(
 
     if sync_mode:
         client = HTTPHandler()
+        _client_to_mock = HTTPHandler
     else:
         client = AsyncHTTPHandler()
+        _client_to_mock = AsyncHTTPHandler
 
     data = {"model": model}
     data, original_function, mapped_target = _pre_call_utils_httpx(
@@ -1113,15 +1115,17 @@ async def test_exception_with_headers_httpx(
         )
 
         # Create and raise the HTTPStatusError exception
-        raise HTTPStatusError(
+        _exception = HTTPStatusError(
             message="Error code: 429 - Rate Limit Error!",
             request=request,
             response=response,
         )
+        setattr(_exception, "status_code", 429)
+        raise _exception
 
     with patch.object(
-        mapped_target,
-        "send",
+        _client_to_mock,
+        "post",
         side_effect=_return_exception,
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)
