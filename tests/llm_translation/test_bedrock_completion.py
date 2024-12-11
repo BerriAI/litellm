@@ -529,6 +529,7 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
         pytest.fail(f"Error occurred: {e}")
 
 
+
 # test_completion_bedrock_claude_sts_client_auth()
 
 
@@ -2106,3 +2107,124 @@ class TestBedrockRerank(BaseLLMRerankTest):
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         }
+
+
+def test_bedrock_empty_content_handling():
+    """
+    Test that empty content in messages is handled correctly with default messages
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello!"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": ""
+                }
+            ]
+        }
+    ]
+
+    # Test with default behavior (modify_params=True)
+    litellm.modify_params = True
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock"
+    )
+
+    # Verify default message was inserted
+    assert any(
+        block.text == "Please continue."
+        for msg in formatted_messages
+        if msg["role"] == "assistant"
+        for block in msg["content"]
+        if hasattr(block, "text")
+    )
+
+def test_bedrock_custom_continue_message():
+    """
+    Test that custom continue messages are used when provided
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello!"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "   "
+                }
+            ]
+        }
+    ]
+
+    custom_continue = {
+        "role": "assistant",
+        "content": [
+            {
+                "text": "Custom continue message"
+            }
+        ]
+    }
+
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+        assistant_continue_message=custom_continue
+    )
+
+    # Verify custom message was used
+    assert any(
+        block.text == "Custom continue message"
+        for msg in formatted_messages
+        if msg["role"] == "assistant"
+        for block in msg["content"]
+        if hasattr(block, "text")
+    )
+
+def test_bedrock_no_default_message():
+    """
+    Test that empty content is handled correctly when modify_params=False
+    """
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Hi again"},
+        {"role": "assistant", "content": "Valid response"}
+    ]
+
+    litellm.modify_params = False
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock"
+    )
+
+    # Verify empty message was omitted but valid message remains
+    assistant_messages = [msg for msg in formatted_messages if msg["role"] == "assistant"]
+    assert len(assistant_messages) == 1  # Only the valid message remains
+    assert any(
+        block.text == "Valid response"
+        for msg in assistant_messages
+        for block in msg["content"]
+        if hasattr(block, "text")
+    )

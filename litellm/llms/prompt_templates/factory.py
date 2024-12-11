@@ -70,14 +70,6 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = {
     ],
 }  # similar to autogen. Only used if `litellm.modify_params=True`.
 
-DEFAULT_EMPTY_USER_CONTENT = {
-    "text": "Please continue.",
-} # Only used if `litellm.modify_params=True`.
-
-DEFAULT_EMPTY_ASSISTANT_CONTENT = {
-    "text": "Please continue.",
-} # Only used if `litellm.modify_params=True`.
-
 
 def map_system_message_pt(messages: list) -> list:
     """
@@ -2485,10 +2477,16 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             if element["text"].strip():
                                 _part = BedrockContentBlock(text=element["text"])
                             else:
-                                # if text is empty, insert a default text block
-                                _part = BedrockContentBlock(
-                                    text=DEFAULT_EMPTY_USER_CONTENT["text"]
-                                )
+                                # bedrock requires non-empty content
+                                # insert a default text block if the user provided it, or if modify_params is True
+                                if user_continue_message is not None:
+                                    _part = BedrockContentBlock(
+                                        text=user_continue_message["content"][0]["text"]
+                                    )
+                                elif litellm.modify_params:
+                                    _part = BedrockContentBlock(
+                                        text=DEFAULT_USER_CONTINUE_MESSAGE["content"][0]["text"]
+                                    )
                                 _parts.append(_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
@@ -2509,12 +2507,16 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 user_content.extend(_parts)
             else:
                 if messages[msg_i]["content"].strip():
-                    _part = BedrockContentBlock(text=messages[msg_i]["content"])
-                else:
-                    # if text is empty, insert a default text block
-                    _part = BedrockContentBlock(
-                        text=DEFAULT_EMPTY_USER_CONTENT["text"]
-                    )
+                    # bedrock requires non-empty content
+                    # insert a default text block if the user provided it, or if modify_params is True
+                    if user_continue_message is not None:
+                        _part = BedrockContentBlock(
+                            text=user_continue_message["content"][0]["text"]
+                        )
+                    elif litellm.modify_params:
+                        _part = BedrockContentBlock(
+                            text=DEFAULT_USER_CONTINUE_MESSAGE["content"][0]["text"]
+                        )
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
                         messages[msg_i], block_type="content_block"
@@ -2586,7 +2588,19 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
                         if element["type"] == "text":
-                            assistants_part = BedrockContentBlock(text=element["text"])
+                            if element["text"].strip():
+                                assistants_part = BedrockContentBlock(text=element["text"])
+                            else:
+                                # bedrock requires non-empty content
+                                # insert a default text block if the user provided it, or if modify_params is True
+                                if assistant_continue_message is not None:
+                                    assistants_part = BedrockContentBlock(
+                                        text=assistant_continue_message["content"][0]["text"]
+                                    )
+                                elif litellm.modify_params:
+                                    assistants_part = BedrockContentBlock(
+                                        text=DEFAULT_ASSISTANT_CONTINUE_MESSAGE["content"][0]["text"]
+                                    )
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
