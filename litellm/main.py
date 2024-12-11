@@ -2623,6 +2623,9 @@ def completion(  # type: ignore # noqa: PLR0915
             ## RESPONSE OBJECT
             response = model_response
         elif custom_llm_provider == "ollama":
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
             api_base = (
                 litellm.api_base
                 or api_base
