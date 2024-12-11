@@ -816,6 +816,7 @@ jobs:
       - run: python ./tests/documentation_tests/test_router_settings.py
       - run: python ./tests/documentation_tests/test_api_docs.py
       - run: python ./tests/code_coverage_tests/ensure_async_clients_test.py
+      - run: python ./tests/code_coverage_tests/enforce_llms_folder_style.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
