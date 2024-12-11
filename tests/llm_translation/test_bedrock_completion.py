@@ -529,7 +529,6 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
         pytest.fail(f"Error occurred: {e}")
 
 
-
 # test_completion_bedrock_claude_sts_client_auth()
 
 
