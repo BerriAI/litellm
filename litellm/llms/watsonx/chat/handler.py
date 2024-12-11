@@ -21,7 +21,6 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             if api_params.get("space_id") is None:
                 raise WatsonXAIError(
                     status_code=401,
-                    url=api_params["url"],
                     message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
                 )
             deployment_id = "/".join(model.split("/")[1:])
