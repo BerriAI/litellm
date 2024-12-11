@@ -1588,6 +1588,8 @@ def token_counter(
                     count_response_tokens=count_response_tokens,
                     tools=tools,
                     tool_choice=tool_choice,
+                    use_default_image_token_count=use_default_image_token_count
+                    or False,
                 )
             else:
                 print_verbose(
@@ -1601,6 +1603,8 @@ def token_counter(
                     count_response_tokens=count_response_tokens,
                     tools=tools,
                     tool_choice=tool_choice,
+                    use_default_image_token_count=use_default_image_token_count
+                    or False,
                 )
     else:
         num_tokens = len(encoding.encode(text, disallowed_special=()))  # type: ignore
