@@ -14,7 +14,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantM
 from litellm.types.utils import ModelResponse
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class OpenAILikeChatConfig(OpenAIGPTConfig):

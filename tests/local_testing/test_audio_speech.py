@@ -60,7 +60,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
     else:
@@ -78,7 +78,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
 
@@ -109,7 +109,7 @@ async def test_audio_speech_litellm_vertex(sync_mode):
 
         from types import SimpleNamespace
 
-        from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
         response.stream_to_file(speech_file_path)
 
