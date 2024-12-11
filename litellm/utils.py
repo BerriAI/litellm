@@ -135,7 +135,9 @@ from litellm.types.utils import (
     Usage,
 )
 
-with resources.open_text("litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json") as f:
+with resources.open_text(
+    "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+) as f:
     json_data = json.load(f)
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
@@ -3073,7 +3075,7 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         if "codestral" in model:
-            optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+            optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -3415,7 +3417,7 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+        optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6237,7 +6239,7 @@ from litellm.llms.base_llm.transformation import BaseConfig
 
 class ProviderConfigManager:
     @staticmethod
-    def get_provider_chat_config( # noqa: PLR0915
+    def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: litellm.LlmProviders
     ) -> BaseConfig:
         """
@@ -6344,7 +6346,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
-            return litellm.MistralTextCompletionConfig()
+            return litellm.CodestralTextCompletionConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
             return litellm.SambanovaConfig()
         elif litellm.LlmProviders.MARITALK == provider:
