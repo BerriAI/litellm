@@ -3535,7 +3535,21 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-
+    elif custom_llm_provider == "vllm":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VLLMConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "groq":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6313,6 +6327,8 @@ class ProviderConfigManager:
             return litellm.LMStudioChatConfig()
         elif litellm.LlmProviders.GALADRIEL == provider:
             return litellm.GaladrielChatConfig()
+        elif litellm.LlmProviders.VLLM == provider:
+            return litellm.VLLMConfig()
         return litellm.OpenAIGPTConfig()
 
 
