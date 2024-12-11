@@ -19,6 +19,10 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -26,7 +30,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from ...base import BaseLLM
-from ...prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import PredibaseError
 
 
