@@ -2334,7 +2334,7 @@ def test_completion_openai_litellm_key():
 # test_ completion_openai_litellm_key()
 
 
-# @pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
+@pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
@@ -2343,7 +2343,7 @@ def test_completion_ollama_hosted():
             model="ollama/phi",
             messages=messages,
             max_tokens=2,
-            # api_base="https://test-ollama-endpoint.onrender.com",
+            api_base="https://test-ollama-endpoint.onrender.com",
         )
         # Add any assertions here to check the response
         print(response)
