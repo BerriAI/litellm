@@ -279,7 +279,9 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"maxTokens": 10}
 
-    from litellm.llms.text_completion_codestral import CodestralTextCompletionConfig
+    from litellm.llms.codestral.completion.transformation import (
+        CodestralTextCompletionConfig,
+    )
 
     assert (
         "max_completion_tokens"
