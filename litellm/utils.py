@@ -3073,7 +3073,7 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         if "codestral" in model:
-            optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+            optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -3415,7 +3415,7 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.MistralTextCompletionConfig().map_openai_params(
+        optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6344,7 +6344,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
-            return litellm.MistralTextCompletionConfig()
+            return litellm.CodestralTextCompletionConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
             return litellm.SambanovaConfig()
         elif litellm.LlmProviders.MARITALK == provider:

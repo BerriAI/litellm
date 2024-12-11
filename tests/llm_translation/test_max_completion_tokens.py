@@ -212,13 +212,13 @@ def test_all_model_configs():
         {},
     ) == {"max_new_tokens": 10}
 
-    from litellm.llms.text_completion_codestral import MistralTextCompletionConfig
+    from litellm.llms.text_completion_codestral import CodestralTextCompletionConfig
 
     assert (
         "max_completion_tokens"
-        in MistralTextCompletionConfig().get_supported_openai_params(model="llama3")
+        in CodestralTextCompletionConfig().get_supported_openai_params(model="llama3")
     )
-    assert MistralTextCompletionConfig().map_openai_params(
+    assert CodestralTextCompletionConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
@@ -277,13 +277,13 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"maxTokens": 10}
 
-    from litellm.llms.text_completion_codestral import MistralTextCompletionConfig
+    from litellm.llms.text_completion_codestral import CodestralTextCompletionConfig
 
     assert (
         "max_completion_tokens"
-        in MistralTextCompletionConfig().get_supported_openai_params(model="llama3")
+        in CodestralTextCompletionConfig().get_supported_openai_params(model="llama3")
     )
-    assert MistralTextCompletionConfig().map_openai_params(
+    assert CodestralTextCompletionConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},

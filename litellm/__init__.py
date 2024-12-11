@@ -1178,7 +1178,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
-from .llms.text_completion_codestral import MistralTextCompletionConfig
+from .llms.text_completion_codestral import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
