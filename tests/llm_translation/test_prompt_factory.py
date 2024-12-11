@@ -449,8 +449,12 @@ def test_azure_tool_call_invoke_helper():
         {"role": "assistant", "function_call": {"name": "get_weather"}},
     ]
 
-    transformed_messages = litellm.AzureOpenAIConfig.transform_request(
-        model="gpt-4o", messages=messages, optional_params={}
+    transformed_messages = litellm.AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
     )
 
     assert transformed_messages["messages"] == [

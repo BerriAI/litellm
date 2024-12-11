@@ -4,7 +4,17 @@ import os
 import time
 import traceback
 import types
-from typing import Any, Callable, Coroutine, Iterable, Literal, Optional, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Union,
+    cast,
+)
 
 import httpx
 import openai
@@ -18,6 +28,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ProviderField
@@ -35,6 +46,7 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
+from .chat.gpt_transformation import OpenAIGPTConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 
 
@@ -81,135 +93,7 @@ class MistralEmbeddingConfig:
         return optional_params
 
 
-class DeepInfraConfig:
-    """
-    Reference: https://deepinfra.com/docs/advanced/openai_api
-
-    The class `DeepInfra` provides configuration for the DeepInfra's Chat Completions API interface. Below are the parameters:
-    """
-
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
-
-    def __init__(
-        self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "stream",
-            "frequency_penalty",
-            "function_call",
-            "functions",
-            "logit_bias",
-            "max_tokens",
-            "max_completion_tokens",
-            "n",
-            "presence_penalty",
-            "stop",
-            "temperature",
-            "top_p",
-            "response_format",
-            "tools",
-            "tool_choice",
-        ]
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        supported_openai_params = self.get_supported_openai_params()
-        for param, value in non_default_params.items():
-            if (
-                param == "temperature"
-                and value == 0
-                and model == "mistralai/Mistral-7B-Instruct-v0.1"
-            ):  # this model does no support temperature == 0
-                value = 0.0001  # close to 0
-            if param == "tool_choice":
-                if (
-                    value != "auto" and value != "none"
-                ):  # https://deepinfra.com/docs/advanced/function_calling
-                    ## UNSUPPORTED TOOL CHOICE VALUE
-                    if litellm.drop_params is True or drop_params is True:
-                        value = None
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message="Deepinfra doesn't support tool_choice={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
-                                value
-                            ),
-                            status_code=400,
-                        )
-            elif param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
-                if value is not None:
-                    optional_params[param] = value
-        return optional_params
-
-    def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-        api_base = (
-            api_base
-            or get_secret_str("DEEPINFRA_API_BASE")
-            or "https://api.deepinfra.com/v1/openai"
-        )
-        dynamic_api_key = api_key or get_secret_str("DEEPINFRA_API_KEY")
-        return api_base, dynamic_api_key
-
-
-class OpenAIConfig:
+class OpenAIConfig(BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
 
@@ -273,25 +157,12 @@ class OpenAIConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         """
-        This function returns the list of supported openai parameters for a given OpenAI Model
+        This function returns the list
+        of supported openai parameters for a given OpenAI Model
 
         - If O1 model, returns O1 supported params
         - If gpt-audio model, returns gpt-audio supported params
@@ -318,6 +189,11 @@ class OpenAIConfig:
             if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        return messages
 
     def map_openai_params(
         self,
@@ -347,6 +223,55 @@ class OpenAIConfig:
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+        )
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return OpenAIError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return {"model": model, "messages": messages, **optional_params}
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        raise NotImplementedError(
+            "OpenAI handler does this transformation as it uses the OpenAI SDK."
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        raise NotImplementedError(
+            "OpenAI handler does this validation as it uses the OpenAI SDK."
         )
 
 
@@ -483,6 +408,7 @@ class OpenAIChatCompletion(BaseLLM):
         model_response: ModelResponse,
         timeout: Union[float, httpx.Timeout],
         optional_params: dict,
+        litellm_params: dict,
         logging_obj: Any,
         model: Optional[str] = None,
         messages: Optional[list] = None,
@@ -490,7 +416,6 @@ class OpenAIChatCompletion(BaseLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         acompletion: bool = False,
-        litellm_params=None,
         logger_fn=None,
         headers: Optional[dict] = None,
         custom_prompt_dict: dict = {},
@@ -516,31 +441,26 @@ class OpenAIChatCompletion(BaseLLM):
 
             if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
-                # process all OpenAI compatible provider logic here
-                if custom_llm_provider == "mistral":
-                    # check if message content passed in as list, and not string
-                    messages = prompt_factory(  # type: ignore
-                        model=model,
-                        messages=messages,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-                if custom_llm_provider == "perplexity" and messages is not None:
-                    # check if messages.name is passed + supported, if not supported remove
-                    messages = prompt_factory(  # type: ignore
-                        model=model,
-                        messages=messages,
-                        custom_llm_provider=custom_llm_provider,
-                    )
+
             if messages is not None and custom_llm_provider is not None:
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
-                messages = provider_config._transform_messages(messages)
+                if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
+                    provider_config, OpenAIConfig
+                ):
+                    messages = provider_config._transform_messages(messages)
 
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
-                data = {"model": model, "messages": messages, **optional_params}
+                data = OpenAIConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers or {},
+                )
 
                 try:
                     max_retries = data.pop("max_retries", 2)
@@ -2430,7 +2350,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         """
         Here's an example:
         ```
-        from litellm.llms.OpenAI.openai import OpenAIAssistantsAPI, MessageData
+        from litellm.llms.openai.openai import OpenAIAssistantsAPI, MessageData
 
         # create thread
         message: MessageData = {"role": "user", "content": "Hey, how's it going?"}

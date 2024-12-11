@@ -363,6 +363,7 @@ class SagemakerLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            litellm_params=litellm_params,
         )
 
     async def make_async_call(
@@ -562,6 +563,7 @@ class SagemakerLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            litellm_params=litellm_params,
         )
 
     def embedding(

@@ -49,6 +49,10 @@ class CloudflareChatConfig(BaseConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+    @classmethod
+    def get_config(cls):
+        return super().get_config()
+
     def validate_environment(
         self,
         headers: dict,
@@ -120,6 +124,7 @@ class CloudflareChatConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,

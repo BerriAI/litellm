@@ -6,28 +6,14 @@ from typing import Any, Callable, Optional
 
 import requests  # type: ignore
 
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
+from ..common_utils import OobaboogaError
+from .transformation import OobaboogaConfig
 
-
-class OobaboogaError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
-
-
-def validate_environment(api_key):
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
-    if api_key:
-        headers["Authorization"] = f"Token {api_key}"
-    return headers
+oobabooga_config = OobaboogaConfig()
 
 
 def completion(
@@ -40,12 +26,18 @@ def completion(
     api_key,
     logging_obj,
     optional_params: dict,
+    litellm_params: dict,
     custom_prompt_dict={},
-    litellm_params=None,
     logger_fn=None,
     default_max_tokens_to_sample=None,
 ):
-    headers = validate_environment(api_key)
+    headers = oobabooga_config.validate_environment(
+        api_key=api_key,
+        headers={},
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+    )
     if "https" in model:
         completion_url = model
     elif api_base:
@@ -58,10 +50,13 @@ def completion(
     model = model
 
     completion_url = completion_url + "/v1/chat/completions"
-    data = {
-        "messages": messages,
-        **optional_params,
-    }
+    data = oobabooga_config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
     ## LOGGING
 
     logging_obj.pre_call(
@@ -70,8 +65,8 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-
-    response = requests.post(
+    client = _get_httpx_client()
+    response = client.post(
         completion_url,
         headers=headers,
         data=json.dumps(data),
@@ -80,44 +75,18 @@ def completion(
     if "stream" in optional_params and optional_params["stream"] is True:
         return response.iter_lines()
     else:
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
+        return oobabooga_config.transform_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
             api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
+            request_data=data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
         )
-        print_verbose(f"raw model_response: {response.text}")
-        ## RESPONSE OBJECT
-        try:
-            completion_response = response.json()
-        except Exception:
-            raise OobaboogaError(
-                message=response.text, status_code=response.status_code
-            )
-        if "error" in completion_response:
-            raise OobaboogaError(
-                message=completion_response["error"],
-                status_code=response.status_code,
-            )
-        else:
-            try:
-                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
-            except Exception:
-                raise OobaboogaError(
-                    message=json.dumps(completion_response),
-                    status_code=response.status_code,
-                )
-
-        model_response.created = int(time.time())
-        model_response.model = model
-        usage = Usage(
-            prompt_tokens=completion_response["usage"]["prompt_tokens"],
-            completion_tokens=completion_response["usage"]["completion_tokens"],
-            total_tokens=completion_response["usage"]["total_tokens"],
-        )
-        setattr(model_response, "usage", usage)
-        return model_response
 
 
 def embedding(
@@ -127,7 +96,7 @@ def embedding(
     api_key: Optional[str],
     api_base: Optional[str],
     logging_obj: Any,
-    optional_params=None,
+    optional_params: dict,
     encoding=None,
 ):
     # Create completion URL
@@ -153,7 +122,13 @@ def embedding(
         )
 
     # Send POST request
-    headers = validate_environment(api_key)
+    headers = oobabooga_config.validate_environment(
+        api_key=api_key,
+        headers={},
+        model=model,
+        messages=[],
+        optional_params=optional_params,
+    )
     response = requests.post(embeddings_url, headers=headers, json=data)
     if not response.ok:
         raise OobaboogaError(message=response.text, status_code=response.status_code)

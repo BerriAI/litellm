@@ -274,6 +274,7 @@ class IBMWatsonXAIConfig(BaseConfig):
         request_data: Dict,
         messages: List[AllMessageValues],
         optional_params: Dict,
+        litellm_params: Dict,
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
