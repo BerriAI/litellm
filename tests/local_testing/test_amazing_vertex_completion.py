@@ -1645,7 +1645,10 @@ async def test_gemini_pro_httpx_custom_api_base(model):
     ]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    client = HTTPHandler()
+    if "claude" in model:
+        client = HTTPHandler
+    else:
+        client = HTTPHandler()
 
     with patch.object(client, "post", new=MagicMock()) as mock_call:
         try:
