@@ -61,34 +61,13 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "vllm":
         return litellm.VLLMConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepseek":
-        return [
-            # https://platform.deepseek.com/api-docs/api/create-chat-completion
-            "frequency_penalty",
-            "max_tokens",
-            "presence_penalty",
-            "response_format",
-            "stop",
-            "stream",
-            "temperature",
-            "top_p",
-            "logprobs",
-            "top_logprobs",
-            "tools",
-            "tool_choice",
-        ]
+        return litellm.DeepSeekChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere":
         return litellm.CohereConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "cohere_chat":
         return litellm.CohereChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "maritalk":
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "presence_penalty",
-            "stop",
-        ]
+        return litellm.MaritalkConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openai":
         return litellm.OpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
@@ -176,14 +155,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "deepinfra":
         return litellm.DeepInfraConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "perplexity":
-        return [
-            "temperature",
-            "top_p",
-            "stream",
-            "max_tokens",
-            "presence_penalty",
-            "frequency_penalty",
-        ]
+        return litellm.PerplexityChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "anyscale":
         return [
             "temperature",
