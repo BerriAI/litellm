@@ -103,7 +103,7 @@ from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.oobabooga.chat import oobabooga
-from .llms.openai.audio_transcriptions import OpenAIAudioTranscription
+from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
