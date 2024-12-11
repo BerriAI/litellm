@@ -7,7 +7,7 @@ import httpx
 from litellm.utils import ModelResponse, get_secret
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from ...prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import AWSEventStreamDecoder
 from .transformation import SagemakerChatConfig
 

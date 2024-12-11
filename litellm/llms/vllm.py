@@ -9,7 +9,7 @@ import requests  # type: ignore
 
 from litellm.utils import ModelResponse, Usage
 
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 
 llm = None
 

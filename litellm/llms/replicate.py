@@ -15,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class ReplicateError(Exception):

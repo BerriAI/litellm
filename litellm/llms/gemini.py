@@ -16,7 +16,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.utils import Choices, Message, ModelResponse, Usage
 
-from .prompt_templates.factory import custom_prompt, get_system_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, get_system_prompt, prompt_factory
 
 
 class GeminiError(Exception):

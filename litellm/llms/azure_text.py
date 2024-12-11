@@ -22,7 +22,7 @@ from litellm.utils import (
 from .base import BaseLLM
 from .openai.completion.handler import OpenAITextCompletion
 from .openai.completion.transformation import OpenAITextCompletionConfig
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 

@@ -11,7 +11,7 @@ from ....types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from ...prompt_templates.factory import convert_to_azure_openai_messages
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_azure_openai_messages
 
 
 class AzureOpenAIConfig:
