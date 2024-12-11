@@ -1104,7 +1104,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transfor
 )
 
 from .llms.sagemaker.sagemaker import SagemakerConfig
-from .llms.ollama import OllamaConfig
+from .llms.ollama.completion.handler import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock.chat.invoke_handler import (
