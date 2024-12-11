@@ -213,7 +213,7 @@ def test_router_pattern_match_e2e():
     """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    client = HTTPHandler()
+    client = HTTPHandler
     router = Router(
         model_list=[
             {
