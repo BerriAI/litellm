@@ -10,7 +10,7 @@ from typing import Any, Callable, List, Optional, Union
 from httpx._config import Timeout
 
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
-from litellm.llms.OpenAI.openai import OpenAIChatCompletion
+from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
