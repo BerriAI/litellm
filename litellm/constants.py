@@ -48,7 +48,6 @@ LITELLM_CHAT_PROVIDERS = [
     "sambanova",
     "maritalk",
     "cloudflare",
-    "xinference",
     "fireworks_ai",
     "friendliai",
     "watsonx",

@@ -103,6 +103,7 @@ from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.oobabooga.chat import oobabooga
+from .llms.ollama.completion import handler as ollama
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.openai import OpenAIChatCompletion
@@ -149,6 +150,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
 from .llms.vertex_ai_and_google_ai_studio.vertex_model_garden.main import (
     VertexAIModelGardenModels,
 )
+from .llms.vllm.completion import handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
@@ -2592,7 +2594,7 @@ def completion(  # type: ignore # noqa: PLR0915
             response = response
         elif custom_llm_provider == "vllm":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = vllm.completion(
+            model_response = handler.completion(
                 model=model,
                 messages=messages,
                 custom_prompt_dict=custom_prompt_dict,
