@@ -1,5 +1,5 @@
 # What is this?
-## Controller file for TextCompletionCodestral Integration - https://codestral.com/
+## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import copy
 import json
