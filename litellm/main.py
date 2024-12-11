@@ -125,29 +125,29 @@ from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.text_completion_codestral import CodestralTextCompletion
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.triton import TritonChatCompletion
-from .llms.vertex_ai_and_google_ai_studio import vertex_ai_non_gemini
-from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from .llms.vertex_ai import vertex_ai_non_gemini
+from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
-from .llms.vertex_ai_and_google_ai_studio.gemini_embeddings.batch_embed_content_handler import (
+from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
     GoogleBatchEmbeddings,
 )
-from .llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+from .llms.vertex_ai.image_generation.image_generation_handler import (
     VertexImageGeneration,
 )
-from .llms.vertex_ai_and_google_ai_studio.multimodal_embeddings.embedding_handler import (
+from .llms.vertex_ai.multimodal_embeddings.embedding_handler import (
     VertexMultimodalEmbedding,
 )
-from .llms.vertex_ai_and_google_ai_studio.text_to_speech.text_to_speech_handler import (
+from .llms.vertex_ai.text_to_speech.text_to_speech_handler import (
     VertexTextToSpeechAPI,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
+from .llms.vertex_ai.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler import (
+from .llms.vertex_ai.vertex_embeddings.embedding_handler import (
     VertexEmbedding,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_model_garden.main import (
+from .llms.vertex_ai.vertex_model_garden.main import (
     VertexAIModelGardenModels,
 )
 from .llms.vllm.completion import handler as vllm_handler

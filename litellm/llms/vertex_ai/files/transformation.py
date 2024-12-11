@@ -2,13 +2,13 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+from litellm.llms.vertex_ai.gemini.transformation import (
     _transform_request_body,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.openai import (
