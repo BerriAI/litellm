@@ -20,6 +20,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
 )
 
 import httpx  # type: ignore
@@ -30,6 +31,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -86,9 +88,15 @@ from .transformation import (
     _gemini_convert_messages_with_history,
     _process_gemini_image,
     async_transform_request_body,
-    set_headers,
     sync_transform_request_body,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    LoggingClass = LiteLLMLoggingObj
+else:
+    LoggingClass = Any
 
 
 class VertexAIConfig:
@@ -277,7 +285,7 @@ class VertexAIConfig:
         ]
 
 
-class VertexGeminiConfig:
+class VertexGeminiConfig(BaseConfig):
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
@@ -338,23 +346,9 @@ class VertexGeminiConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "temperature",
             "top_p",
@@ -473,12 +467,11 @@ class VertexGeminiConfig:
 
     def map_openai_params(
         self,
+        non_default_params: Dict,
+        optional_params: Dict,
         model: str,
-        non_default_params: dict,
-        optional_params: dict,
         drop_params: bool,
-    ):
-
+    ) -> Dict:
         for param, value in non_default_params.items():
             if param == "temperature":
                 optional_params["temperature"] = value
@@ -751,38 +744,38 @@ class VertexGeminiConfig:
 
         return model_response
 
-    def _transform_response(
+    def transform_response(
         self,
         model: str,
-        response: httpx.Response,
+        raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str,
-        data: Union[dict, str, RequestBody],
-        messages: List,
-        print_verbose,
-        encoding,
+        logging_obj: LoggingClass,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         ## LOGGING
         logging_obj.post_call(
             input=messages,
             api_key="",
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
         )
 
         ## RESPONSE OBJECT
         try:
-            completion_response = GenerateContentResponseBody(**response.json())  # type: ignore
+            completion_response = GenerateContentResponseBody(**raw_response.json())  # type: ignore
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    response.text, str(e)
+                    raw_response.text, str(e)
                 ),
                 status_code=422,
+                headers=raw_response.headers,
             )
 
         ## GET MODEL ##
@@ -915,13 +908,52 @@ class VertexGeminiConfig:
                     completion_response, str(e)
                 ),
                 status_code=422,
+                headers=raw_response.headers,
             )
 
         return model_response
 
-    @staticmethod
-    def _transform_messages(messages: List[AllMessageValues]) -> List[ContentType]:
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[ContentType]:
         return _gemini_convert_messages_with_history(messages=messages)
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return VertexAIError(
+            message=error_message, status_code=status_code, headers=headers
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        headers: Dict,
+    ) -> Dict:
+        raise NotImplementedError(
+            "Vertex AI has a custom implementation of transform_request. Needs sync + async."
+        )
+
+    def validate_environment(
+        self,
+        headers: Optional[Dict],
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        api_key: Optional[str] = None,
+    ) -> Dict:
+        default_headers = {
+            "Content-Type": "application/json",
+        }
+        if api_key is not None:
+            default_headers["Authorization"] = f"Bearer {api_key}"
+        if headers is not None:
+            default_headers.update(headers)
+
+        return default_headers
 
 
 class GoogleAIStudioGeminiConfig(
@@ -978,23 +1010,9 @@ class GoogleAIStudioGeminiConfig(
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "temperature",
             "top_p",
@@ -1012,22 +1030,27 @@ class GoogleAIStudioGeminiConfig(
 
     def map_openai_params(
         self,
-        model: str,
         non_default_params: Dict,
         optional_params: Dict,
+        model: str,
         drop_params: bool,
-    ):
+    ) -> Dict:
+
         # drop frequency_penalty and presence_penalty
         if "frequency_penalty" in non_default_params:
             del non_default_params["frequency_penalty"]
         if "presence_penalty" in non_default_params:
             del non_default_params["presence_penalty"]
         return super().map_openai_params(
-            model, non_default_params, optional_params, drop_params
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            drop_params=drop_params,
         )
 
-    @staticmethod
-    def _transform_messages(messages: List[AllMessageValues]) -> List[ContentType]:
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[ContentType]:
         """
         Google AI Studio Gemini does not support image urls in messages.
         """
@@ -1075,9 +1098,14 @@ async def make_call(
         raise VertexAIError(
             status_code=e.response.status_code,
             message=VertexGeminiConfig().translate_exception_str(exception_string),
+            headers=e.response.headers,
         )
     if response.status_code != 200:
-        raise VertexAIError(status_code=response.status_code, message=response.text)
+        raise VertexAIError(
+            status_code=response.status_code,
+            message=response.text,
+            headers=response.headers,
+        )
 
     completion_stream = ModelResponseIterator(
         streaming_response=response.aiter_lines(), sync_stream=False
@@ -1111,7 +1139,11 @@ def make_sync_call(
     response = client.post(api_base, headers=headers, data=data, stream=True)
 
     if response.status_code != 200:
-        raise VertexAIError(status_code=response.status_code, message=response.read())
+        raise VertexAIError(
+            status_code=response.status_code,
+            message=str(response.read()),
+            headers=response.headers,
+        )
 
     completion_stream = ModelResponseIterator(
         streaming_response=response.iter_lines(), sync_stream=True
@@ -1182,7 +1214,13 @@ class VertexLLM(VertexBase):
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
-        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        headers = VertexGeminiConfig().validate_environment(
+            api_key=auth_header,
+            headers=extra_headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1263,7 +1301,13 @@ class VertexLLM(VertexBase):
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
 
-        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        headers = VertexGeminiConfig().validate_environment(
+            api_key=auth_header,
+            headers=extra_headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+        )
 
         request_body = await async_transform_request_body(**data)  # type: ignore
         _async_client_params = {}
@@ -1287,23 +1331,32 @@ class VertexLLM(VertexBase):
         )
 
         try:
-            response = await client.post(api_base, headers=headers, json=request_body)  # type: ignore
+            response = await client.post(
+                api_base, headers=headers, json=cast(dict, request_body)
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            raise VertexAIError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+            )
         except httpx.TimeoutException:
-            raise VertexAIError(status_code=408, message="Timeout error occurred.")
+            raise VertexAIError(
+                status_code=408,
+                message="Timeout error occurred.",
+                headers=None,
+            )
 
-        return VertexGeminiConfig()._transform_response(
+        return VertexGeminiConfig().transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key="",
-            data=request_body,
+            request_data=cast(dict, request_body),
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
             litellm_params=litellm_params,
             encoding=encoding,
@@ -1421,7 +1474,13 @@ class VertexLLM(VertexBase):
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
         )
-        headers = set_headers(auth_header=auth_header, extra_headers=extra_headers)
+        headers = VertexGeminiConfig().validate_environment(
+            api_key=auth_header,
+            headers=extra_headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+        )
 
         ## TRANSFORMATION ##
         data = sync_transform_request_body(**transform_request_params)
@@ -1479,21 +1538,28 @@ class VertexLLM(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            raise VertexAIError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+            )
         except httpx.TimeoutException:
-            raise VertexAIError(status_code=408, message="Timeout error occurred.")
+            raise VertexAIError(
+                status_code=408,
+                message="Timeout error occurred.",
+                headers=None,
+            )
 
-        return VertexGeminiConfig()._transform_response(
+        return VertexGeminiConfig().transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
             optional_params=optional_params,
             litellm_params=litellm_params,
             api_key="",
-            data=data,  # type: ignore
+            request_data=data,  # type: ignore
             messages=messages,
-            print_verbose=print_verbose,
             encoding=encoding,
         )
 

@@ -299,11 +299,13 @@ def _transform_request_body(
 
     try:
         if custom_llm_provider == "gemini":
-            content = litellm.GoogleAIStudioGeminiConfig._transform_messages(
+            content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
                 messages=messages
             )
         else:
-            content = litellm.VertexGeminiConfig._transform_messages(messages=messages)
+            content = litellm.VertexGeminiConfig()._transform_messages(
+                messages=messages
+            )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
@@ -460,15 +462,3 @@ def _transform_system_message(
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages
-
-
-def set_headers(auth_header: Optional[str], extra_headers: Optional[dict]) -> dict:
-    headers = {
-        "Content-Type": "application/json",
-    }
-    if auth_header is not None:
-        headers["Authorization"] = f"Bearer {auth_header}"
-    if extra_headers is not None:
-        headers.update(extra_headers)
-
-    return headers

@@ -1,22 +1,20 @@
-from typing import List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.llms.base_llm.transformation import BaseLLMException
 from litellm.types.llms.vertex_ai import PartType
 
 
-class VertexAIError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+class VertexAIError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[Union[Dict, httpx.Headers]] = None,
+    ):
+        super().__init__(message=message, status_code=status_code, headers=headers)
 
 
 def get_supports_system_message(

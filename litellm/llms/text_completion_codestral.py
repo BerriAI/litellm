@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.OpenAI.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.llms.databricks import GenericStreamingChunk
 from litellm.utils import (
     Choices,
@@ -91,19 +92,17 @@ async def make_call(
     return completion_stream
 
 
-class MistralTextCompletionConfig:
+class MistralTextCompletionConfig(OpenAITextCompletionConfig):
     """
     Reference: https://docs.mistral.ai/api/#operation/createFIMCompletion
     """
 
     suffix: Optional[str] = None
     temperature: Optional[int] = None
-    top_p: Optional[float] = None
     max_tokens: Optional[int] = None
     min_tokens: Optional[int] = None
     stream: Optional[bool] = None
     random_seed: Optional[int] = None
-    stop: Optional[str] = None
 
     def __init__(
         self,
@@ -123,23 +122,9 @@ class MistralTextCompletionConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str):
         return [
             "suffix",
             "temperature",
@@ -151,7 +136,13 @@ class MistralTextCompletionConfig:
             "stop",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         for param, value in non_default_params.items():
             if param == "suffix":
                 optional_params["suffix"] = value

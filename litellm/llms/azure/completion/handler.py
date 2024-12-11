@@ -19,104 +19,16 @@ from litellm.utils import (
     convert_to_model_response_object,
 )
 
-from .base import BaseLLM
-from .openai.completion.handler import OpenAITextCompletion
-from .openai.completion.transformation import OpenAITextCompletionConfig
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ...base import BaseLLM
+from ...OpenAI.completion.handler import OpenAITextCompletion
+from ...OpenAI.completion.transformation import OpenAITextCompletionConfig
+from ...prompt_templates.factory import custom_prompt, prompt_factory
+from ..common_utils import AzureOpenAIError
 
 openai_text_completion_config = OpenAITextCompletionConfig()
 
 
-class AzureOpenAIError(Exception):
-    def __init__(
-        self,
-        status_code,
-        message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[httpx.Headers] = None,
-    ):
-        self.status_code = status_code
-        self.message = message
-        self.headers = headers
-        if request:
-            self.request = request
-        else:
-            self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        if response:
-            self.response = response
-        else:
-            self.response = httpx.Response(
-                status_code=status_code, request=self.request
-            )
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
-
-
-class AzureOpenAIConfig(OpenAIConfig):
-    """
-    Reference: https://platform.openai.com/docs/api-reference/chat/create
-
-    The class `AzureOpenAIConfig` provides configuration for the OpenAI's Chat API interface, for use with Azure. It inherits from `OpenAIConfig`. Below are the parameters::
-
-    - `frequency_penalty` (number or null): Defaults to 0. Allows a value between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, thereby minimizing repetition.
-
-    - `function_call` (string or object): This optional parameter controls how the model calls functions.
-
-    - `functions` (array): An optional parameter. It is a list of functions for which the model may generate JSON inputs.
-
-    - `logit_bias` (map): This optional parameter modifies the likelihood of specified tokens appearing in the completion.
-
-    - `max_tokens` (integer or null): This optional parameter helps to set the maximum number of tokens to generate in the chat completion.
-
-    - `n` (integer or null): This optional parameter helps to set how many chat completion choices to generate for each input message.
-
-    - `presence_penalty` (number or null): Defaults to 0. It penalizes new tokens based on if they appear in the text so far, hence increasing the model's likelihood to talk about new topics.
-
-    - `stop` (string / array / null): Specifies up to 4 sequences where the API will stop generating further tokens.
-
-    - `temperature` (number or null): Defines the sampling temperature to use, varying between 0 and 2.
-
-    - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
-    """
-
-    def __init__(
-        self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-    ) -> None:
-        super().__init__(
-            frequency_penalty=frequency_penalty,
-            function_call=function_call,
-            functions=functions,
-            logit_bias=logit_bias,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            stop=stop,
-            temperature=temperature,
-            top_p=top_p,
-        )
-
-
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
-    # azure_client_params = {
-    #     "api_version": api_version,
-    #     "azure_endpoint": api_base,
-    #     "azure_deployment": model,
-    #     "http_client": litellm.client_session,
-    #     "max_retries": max_retries,
-    #     "timeout": timeout,
-    # }
     azure_endpoint = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
         # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192

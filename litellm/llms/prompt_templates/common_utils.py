@@ -4,7 +4,7 @@ Common utility functions used for translating messages across providers
 
 import json
 from copy import deepcopy
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union, cast
 
 import litellm
 from litellm.types.llms.openai import (
@@ -51,6 +51,13 @@ def strip_name_from_messages(
             msg_copy.pop("name", None)  # type: ignore
         new_messages.append(msg_copy)
     return new_messages
+
+
+def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValues:
+    """
+    Strips None values from message
+    """
+    return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
 def convert_content_list_to_str(message: AllMessageValues) -> str:

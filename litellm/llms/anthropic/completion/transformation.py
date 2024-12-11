@@ -180,6 +180,7 @@ class AnthropicTextConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
