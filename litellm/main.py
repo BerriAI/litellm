@@ -1899,6 +1899,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
             )
         elif custom_llm_provider == "cohere_chat":
             cohere_key = (
