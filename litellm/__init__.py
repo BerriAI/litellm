@@ -1055,7 +1055,11 @@ ALL_LITELLM_RESPONSE_TYPES = [
 
 from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
+from .llms.openai_like.chat.handler import OpenAILikeChatConfig
+from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.huggingface_restapi import HuggingfaceConfig
+from .llms.empower.chat.transformation import EmpowerChatConfig
+from .llms.github.chat.transformation import GithubChatConfig
 from .llms.anthropic.chat.handler import AnthropicConfig
 from .llms.anthropic.experimental_pass_through.transformation import (
     AnthropicExperimentalPassThroughConfig,

@@ -6303,6 +6303,23 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXChatConfig()
         elif litellm.LlmProviders.WATSONX_TEXT == provider:
             return litellm.IBMWatsonXAIConfig()
+        elif litellm.LlmProviders.EMPOWER == provider:
+            return litellm.EmpowerChatConfig()
+        elif litellm.LlmProviders.GITHUB == provider:
+            return litellm.GithubChatConfig()
+        elif (
+            litellm.LlmProviders.CUSTOM == provider
+            or litellm.LlmProviders.CUSTOM_OPENAI == provider
+            or litellm.LlmProviders.OPENAI_LIKE == provider
+            or litellm.LlmProviders.LITELLM_PROXY == provider
+        ):
+            return litellm.OpenAILikeChatConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMChatConfig()
+        elif litellm.LlmProviders.LM_STUDIO == provider:
+            return litellm.LMStudioChatConfig()
+        elif litellm.LlmProviders.GALADRIEL == provider:
+            return litellm.GaladrielChatConfig()
         return litellm.OpenAIGPTConfig()
 
 
