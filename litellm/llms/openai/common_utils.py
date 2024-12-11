@@ -3,7 +3,7 @@ Common helpers / utils across al OpenAI endpoints
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 import openai
@@ -18,7 +18,7 @@ class OpenAIError(BaseLLMException):
         message: str,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
-        headers: Optional[httpx.Headers] = None,
+        headers: Optional[Union[dict, httpx.Headers]] = None,
     ):
         self.status_code = status_code
         self.message = message

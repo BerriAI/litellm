@@ -29,19 +29,6 @@ def logger_fn(user_model_dict):
     pass
 
 
-# completion with num retries + impact on exception mapping
-def test_completion_with_num_retries():
-    try:
-        response = completion(
-            model="j2-ultra",
-            messages=[{"messages": "vibe", "bad": "message"}],
-            num_retries=2,
-        )
-        pytest.fail(f"Unmapped exception occurred")
-    except Exception as e:
-        pass
-
-
 # test_completion_with_num_retries()
 def test_completion_with_0_num_retries():
     try:

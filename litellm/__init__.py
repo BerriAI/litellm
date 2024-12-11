@@ -601,6 +601,7 @@ openai_compatible_providers: List = [
     "cerebras",
     "sambanova",
     "ai21_chat",
+    "ai21",
     "volcengine",
     "codestral",
     "deepseek",
@@ -853,7 +854,6 @@ class LlmProviders(str, Enum):
     OPENROUTER = "openrouter"
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
-    PALM = "palm"
     GEMINI = "gemini"
     AI21 = "ai21"
     BASETEN = "baseten"
@@ -871,7 +871,6 @@ class LlmProviders(str, Enum):
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
-    ANYSCALE = "anyscale"
     MISTRAL = "mistral"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
@@ -1057,10 +1056,15 @@ from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
-from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.empower.chat.transformation import EmpowerChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
-from .llms.anthropic.chat.handler import AnthropicConfig
+from .llms.empower.chat.transformation import EmpowerChatConfig
+from .llms.huggingface.chat.transformation import (
+    HuggingfaceChatConfig as HuggingfaceConfig,
+)
+from .llms.oobabooga.chat.transformation import OobaboogaConfig
+from .llms.maritalk import MaritalkConfig
+from .llms.openrouter.chat.transformation import OpenrouterConfig
+from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.experimental_pass_through.transformation import (
     AnthropicExperimentalPassThroughConfig,
 )
@@ -1069,23 +1073,25 @@ from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase import PredibaseConfig
-from .llms.replicate import ReplicateConfig
+from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
-from .llms.cloudflare.chat.transformation import CloudflareChatConfig
-from .llms.ai21.completion import AI21Config
-from .llms.ai21.chat import AI21ChatConfig
+from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.together_ai.chat import TogetherAIConfig
-from .llms.palm import PalmConfig
-from .llms.gemini import GeminiConfig
-from .llms.nlp_cloud import NLPCloudConfig
+from .llms.cloudflare.chat.transformation import CloudflareChatConfig
+from .llms.deprecated_providers.palm import (
+    PalmConfig,
+)  # here to prevent breaking changes
+from .llms.nlp_cloud.chat.handler import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
+    GoogleAIStudioGeminiConfig as GeminiConfig,
 )
+
 
 from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,
@@ -1107,7 +1113,6 @@ from .llms.ollama.completion.transformation import OllamaConfig
 from .llms.sagemaker.completion.transformation import SagemakerConfig
 from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.ollama_chat import OllamaChatConfig
-from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     AmazonConverseConfig,
@@ -1134,11 +1139,8 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 )
 from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.openai.openai import (
-    OpenAIConfig,
-    MistralEmbeddingConfig,
-    DeepInfraConfig,
-)
+from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
+from .llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
@@ -1167,7 +1169,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
-from .llms.ai21.chat import AI21ChatConfig
+from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
@@ -1183,6 +1185,7 @@ from .llms.azure.azure import (
 )
 
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
