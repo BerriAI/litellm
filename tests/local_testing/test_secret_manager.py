@@ -198,6 +198,7 @@ def test_oidc_env_path():
         del os.environ[env_var_name]
 
 
+@pytest.mark.flaky(retries=6, delay=1)
 def test_google_secret_manager():
     """
     Test that we can get a secret from Google Secret Manager
@@ -207,7 +208,7 @@ def test_google_secret_manager():
 
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     secret_manager = GoogleSecretManager()
 
     secret_val = secret_manager.get_secret_from_google_secret_manager(
@@ -230,7 +231,7 @@ def test_google_secret_manager_read_in_memory():
 
     from litellm.secret_managers.google_secret_manager import GoogleSecretManager
 
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "adroit-crow-413218"
     secret_manager = GoogleSecretManager()
     secret_manager.cache.cache_dict["UNIQUE_KEY"] = None

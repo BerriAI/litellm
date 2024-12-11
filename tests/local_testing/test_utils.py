@@ -437,8 +437,8 @@ def test_token_counter():
         print(tokens)
         assert tokens > 0
 
-        tokens = token_counter(model="palm/chat-bison", messages=messages)
-        print("palm/chat-bison")
+        tokens = token_counter(model="gemini/chat-bison", messages=messages)
+        print("gemini/chat-bison")
         print(tokens)
         assert tokens > 0
 
@@ -465,7 +465,7 @@ def test_token_counter():
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
         ("anthropic.claude-instant-v1", False),
-        ("palm/chat-bison", False),
+        ("gemini/gemini-1.5-flash", True),
     ],
 )
 def test_supports_function_calling(model, expected_bool):

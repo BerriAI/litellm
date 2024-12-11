@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
@@ -41,20 +41,19 @@ class VertexPassthroughLoggingHandler:
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()
             litellm_model_response: litellm.ModelResponse = (
-                instance_of_vertex_llm._transform_response(
+                instance_of_vertex_llm.transform_response(
                     model=model,
                     messages=[
                         {"role": "user", "content": "no-message-pass-through-endpoint"}
                     ],
-                    response=httpx_response,
+                    raw_response=httpx_response,
                     model_response=litellm.ModelResponse(),
                     logging_obj=logging_obj,
                     optional_params={},
                     litellm_params={},
                     api_key="",
-                    data={},
-                    print_verbose=litellm.print_verbose,
-                    encoding=None,
+                    request_data={},
+                    encoding=litellm.encoding,
                 )
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
@@ -72,7 +71,7 @@ class VertexPassthroughLoggingHandler:
             }
 
         elif "predict" in url_route:
-            from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+            from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
                 VertexImageGeneration,
             )
             from litellm.types.utils import PassthroughCallTypes

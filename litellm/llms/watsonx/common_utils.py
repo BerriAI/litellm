@@ -1,24 +1,23 @@
-from typing import Callable, Optional, cast
+from typing import Callable, Dict, Optional, Union, cast
 
 import httpx
 
 import litellm
 from litellm import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.llms.base_llm.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import WatsonXAPIParams
 
 
-class WatsonXAIError(Exception):
-    def __init__(self, status_code, message, url: Optional[str] = None):
-        self.status_code = status_code
-        self.message = message
-        url = url or "https://https://us-south.ml.cloud.ibm.com"
-        self.request = httpx.Request(method="POST", url=url)
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+class WatsonXAIError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[Union[Dict, httpx.Headers]] = None,
+    ):
+        super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 iam_token_cache = InMemoryCache()
@@ -151,13 +150,11 @@ def _get_api_params(
     elif token is None and api_key is None:
         raise WatsonXAIError(
             status_code=401,
-            url=url,
             message="Error: API key or token not found. Set WX_API_KEY or WX_TOKEN in environment variables or pass in as a parameter.",
         )
     if project_id is None:
         raise WatsonXAIError(
             status_code=401,
-            url=url,
             message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
         )
 

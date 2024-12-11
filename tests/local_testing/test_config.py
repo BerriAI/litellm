@@ -290,33 +290,47 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
             assert len(llm_router.model_list) == len(model_list) + prev_llm_router_val
 
 
+from litellm import LITELLM_CHAT_PROVIDERS, LlmProviders
+from litellm.utils import ProviderConfigManager
+from litellm.llms.base_llm.transformation import BaseConfig
+
+
+def _check_provider_config(config: BaseConfig, provider: LlmProviders):
+    assert isinstance(
+        config,
+        BaseConfig,
+    ), f"Provider {provider} is not a subclass of BaseConfig. Got={config}"
+
+    if (
+        provider != litellm.LlmProviders.OPENAI
+        and provider != litellm.LlmProviders.OPENAI_LIKE
+        and provider != litellm.LlmProviders.CUSTOM_OPENAI
+    ):
+        assert (
+            config.__class__.__name__ != "OpenAIGPTConfig"
+        ), f"Provider {provider} is an instance of OpenAIGPTConfig"
+
+    assert "_abc_impl" not in config.get_config(), f"Provider {provider} has _abc_impl"
+
+
 # def test_provider_config_manager():
-#     from litellm import LITELLM_CHAT_PROVIDERS, LlmProviders
-#     from litellm.utils import ProviderConfigManager
-#     from litellm.llms.base_llm.transformation import BaseConfig
-#     from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+#     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 #     for provider in LITELLM_CHAT_PROVIDERS:
-#         assert isinstance(
-#             ProviderConfigManager.get_provider_chat_config(
-#                 model="gpt-3.5-turbo", provider=LlmProviders(provider)
-#             ),
-#             BaseConfig,
-#         ), f"Provider {provider} is not a subclass of BaseConfig"
+#         if (
+#             provider == LlmProviders.VERTEX_AI
+#             or provider == LlmProviders.VERTEX_AI_BETA
+#             or provider == LlmProviders.BEDROCK
+#             or provider == LlmProviders.BASETEN
+#             or provider == LlmProviders.PETALS
+#             or provider == LlmProviders.SAGEMAKER
+#             or provider == LlmProviders.SAGEMAKER_CHAT
+#             or provider == LlmProviders.VLLM
+#             or provider == LlmProviders.OLLAMA
+#         ):
+#             continue
 
 #         config = ProviderConfigManager.get_provider_chat_config(
 #             model="gpt-3.5-turbo", provider=LlmProviders(provider)
 #         )
-
-#         if (
-#             provider != litellm.LlmProviders.OPENAI
-#             and provider != litellm.LlmProviders.OPENAI_LIKE
-#             and provider != litellm.LlmProviders.CUSTOM_OPENAI
-#         ):
-#             assert (
-#                 config.__class__.__name__ != "OpenAIGPTConfig"
-#             ), f"Provider {provider} is an instance of OpenAIGPTConfig"
-
-#         assert (
-#             "_abc_impl" not in config.get_config()
-#         ), f"Provider {provider} has _abc_impl"
+#         _check_provider_config(config, provider)

@@ -17,7 +17,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class GroqChatConfig(OpenAIGPTConfig):

@@ -24,7 +24,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
 
-from ...prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
 from ..common_utils import BedrockError, get_bedrock_tool_name
 
 

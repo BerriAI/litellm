@@ -13,7 +13,6 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import requests  # type: ignore
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
@@ -52,7 +51,8 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         messages: list,
         optional_params: dict,
-        encoding: str,
+        litellm_params: dict,
+        encoding: Any,
         api_key: Optional[str] = None,
     ):
         async_httpx_client = get_async_httpx_client(
@@ -76,6 +76,7 @@ class BaseLLMHTTPHandler:
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 
@@ -107,6 +108,11 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=messages,
             optional_params=optional_params,
+        )
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
         )
 
         data = provider_config.transform_request(
@@ -159,6 +165,7 @@ class BaseLLMHTTPHandler:
                     api_key=api_key,
                     messages=messages,
                     optional_params=optional_params,
+                    litellm_params=litellm_params,
                     encoding=encoding,
                 )
 
@@ -207,6 +214,7 @@ class BaseLLMHTTPHandler:
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
         )
 
@@ -369,8 +377,12 @@ class BaseLLMHTTPHandler:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
             error_text = getattr(error_response, "text", error_text)
-        raise provider_config.error_class(  # type: ignore
-            message=error_text,
+        if error_headers:
+            error_headers = dict(error_headers)
+        else:
+            error_headers = {}
+        raise provider_config.get_error_class(
+            error_message=error_text,
             status_code=status_code,
             headers=error_headers,
         )

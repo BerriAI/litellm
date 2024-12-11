@@ -32,10 +32,10 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
 litellm.num_retries = 3
@@ -2338,7 +2338,7 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
 
@@ -2927,7 +2927,7 @@ def test_gemini_function_call_parameter_in_messages():
 
 def test_gemini_function_call_parameter_in_messages_2():
     litellm.set_verbose = True
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+    from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
 

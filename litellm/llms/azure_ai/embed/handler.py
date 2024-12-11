@@ -16,7 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.OpenAI.openai import OpenAIChatCompletion
+from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.types.llms.azure_ai import ImageEmbeddingRequest
 from litellm.types.utils import Embedding, EmbeddingResponse
 from litellm.utils import convert_to_model_response_object, is_base64_encoded

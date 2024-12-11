@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.utils import ModelResponse
 
-from ...OpenAI.completion.handler import OpenAITextCompletion
+from ...openai.completion.handler import OpenAITextCompletion
 from .transformation import TogetherAITextCompletionConfig
 
 together_ai_text_completion_global_config = TogetherAITextCompletionConfig()

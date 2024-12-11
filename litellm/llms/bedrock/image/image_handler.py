@@ -16,7 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import ImageResponse
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 
 if TYPE_CHECKING:

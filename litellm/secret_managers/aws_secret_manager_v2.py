@@ -26,14 +26,13 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.proxy._types import KeyManagementSystem
 from litellm.types.llms.custom_http import httpxSpecialProvider
-
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 class AWSSecretsManagerV2(BaseAWSLLM):
     @classmethod

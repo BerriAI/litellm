@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.llms.prompt_templates.factory import map_system_message_pt
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
@@ -190,9 +190,10 @@ def test_databricks_optional_params():
         custom_llm_provider="databricks",
         max_tokens=10,
         temperature=0.2,
+        stream=True,
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 2
+    assert len(optional_params) == 3
     assert "user" not in optional_params
 
 

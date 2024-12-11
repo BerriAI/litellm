@@ -9,9 +9,11 @@ from typing import (
     Any,
     AsyncIterator,
     Callable,
+    Dict,
     Iterator,
     List,
     Optional,
+    TypedDict,
     Union,
 )
 
@@ -33,15 +35,25 @@ class BaseLLMException(Exception):
         self,
         status_code: int,
         message: str,
-        headers: Optional[httpx.Headers] = None,
+        headers: Optional[Union[dict, httpx.Headers]] = None,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
     ):
         self.status_code = status_code
         self.message: str = message
         self.headers = headers
-        self.request = httpx.Request(method="POST", url="https://docs.litellm.ai/docs")
-        self.response = httpx.Response(status_code=status_code, request=self.request)
+        if request:
+            self.request = request
+        else:
+            self.request = httpx.Request(
+                method="POST", url="https://docs.litellm.ai/docs"
+            )
+        if response:
+            self.response = response
+        else:
+            self.response = httpx.Response(
+                status_code=status_code, request=self.request
+            )
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -95,6 +107,16 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
+    def get_complete_url(self, api_base: str, model: str) -> str:
+        """
+        OPTIONAL
+
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        return api_base
+
     @abstractmethod
     def transform_request(
         self,
@@ -107,12 +129,6 @@ class BaseConfig(ABC):
         pass
 
     @abstractmethod
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        pass
-
-    @abstractmethod
     def transform_response(
         self,
         model: str,
@@ -122,7 +138,8 @@ class BaseConfig(ABC):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: str,
+        litellm_params: dict,
+        encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:

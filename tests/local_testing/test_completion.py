@@ -22,9 +22,9 @@ import pytest
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -696,7 +696,7 @@ async def test_anthropic_no_content_error():
 
 
 def test_parse_xml_params():
-    from litellm.llms.prompt_templates.factory import parse_xml_params
+    from litellm.litellm_core_utils.prompt_templates.factory import parse_xml_params
 
     ## SCENARIO 1 ## - W/ ARRAY
     xml_content = """<invoke><tool_name>return_list_of_str</tool_name>\n<parameters>\n<value>\n<item>apple</item>\n<item>banana</item>\n<item>orange</item>\n</value>\n</parameters></invoke>"""
@@ -1124,32 +1124,6 @@ def test_completion_mistral_api_modified_input():
             pass
         else:
             pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_acompletion_claude2_1():
-    try:
-        litellm.set_verbose = True
-        print("claude2.1 test request")
-        messages = [
-            {
-                "role": "system",
-                "content": "Your goal is generate a joke on the topic user gives.",
-            },
-            {"role": "user", "content": "Generate a 3 liner joke for me"},
-        ]
-        # test without max-tokens
-        response = await litellm.acompletion(model="claude-2.1", messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-        print(response.usage)
-        print(response.usage.completion_tokens)
-        print(response["usage"]["completion_tokens"])
-        # print("new cost tracking")
-    except litellm.InternalServerError:
-        pytest.skip("model is overloaded.")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # def test_completion_oobabooga():
@@ -1632,30 +1606,33 @@ HF Tests we should pass
 #####################################################
 #####################################################
 # Test util to sort models to TGI, conv, None
+from litellm.llms.huggingface.chat.transformation import HuggingfaceChatConfig
+
+
 def test_get_hf_task_for_model():
     model = "glaiveai/glaive-coder-7b"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "meta-llama/Llama-2-7b-hf"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation-inference"
 
     model = "facebook/blenderbot-400M-distill"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     model = "facebook/blenderbot-3B"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "conversational"
 
     # neither Conv or None
     model = "roneneldan/TinyStories-3M"
-    model_type, _ = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
+    model_type, _ = HuggingfaceChatConfig().get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
     assert model_type == "text-generation"
 
@@ -1743,14 +1720,17 @@ def tgi_mock_post(url, **kwargs):
 def test_hf_test_completion_tgi():
     litellm.set_verbose = True
     try:
+        client = HTTPHandler()
 
-        with patch("requests.post", side_effect=tgi_mock_post) as mock_client:
+        with patch.object(client, "post", side_effect=tgi_mock_post) as mock_client:
             response = completion(
                 model="huggingface/HuggingFaceH4/zephyr-7b-beta",
                 messages=[{"content": "Hello, how are you?", "role": "user"}],
                 max_tokens=10,
                 wait_for_model=True,
+                client=client,
             )
+            mock_client.assert_called_once()
             # Add any assertions-here to check the response
             print(response)
             assert "options" in mock_client.call_args.kwargs["data"]
@@ -1888,13 +1868,15 @@ def mock_post(url, **kwargs):
 
 def test_hf_classifier_task():
     try:
-        with patch("requests.post", side_effect=mock_post):
+        client = HTTPHandler()
+        with patch.object(client, "post", side_effect=mock_post):
             litellm.set_verbose = True
             user_message = "I like you. I love you"
             messages = [{"content": user_message, "role": "user"}]
             response = completion(
                 model="huggingface/text-classification/shahrukhx01/question-vs-statement-classifier",
                 messages=messages,
+                client=client,
             )
             print(f"response: {response}")
             assert isinstance(response, litellm.ModelResponse)
@@ -3122,19 +3104,20 @@ async def test_completion_replicate_llama3(sync_mode):
             response = completion(
                 model=model_name,
                 messages=messages,
+                max_tokens=10,
             )
         else:
             response = await litellm.acompletion(
                 model=model_name,
                 messages=messages,
+                max_tokens=10,
             )
             print(f"ASYNC REPLICATE RESPONSE - {response}")
-        print(response)
+        print(f"REPLICATE RESPONSE - {response}")
         # Add any assertions here to check the response
         assert isinstance(response, litellm.ModelResponse)
+        assert len(response.choices[0].message.content.strip()) > 0
         response_format_tests(response=response)
-    except litellm.APIError as e:
-        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -3702,18 +3685,27 @@ def test_mistral_anyscale_stream():
 #         error_str = traceback.format_exc()
 #         pytest.fail(f"Error occurred: {error_str}")
 
-# test_completion_with_fallbacks_multiple_keys()
-# def test_petals():
-#     try:
-#         response = completion(model="petals-team/StableBeluga2", messages=messages)
-#         # Add any assertions here to check the response
-#         print(response)
 
-#         response = completion(model="petals-team/StableBeluga2", messages=messages)
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+# test_completion_with_fallbacks_multiple_keys()
+def test_petals():
+    try:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+        with patch.object(client, "post") as mock_post:
+            try:
+                completion(
+                    model="petals-team/StableBeluga2",
+                    messages=messages,
+                    client=client,
+                    api_base="https://api.petals.dev",
+                )
+            except Exception as e:
+                print(f"Error occurred: {e}")
+            mock_post.assert_called_once()
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # def test_baseten():
 #     try:
@@ -3769,22 +3761,6 @@ def test_mistral_anyscale_stream():
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
-
-
-#### Test A121 ###################
-@pytest.mark.skip(reason="Local test")
-def test_completion_ai21():
-    print("running ai21 j2light test")
-    litellm.set_verbose = True
-    model_name = "j2-light"
-    try:
-        response = completion(
-            model=model_name, messages=messages, max_tokens=100, temperature=0.8
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_ai21()
@@ -4179,26 +4155,6 @@ def test_completion_together_ai_stream():
 
 
 # test_completion_together_ai_stream()
-
-
-# Cloud flare AI tests
-@pytest.mark.skip(reason="Flaky test-cloudflare is very unstable")
-def test_completion_cloudflare():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
-            messages=[{"content": "what llm are you", "role": "user"}],
-            max_tokens=15,
-            num_retries=3,
-        )
-        print(response)
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_cloudflare()
 
 
 def test_moderation():

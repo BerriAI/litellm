@@ -5,7 +5,7 @@ import litellm
 from litellm._logging import print_verbose
 from litellm.utils import get_optional_params
 
-from ..llms import vllm
+from ..llms.vllm.completion import handler as vllm_handler
 
 
 def batch_completion(
@@ -83,7 +83,7 @@ def batch_completion(
             model=model,
             custom_llm_provider=custom_llm_provider,
         )
-        results = vllm.batch_completions(
+        results = vllm_handler.batch_completions(
             model=model,
             messages=batch_messages,
             custom_prompt_dict=litellm.custom_prompt_dict,

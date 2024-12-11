@@ -33,7 +33,7 @@ from litellm import (
 )
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
 
@@ -1262,7 +1262,7 @@ def test_bedrock_get_base_model(model, expected_base_model):
     assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
 
 
-from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
 
 
 def test_bedrock_converse_translation_tool_message():
@@ -1320,7 +1320,7 @@ def test_base_aws_llm_get_credentials():
 
     import boto3
 
-    from litellm.llms.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     start_time = time.time()
     session = boto3.Session(
@@ -1603,7 +1603,7 @@ def test_bedrock_completion_test_3():
     Check if content in tool result is formatted correctly
     """
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
-    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
 
     messages = [
         {

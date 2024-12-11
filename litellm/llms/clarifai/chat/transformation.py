@@ -7,7 +7,7 @@ import httpx
 import litellm
 from litellm.llms.base_llm.base_model_iterator import FakeStreamResponseIterator
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
+from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -148,6 +148,7 @@ class ClarifaiConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,

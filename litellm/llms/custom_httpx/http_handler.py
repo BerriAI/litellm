@@ -211,7 +211,6 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-
             if stream is True:
                 setattr(e, "message", await e.response.aread())
                 setattr(e, "text", await e.response.aread())

@@ -29,216 +29,14 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
 from ...base import BaseLLM
-from ...prompt_templates import factory as ptf
+from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
-
-
-class IBMWatsonXAIConfig:
-    """
-    Reference: https://cloud.ibm.com/apidocs/watsonx-ai#text-generation
-    (See ibm_watsonx_ai.metanames.GenTextParamsMetaNames for a list of all available params)
-
-    Supported params for all available watsonx.ai foundational models.
-
-    - `decoding_method` (str): One of "greedy" or "sample"
-
-    - `temperature` (float): Sets the model temperature for sampling - not available when decoding_method='greedy'.
-
-    - `max_new_tokens` (integer): Maximum length of the generated tokens.
-
-    - `min_new_tokens` (integer): Maximum length of input tokens. Any more than this will be truncated.
-
-    - `length_penalty` (dict): A dictionary with keys "decay_factor" and "start_index".
-
-    - `stop_sequences` (string[]): list of strings to use as stop sequences.
-
-    - `top_k` (integer): top k for sampling - not available when decoding_method='greedy'.
-
-    - `top_p` (integer): top p for sampling - not available when decoding_method='greedy'.
-
-    - `repetition_penalty` (float): token repetition penalty during text generation.
-
-    - `truncate_input_tokens` (integer): Truncate input tokens to this length.
-
-    - `include_stop_sequences` (bool): If True, the stop sequence will be included at the end of the generated text in the case of a match.
-
-    - `return_options` (dict): A dictionary of options to return. Options include "input_text", "generated_tokens", "input_tokens", "token_ranks". Values are boolean.
-
-    - `random_seed` (integer): Random seed for text generation.
-
-    - `moderations` (dict): Dictionary of properties that control the moderations, for usages such as Hate and profanity (HAP) and PII filtering.
-
-    - `stream` (bool): If True, the model will return a stream of responses.
-    """
-
-    decoding_method: Optional[str] = "sample"
-    temperature: Optional[float] = None
-    max_new_tokens: Optional[int] = None  # litellm.max_tokens
-    min_new_tokens: Optional[int] = None
-    length_penalty: Optional[dict] = None  # e.g {"decay_factor": 2.5, "start_index": 5}
-    stop_sequences: Optional[List[str]] = None  # e.g ["}", ")", "."]
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    truncate_input_tokens: Optional[int] = None
-    include_stop_sequences: Optional[bool] = False
-    return_options: Optional[Dict[str, bool]] = None
-    random_seed: Optional[int] = None  # e.g 42
-    moderations: Optional[dict] = None
-    stream: Optional[bool] = False
-
-    def __init__(
-        self,
-        decoding_method: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_new_tokens: Optional[int] = None,
-        min_new_tokens: Optional[int] = None,
-        length_penalty: Optional[dict] = None,
-        stop_sequences: Optional[List[str]] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None,
-        truncate_input_tokens: Optional[int] = None,
-        include_stop_sequences: Optional[bool] = None,
-        return_options: Optional[dict] = None,
-        random_seed: Optional[int] = None,
-        moderations: Optional[dict] = None,
-        stream: Optional[bool] = None,
-        **kwargs,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def is_watsonx_text_param(self, param: str) -> bool:
-        """
-        Determine if user passed in a watsonx.ai text generation param
-        """
-        text_generation_params = [
-            "decoding_method",
-            "max_new_tokens",
-            "min_new_tokens",
-            "length_penalty",
-            "stop_sequences",
-            "top_k",
-            "repetition_penalty",
-            "truncate_input_tokens",
-            "include_stop_sequences",
-            "return_options",
-            "random_seed",
-            "moderations",
-            "decoding_method",
-            "min_tokens",
-        ]
-
-        return param in text_generation_params
-
-    def get_supported_openai_params(self):
-        return [
-            "temperature",  # equivalent to temperature
-            "max_tokens",  # equivalent to max_new_tokens
-            "top_p",  # equivalent to top_p
-            "frequency_penalty",  # equivalent to repetition_penalty
-            "stop",  # equivalent to stop_sequences
-            "seed",  # equivalent to random_seed
-            "stream",  # equivalent to stream
-        ]
-
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
-        extra_body = {}
-        for k, v in non_default_params.items():
-            if k == "max_tokens":
-                optional_params["max_new_tokens"] = v
-            elif k == "stream":
-                optional_params["stream"] = v
-            elif k == "temperature":
-                optional_params["temperature"] = v
-            elif k == "top_p":
-                optional_params["top_p"] = v
-            elif k == "frequency_penalty":
-                optional_params["repetition_penalty"] = v
-            elif k == "seed":
-                optional_params["random_seed"] = v
-            elif k == "stop":
-                optional_params["stop_sequences"] = v
-            elif k == "decoding_method":
-                extra_body["decoding_method"] = v
-            elif k == "min_tokens":
-                extra_body["min_new_tokens"] = v
-            elif k == "top_k":
-                extra_body["top_k"] = v
-            elif k == "truncate_input_tokens":
-                extra_body["truncate_input_tokens"] = v
-            elif k == "length_penalty":
-                extra_body["length_penalty"] = v
-            elif k == "time_limit":
-                extra_body["time_limit"] = v
-            elif k == "return_options":
-                extra_body["return_options"] = v
-
-        if extra_body:
-            optional_params["extra_body"] = extra_body
-        return optional_params
-
-    def get_mapped_special_auth_params(self) -> dict:
-        """
-        Common auth params across bedrock/vertex_ai/azure/watsonx
-        """
-        return {
-            "project": "watsonx_project",
-            "region_name": "watsonx_region_name",
-            "token": "watsonx_token",
-        }
-
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
-        mapped_params = self.get_mapped_special_auth_params()
-
-        for param, value in non_default_params.items():
-            if param in mapped_params:
-                optional_params[mapped_params[param]] = value
-        return optional_params
-
-    def get_eu_regions(self) -> List[str]:
-        """
-        Source: https://www.ibm.com/docs/en/watsonx/saas?topic=integrations-regional-availability
-        """
-        return [
-            "eu-de",
-            "eu-gb",
-        ]
-
-    def get_us_regions(self) -> List[str]:
-        """
-        Source: https://www.ibm.com/docs/en/watsonx/saas?topic=integrations-regional-availability
-        """
-        return [
-            "us-south",
-        ]
+from .transformation import IBMWatsonXAIConfig
 
 
 def convert_messages_to_prompt(model, messages, provider, custom_prompt_dict) -> str:
@@ -281,6 +79,7 @@ class IBMWatsonXAI(BaseLLM):
     def _prepare_text_generation_req(
         self,
         model_id: str,
+        messages: List[AllMessageValues],
         prompt: str,
         stream: bool,
         optional_params: dict,
@@ -293,11 +92,13 @@ class IBMWatsonXAI(BaseLLM):
         # build auth headers
         api_token = api_params.get("token")
         self.token = api_token
-        headers = {
-            "Authorization": f"Bearer {api_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers = IBMWatsonXAIConfig().validate_environment(
+            headers={},
+            model=model_id,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_token,
+        )
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
         # init the payload to the text generation call
@@ -313,7 +114,6 @@ class IBMWatsonXAI(BaseLLM):
             if api_params.get("space_id") is None:
                 raise WatsonXAIError(
                     status_code=401,
-                    url=api_params["url"],
                     message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
                 )
             deployment_id = "/".join(model_id.split("/")[1:])
@@ -466,6 +266,7 @@ class IBMWatsonXAI(BaseLLM):
             req_params = self._prepare_text_generation_req(
                 model_id=model,
                 prompt=prompt,
+                messages=messages,
                 stream=stream,
                 optional_params=optional_params,
                 print_verbose=print_verbose,
