@@ -5013,6 +5013,38 @@ def speech(
 ##### Health Endpoints #######################
 
 
+async def ahealth_check_chat_models(
+    model: str, custom_llm_provider: str, model_params: dict
+) -> dict:
+    if "*" in model:
+        from litellm.litellm_core_utils.llm_request_utils import (
+            pick_cheapest_chat_model_from_llm_provider,
+        )
+
+        # this is a wildcard model, we need to pick a random model from the provider
+        cheapest_model = pick_cheapest_chat_model_from_llm_provider(
+            custom_llm_provider=custom_llm_provider
+        )
+        fallback_models: Optional[List] = None
+        if custom_llm_provider in litellm.models_by_provider:
+            models = litellm.models_by_provider[custom_llm_provider]
+            random.shuffle(models)  # Shuffle the models list in place
+            fallback_models = models[
+                :2
+            ]  # Pick the first 2 models from the shuffled list
+        model_params["model"] = cheapest_model
+        model_params["fallbacks"] = fallback_models
+        model_params["max_tokens"] = 1
+        await acompletion(**model_params)
+        response = {}  # args like remaining ratelimit etc.
+    else:  # default to completion calls
+        model_params["max_tokens"] = 1
+        await acompletion(**model_params)
+        response = {}  # args like remaining ratelimit etc.
+
+    return response
+
+
 async def ahealth_check(  # noqa: PLR0915
     model_params: dict,
     mode: Optional[
@@ -5144,29 +5176,12 @@ async def ahealth_check(  # noqa: PLR0915
                 model_params["documents"] = ["my sample text"]
                 await litellm.arerank(**model_params)
                 response = {}
-            elif "*" in model:
-                from litellm.litellm_core_utils.llm_request_utils import (
-                    pick_cheapest_chat_model_from_llm_provider,
+            else:
+                response = await ahealth_check_chat_models(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    model_params=model_params,
                 )
-
-                # this is a wildcard model, we need to pick a random model from the provider
-                cheapest_model = pick_cheapest_chat_model_from_llm_provider(
-                    custom_llm_provider=custom_llm_provider
-                )
-                fallback_models: Optional[List] = None
-                if custom_llm_provider in litellm.models_by_provider:
-                    models = litellm.models_by_provider[custom_llm_provider]
-                    random.shuffle(models)  # Shuffle the models list in place
-                    fallback_models = models[
-                        :2
-                    ]  # Pick the first 2 models from the shuffled list
-                model_params["model"] = cheapest_model
-                model_params["fallbacks"] = fallback_models
-                await acompletion(**model_params)
-                response = {}  # args like remaining ratelimit etc.
-            else:  # default to completion calls
-                await acompletion(**model_params)
-                response = {}  # args like remaining ratelimit etc.
         return response
     except Exception as e:
         stack_trace = traceback.format_exc()

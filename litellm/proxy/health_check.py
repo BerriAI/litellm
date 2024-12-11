@@ -72,7 +72,6 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
         litellm_params["messages"] = _get_random_llm_message()
-        litellm_params["max_tokens"] = 1
         mode = model_info.get("mode", None)
         tasks.append(
             litellm.ahealth_check(
