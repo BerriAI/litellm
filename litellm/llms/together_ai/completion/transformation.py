@@ -15,7 +15,7 @@ from litellm.types.llms.openai import (
     OpenAITextCompletionUserMessage,
 )
 
-from ...OpenAI.completion.transformation import OpenAITextCompletionConfig
+from ...openai.completion.transformation import OpenAITextCompletionConfig
 
 
 class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderField
 
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ...prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,

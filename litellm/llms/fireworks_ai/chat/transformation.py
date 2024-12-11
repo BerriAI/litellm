@@ -3,7 +3,7 @@ from typing import Literal, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
 
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig
 
 

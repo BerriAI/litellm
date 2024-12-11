@@ -10,7 +10,7 @@ from typing import Optional
 
 from litellm import get_model_info, verbose_logger
 
-from ..OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ..openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class TogetherAIConfig(OpenAIGPTConfig):
