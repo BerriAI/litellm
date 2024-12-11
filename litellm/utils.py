@@ -1348,14 +1348,16 @@ def openai_token_counter(  # noqa: PLR0915
                                 num_tokens += calculate_img_tokens(
                                     data=url,
                                     mode=detail,
-                                    use_default_image_token_count=use_default_image_token_count,
+                                    use_default_image_token_count=use_default_image_token_count
+                                    or False,
                                 )
                             elif isinstance(c["image_url"], str):
                                 image_url_str = c["image_url"]
                                 num_tokens += calculate_img_tokens(
                                     data=image_url_str,
                                     mode="auto",
-                                    use_default_image_token_count=use_default_image_token_count,
+                                    use_default_image_token_count=use_default_image_token_count
+                                    or False,
                                 )
     elif text is not None and count_response_tokens is True:
         # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
@@ -1537,14 +1539,16 @@ def token_counter(
                                     num_tokens += calculate_img_tokens(
                                         data=url,
                                         mode=detail,
-                                        use_default_image_token_count=use_default_image_token_count,
+                                        use_default_image_token_count=use_default_image_token_count
+                                        or False,
                                     )
                                 elif isinstance(c["image_url"], str):
                                     image_url_str = c["image_url"]
                                     num_tokens += calculate_img_tokens(
                                         data=image_url_str,
                                         mode="auto",
-                                        use_default_image_token_count=use_default_image_token_count,
+                                        use_default_image_token_count=use_default_image_token_count
+                                        or False,
                                     )
                 if message.get("tool_calls"):
                     is_tool_call = True
