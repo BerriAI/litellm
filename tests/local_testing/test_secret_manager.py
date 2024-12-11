@@ -198,6 +198,7 @@ def test_oidc_env_path():
         del os.environ[env_var_name]
 
 
+@pytest.mark.flaky(retries=6, delay=1)
 def test_google_secret_manager():
     """
     Test that we can get a secret from Google Secret Manager
