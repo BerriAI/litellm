@@ -68,13 +68,3 @@ def asyncify(
         )
 
     return wrapper
-
-
-def run_async_function_within_sync_function(coroutine: Coroutine) -> Any:
-    """
-    Helper to run an async function from a sync function using anyio.
-
-    Usage:
-        result = run_async_function(my_async_func(arg1, arg2))
-    """
-    return anyio.run(lambda: coroutine)

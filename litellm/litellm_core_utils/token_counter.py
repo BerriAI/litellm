@@ -7,11 +7,7 @@ from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger
-from litellm.litellm_core_utils.asyncify import run_async_function_within_sync_function
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 
 def get_modified_max_tokens(
@@ -162,7 +158,7 @@ def get_image_type(image_data: bytes) -> Union[str, None]:
     return None
 
 
-async def get_image_dimensions(data) -> Tuple[int, int]:
+def get_image_dimensions(data) -> Tuple[int, int]:
     """
     Async Function to get the dimensions of an image from a URL or base64 encoded string.
 
@@ -178,10 +174,8 @@ async def get_image_dimensions(data) -> Tuple[int, int]:
 
     try:
         # Try to open as URL
-        client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
-        response = await client.get(data)
+        client = _get_httpx_client()
+        response = client.get(data)
         img_data = response.read()
     except Exception:
         # If not URL, assume it's base64
@@ -240,9 +234,8 @@ def calculage_img_tokens(
     if mode == "low" or mode == "auto":
         return base_tokens
     elif mode == "high":
-        width, height = run_async_function_within_sync_function(
-            get_image_dimensions(data=data)
-        )
+        # Run the async function using the helper
+        width, height = get_image_dimensions(data=data)
         resized_width, resized_height = resize_image_high_res(
             width=width, height=height
         )
