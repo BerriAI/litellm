@@ -2414,9 +2414,26 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
+        elif custom_llm_provider == "sagemaker_chat":
+            # boto3 reads keys from .env
+            model_response = sagemaker_chat_completion.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_prompt_dict=custom_prompt_dict,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+                acompletion=acompletion,
+            )
+
+            ## RESPONSE OBJECT
+            response = model_response
         elif (
             custom_llm_provider == "sagemaker"
-            or custom_llm_provider == "sagemaker_chat"
         ):
             # boto3 reads keys from .env
             model_response = sagemaker_llm.completion(
