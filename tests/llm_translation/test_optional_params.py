@@ -190,9 +190,10 @@ def test_databricks_optional_params():
         custom_llm_provider="databricks",
         max_tokens=10,
         temperature=0.2,
+        stream=True,
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 2
+    assert len(optional_params) == 3
     assert "user" not in optional_params
 
 

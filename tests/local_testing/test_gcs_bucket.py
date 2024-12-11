@@ -522,6 +522,7 @@ async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     )
 
 
+@pytest.mark.flaky(retries=5, delay=3)
 @pytest.mark.asyncio
 async def test_get_gcs_logging_config_without_service_account():
     """

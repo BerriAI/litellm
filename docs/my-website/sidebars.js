@@ -190,11 +190,9 @@ const sidebars = {
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
-        "providers/palm", 
         "providers/sambanova", 
         "providers/custom_llm_server",
         "providers/petals",
-        
       ],
     },
     {

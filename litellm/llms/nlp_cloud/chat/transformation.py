@@ -1,26 +1,25 @@
 import json
-import os
 import time
-import types
-from enum import Enum
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
-import requests  # type: ignore
+import httpx
 
-import litellm
+from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import ModelResponse, Usage
 
+from ..common_utils import NLPCloudError
 
-class NLPCloudError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    LoggingClass = LiteLLMLoggingObj
+else:
+    LoggingClass = Any
 
 
-class NLPCloudConfig:
+class NLPCloudConfig(BaseConfig):
     """
     Reference: https://docs.nlpcloud.com/#generation
 
@@ -84,106 +83,119 @@ class NLPCloudConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
+        return super().get_config()
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+        if api_key:
+            headers["Authorization"] = f"Token {api_key}"
+        return headers
+
+    def get_supported_openai_params(self, model: str) -> List:
+        return [
+            "max_tokens",
+            "stream",
+            "temperature",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "n",
+            "stop",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["max_length"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
+            if param == "frequency_penalty":
+                optional_params["frequency_penalty"] = value
+            if param == "n":
+                optional_params["num_return_sequences"] = value
+            if param == "stop":
+                optional_params["stop_sequences"] = value
+        return optional_params
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return NLPCloudError(
+            status_code=status_code, message=error_message, headers=headers
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        text = " ".join(convert_content_list_to_str(message) for message in messages)
+
+        data = {
+            "text": text,
+            **optional_params,
         }
 
+        return data
 
-def validate_environment(api_key):
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-    }
-    if api_key:
-        headers["Authorization"] = f"Token {api_key}"
-    return headers
-
-
-def completion(
-    model: str,
-    messages: list,
-    api_base: str,
-    model_response: ModelResponse,
-    print_verbose: Callable,
-    encoding,
-    api_key,
-    logging_obj,
-    optional_params: dict,
-    litellm_params=None,
-    logger_fn=None,
-    default_max_tokens_to_sample=None,
-):
-    headers = validate_environment(api_key)
-
-    ## Load Config
-    config = litellm.NLPCloudConfig.get_config()
-    for k, v in config.items():
-        if (
-            k not in optional_params
-        ):  # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
-            optional_params[k] = v
-
-    completion_url_fragment_1 = api_base
-    completion_url_fragment_2 = "/generation"
-    model = model
-    text = " ".join(message["content"] for message in messages)
-
-    data = {
-        "text": text,
-        **optional_params,
-    }
-
-    completion_url = completion_url_fragment_1 + model + completion_url_fragment_2
-
-    ## LOGGING
-    logging_obj.pre_call(
-        input=text,
-        api_key=api_key,
-        additional_args={
-            "complete_input_dict": data,
-            "headers": headers,
-            "api_base": completion_url,
-        },
-    )
-    ## COMPLETION CALL
-    response = requests.post(
-        completion_url,
-        headers=headers,
-        data=json.dumps(data),
-        stream=optional_params["stream"] if "stream" in optional_params else False,
-    )
-    if "stream" in optional_params and optional_params["stream"] is True:
-        return clean_and_iterate_chunks(response)
-    else:
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
         ## LOGGING
         logging_obj.post_call(
-            input=text,
+            input=None,
             api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
         )
-        print_verbose(f"raw model_response: {response.text}")
+
         ## RESPONSE OBJECT
         try:
-            completion_response = response.json()
+            completion_response = raw_response.json()
         except Exception:
-            raise NLPCloudError(message=response.text, status_code=response.status_code)
+            raise NLPCloudError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
         if "error" in completion_response:
             raise NLPCloudError(
                 message=completion_response["error"],
-                status_code=response.status_code,
+                status_code=raw_response.status_code,
             )
         else:
             try:
@@ -194,7 +206,7 @@ def completion(
             except Exception:
                 raise NLPCloudError(
                     message=json.dumps(completion_response),
-                    status_code=response.status_code,
+                    status_code=raw_response.status_code,
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
@@ -210,37 +222,3 @@ def completion(
         )
         setattr(model_response, "usage", usage)
         return model_response
-
-
-# def clean_and_iterate_chunks(response):
-#     def process_chunk(chunk):
-#         print(f"received chunk: {chunk}")
-#         cleaned_chunk = chunk.decode("utf-8")
-#         # Perform further processing based on your needs
-#         return cleaned_chunk
-
-
-#     for line in response.iter_lines():
-#         if line:
-#             yield process_chunk(line)
-def clean_and_iterate_chunks(response):
-    buffer = b""
-
-    for chunk in response.iter_content(chunk_size=1024):
-        if not chunk:
-            break
-
-        buffer += chunk
-        while b"\x00" in buffer:
-            buffer = buffer.replace(b"\x00", b"")
-            yield buffer.decode("utf-8")
-            buffer = b""
-
-    # No more data expected, yield any remaining data in the buffer
-    if buffer:
-        yield buffer.decode("utf-8")
-
-
-def embedding():
-    # logic for parsing in - calling - parsing out model embedding calls
-    pass
