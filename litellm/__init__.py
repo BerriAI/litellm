@@ -1184,6 +1184,7 @@ from .llms.azure.azure import (
 
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig

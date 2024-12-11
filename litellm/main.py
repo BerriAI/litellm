@@ -94,7 +94,6 @@ from .llms import (
     palm,
     petals,
     replicate,
-    vllm,
 )
 from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
@@ -160,6 +159,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
 from .llms.vertex_ai_and_google_ai_studio.vertex_model_garden.main import (
     VertexAIModelGardenModels,
 )
+from .llms.vllm.completion import handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
@@ -2691,7 +2691,7 @@ def completion(  # type: ignore # noqa: PLR0915
             response = response
         elif custom_llm_provider == "vllm":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = vllm.completion(
+            model_response = handler.completion(
                 model=model,
                 messages=messages,
                 custom_prompt_dict=custom_prompt_dict,

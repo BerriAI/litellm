@@ -29,7 +29,7 @@ LITELLM_CHAT_PROVIDERS = [
     # "sagemaker",
     # "sagemaker_chat",
     # "bedrock",
-    # "vllm",
+    "vllm",
     # "nlp_cloud",
     # "petals",
     # "oobabooga",

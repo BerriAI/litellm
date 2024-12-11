@@ -9,7 +9,7 @@ import requests  # type: ignore
 
 from litellm.utils import ModelResponse, Usage
 
-from .prompt_templates.factory import custom_prompt, prompt_factory
+from ...prompt_templates.factory import custom_prompt, prompt_factory
 
 llm = None
 
@@ -29,7 +29,8 @@ class VLLMError(Exception):
 def validate_environment(model: str):
     global llm
     try:
-        from vllm import LLM, SamplingParams  # type: ignore
+        from litellm.llms.vllm.completion.handler import LLM  # type: ignore
+        from litellm.llms.vllm.completion.handler import SamplingParams  # type: ignore
 
         if llm is None:
             llm = LLM(model=model)
