@@ -1083,7 +1083,7 @@ from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
 from .llms.nlp_cloud.chat.handler import NLPCloudConfig
-from .llms.aleph_alpha import AlephAlphaConfig
+from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -1178,7 +1178,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
-from .llms.text_completion_codestral import MistralTextCompletionConfig
+from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,

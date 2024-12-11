@@ -1147,7 +1147,7 @@ class CustomStreamWrapper:
                         total_tokens=response_obj["usage"].total_tokens,
                     )
             elif self.custom_llm_provider == "text-completion-codestral":
-                response_obj = litellm.MistralTextCompletionConfig()._chunk_parser(
+                response_obj = litellm.CodestralTextCompletionConfig()._chunk_parser(
                     chunk
                 )
                 completion_obj["content"] = response_obj["text"]
