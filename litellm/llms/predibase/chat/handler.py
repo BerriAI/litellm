@@ -25,37 +25,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
-from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
-
-
-class PredibaseError(Exception):
-    def __init__(
-        self,
-        status_code,
-        message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-    ):
-        self.status_code = status_code
-        self.message = message
-        if request is not None:
-            self.request = request
-        else:
-            self.request = httpx.Request(
-                method="POST",
-                url="https://docs.predibase.com/user-guide/inference/rest_api",
-            )
-        if response is not None:
-            self.response = response
-        else:
-            self.response = httpx.Response(
-                status_code=status_code, request=self.request
-            )
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
-
+from ...base import BaseLLM
+from ...prompt_templates.factory import custom_prompt, prompt_factory
+from ..common_utils import PredibaseError
 
 async def make_call(
     client: AsyncHTTPHandler,
@@ -86,142 +58,10 @@ async def make_call(
     return completion_stream
 
 
-class PredibaseConfig:
-    """
-    Reference:  https://docs.predibase.com/user-guide/inference/rest_api
-
-    """
-
-    adapter_id: Optional[str] = None
-    adapter_source: Optional[Literal["pbase", "hub", "s3"]] = None
-    best_of: Optional[int] = None
-    decoder_input_details: Optional[bool] = None
-    details: bool = True  # enables returning logprobs + best of
-    max_new_tokens: int = (
-        256  # openai default - requests hang if max_new_tokens not given
-    )
-    repetition_penalty: Optional[float] = None
-    return_full_text: Optional[bool] = (
-        False  # by default don't return the input as part of the output
-    )
-    seed: Optional[int] = None
-    stop: Optional[List[str]] = None
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[int] = None
-    truncate: Optional[int] = None
-    typical_p: Optional[float] = None
-    watermark: Optional[bool] = None
-
-    def __init__(
-        self,
-        best_of: Optional[int] = None,
-        decoder_input_details: Optional[bool] = None,
-        details: Optional[bool] = None,
-        max_new_tokens: Optional[int] = None,
-        repetition_penalty: Optional[float] = None,
-        return_full_text: Optional[bool] = None,
-        seed: Optional[int] = None,
-        stop: Optional[List[str]] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[int] = None,
-        truncate: Optional[int] = None,
-        typical_p: Optional[float] = None,
-        watermark: Optional[bool] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "stream",
-            "temperature",
-            "max_completion_tokens",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "n",
-            "response_format",
-        ]
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
-            if param == "temperature":
-                if value == 0.0 or value == 0:
-                    # hugging face exception raised when temp==0
-                    # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
-                    value = 0.01
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "n":
-                optional_params["best_of"] = value
-                optional_params["do_sample"] = (
-                    True  # Need to sample if you want best of for hf inference endpoints
-                )
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "stop":
-                optional_params["stop"] = value
-            if param == "max_tokens" or param == "max_completion_tokens":
-                # HF TGI raises the following exception when max_new_tokens==0
-                # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
-                if value == 0:
-                    value = 1
-                optional_params["max_new_tokens"] = value
-            if param == "echo":
-                # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details
-                #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
-                optional_params["decoder_input_details"] = True
-            if param == "response_format":
-                optional_params["response_format"] = value
-        return optional_params
-
-
 class PredibaseChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def _validate_environment(
-        self, api_key: Optional[str], user_headers: dict, tenant_id: Optional[str]
-    ) -> dict:
-        if api_key is None:
-            raise ValueError(
-                "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
-            )
-        if tenant_id is None:
-            raise ValueError(
-                "Missing Predibase Tenant ID - Required for making the request. Set dynamically (e.g. `completion(..tenant_id=<MY-ID>)`) or in env - `PREDIBASE_TENANT_ID`."
-            )
-        headers = {
-            "content-type": "application/json",
-            "Authorization": "Bearer {}".format(api_key),
-        }
-        if user_headers is not None and isinstance(user_headers, dict):
-            headers = {**headers, **user_headers}
-        return headers
 
     def output_parser(self, generated_text: str):
         """
@@ -398,7 +238,7 @@ class PredibaseChatCompletion(BaseLLM):
         logger_fn=None,
         headers: dict = {},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        headers = self._validate_environment(api_key, headers, tenant_id=tenant_id)
+        headers = litellm.PredibaseConfig().validate_environment(api_key=api_key, headers=headers, messages=messages, optional_params=optional_params, model=model)
         completion_url = ""
         input_text = ""
         base_url = "https://serving.app.predibase.com"

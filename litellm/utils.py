@@ -6337,6 +6337,8 @@ class ProviderConfigManager:
             return litellm.VLLMConfig()
         elif litellm.LlmProviders.OLLAMA == provider:
             return litellm.OllamaConfig()
+        elif litellm.LlmProviders.PREDIBASE == provider:
+            return litellm.PredibaseConfig()
         return litellm.OpenAIGPTConfig()
 
 

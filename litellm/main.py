@@ -119,7 +119,7 @@ from .llms.openai.chat.o1_handler import OpenAIO1ChatCompletion
 from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
-from .llms.predibase import PredibaseChatCompletion
+from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.prompt_templates.common_utils import get_completion_messages
 from .llms.prompt_templates.factory import (
     custom_prompt,
@@ -2394,6 +2394,11 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.predibase_tenant_id
                 or get_secret("PREDIBASE_TENANT_ID")
             )
+
+            if tenant_id is None:
+                raise ValueError(
+                    "Missing Predibase Tenant ID - Required for making the request. Set dynamically (e.g. `completion(..tenant_id=<MY-ID>)`) or in env - `PREDIBASE_TENANT_ID`."
+                )
 
             api_base = (
                 api_base

@@ -297,7 +297,7 @@ def test_provider_config_manager():
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
     for provider in LITELLM_CHAT_PROVIDERS:
-        if provider == LlmProviders.TRITON or provider == LlmProviders.PREDIBASE:
+        if provider == LlmProviders.TRITON:
             continue
         assert isinstance(
             ProviderConfigManager.get_provider_chat_config(

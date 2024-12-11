@@ -195,7 +195,7 @@ def test_all_model_configs():
         optional_params={},
     ) == {"num_predict": 10}
 
-    from litellm.llms.predibase import PredibaseConfig
+    from litellm.llms.predibase.chat.transformation import PredibaseConfig
 
     assert "max_completion_tokens" in PredibaseConfig().get_supported_openai_params()
     assert PredibaseConfig().map_openai_params(
