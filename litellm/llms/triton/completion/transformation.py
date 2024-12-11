@@ -6,12 +6,12 @@ from typing import Any, Dict, List, Optional, Union
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.llms.base_llm.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,
 )
-from litellm.llms.prompt_templates.factory import prompt_factory
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
