@@ -1375,7 +1375,10 @@ def openai_token_counter(  # noqa: PLR0915
     return num_tokens
 
 
-def resize_image_high_res(width, height):
+def resize_image_high_res(
+    width: int,
+    height: int,
+) -> Tuple[int, int]:
     # Maximum dimensions for high res mode
     max_short_side = 768
     max_long_side = 2000
@@ -1514,7 +1517,9 @@ def calculage_img_tokens(
         resized_width, resized_height = resize_image_high_res(
             width=width, height=height
         )
-        tiles_needed_high_res = calculate_tiles_needed(resized_width, resized_height)
+        tiles_needed_high_res = calculate_tiles_needed(
+            resized_width=resized_width, resized_height=resized_height
+        )
         tile_tokens = (base_tokens * 2) * tiles_needed_high_res
         total_tokens = base_tokens + tile_tokens
         return total_tokens
