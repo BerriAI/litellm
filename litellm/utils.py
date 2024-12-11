@@ -6291,9 +6291,15 @@ def is_prompt_caching_valid_prompt(
 
     OpenAI + Anthropic providers have a minimum token count of 1024 for prompt caching.
     """
-    if messages is None and tools is None:
+    try:
+        if messages is None and tools is None:
+            return False
+        if custom_llm_provider is not None and not model.startswith(
+            custom_llm_provider
+        ):
+            model = custom_llm_provider + "/" + model
+        token_count = token_counter(messages=messages, tools=tools, model=model)
+        return token_count >= 1024
+    except Exception as e:
+        verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
         return False
-    if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
-        model = custom_llm_provider + "/" + model
-    token_count = token_counter(messages=messages, tools=tools, model=model)
-    return token_count >= 1024
