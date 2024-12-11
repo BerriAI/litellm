@@ -4377,6 +4377,9 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
     ):
         strip_version = _strip_stable_vertex_version(model_name=model)
         return strip_version
+    elif custom_llm_provider and (custom_llm_provider == "databricks"):
+        strip_version = _strip_stable_vertex_version(model_name=model)
+        return strip_version
     else:
         strip_finetune = _strip_openai_finetune_model_name(model_name=model)
         return strip_finetune
@@ -4542,7 +4545,6 @@ def get_model_info(  # noqa: PLR0915
             )
 
         #########################
-
         supported_openai_params = litellm.get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
