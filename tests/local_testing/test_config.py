@@ -325,10 +325,10 @@ def _check_provider_config(config: BaseConfig, provider: LlmProviders):
 #             or provider == LlmProviders.SAGEMAKER
 #             or provider == LlmProviders.SAGEMAKER_CHAT
 #             or provider == LlmProviders.VLLM
-#             or provider == LlmProviders.PETALS
 #             or provider == LlmProviders.OLLAMA
 #         ):
 #             continue
+
 #         config = ProviderConfigManager.get_provider_chat_config(
 #             model="gpt-3.5-turbo", provider=LlmProviders(provider)
 #         )

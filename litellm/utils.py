@@ -135,7 +135,9 @@ from litellm.types.utils import (
     Usage,
 )
 
-with resources.open_text("litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json") as f:
+with resources.open_text(
+    "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+) as f:
     json_data = json.load(f)
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
@@ -3320,15 +3322,16 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        # max_new_tokens=1,temperature=0.9, top_p=0.6
-        if max_tokens is not None:
-            optional_params["max_new_tokens"] = max_tokens
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
+        optional_params = litellm.PetalsConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "deepinfra":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6237,7 +6240,7 @@ from litellm.llms.base_llm.transformation import BaseConfig
 
 class ProviderConfigManager:
     @staticmethod
-    def get_provider_chat_config( # noqa: PLR0915
+    def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: litellm.LlmProviders
     ) -> BaseConfig:
         """
@@ -6357,6 +6360,8 @@ class ProviderConfigManager:
             return litellm.VLLMConfig()
         elif litellm.LlmProviders.OLLAMA == provider:
             return litellm.OllamaConfig()
+        elif litellm.LlmProviders.PETALS == provider:
+            return litellm.PetalsConfig()
         return litellm.OpenAIGPTConfig()
 
 

@@ -3,91 +3,21 @@ import os
 import time
 import types
 from enum import Enum
-from typing import Callable, Optional
-
-import requests  # type: ignore
+from typing import Callable, Optional, Union
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+)
 from litellm.utils import ModelResponse, Usage
 
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
-
-
-class PetalsError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
-
-
-class PetalsConfig:
-    """
-    Reference: https://github.com/petals-infra/chat.petals.dev#post-apiv1generate
-    The `PetalsConfig` class encapsulates the configuration for the Petals API. The properties of this class are described below:
-
-    - `max_length` (integer): This represents the maximum length of the generated text (including the prefix) in tokens.
-
-    - `max_new_tokens` (integer): This represents the maximum number of newly generated tokens (excluding the prefix).
-
-    The generation parameters are compatible with `.generate()` from Hugging Face's Transformers library:
-
-    - `do_sample` (boolean, optional): If set to 0 (default), the API runs greedy generation. If set to 1, the API performs sampling using the parameters below:
-
-    - `temperature` (float, optional): This value sets the temperature for sampling.
-
-    - `top_k` (integer, optional): This value sets the limit for top-k sampling.
-
-    - `top_p` (float, optional): This value sets the limit for top-p (nucleus) sampling.
-
-    - `repetition_penalty` (float, optional): This helps apply the repetition penalty during text generation, as discussed in this paper.
-    """
-
-    max_length: Optional[int] = None
-    max_new_tokens: Optional[int] = (
-        litellm.max_tokens
-    )  # petals requires max tokens to be set
-    do_sample: Optional[bool] = None
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-
-    def __init__(
-        self,
-        max_length: Optional[int] = None,
-        max_new_tokens: Optional[
-            int
-        ] = litellm.max_tokens,  # petals requires max tokens to be set
-        do_sample: Optional[bool] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+from ..common_utils import PetalsError
 
 
 def completion(
@@ -102,6 +32,7 @@ def completion(
     stream=False,
     litellm_params=None,
     logger_fn=None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
 ):
     ## Load Config
     config = litellm.PetalsConfig.get_config()
@@ -137,7 +68,9 @@ def completion(
         data = {"model": model, "inputs": prompt, **optional_params}
 
         ## COMPLETION CALL
-        response = requests.post(api_base, data=data)
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+        response = client.post(api_base, data=data)
 
         ## LOGGING
         logging_obj.post_call(
@@ -151,7 +84,11 @@ def completion(
         try:
             output_text = response.json()["outputs"]
         except Exception as e:
-            PetalsError(status_code=response.status_code, message=str(e))
+            PetalsError(
+                status_code=response.status_code,
+                message=str(e),
+                headers=response.headers,
+            )
 
     else:
         try:

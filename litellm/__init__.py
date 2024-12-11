@@ -1084,7 +1084,7 @@ from .llms.deprecated_providers.palm import (
 )  # here to prevent breaking changes
 from .llms.nlp_cloud.chat.handler import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
-from .llms.petals import PetalsConfig
+from .llms.petals.completion.transformation import PetalsConfig
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     GoogleAIStudioGeminiConfig,
