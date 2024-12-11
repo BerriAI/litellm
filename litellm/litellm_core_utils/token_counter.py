@@ -7,6 +7,7 @@ from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 
@@ -158,7 +159,9 @@ def get_image_type(image_data: bytes) -> Union[str, None]:
     return None
 
 
-def get_image_dimensions(data) -> Tuple[int, int]:
+def get_image_dimensions(
+    data: str, use_default_image_token_count: bool = False
+) -> Tuple[int, int]:
     """
     Async Function to get the dimensions of an image from a URL or base64 encoded string.
 
@@ -169,8 +172,13 @@ def get_image_dimensions(data) -> Tuple[int, int]:
         Tuple[int, int]: The width and height of the image.
     """
     img_data = None
-    DEFAULT_WIDTH = 100
-    DEFAULT_HEIGHT = 100
+    if use_default_image_token_count:
+        verbose_logger.debug(
+            "Using default image dimensions: {}x{}".format(
+                DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
+            )
+        )
+        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
     try:
         # Try to open as URL
@@ -223,13 +231,14 @@ def get_image_dimensions(data) -> Tuple[int, int]:
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
-    return DEFAULT_WIDTH, DEFAULT_HEIGHT
+    return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
 
-def calculage_img_tokens(
+def calculate_img_tokens(
     data,
     mode: Literal["low", "high", "auto"] = "auto",
     base_tokens: int = 85,  # openai default - https://openai.com/pricing
+    use_default_image_token_count: Optional[bool] = False,
 ):
     if mode == "low" or mode == "auto":
         return base_tokens

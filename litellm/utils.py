@@ -96,7 +96,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import (
-    calculage_img_tokens,
+    calculate_img_tokens,
     get_modified_max_tokens,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1286,6 +1286,7 @@ def openai_token_counter(  # noqa: PLR0915
     count_response_tokens: Optional[
         bool
     ] = False,  # Flag passed from litellm.stream_chunk_builder, to indicate counting tokens for LLM Response. We need this because for LLM input we add +3 tokens per message - based on OpenAI's token counter
+    use_default_image_token_count: Optional[bool] = False,
 ):
     """
     Return the number of tokens used by a list of messages.
@@ -1344,13 +1345,17 @@ def openai_token_counter(  # noqa: PLR0915
                                 image_url_dict = c["image_url"]
                                 detail = image_url_dict.get("detail", "auto")
                                 url = image_url_dict.get("url")
-                                num_tokens += calculage_img_tokens(
-                                    data=url, mode=detail
+                                num_tokens += calculate_img_tokens(
+                                    data=url,
+                                    mode=detail,
+                                    use_default_image_token_count=use_default_image_token_count,
                                 )
                             elif isinstance(c["image_url"], str):
                                 image_url_str = c["image_url"]
-                                num_tokens += calculage_img_tokens(
-                                    data=image_url_str, mode="auto"
+                                num_tokens += calculate_img_tokens(
+                                    data=image_url_str,
+                                    mode="auto",
+                                    use_default_image_token_count=use_default_image_token_count,
                                 )
     elif text is not None and count_response_tokens is True:
         # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
@@ -1494,6 +1499,7 @@ def token_counter(
     count_response_tokens: Optional[bool] = False,
     tools: Optional[List[ChatCompletionToolParam]] = None,
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
+    use_default_image_token_count: Optional[bool] = False,
 ) -> int:
     """
     Count the number of tokens in a given text using a specified model.
@@ -1528,13 +1534,17 @@ def token_counter(
                                     image_url_dict = c["image_url"]
                                     detail = image_url_dict.get("detail", "auto")
                                     url = image_url_dict.get("url")
-                                    num_tokens += calculage_img_tokens(
-                                        data=url, mode=detail
+                                    num_tokens += calculate_img_tokens(
+                                        data=url,
+                                        mode=detail,
+                                        use_default_image_token_count=use_default_image_token_count,
                                     )
                                 elif isinstance(c["image_url"], str):
                                     image_url_str = c["image_url"]
-                                    num_tokens += calculage_img_tokens(
-                                        data=image_url_str, mode="auto"
+                                    num_tokens += calculate_img_tokens(
+                                        data=image_url_str,
+                                        mode="auto",
+                                        use_default_image_token_count=use_default_image_token_count,
                                     )
                 if message.get("tool_calls"):
                     is_tool_call = True
