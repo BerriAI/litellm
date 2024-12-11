@@ -9,7 +9,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
 )
