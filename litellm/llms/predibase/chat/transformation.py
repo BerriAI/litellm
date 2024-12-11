@@ -1,10 +1,12 @@
-from typing import Optional, Literal, List, TYPE_CHECKING, Any, Union
 import types
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from httpx import Headers, Response
+
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.types.utils import ModelResponse
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
 from ..common_utils import PredibaseError
 
 if TYPE_CHECKING:
@@ -25,7 +27,9 @@ class PredibaseConfig(BaseConfig):
     best_of: Optional[int] = None
     decoder_input_details: Optional[bool] = None
     details: bool = True  # enables returning logprobs + best of
-    max_new_tokens: int = 256  # openai default - requests hang if max_new_tokens not given
+    max_new_tokens: int = (
+        256  # openai default - requests hang if max_new_tokens not given
+    )
     repetition_penalty: Optional[float] = None
     return_full_text: Optional[bool] = (
         False  # by default don't return the input as part of the output
@@ -65,7 +69,7 @@ class PredibaseConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str):
         return [
             "stream",
             "temperature",
@@ -78,7 +82,11 @@ class PredibaseConfig(BaseConfig):
         ]
 
     def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str, drop_params: bool
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
@@ -131,7 +139,9 @@ class PredibaseConfig(BaseConfig):
             "Predibase transformation currently done in handler.py. Need to migrate to this file."
         )
 
-    def _transform_messages(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    def _transform_messages(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
         return messages
 
     def transform_request(
@@ -149,7 +159,9 @@ class PredibaseConfig(BaseConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
     ) -> BaseLLMException:
-        return PredibaseError(status_code=status_code, message=error_message, headers=headers)
+        return PredibaseError(
+            status_code=status_code, message=error_message, headers=headers
+        )
 
     def validate_environment(
         self,
