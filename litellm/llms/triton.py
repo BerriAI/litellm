@@ -5,13 +5,13 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
+    _get_httpx_client,
 )
 from litellm.utils import (
     Choices,
@@ -114,7 +114,9 @@ class TritonChatCompletion(BaseLLM):
             ]
         }
 
-        curl_string = f"curl {api_base} -X POST -H 'Content-Type: application/json' -d '{data_for_triton}'"
+        curl_string = (
+            f"curl {api_base} -X POST -H 'Content-Type: application/json' -d '{data_for_triton}'"
+        )
 
         logging_obj.pre_call(
             input="",
@@ -149,7 +151,7 @@ class TritonChatCompletion(BaseLLM):
         optional_params: dict,
         model_response: ModelResponse,
         api_key: Optional[str] = None,
-        client=None,
+        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         stream: Optional[bool] = False,
         acompletion: bool = False,
     ) -> ModelResponse:
@@ -169,9 +171,7 @@ class TritonChatCompletion(BaseLLM):
             data_for_triton["parameters"].update(optional_params)
             type_of_model = "trtllm"
 
-        elif api_base.endswith(
-            "infer"
-        ):  ### This is an infer model with a custom model on triton
+        elif api_base.endswith("infer"):  ### This is an infer model with a custom model on triton
             text_input = messages[0]["content"]
             data_for_triton = {
                 "inputs": [
@@ -240,16 +240,18 @@ class TritonChatCompletion(BaseLLM):
                 model_response=model_response,
                 type_of_model=type_of_model,
             )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            handler = _get_httpx_client()
         else:
-            handler = HTTPHandler()
+            handler = client
+
         if stream:
             return self._handle_stream(  # type: ignore
                 handler, api_base, json_data_for_triton, model, logging_obj
             )
         else:
-            response = handler.post(
-                url=api_base, data=json_data_for_triton, headers=headers
-            )
+            response = handler.post(url=api_base, data=json_data_for_triton, headers=headers)
             return self._handle_response(
                 response, model_response, logging_obj, type_of_model=type_of_model
             )
@@ -273,18 +275,14 @@ class TritonChatCompletion(BaseLLM):
                 handler, api_base, data_for_triton, model, logging_obj
             )
         else:
-            response = await handler.post(
-                url=api_base, data=data_for_triton, headers=headers
-            )
+            response = await handler.post(url=api_base, data=data_for_triton, headers=headers)
 
             return self._handle_response(
                 response, model_response, logging_obj, type_of_model=type_of_model
             )
 
     def _handle_stream(self, handler, api_base, data_for_triton, model, logging_obj):
-        response = handler.post(
-            url=api_base + "_stream", data=data_for_triton, stream=True
-        )
+        response = handler.post(url=api_base + "_stream", data=data_for_triton, stream=True)
         streamwrapper = litellm.CustomStreamWrapper(
             response.iter_lines(),
             model=model,
@@ -294,12 +292,8 @@ class TritonChatCompletion(BaseLLM):
         for chunk in streamwrapper:
             yield (chunk)
 
-    async def _ahandle_stream(
-        self, handler, api_base, data_for_triton, model, logging_obj
-    ):
-        response = await handler.post(
-            url=api_base + "_stream", data=data_for_triton, stream=True
-        )
+    async def _ahandle_stream(self, handler, api_base, data_for_triton, model, logging_obj):
+        response = await handler.post(url=api_base + "_stream", data=data_for_triton, stream=True)
         streamwrapper = litellm.CustomStreamWrapper(
             response.aiter_lines(),
             model=model,
@@ -336,12 +330,8 @@ class TritonChatCompletion(BaseLLM):
         return model_response
 
     @staticmethod
-    def split_embedding_by_shape(
-        data: List[float], shape: List[int]
-    ) -> List[List[float]]:
+    def split_embedding_by_shape(data: List[float], shape: List[int]) -> List[List[float]]:
         if len(shape) != 2:
             raise ValueError("Shape must be of length 2.")
         embedding_size = shape[1]
-        return [
-            data[i * embedding_size : (i + 1) * embedding_size] for i in range(shape[0])
-        ]
+        return [data[i * embedding_size : (i + 1) * embedding_size] for i in range(shape[0])]
