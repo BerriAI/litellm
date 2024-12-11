@@ -13,7 +13,7 @@ from httpx._models import Headers
 
 from litellm.llms.base_llm.transformation import BaseLLMException
 
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import SagemakerError
 
 
