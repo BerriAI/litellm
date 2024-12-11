@@ -11,7 +11,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.OpenAI.openai import AllMessageValues
+from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     RequestBody,
