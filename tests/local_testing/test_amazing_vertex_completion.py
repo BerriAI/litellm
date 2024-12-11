@@ -1456,7 +1456,10 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
         "additionalProperties": False,
     }
 
-    client = HTTPHandler()
+    if "claude" in model:
+        client = HTTPHandler
+    else:
+        client = HTTPHandler()
 
     httpx_response = MagicMock()
     if invalid_response is True:
