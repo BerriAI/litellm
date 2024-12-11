@@ -51,6 +51,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         messages: list,
         optional_params: dict,
+        litellm_params: dict,
         encoding: str,
         api_key: Optional[str] = None,
     ):
@@ -66,7 +67,7 @@ class BaseLLMHTTPHandler:
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
-        return provider_config.transform_response(
+        model_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -76,7 +77,12 @@ class BaseLLMHTTPHandler:
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            json_mode=litellm_params.get("json_mode", False),
         )
+        model_response._hidden_params["additional_headers"] = (
+            provider_config.transform_response_headers(headers=response.headers)
+        )
+        return model_response
 
     def completion(
         self,
@@ -147,6 +153,7 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                     data=data,
                     fake_stream=fake_stream,
+                    litellm_params=litellm_params,
                 )
 
             else:
@@ -163,13 +170,14 @@ class BaseLLMHTTPHandler:
                     api_key=api_key,
                     messages=messages,
                     optional_params=optional_params,
+                    litellm_params=litellm_params,
                     encoding=encoding,
                 )
 
         if stream is True:
             if fake_stream is not True:
                 data["stream"] = stream
-            completion_stream, headers = self.make_sync_call(
+            completion_stream, response_headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
                 headers=headers,  # type: ignore
@@ -179,12 +187,16 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 timeout=timeout,
                 fake_stream=fake_stream,
+                litellm_params=litellm_params,
             )
             return CustomStreamWrapper(
                 completion_stream=completion_stream,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=provider_config.transform_response_headers(
+                    headers=response_headers
+                ),
             )
 
         sync_httpx_client = _get_httpx_client()
@@ -202,7 +214,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
             )
 
-        return provider_config.transform_response(
+        model_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -212,7 +224,12 @@ class BaseLLMHTTPHandler:
             messages=messages,
             optional_params=optional_params,
             encoding=encoding,
+            json_mode=litellm_params.get("json_mode", False),
         )
+        model_response._hidden_params["additional_headers"] = (
+            provider_config.transform_response_headers(headers=response.headers)
+        )
+        return model_response
 
     def make_sync_call(
         self,
@@ -222,6 +239,7 @@ class BaseLLMHTTPHandler:
         data: str,
         model: str,
         messages: list,
+        litellm_params: dict,
         logging_obj,
         timeout: Optional[Union[float, httpx.Timeout]],
         fake_stream: bool = False,
@@ -256,11 +274,15 @@ class BaseLLMHTTPHandler:
 
         if fake_stream is True:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(), sync_stream=True
+                streaming_response=response.json(),
+                sync_stream=True,
+                json_mode=litellm_params.get("json_mode", False),
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+                streaming_response=response.iter_lines(),
+                sync_stream=True,
+                json_mode=litellm_params.get("json_mode", False),
             )
 
         # LOGGING
@@ -284,9 +306,10 @@ class BaseLLMHTTPHandler:
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
         data: dict,
+        litellm_params: dict,
         fake_stream: bool = False,
     ):
-        completion_stream, _response_headers = await self.make_async_call(
+        completion_stream, response_headers = await self.make_async_call(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
             api_base=api_base,
@@ -296,12 +319,16 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             timeout=timeout,
             fake_stream=fake_stream,
+            litellm_params=litellm_params,
         )
         streamwrapper = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
+            _response_headers=provider_config.transform_response_headers(
+                headers=response_headers
+            ),
         )
         return streamwrapper
 
@@ -313,6 +340,7 @@ class BaseLLMHTTPHandler:
         headers: dict,
         data: str,
         messages: list,
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         timeout: Optional[Union[float, httpx.Timeout]],
         fake_stream: bool = False,
@@ -348,11 +376,15 @@ class BaseLLMHTTPHandler:
             )
         if fake_stream is True:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(), sync_stream=False
+                streaming_response=response.json(),
+                sync_stream=False,
+                json_mode=litellm_params.get("json_mode", False),
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.aiter_lines(), sync_stream=False
+                streaming_response=response.aiter_lines(),
+                sync_stream=False,
+                json_mode=litellm_params.get("json_mode", False),
             )
         # LOGGING
         logging_obj.post_call(

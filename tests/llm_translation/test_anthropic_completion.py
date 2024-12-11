@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 import litellm.types
 import litellm.types.utils
-from litellm.llms.anthropic.chat import ModelResponseIterator
+from litellm.llms.anthropic.chat.transformation import AnthropicModelResponseIterator
 
 load_dotenv()
 import io
@@ -36,7 +36,6 @@ from litellm.types.llms.anthropic import AnthropicResponse
 from litellm.types.utils import GenericStreamingChunk, ChatCompletionToolCallChunk
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
-from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest
 
@@ -358,7 +357,7 @@ def test_anthropic_tool_streaming():
     when they should start at 0
     """
     litellm.set_verbose = True
-    response_iter = ModelResponseIterator([], False)
+    response_iter = AnthropicModelResponseIterator([], False)
 
     # First index is 0, we'll start earlier because incrementing is easier
     correct_tool_index = -1

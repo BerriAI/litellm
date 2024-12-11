@@ -75,7 +75,6 @@ class VertexAIModelGardenModels(VertexBase):
             import vertexai
             from google.cloud import aiplatform
 
-            from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.OpenAI.openai import OpenAIChatCompletion
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.text_completion_codestral import CodestralTextCompletion

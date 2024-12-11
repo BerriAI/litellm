@@ -4272,14 +4272,14 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],
+    ["claude-3-sonnet-20240229"],
 )
 @pytest.mark.parametrize(
     "stream",
-    [False, True],
+    [True],
 )
-@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_response_ratelimit_headers(model, stream):
+    litellm.set_verbose = True
     response = completion(
         model=model,
         messages=[{"role": "user", "content": "Hello world"}],

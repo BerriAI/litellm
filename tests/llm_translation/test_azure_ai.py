@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 
 import litellm.types
 import litellm.types.utils
-from litellm.llms.anthropic.chat import ModelResponseIterator
 import httpx
 import json
 from respx import MockRouter

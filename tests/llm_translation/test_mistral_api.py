@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 
 import litellm.types
 import litellm.types.utils
-from litellm.llms.anthropic.chat import ModelResponseIterator
 
 load_dotenv()
 import io
@@ -22,8 +21,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-
-from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest
 
