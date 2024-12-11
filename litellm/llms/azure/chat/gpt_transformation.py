@@ -14,8 +14,9 @@ from ....types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
+
 from ...base_llm.transformation import BaseConfig
-from ...prompt_templates.factory import convert_to_azure_openai_messages
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_azure_openai_messages
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
-
 
 class AzureOpenAIConfig(BaseConfig):
     """

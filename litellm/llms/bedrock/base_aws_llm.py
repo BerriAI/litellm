@@ -10,7 +10,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from .base import BaseLLM
+from litellm.llms.base import BaseLLM
 
 if TYPE_CHECKING:
     from botocore.credentials import Credentials

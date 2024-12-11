@@ -18,7 +18,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
 
-from ...prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import OllamaError
 from .transformation import OllamaConfig
 

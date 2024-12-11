@@ -7,7 +7,7 @@ import httpx
 
 import litellm
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
+from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,

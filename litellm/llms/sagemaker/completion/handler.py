@@ -31,8 +31,8 @@ from litellm.utils import (
     get_secret,
 )
 
-from ...base_aws_llm import BaseAWSLLM
-from ...prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
 from .transformation import SagemakerConfig
 

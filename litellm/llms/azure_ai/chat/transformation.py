@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.openai.openai import OpenAIConfig
-from litellm.llms.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
