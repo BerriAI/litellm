@@ -26,6 +26,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import (
     Choices,
@@ -205,6 +207,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
+            print(f"e.response.text: {e.response.text}")
             raise OpenAILikeError(
                 status_code=e.response.status_code,
                 message=e.response.text,
@@ -212,6 +215,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         except httpx.TimeoutException:
             raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
+            print(f"e: {e}")
             raise OpenAILikeError(status_code=500, message=str(e))
 
         return OpenAILikeChatConfig._transform_response(
@@ -280,7 +284,10 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
-            messages = provider_config._transform_messages(messages)
+            if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
+                provider_config, OpenAIConfig
+            ):
+                messages = provider_config._transform_messages(messages)
 
         data = {
             "model": model,

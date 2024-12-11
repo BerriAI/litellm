@@ -168,12 +168,17 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.huggingface_restapi import HuggingfaceConfig
+    from litellm.llms.huggingface.chat.handler import HuggingfaceConfig
 
-    assert "max_completion_tokens" in HuggingfaceConfig().get_supported_openai_params()
-    assert HuggingfaceConfig().map_openai_params({"max_completion_tokens": 10}, {}) == {
-        "max_new_tokens": 10
-    }
+    assert "max_completion_tokens" in HuggingfaceConfig().get_supported_openai_params(
+        model="llama3"
+    )
+    assert HuggingfaceConfig().map_openai_params(
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        model="llama3",
+        drop_params=False,
+    ) == {"max_new_tokens": 10}
 
     from litellm.llms.nvidia_nim.chat import NvidiaNimConfig
 
@@ -184,15 +189,19 @@ def test_all_model_configs():
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     from litellm.llms.ollama_chat import OllamaChatConfig
 
-    assert "max_completion_tokens" in OllamaChatConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in OllamaChatConfig().get_supported_openai_params(
+        model="llama3"
+    )
     assert OllamaChatConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"num_predict": 10}
 
     from litellm.llms.predibase.chat.transformation import PredibaseConfig
@@ -207,11 +216,13 @@ def test_all_model_configs():
 
     assert (
         "max_completion_tokens"
-        in MistralTextCompletionConfig().get_supported_openai_params()
+        in MistralTextCompletionConfig().get_supported_openai_params(model="llama3")
     )
     assert MistralTextCompletionConfig().map_openai_params(
-        {"max_completion_tokens": 10},
-        {},
+        model="llama3",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     from litellm.llms.volcengine import VolcEngineConfig
@@ -223,9 +234,10 @@ def test_all_model_configs():
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.ai21.chat import AI21ChatConfig
+    from litellm.llms.ai21.chat.transformation import AI21ChatConfig
 
     assert "max_completion_tokens" in AI21ChatConfig().get_supported_openai_params(
         "jamba-1.5-mini@001"
@@ -234,11 +246,14 @@ def test_all_model_configs():
         model="jamba-1.5-mini@001",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 
-    assert "max_completion_tokens" in AzureOpenAIConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in AzureOpenAIConfig().get_supported_openai_params(
+        model="gpt-3.5-turbo"
+    )
     assert AzureOpenAIConfig().map_openai_params(
         model="gpt-3.5-turbo",
         non_default_params={"max_completion_tokens": 10},
@@ -266,11 +281,13 @@ def test_all_model_configs():
 
     assert (
         "max_completion_tokens"
-        in MistralTextCompletionConfig().get_supported_openai_params()
+        in MistralTextCompletionConfig().get_supported_openai_params(model="llama3")
     )
     assert MistralTextCompletionConfig().map_openai_params(
+        model="llama3",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_tokens": 10}
 
     from litellm.llms.bedrock.common_utils import (
@@ -341,7 +358,9 @@ def test_all_model_configs():
 
     assert (
         "max_completion_tokens"
-        in GoogleAIStudioGeminiConfig().get_supported_openai_params()
+        in GoogleAIStudioGeminiConfig().get_supported_openai_params(
+            model="gemini-1.0-pro"
+        )
     )
 
     assert GoogleAIStudioGeminiConfig().map_openai_params(
@@ -351,7 +370,9 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_output_tokens": 10}
 
-    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params(
+        model="gemini-1.0-pro"
+    )
 
     assert VertexGeminiConfig().map_openai_params(
         model="gemini-1.0-pro",
