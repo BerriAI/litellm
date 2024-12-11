@@ -9,6 +9,7 @@ from typing import (
     Any,
     AsyncIterator,
     Callable,
+    Dict,
     Iterator,
     List,
     Optional,
@@ -33,7 +34,7 @@ class BaseLLMException(Exception):
         self,
         status_code: int,
         message: str,
-        headers: Optional[httpx.Headers] = None,
+        headers: Optional[Union[httpx.Headers, Dict]] = None,
         request: Optional[httpx.Request] = None,
         response: Optional[httpx.Response] = None,
     ):

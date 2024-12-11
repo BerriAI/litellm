@@ -129,7 +129,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
         "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
     ],
 )
-@pytest.mark.flaky(retries=3, delay=1)
+# @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_sagemaker_stream(sync_mode, model):
     try:
         litellm.set_verbose = False

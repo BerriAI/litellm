@@ -1099,7 +1099,8 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transfor
     VertexAIAi21Config,
 )
 
-from .llms.sagemaker.sagemaker import SagemakerConfig
+from .llms.sagemaker.completion.transformation import SagemakerConfig
+from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.ollama import OllamaConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.maritalk import MaritTalkConfig

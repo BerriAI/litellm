@@ -182,7 +182,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "sagemaker":
-        return ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        return litellm.SagemakerConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "aleph_alpha":
         return [
             "max_tokens",

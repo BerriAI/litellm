@@ -3145,31 +3145,16 @@ def get_optional_params(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
-        if temperature is not None:
-            if temperature == 0.0 or temperature == 0:
-                # hugging face exception raised when temp==0
-                # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
-                if not passed_params.get("aws_sagemaker_allow_zero_temp", False):
-                    temperature = 0.01
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if n is not None:
-            optional_params["best_of"] = n
-            optional_params["do_sample"] = (
-                True  # Need to sample if you want best of for hf inference endpoints
-            )
-        if stream is not None:
-            optional_params["stream"] = stream
-        if stop is not None:
-            optional_params["stop"] = stop
-        if max_tokens is not None:
-            # HF TGI raises the following exception when max_new_tokens==0
-            # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
-            if max_tokens == 0:
-                max_tokens = 1
-            optional_params["max_new_tokens"] = max_tokens
-        passed_params.pop("aws_sagemaker_allow_zero_temp", None)
+        optional_params = litellm.SagemakerConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "bedrock":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6284,7 +6269,10 @@ class ProviderConfigManager:
                 return litellm.VertexAIAnthropicConfig()
         elif litellm.LlmProviders.CLOUDFLARE == provider:
             return litellm.CloudflareChatConfig()
-
+        elif litellm.LlmProviders.SAGEMAKER_CHAT == provider:
+            return litellm.SagemakerChatConfig()
+        elif litellm.LlmProviders.SAGEMAKER == provider:
+            return litellm.SagemakerConfig()
         return litellm.OpenAIGPTConfig()
 
 
