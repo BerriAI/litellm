@@ -1103,7 +1103,6 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transfor
     VertexAIAi21Config,
 )
 
-from .llms.ollama.completion.handler import OllamaConfig
 from .llms.sagemaker.completion.transformation import SagemakerConfig
 from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.ollama import OllamaConfig

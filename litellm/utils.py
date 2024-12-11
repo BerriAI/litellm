@@ -3308,12 +3308,6 @@ def get_optional_params(  # noqa: PLR0915
         optional_params = litellm.OllamaConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
         )
     elif custom_llm_provider == "ollama_chat":
         supported_params = get_supported_openai_params(
@@ -6319,8 +6313,6 @@ class ProviderConfigManager:
             return litellm.LMStudioChatConfig()
         elif litellm.LlmProviders.GALADRIEL == provider:
             return litellm.GaladrielChatConfig()
-        elif litellm.LlmProviders.OLLAMA == provider:
-            return litellm.OllamaConfig()
         return litellm.OpenAIGPTConfig()
 
 
