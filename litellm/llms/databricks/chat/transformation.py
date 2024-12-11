@@ -45,21 +45,7 @@ class DatabricksConfig(OpenAIGPTConfig):
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
