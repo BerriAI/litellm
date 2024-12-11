@@ -83,7 +83,7 @@ from litellm.utils import (
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import aleph_alpha, baseten, maritalk, ollama, ollama_chat, petals, vllm
+from .llms import aleph_alpha, baseten, maritalk, ollama_chat, petals
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -150,7 +150,7 @@ from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.embedding_handler im
 from .llms.vertex_ai_and_google_ai_studio.vertex_model_garden.main import (
     VertexAIModelGardenModels,
 )
-from .llms.vllm.completion import handler
+from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
@@ -2594,7 +2594,7 @@ def completion(  # type: ignore # noqa: PLR0915
             response = response
         elif custom_llm_provider == "vllm":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = handler.completion(
+            model_response = vllm_handler.completion(
                 model=model,
                 messages=messages,
                 custom_prompt_dict=custom_prompt_dict,
