@@ -45,7 +45,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from ..prompt_templates.factory import custom_prompt, prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from .chat.gpt_transformation import OpenAIGPTConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 

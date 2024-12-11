@@ -22,7 +22,7 @@ from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (

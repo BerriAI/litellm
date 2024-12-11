@@ -135,7 +135,7 @@ from litellm.types.utils import (
     Usage,
 )
 
-with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
+with resources.open_text("litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json") as f:
     json_data = json.load(f)
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)

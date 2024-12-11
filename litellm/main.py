@@ -57,7 +57,7 @@ from litellm.litellm_core_utils.mock_functions import (
     mock_image_generation,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.common_utils import get_content_from_model_response
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_content_from_model_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
@@ -110,8 +110,8 @@ from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.predibase import PredibaseChatCompletion
-from .llms.prompt_templates.common_utils import get_completion_messages
-from .llms.prompt_templates.factory import (
+from .litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     function_call_prompt,
     map_system_message_pt,

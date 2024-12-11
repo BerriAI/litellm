@@ -24,7 +24,7 @@ from litellm.types.utils import ResponseFormatChunk
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ....anthropic.chat.transformation import AnthropicConfig
-from ....prompt_templates.factory import (
+from litellm.litellm_core_utils.prompt_templates.factory import (
     construct_tool_use_system_prompt,
     contains_tag,
     custom_prompt,
