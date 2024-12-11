@@ -22,7 +22,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
 IAM_AUTH_KEY = "IAM_AUTH"
@@ -190,7 +190,7 @@ class GCSBucketBase(CustomBatchLogger):
         This function is used to get the Vertex instance for the GCS Bucket Logger.
         It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
         """
-        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import (
+        from litellm.llms.vertex_ai.vertex_llm_base import (
             VertexBase,
         )
 

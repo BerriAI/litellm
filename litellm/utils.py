@@ -135,7 +135,9 @@ from litellm.types.utils import (
     Usage,
 )
 
-with resources.open_text("litellm.llms.tokenizers", "anthropic_tokenizer.json") as f:
+with resources.open_text(
+    "litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json"
+) as f:
     json_data = json.load(f)
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
@@ -4086,7 +4088,7 @@ def get_api_base(
         _optional_params.vertex_location is not None
         and _optional_params.vertex_project is not None
     ):
-        from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.main import (
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexPartnerProvider,
             create_vertex_url,
         )
@@ -6237,7 +6239,7 @@ from litellm.llms.base_llm.transformation import BaseConfig
 
 class ProviderConfigManager:
     @staticmethod
-    def get_provider_chat_config( # noqa: PLR0915
+    def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: litellm.LlmProviders
     ) -> BaseConfig:
         """

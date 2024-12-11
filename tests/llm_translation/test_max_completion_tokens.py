@@ -135,10 +135,10 @@ async def test_anthropic_api_max_completion_tokens(model: str):
 
 
 def test_all_model_configs():
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
     )
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
         VertexAILlama3Config,
     )
 
@@ -329,7 +329,7 @@ def test_all_model_configs():
         optional_params={},
     ) == {"max_tokens": 10}
 
-    from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.anthropic.transformation import (
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
         VertexAIAnthropicConfig,
     )
 
@@ -347,7 +347,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexAIConfig,
         GoogleAIStudioGeminiConfig,
         VertexGeminiConfig,

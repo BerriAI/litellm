@@ -17,7 +17,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
-from ...prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import ReplicateError
 from .transformation import ReplicateConfig
 

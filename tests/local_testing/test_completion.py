@@ -22,9 +22,9 @@ import pytest
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -696,7 +696,7 @@ async def test_anthropic_no_content_error():
 
 
 def test_parse_xml_params():
-    from litellm.llms.prompt_templates.factory import parse_xml_params
+    from litellm.litellm_core_utils.prompt_templates.factory import parse_xml_params
 
     ## SCENARIO 1 ## - W/ ARRAY
     xml_content = """<invoke><tool_name>return_list_of_str</tool_name>\n<parameters>\n<value>\n<item>apple</item>\n<item>banana</item>\n<item>orange</item>\n</value>\n</parameters></invoke>"""

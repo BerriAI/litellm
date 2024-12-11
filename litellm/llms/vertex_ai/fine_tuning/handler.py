@@ -12,7 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexLLM,
 )
 from litellm.types.llms.openai import FineTuningJobCreate

@@ -15,10 +15,10 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_ai_non_gemini import (
+from litellm.llms.vertex_ai.vertex_ai_non_gemini import (
     VertexAIError,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import Usage
 

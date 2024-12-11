@@ -96,7 +96,7 @@ class VertexAIPartnerModels(VertexBase):
             )
             from litellm.llms.openai.openai import OpenAIChatCompletion
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
-            from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
             )
         except Exception:

@@ -14,7 +14,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
 
-from ...prompt_templates.common_utils import convert_content_list_to_str
+from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
 from ..chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenAIError
 from .utils import is_tokens_or_list_of_tokens

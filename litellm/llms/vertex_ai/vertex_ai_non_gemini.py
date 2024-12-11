@@ -15,7 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
-from litellm.llms.prompt_templates.factory import (
+from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,

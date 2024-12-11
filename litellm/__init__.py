@@ -1085,7 +1085,7 @@ from .llms.deprecated_providers.palm import (
 from .llms.nlp_cloud.chat.handler import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     GoogleAIStudioGeminiConfig,
     VertexAIConfig,
@@ -1093,19 +1093,19 @@ from .llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gem
 )
 
 
-from .llms.vertex_ai_and_google_ai_studio.vertex_embeddings.transformation import (
+from .llms.vertex_ai.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,
 )
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.anthropic.transformation import (
+from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.llama3.transformation import (
+from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
     VertexAILlama3Config,
 )
-from .llms.vertex_ai_and_google_ai_studio.vertex_ai_partner_models.ai21.transformation import (
+from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
 

@@ -11,7 +11,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderField
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ...prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,
 )
