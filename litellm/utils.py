@@ -3335,15 +3335,16 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        # max_new_tokens=1,temperature=0.9, top_p=0.6
-        if max_tokens is not None:
-            optional_params["max_new_tokens"] = max_tokens
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
+        optional_params = litellm.PetalsConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "deepinfra":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6375,6 +6376,8 @@ class ProviderConfigManager:
             return litellm.PredibaseConfig()
         elif litellm.LlmProviders.TRITON == provider:
             return litellm.TritonConfig()
+        elif litellm.LlmProviders.PETALS == provider:
+            return litellm.PetalsConfig()
         return litellm.OpenAIGPTConfig()
 
 

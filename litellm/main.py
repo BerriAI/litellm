@@ -94,7 +94,7 @@ from .litellm_core_utils.prompt_templates.factory import (
     stringify_json_tool_call_content,
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import baseten, maritalk, ollama_chat, petals
+from .llms import baseten, maritalk, ollama_chat
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -120,6 +120,7 @@ from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
+from .llms.petals.completion import handler as petals_handler
 from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
@@ -2791,7 +2792,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             custom_llm_provider = "petals"
             stream = optional_params.pop("stream", False)
-            model_response = petals.completion(
+            model_response = petals_handler.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2802,6 +2803,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
+                client=client,
             )
             if stream is True:  ## [BETA]
                 # Fake streaming for petals
