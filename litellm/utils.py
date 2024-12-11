@@ -367,8 +367,12 @@ def function_setup(  # noqa: PLR0915
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
                 elif callback in litellm._known_custom_logger_compatible_callbacks:
-                    callback_class = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback,
+                    from litellm.litellm_core_utils.litellm_logging import (
+                        _init_custom_logger_compatible_class,
+                    )
+
+                    callback_class = _init_custom_logger_compatible_class(
+                        callback,  # type: ignore
                         internal_usage_cache=None,
                         llm_router=None,  # type: ignore
                     )
