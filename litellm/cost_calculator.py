@@ -46,7 +46,7 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.openai.cost_calculation import cost_router as openai_cost_router
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
-from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.cost_calculator import (
+from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent

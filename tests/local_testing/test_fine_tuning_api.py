@@ -20,7 +20,7 @@ from test_gcs_bucket import load_vertex_ai_credentials
 
 from litellm import create_fine_tuning_job
 from litellm._logging import verbose_logger
-from litellm.llms.vertex_ai_and_google_ai_studio.fine_tuning.handler import (
+from litellm.llms.vertex_ai.fine_tuning.handler import (
     FineTuningJobCreate,
     VertexFineTuningAPI,
 )

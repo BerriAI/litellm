@@ -22,7 +22,7 @@ import litellm
 from litellm import client
 from litellm.llms.azure.azure import AzureBatchesAPI
 from litellm.llms.openai.openai import OpenAIBatchesAPI
-from litellm.llms.vertex_ai_and_google_ai_studio.batches.handler import (
+from litellm.llms.vertex_ai.batches.handler import (
     VertexAIBatchPrediction,
 )
 from litellm.secret_managers.main import get_secret, get_secret_str

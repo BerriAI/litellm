@@ -1,7 +1,7 @@
 import uuid
 from typing import Any, Dict, Literal
 
-from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
 )
 from litellm.types.llms.openai import Batch, BatchJobStatus, CreateBatchRequest
