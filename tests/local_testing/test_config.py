@@ -296,8 +296,9 @@ def test_provider_config_manager():
     from litellm.llms.base_llm.transformation import BaseConfig
     from litellm.llms.OpenAI.chat.gpt_transformation import OpenAIGPTConfig
 
-    LITELLM_CHAT_PROVIDERS = ["sagemaker_chat", "sagemaker"]
     for provider in LITELLM_CHAT_PROVIDERS:
+        if provider == LlmProviders.TRITON or provider == LlmProviders.PREDIBASE:
+            continue
         assert isinstance(
             ProviderConfigManager.get_provider_chat_config(
                 model="gpt-3.5-turbo", provider=LlmProviders(provider)

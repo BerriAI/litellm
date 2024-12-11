@@ -3504,6 +3504,11 @@ def get_optional_params(  # noqa: PLR0915
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "volcengine":
         supported_params = get_supported_openai_params(
@@ -3647,6 +3652,12 @@ def get_optional_params(  # noqa: PLR0915
         optional_params = litellm.IBMWatsonXAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
     elif custom_llm_provider == "openai":
         supported_params = get_supported_openai_params(
@@ -6277,6 +6288,31 @@ class ProviderConfigManager:
             return litellm.SagemakerChatConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             return litellm.SagemakerConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIConfig()
+        elif litellm.LlmProviders.FRIENDLIAI == provider:
+            return litellm.FriendliaiChatConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXChatConfig()
+        elif litellm.LlmProviders.WATSONX_TEXT == provider:
+            return litellm.IBMWatsonXAIConfig()
+        elif litellm.LlmProviders.EMPOWER == provider:
+            return litellm.EmpowerChatConfig()
+        elif litellm.LlmProviders.GITHUB == provider:
+            return litellm.GithubChatConfig()
+        elif (
+            litellm.LlmProviders.CUSTOM == provider
+            or litellm.LlmProviders.CUSTOM_OPENAI == provider
+            or litellm.LlmProviders.OPENAI_LIKE == provider
+            or litellm.LlmProviders.LITELLM_PROXY == provider
+        ):
+            return litellm.OpenAILikeChatConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMChatConfig()
+        elif litellm.LlmProviders.LM_STUDIO == provider:
+            return litellm.LMStudioChatConfig()
+        elif litellm.LlmProviders.GALADRIEL == provider:
+            return litellm.GaladrielChatConfig()
         return litellm.OpenAIGPTConfig()
 
 
