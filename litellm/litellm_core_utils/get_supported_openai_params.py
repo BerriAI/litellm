@@ -107,7 +107,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         elif request_type == "embeddings":
             return litellm.MistralEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "text-completion-codestral":
-        return litellm.MistralTextCompletionConfig().get_supported_openai_params(
+        return litellm.CodestralTextCompletionConfig().get_supported_openai_params(
             model=model
         )
     elif custom_llm_provider == "sambanova":
@@ -138,7 +138,7 @@ def get_supported_openai_params(  # noqa: PLR0915
                 return litellm.MistralConfig().get_supported_openai_params(model=model)
             if model.startswith("codestral"):
                 return (
-                    litellm.MistralTextCompletionConfig().get_supported_openai_params(
+                    litellm.CodestralTextCompletionConfig().get_supported_openai_params(
                         model=model
                     )
                 )
