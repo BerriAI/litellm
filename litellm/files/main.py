@@ -16,7 +16,7 @@ import httpx
 import litellm
 from litellm import client, get_secret_str
 from litellm.llms.files_apis.azure import AzureOpenAIFilesAPI
-from litellm.llms.OpenAI.openai import FileDeleted, FileObject, OpenAIFilesAPI
+from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai_and_google_ai_studio.files.handler import (
     VertexAIFilesHandler,
 )

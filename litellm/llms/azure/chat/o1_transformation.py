@@ -18,7 +18,7 @@ from typing import Any, List, Optional, Union
 import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
-from ...OpenAI.chat.o1_transformation import OpenAIO1Config
+from ...openai.chat.o1_transformation import OpenAIO1Config
 
 
 class AzureOpenAIO1Config(OpenAIO1Config):
