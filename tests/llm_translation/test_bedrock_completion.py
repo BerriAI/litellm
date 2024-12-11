@@ -2142,14 +2142,9 @@ def test_bedrock_empty_content_handling():
         llm_provider="bedrock"
     )
 
-    # Verify default message was inserted
-    assert any(
-        block.text == "Please continue."
-        for msg in formatted_messages
-        if msg["role"] == "assistant"
-        for block in msg["content"]
-        if hasattr(block, "text")
-    )
+    # Verify assistant message with default text was inserted
+    assert formatted_messages[1]["role"] == "assistant"
+    assert formatted_messages[1]["content"][0].text == "Please continue."
 
 def test_bedrock_custom_continue_message():
     """
@@ -2193,13 +2188,8 @@ def test_bedrock_custom_continue_message():
     )
 
     # Verify custom message was used
-    assert any(
-        block.text == "Custom continue message"
-        for msg in formatted_messages
-        if msg["role"] == "assistant"
-        for block in msg["content"]
-        if hasattr(block, "text")
-    )
+    assert formatted_messages[1]["role"] == "assistant"
+    assert formatted_messages[1]["content"][0].text == "Custom continue message"
 
 def test_bedrock_no_default_message():
     """
@@ -2219,12 +2209,8 @@ def test_bedrock_no_default_message():
         llm_provider="bedrock"
     )
 
-    # Verify empty message was omitted but valid message remains
+    # Verify empty message is present and valid message remains
     assistant_messages = [msg for msg in formatted_messages if msg["role"] == "assistant"]
-    assert len(assistant_messages) == 1  # Only the valid message remains
-    assert any(
-        block.text == "Valid response"
-        for msg in assistant_messages
-        for block in msg["content"]
-        if hasattr(block, "text")
-    )
+    assert len(assistant_messages) == 2  # Both empty and valid messages present
+    assert assistant_messages[0]["content"][0].text == ""  # First message is empty
+    assert assistant_messages[1]["content"][0].text == "Valid response"  # Second message is valid
