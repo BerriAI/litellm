@@ -1420,11 +1420,33 @@ def calculate_tiles_needed(
     return total_tiles
 
 
+def get_image_type(image_data: bytes) -> Union[str, None]:
+    """take an image (really only the first ~100 bytes max are needed)
+    and return 'png' 'gif' 'jpeg' 'webp' 'heic' or None. method added to
+    allow deprecation of imghdr in 3.13"""
+
+    if image_data[0:8] == b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a":
+        return "png"
+
+    if image_data[0:4] == b"GIF8" and image_data[5:6] == b"a":
+        return "gif"
+
+    if image_data[0:3] == b"\xff\xd8\xff":
+        return "jpeg"
+
+    if image_data[4:8] == b"ftyp":
+        return "heic"
+
+    if image_data[0:4] == b"RIFF" and image_data[8:12] == b"WEBP":
+        return "webp"
+
+    return None
+
+
 def get_image_dimensions(data) -> Tuple[int, int]:
     img_data = None
-    from io import BytesIO
-
-    from PIL import Image
+    DEFAULT_WIDTH = 100
+    DEFAULT_HEIGHT = 100
 
     try:
         # Try to open as URL
@@ -1436,9 +1458,48 @@ def get_image_dimensions(data) -> Tuple[int, int]:
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
-    _pil_image = Image.open(BytesIO(img_data))
-    width, height = _pil_image.size
-    return width, height
+    img_type = get_image_type(img_data)
+
+    if img_type == "png":
+        w, h = struct.unpack(">LL", img_data[16:24])
+        return w, h
+    elif img_type == "gif":
+        w, h = struct.unpack("<HH", img_data[6:10])
+        return w, h
+    elif img_type == "jpeg":
+        with io.BytesIO(img_data) as fhandle:
+            fhandle.seek(0)
+            size = 2
+            ftype = 0
+            while not 0xC0 <= ftype <= 0xCF or ftype in (0xC4, 0xC8, 0xCC):
+                fhandle.seek(size, 1)
+                byte = fhandle.read(1)
+                while ord(byte) == 0xFF:
+                    byte = fhandle.read(1)
+                ftype = ord(byte)
+                size = struct.unpack(">H", fhandle.read(2))[0] - 2
+            fhandle.seek(1, 1)
+            h, w = struct.unpack(">HH", fhandle.read(4))
+        return w, h
+    elif img_type == "webp":
+        # For WebP, the dimensions are stored at different offsets depending on the format
+        # Check for VP8X (extended format)
+        if img_data[12:16] == b"VP8X":
+            w = struct.unpack("<I", img_data[24:27] + b"\x00")[0] + 1
+            h = struct.unpack("<I", img_data[27:30] + b"\x00")[0] + 1
+            return w, h
+        # Check for VP8 (lossy format)
+        elif img_data[12:16] == b"VP8 ":
+            w = struct.unpack("<H", img_data[26:28])[0] & 0x3FFF
+            h = struct.unpack("<H", img_data[28:30])[0] & 0x3FFF
+            return w, h
+        # Check for VP8L (lossless format)
+        elif img_data[12:16] == b"VP8L":
+            bits = struct.unpack("<I", img_data[21:25])[0]
+            w = (bits & 0x3FFF) + 1
+            h = ((bits >> 14) & 0x3FFF) + 1
+            return w, h
+    return DEFAULT_WIDTH, DEFAULT_HEIGHT
 
 
 def calculage_img_tokens(

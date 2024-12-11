@@ -16,6 +16,7 @@ from respx import MockRouter
 import litellm
 from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest
+import asyncio
 
 
 def test_openai_prediction_param():
@@ -308,6 +309,7 @@ from litellm.integrations.custom_logger import CustomLogger
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         super().__init__()
+        self.response_cost: float = 0.0
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_object = kwargs.get("standard_logging_object", None)
@@ -315,14 +317,18 @@ class TestCustomLogger(CustomLogger):
             "standard_logging_object: ", json.dumps(standard_logging_object, indent=4)
         )
 
+        self.response_cost = standard_logging_object["response_cost"]
 
-def test_vision_with_image_url():
+
+@pytest.mark.asyncio
+async def test_vision_with_image_url():
     """
     Assert that cost tracking works for .webp images
     """
-    litellm.callbacks = [TestCustomLogger()]
+    _test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [_test_custom_logger]
 
-    response = litellm.completion(
+    response = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[
             {
@@ -342,5 +348,9 @@ def test_vision_with_image_url():
         stream=True,
     )
 
-    for chunk in response:
+    async for chunk in response:
         print(chunk)
+
+    await asyncio.sleep(1)
+
+    assert _test_custom_logger.response_cost > 0
