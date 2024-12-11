@@ -6,6 +6,7 @@ from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.types.utils import ModelResponse
 from litellm.types.llms.openai import AllMessageValues
 from ..common_utils import PredibaseError
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -24,9 +25,7 @@ class PredibaseConfig(BaseConfig):
     best_of: Optional[int] = None
     decoder_input_details: Optional[bool] = None
     details: bool = True  # enables returning logprobs + best of
-    max_new_tokens: int = (
-        256  # openai default - requests hang if max_new_tokens not given
-    )
+    max_new_tokens: int = 256  # openai default - requests hang if max_new_tokens not given
     repetition_penalty: Optional[float] = None
     return_full_text: Optional[bool] = (
         False  # by default don't return the input as part of the output
@@ -78,7 +77,9 @@ class PredibaseConfig(BaseConfig):
             "response_format",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict, model: str, drop_params: bool
+    ) -> dict:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -112,24 +113,57 @@ class PredibaseConfig(BaseConfig):
                 optional_params["response_format"] = value
         return optional_params
 
-    def transform_response(self, model: str, raw_response: Response, model_response: ModelResponse, logging_obj: LiteLLMLoggingObj, request_data: dict, messages: List[AllMessageValues], optional_params: dict, encoding: str, api_key: Optional[str] = None, json_mode: Optional[bool] = None) -> ModelResponse:      
-        raise NotImplementedError("Predibase transformation currently done in handler.py. Need to migrate to this file.")
-    
+    def transform_response(
+        self,
+        model: str,
+        raw_response: Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: str,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        raise NotImplementedError(
+            "Predibase transformation currently done in handler.py. Need to migrate to this file."
+        )
+
     def _transform_messages(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
         return messages
-    
-    def transform_request(self, model: str, messages: List[AllMessageValues], optional_params: dict, litellm_params: dict, headers: dict) -> dict:
-        raise NotImplementedError("Predibase transformation currently done in handler.py. Need to migrate to this file.")
-    
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        raise NotImplementedError(
+            "Predibase transformation currently done in handler.py. Need to migrate to this file."
+        )
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, Headers]
+    ) -> BaseLLMException:
         return PredibaseError(status_code=status_code, message=error_message, headers=headers)
 
-    def validate_environment(self, headers: dict, model: str, messages: List[AllMessageValues], optional_params: dict, api_key: Optional[str] = None) -> dict:
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> dict:
         if api_key is None:
             raise ValueError(
                 "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
             )
-    
+
         default_headers = {
             "content-type": "application/json",
             "Authorization": "Bearer {}".format(api_key),
