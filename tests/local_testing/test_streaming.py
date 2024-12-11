@@ -1931,64 +1931,9 @@ async def test_completion_watsonx_stream():
 #             raise Exception("Empty response received")
 #     except Exception:
 #         pytest.fail(f"error occurred: {traceback.format_exc()}")
-# test_maritalk_streaming()
-# test on openai completion call
-
-
-# # test on ai21 completion call
-def ai21_completion_call():
-    try:
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an all-knowing oracle",
-            },
-            {"role": "user", "content": "What is the meaning of the Universe?"},
-        ]
-        response = completion(
-            model="j2-ultra", messages=messages, stream=True, max_tokens=500
-        )
-        print(f"response: {response}")
-        has_finished = False
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finished = finished
-            complete_response += chunk
-            if finished:
-                break
-        if has_finished is False:
-            raise Exception("finished reason missing from final chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception:
-        pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
 # ai21_completion_call()
-
-
-def ai21_completion_call_bad_key():
-    try:
-        api_key = "bad-key"
-        response = completion(
-            model="j2-ultra", messages=messages, stream=True, api_key=api_key
-        )
-        print(f"response: {response}")
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception:
-        pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
 # ai21_completion_call_bad_key()
@@ -2416,34 +2361,6 @@ def test_completion_openai_with_functions():
 
 # test_completion_openai_with_functions()
 #### Test Async streaming ####
-
-
-# # test on ai21 completion call
-async def ai21_async_completion_call():
-    try:
-        response = completion(
-            model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
-        )
-        print(f"response: {response}")
-        complete_response = ""
-        start_time = time.time()
-        # Change for loop to async for loop
-        idx = 0
-        async for chunk in response:
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-            idx += 1
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except Exception:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
-
-
-# asyncio.run(ai21_async_completion_call())
 
 
 async def completion_call():

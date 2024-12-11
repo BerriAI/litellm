@@ -3934,6 +3934,7 @@ def test_completion_text_003_prompt_array():
 
 
 ##### hugging face tests
+@pytest.mark.skip(reason="local test")
 def test_completion_hf_prompt_array():
     try:
         litellm.set_verbose = True

@@ -52,20 +52,6 @@ from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import AnthropicConfig
 
 
-# makes headers for API call
-def validate_environment(
-    api_key,
-    user_headers,
-    model,
-    messages: List[AllMessageValues],
-    is_vertex_request: bool,
-    tools: Optional[List[AllAnthropicToolsValues]],
-    anthropic_version: Optional[str] = None,
-):
-
-    pass
-
-
 async def make_call(
     client: Optional[AsyncHTTPHandler],
     api_base: str,
@@ -239,7 +225,7 @@ class AnthropicChatCompletion(BaseLLM):
         data: dict,
         optional_params: dict,
         json_mode: bool,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -283,6 +269,7 @@ class AnthropicChatCompletion(BaseLLM):
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )
@@ -460,6 +447,7 @@ class AnthropicChatCompletion(BaseLLM):
             request_data=data,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )

@@ -285,9 +285,7 @@ def get_llm_provider(  # noqa: PLR0915
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
-        elif model in litellm.ai21_models:
-            custom_llm_provider = "ai21"
-        elif model in litellm.ai21_chat_models:
+        elif model in litellm.ai21_chat_models or model in litellm.ai21_models:
             custom_llm_provider = "ai21_chat"
             api_base = (
                 api_base

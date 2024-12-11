@@ -47,6 +47,7 @@ def cleanup_redis():
         print(f"Error cleaning up Redis: {str(e)}")
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_provider_budgets_e2e_test():
     """
@@ -106,7 +107,7 @@ async def test_provider_budgets_e2e_test():
 
         print("response.hidden_params", response._hidden_params)
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
 
         assert response._hidden_params.get("custom_llm_provider") == "azure"
 

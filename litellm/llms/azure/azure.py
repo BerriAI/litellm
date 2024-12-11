@@ -35,36 +35,9 @@ from ...types.llms.openai import (
     RetrieveBatchRequest,
 )
 from ..base import BaseLLM
-from .common_utils import process_azure_headers
+from .common_utils import AzureOpenAIError, process_azure_headers
 
 azure_ad_cache = DualCache()
-
-
-class AzureOpenAIError(Exception):
-    def __init__(
-        self,
-        status_code,
-        message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-        headers: Optional[httpx.Headers] = None,
-    ):
-        self.status_code = status_code
-        self.message = message
-        self.headers = headers
-        if request:
-            self.request = request
-        else:
-            self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        if response:
-            self.response = response
-        else:
-            self.response = httpx.Response(
-                status_code=status_code, request=self.request
-            )
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -412,8 +385,12 @@ class AzureChatCompletion(BaseLLM):
 
                 data = {"model": None, "messages": messages, **optional_params}
             else:
-                data = litellm.AzureOpenAIConfig.transform_request(
-                    model=model, messages=messages, optional_params=optional_params
+                data = litellm.AzureOpenAIConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers or {},
                 )
 
             if acompletion is True:
