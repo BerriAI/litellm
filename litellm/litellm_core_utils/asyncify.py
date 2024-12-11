@@ -1,6 +1,5 @@
-import asyncio
 import functools
-from typing import Any, Awaitable, Callable, Coroutine, Optional
+from typing import Awaitable, Callable, Optional
 
 import anyio
 import anyio.to_thread
