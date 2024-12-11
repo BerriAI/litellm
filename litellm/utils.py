@@ -2076,6 +2076,8 @@ def get_litellm_params(
     user_continue_message=None,
     base_model=None,
     litellm_trace_id=None,
+    hf_model_name: Optional[str] = None,
+    custom_prompt_dict: Optional[dict] = None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2105,6 +2107,8 @@ def get_litellm_params(
         "base_model": base_model
         or _get_base_model_from_litellm_call_metadata(metadata=metadata),
         "litellm_trace_id": litellm_trace_id,
+        "hf_model_name": hf_model_name,
+        "custom_prompt_dict": custom_prompt_dict,
     }
 
     return litellm_params

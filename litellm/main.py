@@ -1075,6 +1075,8 @@ def completion(  # type: ignore # noqa: PLR0915
             user_continue_message=kwargs.get("user_continue_message"),
             base_model=base_model,
             litellm_trace_id=kwargs.get("litellm_trace_id"),
+            hf_model_name=hf_model_name,
+            custom_prompt_dict=custom_prompt_dict,
         )
         logging.update_environment_variables(
             model=model,
