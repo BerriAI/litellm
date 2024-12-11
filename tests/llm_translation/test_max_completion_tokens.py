@@ -204,12 +204,16 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"num_predict": 10}
 
-    from litellm.llms.predibase import PredibaseConfig
+    from litellm.llms.predibase.chat.transformation import PredibaseConfig
 
-    assert "max_completion_tokens" in PredibaseConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in PredibaseConfig().get_supported_openai_params(
+        model="llama3"
+    )
     assert PredibaseConfig().map_openai_params(
-        {"max_completion_tokens": 10},
-        {},
+        model="llama3",
+        non_default_params={"max_completion_tokens": 10},
+        optional_params={},
+        drop_params=False,
     ) == {"max_new_tokens": 10}
 
     from litellm.llms.codestral.completion.transformation import (
