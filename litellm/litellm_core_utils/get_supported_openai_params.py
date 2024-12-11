@@ -172,7 +172,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "nlp_cloud":
         return litellm.NLPCloudConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "petals":
-        return ["max_tokens", "temperature", "top_p", "stream"]
+        return litellm.PetalsConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepinfra":
         return litellm.DeepInfraConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "perplexity":
