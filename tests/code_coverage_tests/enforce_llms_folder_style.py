@@ -8,7 +8,7 @@ sys.path.insert(
 
 import litellm
 
-ALLOWED_FILES_IN_LLMS_FOLDER = ["__init__", "base", "base_llm", "huggingface_llms_metadata", "custom_httpx", "custom_llm"]
+ALLOWED_FILES_IN_LLMS_FOLDER = ["__init__", "base", "base_llm", "custom_httpx", "custom_llm", "deprecated_providers"]
 
 def get_unique_names_from_llms_dir(base_dir="./litellm/llms/"):
     """
