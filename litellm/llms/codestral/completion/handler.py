@@ -18,11 +18,13 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
+from litellm.llms.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.databricks import GenericStreamingChunk
 from litellm.utils import (
     Choices,
@@ -31,9 +33,6 @@ from litellm.utils import (
     TextCompletionResponse,
     Usage,
 )
-
-from litellm.llms.base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class TextCompletionCodestralError(Exception):
@@ -90,6 +89,7 @@ async def make_call(
     )
 
     return completion_stream
+
 
 class CodestralTextCompletion(BaseLLM):
     def __init__(self) -> None:
