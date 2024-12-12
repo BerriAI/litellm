@@ -534,7 +534,7 @@ def add_known_models():
             gemini_models.append(key)
         elif value.get("litellm_provider") == "fireworks_ai":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
-            if "-to-" not in key:
+            if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.append(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
