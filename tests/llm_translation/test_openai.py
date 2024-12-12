@@ -301,20 +301,3 @@ def test_completion_bad_org():
         os.environ["OPENAI_ORGANIZATION"] = _old_org
     else:
         del os.environ["OPENAI_ORGANIZATION"]
-
-
-from litellm.integrations.custom_logger import CustomLogger
-
-
-class TestCustomLogger(CustomLogger):
-    def __init__(self):
-        super().__init__()
-        self.response_cost: float = 0.0
-
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        standard_logging_object = kwargs.get("standard_logging_object", None)
-        print(
-            "standard_logging_object: ", json.dumps(standard_logging_object, indent=4)
-        )
-
-        self.response_cost = standard_logging_object["response_cost"]
