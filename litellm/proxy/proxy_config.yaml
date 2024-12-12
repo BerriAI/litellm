@@ -7,6 +7,5 @@ model_list:
     litellm_params:
       model: anthropic/fake
       api_base: https://exampleanthropicendpoint-production.up.railway.app/
-
 litellm_settings:
   callbacks: ["datadog"] 

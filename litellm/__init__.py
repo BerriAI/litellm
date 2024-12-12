@@ -96,7 +96,7 @@ add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
-## end of callbacks #############
+### end of callbacks #############
 
 email: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
