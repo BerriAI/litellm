@@ -380,6 +380,41 @@ def test_strip_trailing_slash():
     )
 
 
+def test_get_error_information():
+    """Test get_error_information with different types of exceptions"""
+
+    # Test with None
+    result = StandardLoggingPayloadSetup.get_error_information(None)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == ""
+    assert result["error_class"] == ""
+    assert result["llm_provider"] == ""
+
+    # Test with a basic Exception
+    basic_exception = Exception("Test error")
+    result = StandardLoggingPayloadSetup.get_error_information(basic_exception)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == ""
+    assert result["error_class"] == "Exception"
+    assert result["llm_provider"] == ""
+
+    # Test with litellm exception from provider
+    litellm_exception = litellm.exceptions.RateLimitError(
+        message="Test error",
+        llm_provider="openai",
+        model="gpt-3.5-turbo",
+        response=None,
+        litellm_debug_info=None,
+        max_retries=None,
+        num_retries=None,
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "RateLimitError"
+    assert result["llm_provider"] == "openai"
+
+
 def test_get_response_time():
     """Test get_response_time with different streaming scenarios"""
     # Test case 1: Non-streaming response
