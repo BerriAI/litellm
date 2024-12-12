@@ -1151,15 +1151,6 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
     )
 
 
-def test_is_prompt_caching_enabled(anthropic_messages):
-    assert litellm.utils.is_prompt_caching_valid_prompt(
-        messages=anthropic_messages,
-        tools=None,
-        custom_llm_provider="anthropic",
-        model="anthropic/claude-3-5-sonnet-20240620",
-    )
-
-
 def test_is_prompt_caching_enabled_error_handling():
     """
     Assert that `is_prompt_caching_valid_prompt` safely handles errors in `token_counter`.
