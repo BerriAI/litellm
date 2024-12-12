@@ -49,6 +49,7 @@ from litellm.types.utils import (
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -2729,6 +2730,21 @@ class StandardLoggingPayloadSetup:
             return api_base.rstrip("/")
         return api_base
 
+    @staticmethod
+    def get_error_information(
+        original_exception: Optional[Exception],
+    ) -> StandardLoggingPayloadErrorInformation:
+        error_status: str = str(getattr(original_exception, "status_code", ""))
+        error_class: str = (
+            str(original_exception.__class__.__name__) if original_exception else ""
+        )
+        _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
+        return StandardLoggingPayloadErrorInformation(
+            error_code=error_status,
+            error_class=error_class,
+            llm_provider=_llm_provider_in_exception,
+        )
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2833,6 +2849,10 @@ def get_standard_logging_object_payload(
         )
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+        )
+
         ## get final response object ##
         final_response_obj = StandardLoggingPayloadSetup.get_final_response_obj(
             response_obj=response_obj,
@@ -2872,6 +2892,7 @@ def get_standard_logging_object_payload(
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
+            error_information=error_information,
             response_cost_failure_debug_info=kwargs.get(
                 "response_cost_failure_debug_information"
             ),
