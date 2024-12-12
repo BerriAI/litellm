@@ -329,7 +329,6 @@ def test_get_final_response_obj():
         litellm.turn_off_message_logging = False
 
 
-
 def test_truncate_standard_logging_payload():
     """
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
@@ -368,6 +367,7 @@ def test_truncate_standard_logging_payload():
     # assert len of error_str is less than 10_500
     assert len(str(standard_logging_payload["error_str"])) < 10_500
 
+
 def test_strip_trailing_slash():
     common_api_base = "https://api.test.com"
     assert (
@@ -379,3 +379,37 @@ def test_strip_trailing_slash():
         == common_api_base
     )
 
+
+def test_get_error_information():
+    """Test get_error_information with different types of exceptions"""
+
+    # Test with None
+    result = StandardLoggingPayloadSetup.get_error_information(None)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == ""
+    assert result["error_class"] == ""
+    assert result["llm_provider"] == ""
+
+    # Test with a basic Exception
+    basic_exception = Exception("Test error")
+    result = StandardLoggingPayloadSetup.get_error_information(basic_exception)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == ""
+    assert result["error_class"] == "Exception"
+    assert result["llm_provider"] == ""
+
+    # Test with litellm exception from provider
+    litellm_exception = litellm.exceptions.RateLimitError(
+        message="Test error",
+        llm_provider="openai",
+        model="gpt-3.5-turbo",
+        response=None,
+        litellm_debug_info=None,
+        max_retries=None,
+        num_retries=None,
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "RateLimitError"
+    assert result["llm_provider"] == "openai"
