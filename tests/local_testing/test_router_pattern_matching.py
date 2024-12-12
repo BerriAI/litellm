@@ -133,7 +133,7 @@ def test_route_with_multiple_matching_patterns():
     router.add_pattern("openai/*", deployment1.to_json(exclude_none=True))
     router.add_pattern("openai/gpt-*", deployment2.to_json(exclude_none=True))
     assert router.route("openai/gpt-3.5-turbo") == [
-        deployment1.to_json(exclude_none=True)
+        deployment2.to_json(exclude_none=True)
     ]
 
 
@@ -265,3 +265,29 @@ def test_pattern_matching_router_with_default_wildcard():
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
     )
+
+
+def test_pattern_matching_router_with_default_wildcard_and_model_wildcard():
+    """
+    Match to more specific pattern first.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "*"},
+                "model_info": {"access_groups": ["default"]},
+            },
+            {
+                "model_name": "llmengine/*",
+                "litellm_params": {"model": "openai/*"},
+            },
+        ]
+    )
+
+    assert len(router.pattern_router.patterns) > 0
+
+    pattern_router = router.pattern_router
+    deployments = pattern_router.route("llmengine/gpt-3.5-turbo")
+    assert len(deployments) == 1
+    assert deployments[0]["model_name"] == "llmengine/*"
