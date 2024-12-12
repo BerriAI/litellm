@@ -370,7 +370,7 @@ def test_gpt_4o_token_counter():
 )
 def test_img_url_token_counter(img_url):
 
-    from litellm.utils import get_image_dimensions
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     width, height = get_image_dimensions(data=img_url)
 
