@@ -2742,7 +2742,7 @@ class StandardLoggingPayloadSetup:
         Args:
             start_time_float: float - start time of the LLM call
             end_time_float: float - end time of the LLM call
-            completion_start_time_float: float - time the first chunk of the LLM response is returned (for streaming responses)
+            completion_start_time_float: float - time to first token of the LLM response (for streaming responses)
             stream: bool - True when a stream response is returned
 
         Returns:
