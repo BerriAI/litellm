@@ -1545,6 +1545,12 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: Optional[bool]
 
 
+class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
+    error_code: Optional[str]
+    error_class: Optional[str]
+    llm_provider: Optional[str]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
@@ -1560,9 +1566,10 @@ class StandardLoggingPayload(TypedDict):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    startTime: float
+    startTime: float  # Note: making this camelCase was a mistake, everything should be snake case
     endTime: float
     completionStartTime: float
+    response_time: float
     model_map_information: StandardLoggingModelInformation
     model: str
     model_id: Optional[str]
@@ -1578,6 +1585,7 @@ class StandardLoggingPayload(TypedDict):
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
 

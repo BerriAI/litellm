@@ -113,89 +113,7 @@ Removes any field with `user_api_key_*` from metadata.
 
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
-```python
-
-class StandardLoggingPayload(TypedDict):
-    id: str
-    trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
-    call_type: str
-    response_cost: float
-    response_cost_failure_debug_info: Optional[
-        StandardLoggingModelCostFailureDebugInformation
-    ]
-    status: StandardLoggingPayloadStatus
-    total_tokens: int
-    prompt_tokens: int
-    completion_tokens: int
-    startTime: float
-    endTime: float
-    completionStartTime: float
-    model_map_information: StandardLoggingModelInformation
-    model: str
-    model_id: Optional[str]
-    model_group: Optional[str]
-    api_base: str
-    metadata: StandardLoggingMetadata
-    cache_hit: Optional[bool]
-    cache_key: Optional[str]
-    saved_cache_cost: float
-    request_tags: list
-    end_user: Optional[str]
-    requester_ip_address: Optional[str]
-    messages: Optional[Union[str, list, dict]]
-    response: Optional[Union[str, list, dict]]
-    error_str: Optional[str]
-    model_parameters: dict
-    hidden_params: StandardLoggingHiddenParams
-
-class StandardLoggingHiddenParams(TypedDict):
-    model_id: Optional[str]
-    cache_key: Optional[str]
-    api_base: Optional[str]
-    response_cost: Optional[str]
-    additional_headers: Optional[StandardLoggingAdditionalHeaders]
-
-class StandardLoggingAdditionalHeaders(TypedDict, total=False):
-    x_ratelimit_limit_requests: int
-    x_ratelimit_limit_tokens: int
-    x_ratelimit_remaining_requests: int
-    x_ratelimit_remaining_tokens: int
-
-class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
-    """
-    Specific metadata k,v pairs logged to integration for easier cost tracking
-    """
-
-    spend_logs_metadata: Optional[
-        dict
-    ]  # special param to log k,v pairs to spendlogs for a call
-    requester_ip_address: Optional[str]
-    requester_metadata: Optional[dict]
-
-class StandardLoggingModelInformation(TypedDict):
-    model_map_key: str
-    model_map_value: Optional[ModelInfo]
-  
-
-StandardLoggingPayloadStatus = Literal["success", "failure"]
-
-class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
-    """
-    Debug information, if cost tracking fails.
-
-    Avoid logging sensitive information like response or optional params
-    """
-
-    error_str: Required[str]
-    traceback_str: Required[str]
-    model: str
-    cache_hit: Optional[bool]
-    custom_llm_provider: Optional[str]
-    base_model: Optional[str]
-    call_type: str
-    custom_pricing: Optional[bool]
-```
-
+[👉 **Standard Logging Payload Specification**](./logging_spec)
 
 ## Langfuse
 
@@ -996,6 +914,97 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Your logs should be available on the specified s3 Bucket
 
+## DataDog
+
+LiteLLM Supports logging to the following Datdog Integrations:
+- `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
+- `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+
+<Tabs>
+<TabItem value="datadog" label="Datadog Logs">
+
+We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will log all successfull LLM calls to DataDog
+
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog"] # logs llm success + failure logs on datadog
+  service_callback: ["datadog"] # logs redis, postgres failures on datadog
+```
+
+</TabItem>
+<TabItem value="datadog_llm_observability" label="Datadog LLM Observability">
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
+```
+
+</TabItem>
+</Tabs>
+
+**Step 2**: Set Required env variables for datadog
+
+```shell
+DD_API_KEY="5f2d0f310***********" # your datadog API Key
+DD_SITE="us5.datadoghq.com"       # your datadog base url
+DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "your-custom-metadata": "custom-field",
+    }
+}'
+```
+
+Expected output on Datadog
+
+<Image img={require('../../img/dd_small1.png')} />
+
+### Set DD variables (`DD_SERVICE` etc)
+
+LiteLLM supports customizing the following Datadog environment variables
+
+| Environment Variable | Description | Default Value | Required |
+|---------------------|-------------|---------------|----------|
+| `DD_API_KEY` | Your Datadog API key for authentication | None | ✅ Yes |
+| `DD_SITE` | Your Datadog site (e.g., "us5.datadoghq.com") | None | ✅ Yes |
+| `DD_ENV` | Environment tag for your logs (e.g., "production", "staging") | "unknown" | ❌ No |
+| `DD_SERVICE` | Service name for your logs | "litellm-server" | ❌ No |
+| `DD_SOURCE` | Source name for your logs | "litellm" | ❌ No |
+| `DD_VERSION` | Version tag for your logs | "unknown" | ❌ No |
+| `HOSTNAME` | Hostname tag for your logs | "" | ❌ No |
+| `POD_NAME` | Pod name tag (useful for Kubernetes deployments) | "unknown" | ❌ No |
 
 ## Custom Callback Class [Async]
 
@@ -1636,83 +1645,6 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 <Image img={require('../../img/openmeter_img_2.png')} />
-
-## DataDog
-
-LiteLLM Supports logging to the following Datdog Integrations:
-- `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
-- `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
-
-<Tabs>
-<TabItem value="datadog" label="Datadog Logs">
-
-We will use the `--config` to set `litellm.success_callback = ["datadog"]` this will log all successfull LLM calls to DataDog
-
-**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
-
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  success_callback: ["datadog"] # logs llm success logs on datadog
-  service_callback: ["datadog"] # logs redis, postgres failures on datadog
-```
-
-</TabItem>
-<TabItem value="datadog_llm_observability" label="Datadog LLM Observability">
-
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
-```
-
-</TabItem>
-</Tabs>
-
-**Step 2**: Set Required env variables for datadog
-
-```shell
-DD_API_KEY="5f2d0f310***********" # your datadog API Key
-DD_SITE="us5.datadoghq.com"       # your datadog base url
-DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
-```
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-
-```shell
-litellm --config config.yaml --debug
-```
-
-Test Request
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {
-        "your-custom-metadata": "custom-field",
-    }
-}'
-```
-
-Expected output on Datadog
-
-<Image img={require('../../img/dd_small1.png')} />
 
 ## DynamoDB
 
