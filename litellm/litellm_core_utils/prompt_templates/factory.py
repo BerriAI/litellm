@@ -2688,7 +2688,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _parts.append(_part)  # type: ignore
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
-                                element, block_type="content_block"
+                                message_block=element, block_type="content_block"
                             )
                         )
                         if _cache_point_block is not None:
