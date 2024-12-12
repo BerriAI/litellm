@@ -1560,9 +1560,10 @@ class StandardLoggingPayload(TypedDict):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    startTime: float
+    startTime: float  # Note: making this camelCase was a mistake, everything should be snake case
     endTime: float
     completionStartTime: float
+    response_time: float
     model_map_information: StandardLoggingModelInformation
     model: str
     model_id: Optional[str]

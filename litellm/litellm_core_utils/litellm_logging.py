@@ -2729,6 +2729,18 @@ class StandardLoggingPayloadSetup:
             return api_base.rstrip("/")
         return api_base
 
+    @staticmethod
+    def get_response_time(
+        start_time_float: float,
+        end_time_float: float,
+        completion_start_time_float: float,
+        stream: bool,
+    ) -> float:
+        if stream is True:
+            return completion_start_time_float - start_time_float
+        else:
+            return end_time_float - start_time_float
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2802,6 +2814,12 @@ def get_standard_logging_object_payload(
                 completion_start_time=completion_start_time,
             )
         )
+        response_time = StandardLoggingPayloadSetup.get_response_time(
+            start_time_float=start_time_float,
+            end_time_float=end_time_float,
+            completion_start_time_float=completion_start_time_float,
+            stream=kwargs.get("stream", False),
+        )
         # clean up litellm hidden params
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
             hidden_params
@@ -2850,6 +2868,7 @@ def get_standard_logging_object_payload(
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
+            responseTime=response_time,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
