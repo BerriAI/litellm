@@ -112,16 +112,17 @@ async def test_sagemaker_embedding_health_check():
 
 
 @pytest.mark.asyncio
-async def test_fireworks_health_check():
+async def test_groq_health_check():
     """
     This should not fail
 
     ensure that provider wildcard model passes health check
     """
+    litellm.set_verbose = True
     response = await litellm.ahealth_check(
         model_params={
-            "api_key": os.environ.get("FIREWORKS_AI_API_KEY"),
-            "model": "fireworks_ai/*",
+            "api_key": os.environ.get("GROQ_API_KEY"),
+            "model": "groq/*",
             "messages": [{"role": "user", "content": "What's 1 + 1?"}],
         },
         mode=None,

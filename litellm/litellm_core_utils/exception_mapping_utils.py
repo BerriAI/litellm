@@ -189,7 +189,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             #################### Start of Provider Exception mapping ####################
             ################################################################################
 
-            if "Request Timeout Error" in error_str or "Request timed out" in error_str:
+            if (
+                "Request Timeout Error" in error_str
+                or "Request timed out" in error_str
+                or "Timed out generating response" in error_str
+            ):
                 exception_mapping_worked = True
                 raise Timeout(
                     message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
