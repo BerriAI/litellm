@@ -56,6 +56,14 @@ class BaseLLMChatTest(ABC):
     Abstract base test class that enforces a common test across all test classes.
     """
 
+    @property
+    def completion_function(self):
+        return litellm.completion
+
+    @property
+    def async_completion_function(self):
+        return litellm.acompletion
+
     @abstractmethod
     def get_base_completion_call_args(self) -> dict:
         """Must return the base completion call args"""
@@ -71,7 +79,7 @@ class BaseLLMChatTest(ABC):
             }
         ]
         try:
-            response = litellm.completion(
+            response = self.completion_function(
                 **base_completion_call_args,
                 messages=messages,
             )
@@ -116,7 +124,7 @@ class BaseLLMChatTest(ABC):
         if not supports_pdf_input(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
 
-        response = litellm.completion(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=image_messages,
         )
@@ -128,7 +136,9 @@ class BaseLLMChatTest(ABC):
         messages = [
             {"role": "user", "content": "Hello", "name": "test_name"},
         ]
-        response = litellm.completion(**base_completion_call_args, messages=messages)
+        response = self.completion_function(
+            **base_completion_call_args, messages=messages
+        )
         assert response is not None
 
     def test_multilingual_requests(self):
@@ -138,7 +148,7 @@ class BaseLLMChatTest(ABC):
         Context: https://github.com/openai/openai-python/issues/1921
         """
         base_completion_call_args = self.get_base_completion_call_args()
-        response = litellm.completion(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
         )
@@ -171,7 +181,7 @@ class BaseLLMChatTest(ABC):
             },
         ]
 
-        response = litellm.completion(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=messages,
             response_format=response_format,
@@ -200,7 +210,7 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model does not support response schema")
 
         try:
-            res = litellm.completion(
+            res = self.completion_function(
                 **base_completion_call_args,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant."},
@@ -240,7 +250,7 @@ class BaseLLMChatTest(ABC):
         ]
 
         try:
-            response = litellm.completion(
+            response = self.completion_function(
                 **base_completion_call_args,
                 messages=messages,
                 response_format={"type": "json_object"},
@@ -282,7 +292,9 @@ class BaseLLMChatTest(ABC):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_image_url(self):
+    @pytest.mark.parametrize("detail", [None, "low", "high"])
+    @pytest.mark.asyncio
+    async def test_image_url(self, detail):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
 
@@ -308,7 +320,25 @@ class BaseLLMChatTest(ABC):
             }
         ]
 
-        response = litellm.completion(**base_completion_call_args, messages=messages)
+        if detail is not None:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                                "detail": detail,
+                            },
+                        },
+                    ],
+                }
+            ]
+        response = await self.async_completion_function(
+            **base_completion_call_args, messages=messages
+        )
         assert response is not None
 
     def test_prompt_caching(self):
@@ -325,7 +355,7 @@ class BaseLLMChatTest(ABC):
 
         try:
             for _ in range(2):
-                response = litellm.completion(
+                response = self.completion_function(
                     **base_completion_call_args,
                     messages=[
                         # System Message
@@ -407,7 +437,7 @@ class BaseLLMChatTest(ABC):
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm.set_verbose = True
-        response = litellm.completion(
+        response = self.completion_function(
             **self.get_base_completion_call_args(),
             messages=[{"role": "user", "content": "Hello, how are you?"}],
         )
