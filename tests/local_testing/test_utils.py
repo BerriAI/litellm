@@ -1218,12 +1218,14 @@ def test_is_prompt_caching_enabled_return_default_image_dimensions():
 def test_token_counter_with_image_url_with_detail_high():
     """
     Assert that token_counter does not make a GET request to the image url when `use_default_image_token_count=True`
+
+    PROD TEST this is importat - Can impact latency very badly
     """
-    from litellm.constants import DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
-    from litellm.litellm_core_utils.token_counter import (
-        resize_image_high_res,
-        calculate_tiles_needed,
-    )
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+    from litellm._logging import verbose_logger
+    import logging
+
+    verbose_logger.setLevel(logging.DEBUG)
 
     _tokens = litellm.utils.token_counter(
         messages=[
@@ -1244,10 +1246,4 @@ def test_token_counter_with_image_url_with_detail_high():
         use_default_image_token_count=True,
     )
     print("tokens", _tokens)
-    base_tokens = 85
-    tiles_needed_high_res = calculate_tiles_needed(
-        resized_width=DEFAULT_IMAGE_WIDTH, resized_height=DEFAULT_IMAGE_HEIGHT
-    )
-    tile_tokens = (base_tokens * 2) * tiles_needed_high_res
-    total_tokens = base_tokens + tile_tokens
-    assert _tokens == total_tokens
+    assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
