@@ -7,7 +7,11 @@ from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger
-from litellm.constants import DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
+from litellm.constants import (
+    DEFAULT_IMAGE_HEIGHT,
+    DEFAULT_IMAGE_TOKEN_COUNT,
+    DEFAULT_IMAGE_WIDTH,
+)
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 
@@ -161,27 +165,17 @@ def get_image_type(image_data: bytes) -> Union[str, None]:
 
 def get_image_dimensions(
     data: str,
-    use_default_image_token_count: bool = False,
 ) -> Tuple[int, int]:
     """
     Async Function to get the dimensions of an image from a URL or base64 encoded string.
 
     Args:
         data (str): The URL or base64 encoded string of the image.
-        use_default_image_token_count (bool): When True, will NOT make a GET request to the image URL and instead return the default image dimensions.
 
     Returns:
         Tuple[int, int]: The width and height of the image.
     """
     img_data = None
-    if use_default_image_token_count:
-        verbose_logger.debug(
-            "Using default image dimensions: {}x{}".format(
-                DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
-            )
-        )
-        return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
-
     try:
         # Try to open as URL
         client = _get_httpx_client()
@@ -233,6 +227,8 @@ def get_image_dimensions(
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
+
+    # return sensible default image dimensions if unable to get dimensions
     return DEFAULT_IMAGE_WIDTH, DEFAULT_IMAGE_HEIGHT
 
 
@@ -254,13 +250,17 @@ def calculate_img_tokens(
     Returns:
         int: The number of tokens for the image.
     """
+    if use_default_image_token_count:
+        verbose_logger.debug(
+            "Using default image token count: {}".format(DEFAULT_IMAGE_TOKEN_COUNT)
+        )
+        return DEFAULT_IMAGE_TOKEN_COUNT
     if mode == "low" or mode == "auto":
         return base_tokens
     elif mode == "high":
         # Run the async function using the helper
         width, height = get_image_dimensions(
             data=data,
-            use_default_image_token_count=use_default_image_token_count,
         )
         resized_width, resized_height = resize_image_high_res(
             width=width, height=height

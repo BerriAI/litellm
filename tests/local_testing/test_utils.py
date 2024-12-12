@@ -1213,3 +1213,41 @@ def test_is_prompt_caching_enabled_return_default_image_dimensions():
         args_to_mock_token_counter = mock_token_counter.call_args[1]
         print("args_to_mock", args_to_mock_token_counter)
         assert args_to_mock_token_counter["use_default_image_token_count"] is True
+
+
+def test_token_counter_with_image_url_with_detail_high():
+    """
+    Assert that token_counter does not make a GET request to the image url when `use_default_image_token_count=True`
+    """
+    from litellm.constants import DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH
+    from litellm.litellm_core_utils.token_counter import (
+        resize_image_high_res,
+        calculate_tiles_needed,
+    )
+
+    _tokens = litellm.utils.token_counter(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            }
+        ],
+        model="gpt-4o-mini",
+        use_default_image_token_count=True,
+    )
+    print("tokens", _tokens)
+    base_tokens = 85
+    tiles_needed_high_res = calculate_tiles_needed(
+        resized_width=DEFAULT_IMAGE_WIDTH, resized_height=DEFAULT_IMAGE_HEIGHT
+    )
+    tile_tokens = (base_tokens * 2) * tiles_needed_high_res
+    total_tokens = base_tokens + tile_tokens
+    assert _tokens == total_tokens
