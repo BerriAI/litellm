@@ -1262,7 +1262,9 @@ def test_bedrock_get_base_model(model, expected_base_model):
     assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
 
 
-from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+)
 
 
 def test_bedrock_converse_translation_tool_message():
@@ -1603,7 +1605,9 @@ def test_bedrock_completion_test_3():
     Check if content in tool result is formatted correctly
     """
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     messages = [
         {
@@ -2106,3 +2110,14 @@ class TestBedrockRerank(BaseLLMRerankTest):
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         }
+
+
+@pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
+def test_bedrock_nova_topk(top_k_param):
+    litellm.set_verbose = True
+    data = {
+        "model": "bedrock/us.amazon.nova-pro-v1:0",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        top_k_param: 10,
+    }
+    litellm.completion(**data)
