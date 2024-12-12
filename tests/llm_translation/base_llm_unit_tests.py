@@ -272,7 +272,7 @@ class BaseLLMChatTest(ABC):
         print(response)
 
         content = ""
-        for chunk in response:
+        async for chunk in response:
             content += chunk.choices[0].delta.content or ""
 
         print(f"content={content}<END>")

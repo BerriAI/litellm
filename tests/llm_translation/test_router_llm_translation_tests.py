@@ -1,3 +1,7 @@
+"""
+Uses litellm.Router, ensures router.completion and router.acompletion pass BaseLLMChatTest
+"""
+
 import os
 import sys
 
@@ -12,7 +16,6 @@ import logging
 
 
 class TestRouterLLMTranslation(BaseLLMChatTest):
-    verbose_logger.setLevel(logging.DEBUG)
     verbose_router_logger.setLevel(logging.DEBUG)
 
     litellm_router = Router(
