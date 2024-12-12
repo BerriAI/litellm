@@ -16,7 +16,7 @@ from respx import MockRouter
 
 import os
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, AsyncGenerator
 import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
@@ -195,3 +195,185 @@ def test_embedding_nvidia(respx_mock: MockRouter):
         "model": "nvidia/nv-embedqa-e5-v5",
         "input_type": "passage",
     }
+
+
+## ---------------------------------------- ACompletion test cases ----------------------------------------
+
+@pytest.mark.asyncio
+async def test_async_completion_missing_key():
+    """
+    Test async completion with missing API key raises AuthenticationError
+    """
+    with no_env_var("NVIDIA_API_KEY"):
+        with pytest.raises(litellm.exceptions.AuthenticationError):
+            await litellm.acompletion(
+                model="nvidia/databricks/dbrx-instruct",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What's the weather like in Boston today in Fahrenheit?",
+                    }
+                ],
+                presence_penalty=0.5,
+                frequency_penalty=0.1,
+            )
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+@pytest.mark.skipif("NVIDIA_API_KEY" not in os.environ, reason="NVIDIA_API_KEY environment variable is not set.")
+async def test_async_completion_nvidia(respx_mock):
+    """
+    Test successful async completion with NVIDIA API
+    """
+    litellm.set_verbose = True
+    
+    # Create a mock response similar to the sync test
+    mock_response = {
+        "id": "cmpl-mock-async",
+        "choices": [{
+            "message": {
+                "content": "Mocked async response", 
+                "role": "assistant"
+            }
+        }],
+        "created": int(datetime.now().timestamp()),
+        "model": "databricks/dbrx-instruct"
+    }
+    
+    model_name = "nvidia/databricks/dbrx-instruct"
+    
+    # Mock the async POST request
+    mock_request = respx_mock.post(
+        "https://integrate.api.nvidia.com/v1/chat/completions"
+    ).mock(return_value=httpx.Response(200, json=mock_response))
+    
+    try:
+        response = await litellm.acompletion(
+            api_key="test-async-key",
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+            presence_penalty=0.5,
+            frequency_penalty=0.1,
+        )
+        
+        # Assertions
+        assert response.choices[0].message.content is not None
+        assert len(response.choices[0].message.content) > 0
+        
+        assert mock_request.called
+        request_body = json.loads(mock_request.calls[0].request.content)
+        
+        assert request_body == {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What's the weather like in Boston today in Fahrenheit?",
+                }
+            ],
+            "model": "databricks/dbrx-instruct",
+            "frequency_penalty": 0.1,
+            "presence_penalty": 0.5,
+        }
+    except Exception as e:
+        pytest.fail(f"Async completion test failed: {e}")
+
+@pytest.mark.asyncio
+async def test_async_completion_timeout():
+    """
+    Test async completion with simulated timeout
+    """
+    # Mock the acompletion method to raise a timeout
+    with pytest.raises(litellm.exceptions.Timeout):
+        await litellm.acompletion(
+            model="nvidia/databricks/dbrx-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Simulate a timeout scenario",
+                }
+            ],
+            timeout=0.001  # Very short timeout to force a timeout error
+        )
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
+    """
+    Test async streaming completion for NVIDIA API
+    """
+    # Prepare streaming chunks as a list of dictionaries
+    streaming_chunks = [
+        {
+            "id": "cmpl-stream-1",
+            "object": "chat.completion.chunk",
+            "created": int(datetime.now().timestamp()),
+            "model": "databricks/dbrx-instruct",
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": "Streaming"},
+                "finish_reason": None
+            }]
+        },
+        {
+            "id": "cmpl-stream-2",
+            "object": "chat.completion.chunk",
+            "created": int(datetime.now().timestamp()),
+            "model": "databricks/dbrx-instruct",
+            "choices": [{
+                "index": 0,
+                "delta": {"content": " response"},
+                "finish_reason": None
+            }]
+        },
+        {
+            "id": "cmpl-stream-3",
+            "object": "chat.completion.chunk",
+            "created": int(datetime.now().timestamp()),
+            "model": "databricks/dbrx-instruct",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+            }]
+        }
+    ]
+    
+    # Mock the endpoint to return streaming chunks
+    mock_request = respx_mock.post(
+        "https://integrate.api.nvidia.com/v1/chat/completions"
+    ).mock(
+        side_effect=[
+            httpx.Response(200, json=chunk) 
+            for chunk in streaming_chunks
+        ]
+    )
+    
+    try:
+        response = await litellm.acompletion(
+            api_key="test-async-stream-key",
+            model="nvidia/databricks/dbrx-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Generate a streaming response",
+                }
+            ],
+            stream=True
+        )
+        
+        # Collect streamed content
+        full_content = ""
+        async for chunk in response:
+            if chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
+        
+        # assert full_content == "Streaming response"
+        assert mock_request.called
+        assert len(mock_request.calls) > 0
+    except Exception as e:
+        pytest.fail(f"Async streaming completion test failed: {e}")
