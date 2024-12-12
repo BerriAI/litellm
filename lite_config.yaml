@@ -1,0 +1,31 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params: 
+      model: together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1
+      api_key: os.environ/TOGETHER_API_KEY
+      rpm: 3
+      timeout: 30
+      stream_timeout: 30
+      temperature: 0.7
+      max_tokens: 100
+      top_p: 0.9
+
+litellm_settings:
+  drop_params: True
+  num_retries: 5
+  request_timeout: 30
+  telemetry: False
+  default_headers: 
+    "Content-Type": "application/json"
+
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_pre_call_checks: false
+  retry_on_failure: true
+  timeout: 30
+
+general_settings: 
+  master_key: sk-1234
+  store_model_in_db: True
+  fallback_strategy: "retry"
+  port: 4000

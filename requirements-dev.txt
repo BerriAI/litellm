@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest
+pytest-asyncio
+pytest-cov        # 用于测试覆盖率报告
+black             # 代码格式化
+flake8            # 代码检查
+mypy              # 类型检查

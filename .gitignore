@@ -1,4 +1,5 @@
-.venv
+# Python virtual environment
+venv/
 .env
 .newenv
 newenv/*
@@ -66,3 +67,8 @@ litellm/tests/langfuse.log
 litellm/tests/langfuse.log
 litellm/proxy/google-cloud-sdk/*
 tests/llm_translation/log.txt
+
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
