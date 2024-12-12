@@ -104,7 +104,6 @@ class PatternMatchRouter:
                 if filtered_model_names is not None
                 else []
             )
-
             for pattern, llm_deployments in self.patterns.items():
                 if (
                     filtered_model_names is not None
