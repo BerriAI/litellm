@@ -451,7 +451,7 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_tags():
-        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')}"
+        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')},HOSTNAME:{DataDogLogger._get_datadog_hostname()},POD_NAME:{os.getenv('POD_NAME', 'unknown')}"
 
     @staticmethod
     def _get_datadog_source():
@@ -463,8 +463,12 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_hostname():
-        return ""
+        return os.getenv("HOSTNAME", "")
 
     @staticmethod
     def _get_datadog_env():
         return os.getenv("DD_ENV", "unknown")
+
+    @staticmethod
+    def _get_datadog_pod_name():
+        return os.getenv("POD_NAME", "unknown")
