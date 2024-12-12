@@ -7265,6 +7265,19 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."}
     },
+    "databricks/meta-llama-3.3-70b-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.00000100002,
+        "input_dbu_cost_per_token": 0.000014286,
+        "output_cost_per_token": 0.00000299999,
+        "output_dbu_cost_per_token": 0.000042857,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."}
+    },
     "databricks/databricks-dbrx-instruct": {
         "max_tokens": 32768,
         "max_input_tokens": 32768,
