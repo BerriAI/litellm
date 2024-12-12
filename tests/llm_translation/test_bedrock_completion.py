@@ -1629,7 +1629,7 @@ def test_bedrock_completion_test_3():
                 )
             ],
             function_call=None,
-        ),
+        ).model_dump(),
         {
             "tool_call_id": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
             "role": "tool",
@@ -2112,87 +2112,71 @@ class TestBedrockRerank(BaseLLMRerankTest):
         }
 
 
-def test_bedrock_empty_content_handling():
+@pytest.mark.parametrize(
+    "messages, continue_message_index",
+    [
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": ""}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Hello!"}]},
+            ],
+            0,
+        ),
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+            ],
+            1,
+        ),
+    ],
+)
+def test_bedrock_empty_content_handling(messages, continue_message_index):
     """
     Test that empty content in messages is handled correctly with default messages
     """
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Hello!"
-                }
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": ""
-                }
-            ]
-        }
-    ]
-
     # Test with default behavior (modify_params=True)
     litellm.modify_params = True
     formatted_messages = _bedrock_converse_messages_pt(
         messages=messages,
         model="anthropic.claude-3-sonnet-20240229-v1:0",
-        llm_provider="bedrock"
+        llm_provider="bedrock",
+    )
+    print(formatted_messages)
+    # Verify assistant message with default text was inserted
+    assert formatted_messages[0]["role"] == "user"
+    assert formatted_messages[1]["role"] == "assistant"
+    assert (
+        formatted_messages[continue_message_index]["content"][0]["text"]
+        == "Please continue."
     )
 
-    # Verify assistant message with default text was inserted
-    assert formatted_messages[1]["role"] == "assistant"
-    assert formatted_messages[1]["content"][0].text == "Please continue."
 
 def test_bedrock_custom_continue_message():
     """
     Test that custom continue messages are used when provided
     """
     messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Hello!"
-                }
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "   "
-                }
-            ]
-        }
+        {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
     ]
 
     custom_continue = {
         "role": "assistant",
-        "content": [
-            {
-                "text": "Custom continue message"
-            }
-        ]
+        "content": [{"text": "Custom continue message", "type": "text"}],
     }
 
     formatted_messages = _bedrock_converse_messages_pt(
         messages=messages,
         model="anthropic.claude-3-sonnet-20240229-v1:0",
         llm_provider="bedrock",
-        assistant_continue_message=custom_continue
+        assistant_continue_message=custom_continue,
     )
 
     # Verify custom message was used
     assert formatted_messages[1]["role"] == "assistant"
-    assert formatted_messages[1]["content"][0].text == "Custom continue message"
+    assert formatted_messages[1]["content"][0]["text"] == "Custom continue message"
+
 
 def test_bedrock_no_default_message():
     """
@@ -2202,21 +2186,26 @@ def test_bedrock_no_default_message():
         {"role": "user", "content": "Hello!"},
         {"role": "assistant", "content": ""},
         {"role": "user", "content": "Hi again"},
-        {"role": "assistant", "content": "Valid response"}
+        {"role": "assistant", "content": "Valid response"},
     ]
 
     litellm.modify_params = False
     formatted_messages = _bedrock_converse_messages_pt(
         messages=messages,
         model="anthropic.claude-3-sonnet-20240229-v1:0",
-        llm_provider="bedrock"
+        llm_provider="bedrock",
     )
 
     # Verify empty message is present and valid message remains
-    assistant_messages = [msg for msg in formatted_messages if msg["role"] == "assistant"]
+    assistant_messages = [
+        msg for msg in formatted_messages if msg["role"] == "assistant"
+    ]
     assert len(assistant_messages) == 2  # Both empty and valid messages present
-    assert assistant_messages[0]["content"][0].text == ""  # First message is empty
-    assert assistant_messages[1]["content"][0].text == "Valid response"  # Second message is valid
+    assert assistant_messages[0]["content"][0]["text"] == ""  # First message is empty
+    assert (
+        assistant_messages[1]["content"][0]["text"] == "Valid response"
+    )  # Second message is valid
+
 
 @pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
 def test_bedrock_nova_topk(top_k_param):
@@ -2228,3 +2217,15 @@ def test_bedrock_nova_topk(top_k_param):
     }
     litellm.completion(**data)
 
+
+def test_bedrock_process_empty_text_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        process_empty_text_blocks,
+    )
+
+    message = {
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+        "assistant_continue_message": None,
+    }
+    modified_message = process_empty_text_blocks(**message)
+    assert modified_message["content"][0]["text"] == "Please continue."

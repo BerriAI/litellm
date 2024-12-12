@@ -20,10 +20,13 @@ from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
+    ChatCompletionSystemMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionUserMessage,
+    OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
@@ -263,18 +266,36 @@ class AmazonConverseConfig:
 
     @overload
     def _get_cache_point_block(
-        self, message_block: dict, block_type: Literal["system"]
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["system"],
     ) -> Optional[SystemContentBlock]:
         pass
 
     @overload
     def _get_cache_point_block(
-        self, message_block: dict, block_type: Literal["content_block"]
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["content_block"],
     ) -> Optional[ContentBlock]:
         pass
 
     def _get_cache_point_block(
-        self, message_block: dict, block_type: Literal["system", "content_block"]
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["system", "content_block"],
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
         if message_block.get("cache_control", None) is None:
             return None
@@ -295,7 +316,7 @@ class AmazonConverseConfig:
                 if isinstance(message["content"], str) and len(message["content"]) > 0:
                     _system_content_block = SystemContentBlock(text=message["content"])
                     _cache_point_block = self._get_cache_point_block(
-                        cast(dict, message), block_type="system"
+                        message, block_type="system"
                     )
                 elif isinstance(message["content"], list):
                     for m in message["content"]:
