@@ -2880,7 +2880,7 @@ def get_standard_logging_object_payload(
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
-            responseTime=response_time,
+            response_time=response_time,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],

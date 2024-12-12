@@ -226,6 +226,7 @@ async def test_datadog_logging_http_request():
 
         # Parse the 'message' field as JSON and check its structure
         message = json.loads(body[0]["message"])
+        print("logged message", json.dumps(message, indent=4))
 
         expected_message_fields = StandardLoggingPayload.__annotations__.keys()
 
