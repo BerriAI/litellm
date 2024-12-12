@@ -1,5 +1,5 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: openai/*
     litellm_params:
       model: openai/gpt-4o
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
