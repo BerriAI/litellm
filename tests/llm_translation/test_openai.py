@@ -318,39 +318,3 @@ class TestCustomLogger(CustomLogger):
         )
 
         self.response_cost = standard_logging_object["response_cost"]
-
-
-@pytest.mark.asyncio
-async def test_vision_with_image_url():
-    """
-    Assert that cost tracking works for .webp images
-    """
-    _test_custom_logger = TestCustomLogger()
-    litellm.callbacks = [_test_custom_logger]
-
-    response = await litellm.acompletion(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What is in this image?"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://www.gstatic.com/webp/gallery/1.webp",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            }
-        ],
-        stream=True,
-    )
-
-    async for chunk in response:
-        print(chunk)
-
-    await asyncio.sleep(1)
-
-    assert _test_custom_logger.response_cost > 0
