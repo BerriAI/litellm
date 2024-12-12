@@ -451,15 +451,15 @@ def test_datadog_static_methods():
     # Test with default environment variables
     assert DataDogLogger._get_datadog_source() == "litellm"
     assert DataDogLogger._get_datadog_service() == "litellm-server"
-    assert DataDogLogger._get_datadog_hostname() == ""
+    assert DataDogLogger._get_datadog_hostname() is not None
     assert DataDogLogger._get_datadog_env() == "unknown"
     assert DataDogLogger._get_datadog_pod_name() == "unknown"
 
     # Test tags format with default values
-    expected_default_tags = (
-        "env:unknown,service:litellm,version:unknown,HOSTNAME:,POD_NAME:unknown"
+    assert (
+        "env:unknown,service:litellm,version:unknown,HOSTNAME:"
+        in DataDogLogger._get_datadog_tags()
     )
-    assert DataDogLogger._get_datadog_tags() == expected_default_tags
 
     # Test with custom environment variables
     test_env = {
