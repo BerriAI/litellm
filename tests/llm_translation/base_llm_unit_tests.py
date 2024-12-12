@@ -313,7 +313,7 @@ class BaseLLMChatTest(ABC):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://i.pinimg.com/736x/b4/b1/be/b4b1becad04d03a9071db2817fc9fe77.jpg"
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
                         },
                     },
                 ],
