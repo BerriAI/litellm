@@ -381,9 +381,10 @@ async def test_datadog_payload_environment_variables():
             assert (
                 dd_payload["service"] == "test-service"
             ), "Incorrect service in payload"
+
             assert (
-                dd_payload["ddtags"]
-                == "env:test-env,service:test-service,version:1.0.0"
+                "env:test-env,service:test-service,version:1.0.0,HOSTNAME:"
+                in dd_payload["ddtags"]
             ), "Incorrect tags in payload"
 
     except Exception as e:
