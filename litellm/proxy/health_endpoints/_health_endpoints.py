@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_check import perform_health_check
+from litellm.types.integrations.slack_alerting import BudgetAlertType
 
 #### Health ENDPOINTS ####
 
@@ -145,7 +146,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 team_id=user_api_key_dict.team_id,
             )
             await proxy_logging_obj.budget_alerts(
-                type="user_budget",
+                type=BudgetAlertType.user_budget,
                 user_info=user_info,
             )
 

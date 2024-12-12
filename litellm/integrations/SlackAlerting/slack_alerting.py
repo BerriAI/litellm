@@ -581,15 +581,9 @@ class SlackAlerting(CustomBatchLogger):
                 ttl=self.alerting_args.budget_alert_ttl,
             )
 
-    async def budget_alerts(  # noqa: PLR0915
+    async def budget_alerts(
         self,
-        type: Literal[
-            "token_budget",
-            "user_budget",
-            "team_budget",
-            "proxy_budget",
-            "projected_limit_exceeded",
-        ],
+        type: BudgetAlertType,
         user_info: CallInfo,
     ):
         ## PREVENTITIVE ALERTING ## - https://github.com/BerriAI/litellm/issues/2727
@@ -617,27 +611,12 @@ class SlackAlerting(CustomBatchLogger):
         ] = None
         event_message: str = ""
         webhook_event: Optional[WebhookEvent] = None
-        if type == "proxy_budget":
-            event_group = "proxy"
-            event_message += "Proxy Budget: "
-        elif type == "user_budget":
-            event_group = "internal_user"
-            event_message += "User Budget: "
-            _id = user_info.user_id or _id
-        elif type == "team_budget":
-            event_group = "team"
-            event_message += "Team Budget: "
-            _id = user_info.team_id or _id
-        elif type == "token_budget":
-            event_group = "key"
-            event_message += "Key Budget: "
-            _id = user_info.token
-        elif type == "projected_limit_exceeded":
-            event_group = "key"
-            event_message += "Key Budget: Projected Limit Exceeded"
-            event = "projected_limit_exceeded"
-            _id = user_info.token
-
+        budget_alert_info: BudgetAlertInfo = self._get_budget_alert_info(
+            budget_alert_type=type, user_info=user_info
+        )
+        event_group = budget_alert_info.event_group
+        event_message = budget_alert_info.event_message
+        _id = budget_alert_info.event_id
         # percent of max_budget left to spend
         if user_info.max_budget is None:
             return
@@ -1768,3 +1747,40 @@ Model Info:
             )
 
         return
+
+    def _get_budget_alert_info(
+        self,
+        budget_alert_type: BudgetAlertType,
+        user_info: CallInfo,
+    ) -> BudgetAlertInfo:
+        """
+        Helper function that formats that gets the budget alert infor based on the type of budget alert
+
+        Example: Internal User Budget Alert and Team Budgets will have a different event_group and event_message
+        """
+        budget_alert_info = BudgetAlertInfo(
+            event_group=None,
+            event_message="",
+            event=None,
+            event_id=None,
+        )
+        if budget_alert_type == "proxy_budget":
+            budget_alert_info.event_group = "proxy"
+            budget_alert_info.event_message += "Proxy Budget: "
+        elif budget_alert_type == "user_budget":
+            budget_alert_info.event_group = "internal_user"
+            budget_alert_info.event_message = "User Budget: "
+            budget_alert_info.event_id = user_info.user_id or budget_alert_info.event_id
+        elif budget_alert_type == "team_budget":
+            budget_alert_info.event_group = "team"
+            budget_alert_info.event_message = "Team Budget: "
+            budget_alert_info.event_id = user_info.team_id or budget_alert_info.event_id
+        elif budget_alert_type == "token_budget":
+            budget_alert_info.event_group = "key"
+            budget_alert_info.event_message += "Key Budget: "
+            budget_alert_info.event_id = user_info.token
+        elif budget_alert_type == "projected_limit_exceeded":
+            budget_alert_info.event_group = "key"
+            budget_alert_info.event_message += "Key Budget: Projected Limit Exceeded"
+            budget_alert_info.event_id = user_info.token
+        return budget_alert_info
