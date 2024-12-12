@@ -10,7 +10,7 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `id` | `str` | Unique identifier |
 | `trace_id` | `str` | Trace multiple LLM calls belonging to same overall request |
 | `call_type` | `str` | Type of call |
-| `response_cost` | `float` | Cost of the response |
+| `response_cost` | `float` | Cost of the response in USD ($) |
 | `response_cost_failure_debug_info` | `StandardLoggingModelCostFailureDebugInformation` | Debug information if cost tracking fails |
 | `status` | `StandardLoggingPayloadStatus` | Status of the payload |
 | `total_tokens` | `int` | Total number of tokens |
@@ -19,7 +19,7 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `startTime` | `float` | Start time of the call |
 | `endTime` | `float` | End time of the call |
 | `completionStartTime` | `float` | Time to first token for streaming requests |
-| `response_time` | `float` | Total response time |
+| `response_time` | `float` | Total response time. If streaming, this is the time to first token |
 | `model_map_information` | `StandardLoggingModelInformation` | Model mapping information |
 | `model` | `str` | Model name sent in request |
 | `model_id` | `Optional[str]` | Model ID of the deployment used |

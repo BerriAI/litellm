@@ -113,7 +113,7 @@ Removes any field with `user_api_key_*` from metadata.
 
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
-[👉 **Get Started** - Standard Logging Payload](./logging_spec)
+[👉 **Standard Logging Payload Specification**](./logging_spec)
 
 ## Langfuse
 
