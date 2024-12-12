@@ -2474,8 +2474,22 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
                         if element["type"] == "text":
-                            _part = BedrockContentBlock(text=element["text"])
-                            _parts.append(_part)
+                            if element["text"].strip():
+                                _part = BedrockContentBlock(text=element["text"])
+                            else:
+                                # bedrock requires non-empty content
+                                # insert a default text block if the user provided it, or if modify_params is True
+                                if user_continue_message is not None:
+                                    _part = BedrockContentBlock(
+                                        text=user_continue_message["content"][0]["text"]
+                                    )
+                                elif litellm.modify_params:
+                                    _part = BedrockContentBlock(
+                                        text=DEFAULT_USER_CONTINUE_MESSAGE["content"][0]["text"]
+                                    )
+                                else:
+                                    _part = BedrockContentBlock(text="")
+                                _parts.append(_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -2494,7 +2508,19 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             else:
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                if messages[msg_i]["content"].strip():
+                    # bedrock requires non-empty content
+                    # insert a default text block if the user provided it, or if modify_params is True
+                    if user_continue_message is not None:
+                        _part = BedrockContentBlock(
+                            text=user_continue_message["content"][0]["text"]
+                        )
+                    elif litellm.modify_params:
+                        _part = BedrockContentBlock(
+                            text=DEFAULT_USER_CONTINUE_MESSAGE["content"][0]["text"]
+                        )
+                    else:
+                        _part = BedrockContentBlock(text="")
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
                         messages[msg_i], block_type="content_block"
@@ -2566,7 +2592,21 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 for element in messages[msg_i]["content"]:
                     if isinstance(element, dict):
                         if element["type"] == "text":
-                            assistants_part = BedrockContentBlock(text=element["text"])
+                            if element["text"].strip():
+                                assistants_part = BedrockContentBlock(text=element["text"])
+                            else:
+                                # bedrock requires non-empty content
+                                # insert a default text block if the user provided it, or if modify_params is True
+                                if assistant_continue_message is not None:
+                                    assistants_part = BedrockContentBlock(
+                                        text=assistant_continue_message["content"][0]["text"]
+                                    )
+                                elif litellm.modify_params:
+                                    assistants_part = BedrockContentBlock(
+                                        text=DEFAULT_ASSISTANT_CONTINUE_MESSAGE["content"][0]["text"]
+                                    )
+                                else:
+                                    assistants_part = BedrockContentBlock(text="")
                             assistants_parts.append(assistants_part)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
