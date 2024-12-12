@@ -127,9 +127,10 @@ class StandardLoggingPayload(TypedDict):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    startTime: float
+    startTime: float # Note: making this camelCase was a mistake, everything should be snake case
     endTime: float
-    completionStartTime: float
+    completionStartTime: float # time the first token of the LLM response is returned (for streaming responses)
+    response_time: float # time the LLM takes to respond (for streaming uses time to first token)
     model_map_information: StandardLoggingModelInformation
     model: str
     model_id: Optional[str]

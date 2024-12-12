@@ -329,7 +329,6 @@ def test_get_final_response_obj():
         litellm.turn_off_message_logging = False
 
 
-
 def test_truncate_standard_logging_payload():
     """
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
@@ -368,6 +367,7 @@ def test_truncate_standard_logging_payload():
     # assert len of error_str is less than 10_500
     assert len(str(standard_logging_payload["error_str"])) < 10_500
 
+
 def test_strip_trailing_slash():
     common_api_base = "https://api.test.com"
     assert (
@@ -379,3 +379,37 @@ def test_strip_trailing_slash():
         == common_api_base
     )
 
+
+def test_get_response_time():
+    """Test get_response_time with different streaming scenarios"""
+    # Test case 1: Non-streaming response
+    start_time = 1000.0
+    end_time = 1005.0
+    completion_start_time = 1003.0
+    stream = False
+
+    response_time = StandardLoggingPayloadSetup.get_response_time(
+        start_time_float=start_time,
+        end_time_float=end_time,
+        completion_start_time_float=completion_start_time,
+        stream=stream,
+    )
+
+    # For non-streaming, should return end_time - start_time
+    assert response_time == 5.0
+
+    # Test case 2: Streaming response
+    start_time = 1000.0
+    end_time = 1010.0
+    completion_start_time = 1002.0
+    stream = True
+
+    response_time = StandardLoggingPayloadSetup.get_response_time(
+        start_time_float=start_time,
+        end_time_float=end_time,
+        completion_start_time_float=completion_start_time,
+        stream=stream,
+    )
+
+    # For streaming, should return completion_start_time - start_time
+    assert response_time == 2.0
