@@ -211,7 +211,7 @@ class Huggingface(BaseLLM):
                     ### ASYNC COMPLETION
                     return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, model=model, optional_params=optional_params, timeout=timeout, litellm_params=litellm_params)  # type: ignore
             if client is None or not isinstance(client, HTTPHandler):
-                client = HTTPHandler()
+                client = _get_httpx_client()
             ### SYNC STREAMING
             if "stream" in optional_params and optional_params["stream"] is True:
                 response = client.post(

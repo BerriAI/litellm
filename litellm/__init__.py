@@ -96,7 +96,7 @@ add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
-## end of callbacks #############
+### end of callbacks #############
 
 email: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
@@ -534,7 +534,7 @@ def add_known_models():
             gemini_models.append(key)
         elif value.get("litellm_provider") == "fireworks_ai":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
-            if "-to-" not in key:
+            if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.append(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
