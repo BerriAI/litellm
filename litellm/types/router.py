@@ -172,6 +172,10 @@ class GenericLiteLLMParams(BaseModel):
 
     max_file_size_mb: Optional[float] = None
 
+    # Deployment budgets
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -207,6 +211,9 @@ class GenericLiteLLMParams(BaseModel):
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
         max_file_size_mb: Optional[float] = None,
+        # Deployment budgets
+        max_budget: Optional[float] = None,
+        budget_duration: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -635,12 +642,12 @@ class RoutingStrategy(enum.Enum):
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 
-class ProviderBudgetInfo(BaseModel):
+class GenericBudgetInfo(BaseModel):
     time_period: str  # e.g., '1d', '30d'
     budget_limit: float
 
 
-ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]
+GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
 
 
 class RouterCacheEnum(enum.Enum):
@@ -648,7 +655,7 @@ class RouterCacheEnum(enum.Enum):
     RPM = "global_router:{id}:{model}:rpm:{current_minute}"
 
 
-class ProviderBudgetWindowDetails(BaseModel):
+class GenericBudgetWindowDetails(BaseModel):
     """Details about a provider's budget window"""
 
     budget_start: float
