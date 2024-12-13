@@ -640,12 +640,14 @@ async def insert_sso_user(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_ui_settings(request: Request):
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings, proxy_state
 
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
     _is_sso_enabled = _has_user_setup_sso()
-
+    should_run_expensive_db_queries = (
+        proxy_state.get_proxy_state_variable("spend_logs_row_count") > 1_000_000
+    )
     default_team_disabled = general_settings.get("default_team_disabled", False)
     if "PROXY_DEFAULT_TEAM_DISABLED" in os.environ:
         if os.environ["PROXY_DEFAULT_TEAM_DISABLED"].lower() == "true":
@@ -656,4 +658,5 @@ async def get_ui_settings(request: Request):
         "PROXY_LOGOUT_URL": _logout_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
         "SSO_ENABLED": _is_sso_enabled,
+        "SHOULD_RUN_EXPENSIVE_DB_QUERIES": should_run_expensive_db_queries,
     }
