@@ -4,7 +4,7 @@ import {
   userInfoCall,
   modelAvailableCall,
   getTotalSpendCall,
-  getProxyBaseUrlAndLogoutUrl,
+  getProxyUISettings,
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -28,6 +28,7 @@ export interface ProxySettings {
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
+  SHOULD_RUN_EXPENSIVE_DB_QUERIES: boolean;
 }
 
 
@@ -172,7 +173,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       } else {
         const fetchData = async () => {
           try {
-            const proxy_settings: ProxySettings = await getProxyBaseUrlAndLogoutUrl(accessToken);
+            const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
             setProxySettings(proxy_settings);
 
             const response = await userInfoCall(
