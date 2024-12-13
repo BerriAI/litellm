@@ -4019,15 +4019,15 @@ class Router:
 
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
-        if deployment.model_name == "*":
-            if deployment.litellm_params.model == "*":
-                # user wants to pass through all requests to litellm.acompletion for unknown deployments
-                self.router_general_settings.pass_through_all_models = True
-            else:
-                self.default_deployment = deployment.to_json(exclude_none=True)
+        # if deployment.model_name == "*":
+        #     if deployment.litellm_params.model == "*":
+        #         # user wants to pass through all requests to litellm.acompletion for unknown deployments
+        #         self.router_general_settings.pass_through_all_models = True
+        #     else:
+        #         self.default_deployment = deployment.to_json(exclude_none=True)
         # Check if user is using provider specific wildcard routing
         # example model_name = "databricks/*" or model_name = "anthropic/*"
-        elif "*" in deployment.model_name:
+        if "*" in deployment.model_name:
             # store this as a regex pattern - all deployments matching this pattern will be sent to this deployment
             # Store deployment.model_name as a regex pattern
             self.pattern_router.add_pattern(
