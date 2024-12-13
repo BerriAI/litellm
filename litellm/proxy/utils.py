@@ -2183,6 +2183,35 @@ class PrismaClient:
             )
             raise e
 
+    async def _get_spend_logs_row_count(self) -> int:
+        try:
+            sql_query = """
+            SELECT reltuples::BIGINT
+            FROM pg_class
+            WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
+            """
+            result = await self.db.query_raw(query=sql_query)
+            return result[0]["reltuples"]
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error getting LiteLLM_SpendLogs row count: {e}"
+            )
+            return 0
+
+    async def _set_spend_logs_row_count_in_proxy_state(self) -> None:
+        """
+        Set the `LiteLLM_SpendLogs`row count in proxy state.
+
+        This is used later to determine if we should run expensive UI Usage queries.
+        """
+        from litellm.proxy.proxy_server import proxy_state
+
+        _num_spend_logs_rows = await self._get_spend_logs_row_count()
+        proxy_state.set_proxy_state_variable(
+            variable_name="spend_logs_row_count",
+            value=_num_spend_logs_rows,
+        )
+
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:

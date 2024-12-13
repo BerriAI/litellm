@@ -164,6 +164,7 @@ from litellm.proxy.common_utils.load_config_utils import (
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -327,6 +328,7 @@ premium_user: bool = _license_check.is_premium()
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
+proxy_state = ProxyState()
 if global_max_parallel_request_retries_env is None:
     global_max_parallel_request_retries: int = 3
 else:
@@ -3046,6 +3048,10 @@ class ProxyStartupEvent:
             asyncio.create_task(
                 prisma_client.check_view_exists()
             )  # check if all necessary views exist. Don't block execution
+
+            asyncio.create_task(
+                prisma_client._set_spend_logs_row_count_in_proxy_state()
+            )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
             await prisma_client.health_check()

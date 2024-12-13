@@ -17,7 +17,7 @@ import {
   userCreateCall,
   modelAvailableCall,
   invitationCreateCall,
-  getProxyBaseUrlAndLogoutUrl,
+  getProxyUISettings,
 } from "./networking";
 const { Option } = Select;
 
@@ -82,7 +82,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         setUserModels(availableModels);
 
         // get ui settings 
-        const uiSettingsResponse = await getProxyBaseUrlAndLogoutUrl(accessToken);
+        const uiSettingsResponse = await getProxyUISettings(accessToken);
         console.log("uiSettingsResponse:", uiSettingsResponse);
         
         setUISettings(uiSettingsResponse);
