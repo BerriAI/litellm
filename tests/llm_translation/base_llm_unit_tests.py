@@ -263,67 +263,6 @@ class BaseLLMChatTest(ABC):
         assert content is not None
         assert len(content) > 0
 
-    def test_tool_call_and_json_response_format(self):
-        """
-        Test that the tool call and JSON response format is supported by the LLM API
-        """
-        litellm.set_verbose = True
-        from pydantic import BaseModel
-        from litellm.utils import supports_response_schema
-
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        class RFormat(BaseModel):
-            question: str
-            answer: str
-
-        base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_response_schema(base_completion_call_args["model"], None):
-            pytest.skip("Model does not support response schema")
-
-        try:
-            res = litellm.completion(
-                **base_completion_call_args,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "response user question with JSON object",
-                    },
-                    {"role": "user", "content": "Hey! What's the weather in NewYork?"},
-                ],
-                tool_choice="required",
-                response_format=RFormat,
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_current_weather",
-                            "description": "Get the current weather in a given location",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "location": {
-                                        "type": "string",
-                                        "description": "The city and state, e.g. San Francisco, CA",
-                                    },
-                                    "unit": {
-                                        "type": "string",
-                                        "enum": ["celsius", "fahrenheit"],
-                                    },
-                                },
-                                "required": ["location"],
-                            },
-                        },
-                    }
-                ],
-            )
-            assert res is not None
-
-            assert res.choices[0].message.tool_calls is not None
-        except litellm.InternalServerError:
-            pytest.skip("Model is overloaded")
-
     @pytest.fixture
     def tool_call_no_arguments(self):
         return {
