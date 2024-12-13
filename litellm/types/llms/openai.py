@@ -374,15 +374,15 @@ class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
     pass
 
 
+OpenAIMessageContentListBlock = Union[
+    ChatCompletionTextObject,
+    ChatCompletionImageObject,
+    ChatCompletionAudioObject,
+]
+
 OpenAIMessageContent = Union[
     str,
-    Iterable[
-        Union[
-            ChatCompletionTextObject,
-            ChatCompletionImageObject,
-            ChatCompletionAudioObject,
-        ]
-    ],
+    Iterable[OpenAIMessageContentListBlock],
 ]
 
 # The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.

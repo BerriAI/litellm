@@ -81,6 +81,13 @@ def convert_content_list_to_str(message: AllMessageValues) -> str:
     return texts
 
 
+def is_non_content_values_set(message: AllMessageValues) -> bool:
+    ignore_keys = ["content", "role", "name"]
+    return any(
+        message.get(key, None) is not None for key in message if key not in ignore_keys
+    )
+
+
 def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
     """
     Checks if message content contains an image or audio

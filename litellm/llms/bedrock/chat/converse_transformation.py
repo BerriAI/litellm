@@ -12,19 +12,25 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
+)
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
+    ChatCompletionSystemMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionUserMessage,
+    OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
 
-from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
 from ..common_utils import BedrockError, get_bedrock_tool_name
 
 
@@ -38,6 +44,7 @@ class AmazonConverseConfig:
     stopSequences: Optional[List[str]]
     temperature: Optional[int]
     topP: Optional[int]
+    topK: Optional[int]
 
     def __init__(
         self,
@@ -45,6 +52,7 @@ class AmazonConverseConfig:
         stopSequences: Optional[List[str]] = None,
         temperature: Optional[int] = None,
         topP: Optional[int] = None,
+        topK: Optional[int] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
@@ -258,18 +266,36 @@ class AmazonConverseConfig:
 
     @overload
     def _get_cache_point_block(
-        self, message_block: dict, block_type: Literal["system"]
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["system"],
     ) -> Optional[SystemContentBlock]:
         pass
 
     @overload
     def _get_cache_point_block(
-        self, message_block: dict, block_type: Literal["content_block"]
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["content_block"],
     ) -> Optional[ContentBlock]:
         pass
 
     def _get_cache_point_block(
-        self, message_block: dict, block_type: Literal["system", "content_block"]
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["system", "content_block"],
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
         if message_block.get("cache_control", None) is None:
             return None
@@ -290,7 +316,7 @@ class AmazonConverseConfig:
                 if isinstance(message["content"], str) and len(message["content"]) > 0:
                     _system_content_block = SystemContentBlock(text=message["content"])
                     _cache_point_block = self._get_cache_point_block(
-                        cast(dict, message), block_type="system"
+                        message, block_type="system"
                     )
                 elif isinstance(message["content"], list):
                     for m in message["content"]:
@@ -309,6 +335,11 @@ class AmazonConverseConfig:
                 messages.pop(idx)
         return messages, system_content_blocks
 
+    def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
+        if "top_k" in inference_params:
+            inference_params["topK"] = inference_params.pop("top_k")
+        return InferenceConfig(**inference_params)
+
     def _transform_request(
         self,
         model: str,
@@ -320,7 +351,9 @@ class AmazonConverseConfig:
         inference_params = copy.deepcopy(optional_params)
         additional_request_keys = []
         additional_request_params = {}
-        supported_converse_params = AmazonConverseConfig.__annotations__.keys()
+        supported_converse_params = list(
+            AmazonConverseConfig.__annotations__.keys()
+        ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
         inference_params.pop("json_mode", None)  # used for handling json_schema
@@ -363,7 +396,9 @@ class AmazonConverseConfig:
             "messages": bedrock_messages,
             "additionalModelRequestFields": additional_request_params,
             "system": system_content_blocks,
-            "inferenceConfig": InferenceConfig(**inference_params),
+            "inferenceConfig": self._transform_inference_params(
+                inference_params=inference_params
+            ),
         }
 
         # Guardrail Config

@@ -1,6 +1,8 @@
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import litellm
+from litellm import LlmProviders
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.main import verbose_logger
@@ -11,6 +13,71 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
+    """
+    Handles wildcard routing scenario
+
+    where fallbacks set like:
+    [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
+
+    but model_group is like:
+    "openai/gpt-3.5-turbo"
+
+    Returns:
+    - True if the stripped model group == fallback_key
+    """
+    for provider in litellm.provider_list:
+        if isinstance(provider, Enum):
+            _provider = provider.value
+        else:
+            _provider = provider
+        if model_group.startswith(f"{_provider}/"):
+            stripped_model_group = model_group.replace(f"{_provider}/", "")
+            if stripped_model_group == fallback_key:
+                return True
+    return False
+
+
+def get_fallback_model_group(
+    fallbacks: List[Any], model_group: str
+) -> Tuple[Optional[List[str]], Optional[int]]:
+    """
+    Returns:
+    - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
+    - generic_fallback_idx: int of the index of the generic fallback in the fallbacks list.
+
+    Checks:
+    - exact match
+    - stripped model group match
+    - generic fallback
+    """
+    generic_fallback_idx: Optional[int] = None
+    stripped_model_fallback: Optional[List[str]] = None
+    fallback_model_group: Optional[List[str]] = None
+    ## check for specific model group-specific fallbacks
+    for idx, item in enumerate(fallbacks):
+        if isinstance(item, dict):
+            if list(item.keys())[0] == model_group:  # check exact match
+                fallback_model_group = item[model_group]
+                break
+            elif _check_stripped_model_group(
+                model_group=model_group, fallback_key=list(item.keys())[0]
+            ):  # check generic fallback
+                stripped_model_fallback = item[list(item.keys())[0]]
+            elif list(item.keys())[0] == "*":  # check generic fallback
+                generic_fallback_idx = idx
+        elif isinstance(item, str):
+            fallback_model_group = [fallbacks.pop(idx)]
+    ## if none, check for generic fallback
+    if fallback_model_group is None:
+        if stripped_model_fallback is not None:
+            fallback_model_group = stripped_model_fallback
+        elif generic_fallback_idx is not None:
+            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
+
+    return fallback_model_group, generic_fallback_idx
 
 
 async def run_async_fallback(
