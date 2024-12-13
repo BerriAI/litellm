@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CurrentItemRateLimit, UserAPIKeyAuth
@@ -271,7 +272,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 pass
             elif max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 return self.raise_rate_limit_error(
-                    additional_details=f"Hit limit for api_key: {api_key}. max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
+                    additional_details=f"Hit limit for {RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY}: {api_key}. max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
                 )
             elif current is None:
                 new_val = {
@@ -294,7 +295,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 values_to_update_in_cache.append((request_count_api_key, new_val))
             else:
                 return self.raise_rate_limit_error(
-                    additional_details=f"Hit limit for api_key: {api_key}. tpm_limit: {tpm_limit}, current_tpm {current['current_tpm']} , rpm_limit: {rpm_limit} current rpm {current['current_rpm']} "
+                    additional_details=f"Hit limit for {RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY}: {api_key}. tpm_limit: {tpm_limit}, current_tpm {current['current_tpm']} , rpm_limit: {rpm_limit} current rpm {current['current_rpm']} "
                 )
 
         # Check if request under RPM/TPM per model for a given API Key
@@ -344,14 +345,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     and current["current_tpm"] >= tpm_limit_for_model
                 ):
                     return self.raise_rate_limit_error(
-                        additional_details=f"Hit TPM limit for model: {_model} on api_key: {api_key}. tpm_limit: {tpm_limit_for_model}, current_tpm {current['current_tpm']} "
+                        additional_details=f"Hit TPM limit for model: {_model} on {RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY}: {api_key}. tpm_limit: {tpm_limit_for_model}, current_tpm {current['current_tpm']} "
                     )
                 elif (
                     rpm_limit_for_model is not None
                     and current["current_rpm"] >= rpm_limit_for_model
                 ):
                     return self.raise_rate_limit_error(
-                        additional_details=f"Hit RPM limit for model: {_model} on api_key: {api_key}. rpm_limit: {rpm_limit_for_model}, current_rpm {current['current_rpm']} "
+                        additional_details=f"Hit RPM limit for model: {_model} on {RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY}: {api_key}. rpm_limit: {rpm_limit_for_model}, current_rpm {current['current_rpm']} "
                     )
                 else:
                     values_to_update_in_cache.append((request_count_api_key, new_val))
