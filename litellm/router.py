@@ -123,11 +123,11 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    GenericBudgetConfigType,
     LiteLLM_Params,
     LiteLLMParamsTypedDict,
     ModelGroupInfo,
     ModelInfo,
-    ProviderBudgetConfigType,
     RetryPolicy,
     RouterCacheEnum,
     RouterErrors,
@@ -248,7 +248,7 @@ class Router:
             "usage-based-routing-v2",
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based
-        provider_budget_config: Optional[ProviderBudgetConfigType] = None,
+        provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
         router_general_settings: Optional[
             RouterGeneralSettings
@@ -537,10 +537,14 @@ class Router:
         self.service_logger_obj = ServiceLogging()
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
-        if self.provider_budget_config is not None:
+        self.router_budget_logger: Optional[RouterBudgetLimiting] = None
+        if RouterBudgetLimiting.should_init_router_budget_limiter(
+            model_list=model_list, provider_budget_config=self.provider_budget_config
+        ):
             self.router_budget_logger = RouterBudgetLimiting(
                 router_cache=self.cache,
                 provider_budget_config=self.provider_budget_config,
+                model_list=model_list,
             )
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
@@ -5318,7 +5322,7 @@ class Router:
                 healthy_deployments=healthy_deployments,
             )
 
-            if self.provider_budget_config is not None:
+            if self.router_budget_logger:
                 healthy_deployments = (
                     await self.router_budget_logger.async_filter_deployments(
                         healthy_deployments=healthy_deployments,
