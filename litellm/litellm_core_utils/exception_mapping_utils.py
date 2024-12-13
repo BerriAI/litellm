@@ -656,6 +656,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         model=model,
                     )
+                elif "model_no_support_for_function" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"{custom_llm_provider}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
