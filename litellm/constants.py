@@ -66,3 +66,9 @@ LITELLM_CHAT_PROVIDERS = [
     "lm_studio",
     "galadriel",
 ]
+
+
+########################### LiteLLM Proxy Specific Constants ###########################
+MAX_SPENDLOG_ROWS_TO_QUERY = (
+    1_000_000  # if spendLogs has more than 1M rows, do not query the DB
+)

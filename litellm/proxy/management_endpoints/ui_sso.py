@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.proxy._types import (
     LitellmUserRoles,
     NewUserRequest,
@@ -646,7 +647,8 @@ async def get_ui_settings(request: Request):
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
     _is_sso_enabled = _has_user_setup_sso()
     disable_expensive_db_queries = (
-        proxy_state.get_proxy_state_variable("spend_logs_row_count") > 1_000_000
+        proxy_state.get_proxy_state_variable("spend_logs_row_count")
+        > MAX_SPENDLOG_ROWS_TO_QUERY
     )
     default_team_disabled = general_settings.get("default_team_disabled", False)
     if "PROXY_DEFAULT_TEAM_DISABLED" in os.environ:
