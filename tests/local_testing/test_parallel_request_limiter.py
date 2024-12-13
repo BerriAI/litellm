@@ -1205,7 +1205,7 @@ async def test_pre_call_hook_tpm_limits_per_model():
         assert e.status_code == 429
         print("got error=", e)
         assert (
-            "request limit reached Hit TPM limit for model: azure-model on api_key"
+            "request limit reached Hit TPM limit for model: azure-model on LiteLLM Virtual Key user_api_key_hash"
             in str(e)
         )
 
