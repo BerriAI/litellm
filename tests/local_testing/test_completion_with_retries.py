@@ -11,7 +11,7 @@ sys.path.insert(
 import pytest
 import openai
 import litellm
-from litellm import completion_with_retries, completion
+from litellm import completion_with_retries, completion, acompletion_with_retries
 from litellm import (
     AuthenticationError,
     BadRequestError,
@@ -113,3 +113,36 @@ async def test_completion_with_retry_policy_no_error(sync_mode):
             await completion(**data)
     except Exception as e:
         print(e)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries(sync_mode):
+    """
+    If completion_with_retries is called with num_retries=3, and max_retries=0, then litellm.completion should receive num_retries , max_retries=0
+    """
+    from unittest.mock import patch, MagicMock, AsyncMock
+
+    if sync_mode:
+        target_function = "completion"
+    else:
+        target_function = "acompletion"
+
+    with patch.object(litellm, target_function) as mock_completion:
+        if sync_mode:
+            completion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        else:
+            await acompletion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["num_retries"] == 0
+        assert mock_completion.call_args.kwargs["max_retries"] == 0

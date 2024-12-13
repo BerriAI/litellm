@@ -2969,6 +2969,9 @@ def completion_with_retries(*args, **kwargs):
         )
 
     num_retries = kwargs.pop("num_retries", 3)
+    # reset retries in .completion()
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
     retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop(
         "retry_strategy", "constant_retry"
     )  # type: ignore
@@ -2999,6 +3002,8 @@ async def acompletion_with_retries(*args, **kwargs):
         )
 
     num_retries = kwargs.pop("num_retries", 3)
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
     retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
