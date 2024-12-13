@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Select, SelectItem, Text, Title } from "@tremor/react";
 import { ProxySettings, UserInfo } from "./user_dashboard";
-import { getProxyBaseUrlAndLogoutUrl } from "./networking"
+import { getProxyUISettings } from "./networking"
 
 interface DashboardTeamProps {
   teams: Object[] | null;
@@ -39,7 +39,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
 
   const getProxySettings = async () => {
     if (proxySettings === null && accessToken) {
-      const proxy_settings: ProxySettings = await getProxyBaseUrlAndLogoutUrl(accessToken);
+      const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
       setProxySettings(proxy_settings);
     }
   };
