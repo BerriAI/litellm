@@ -28,7 +28,7 @@ export interface ProxySettings {
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
-  SHOULD_RUN_EXPENSIVE_DB_QUERIES: boolean;
+  DISABLE_EXPENSIVE_DB_QUERIES: boolean;
 }
 
 
