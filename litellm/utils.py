@@ -1830,17 +1830,14 @@ def supports_function_calling(
 
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
     """
-    Check if the given model supports function calling and return a boolean value.
+    Check if the given model supports 'key' and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
     custom_llm_provider (Optional[str]): The provider to be checked.
 
     Returns:
-    bool: True if the model supports function calling, False otherwise.
-
-    Raises:
-    Exception: If the given model is not found or there's an error in retrieval.
+    bool: True if the model supports 'key', False otherwise.
     """
     try:
         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1855,9 +1852,10 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             return True
         return False
     except Exception as e:
-        raise Exception(
+        verbose_logger.error(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+        return False
 
 
 def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:

@@ -2,6 +2,7 @@
 OpenAI-like chat completion transformation
 """
 
+import json
 import types
 from typing import List, Optional, Tuple, Union
 
@@ -9,8 +10,14 @@ import httpx
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
 from litellm.types.utils import ModelResponse
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
@@ -29,6 +36,50 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""
         )  # vllm does not require an api key
         return api_base, dynamic_api_key
+
+    def _create_json_tool_call_for_response_format(
+        self,
+        json_schema: Optional[dict] = None,
+    ) -> ChatCompletionToolParam:
+        """
+        Handles creating a tool call for getting responses in JSON format.
+
+        Args:
+            json_schema (Optional[dict]): The JSON schema the response should be in
+
+        Returns:
+            ChatCompletionToolParam: The tool call to send to an OpenAI-like provider to get responses in JSON format
+        """
+        _input_schema: dict = {}
+
+        if json_schema is None:
+            # Anthropic raises a 400 BadRequest error if properties is passed as None
+            # see usage with additionalProperties (Example 5) https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+            _input_schema["additionalProperties"] = True
+            _input_schema["properties"] = {}
+        else:
+            _input_schema["properties"] = {"values": json_schema}
+
+        _tool = ChatCompletionToolParam(
+            type="function",
+            function=ChatCompletionToolParamFunctionChunk(
+                name=RESPONSE_FORMAT_TOOL_NAME,
+                parameters=_input_schema,
+            ),
+        )
+        return _tool
+
+    def _add_tools_to_optional_params(
+        self, optional_params: dict, tools: List[ChatCompletionToolParam]
+    ) -> dict:
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
 
     @staticmethod
     def _convert_tool_response_to_message(
@@ -53,10 +104,30 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if _tool_calls is None or len(_tool_calls) != 1:
             return message
 
-        message["content"] = _tool_calls[0]["function"].get("arguments") or ""
-        message["tool_calls"] = None
+        if (
+            "name" in _tool_calls[0]["function"]
+            and _tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+        ):
+            message["content"] = _tool_calls[0]["function"].get("arguments") or ""
+            message["tool_calls"] = None
 
         return message
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        extra_body = optional_params.pop("extra_body", {})
+        return {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+            **extra_body,
+        }
 
     @staticmethod
     def _transform_response(
@@ -75,7 +146,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         custom_llm_provider: str,
         base_model: Optional[str],
     ) -> ModelResponse:
-        print(f"response: {response}")
         response_json = response.json()
         logging_obj.post_call(
             input=messages,
