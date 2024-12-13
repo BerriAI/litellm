@@ -3,9 +3,8 @@ model_list:
     litellm_params:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-      budget_config:
-        time_period: 1d
-        budget_limit: 0.000000000001
+      max_budget: 0.000000000001
+      budget_duration: 1d
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
