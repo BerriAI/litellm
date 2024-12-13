@@ -358,6 +358,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # use this for tag-based routing
     tags: Optional[List[str]]
 
+    # deployment budgets
+    max_budget: Optional[float]
+    budget_duration: Optional[str]
+
 
 class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
