@@ -29,6 +29,7 @@ export interface ProxySettings {
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
   DISABLE_EXPENSIVE_DB_QUERIES: boolean;
+  NUM_SPEND_LOGS_ROWS: number;
 }
 
 

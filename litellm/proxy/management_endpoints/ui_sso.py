@@ -658,5 +658,8 @@ async def get_ui_settings(request: Request):
         "PROXY_LOGOUT_URL": _logout_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
         "SSO_ENABLED": _is_sso_enabled,
+        "NUM_SPEND_LOGS_ROWS": proxy_state.get_proxy_state_variable(
+            "spend_logs_row_count"
+        ),
         "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }

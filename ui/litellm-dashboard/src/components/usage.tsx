@@ -429,11 +429,13 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div style={{ width: "100%" }} className="p-8">      
         <Card>
           <Title>Database Query Limit Reached</Title>
           <Text className="mt-4">
-            SpendLogs in DB has 1M+ rows. Please follow our guide to optimize and view your usage data.
+            SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows. 
+            <br></br>
+            Please follow our guide to view usage when SpendLogs has more than 1M rows.
           </Text>
           <Button className="mt-4">
             <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
