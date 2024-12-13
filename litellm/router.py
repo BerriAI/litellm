@@ -152,7 +152,6 @@ from litellm.utils import (
     get_llm_provider,
     get_secret,
     get_utc_datetime,
-    is_prompt_caching_valid_prompt,
     is_region_allowed,
 )
 
@@ -3379,30 +3378,6 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=id,
                 )
-
-                ## PROMPT CACHING
-                prompt_cache = PromptCachingCache(
-                    cache=self.cache,
-                )
-                if (
-                    standard_logging_object["messages"] is not None
-                    and isinstance(standard_logging_object["messages"], list)
-                    and deployment_name is not None
-                    and isinstance(deployment_name, str)
-                ):
-                    valid_prompt = is_prompt_caching_valid_prompt(
-                        messages=standard_logging_object["messages"],  # type: ignore
-                        tools=None,
-                        model=deployment_name,
-                        custom_llm_provider=None,
-                    )
-                    if valid_prompt:
-                        await prompt_cache.async_add_model_id(
-                            model_id=id,
-                            messages=standard_logging_object["messages"],  # type: ignore
-                            tools=None,
-                        )
-
                 return tpm_key
 
         except Exception as e:
@@ -4040,15 +4015,15 @@ class Router:
 
         # Check if user is trying to use model_name == "*"
         # this is a catch all model for their specific api key
-        if deployment.model_name == "*":
-            if deployment.litellm_params.model == "*":
-                # user wants to pass through all requests to litellm.acompletion for unknown deployments
-                self.router_general_settings.pass_through_all_models = True
-            else:
-                self.default_deployment = deployment.to_json(exclude_none=True)
+        # if deployment.model_name == "*":
+        #     if deployment.litellm_params.model == "*":
+        #         # user wants to pass through all requests to litellm.acompletion for unknown deployments
+        #         self.router_general_settings.pass_through_all_models = True
+        #     else:
+        #         self.default_deployment = deployment.to_json(exclude_none=True)
         # Check if user is using provider specific wildcard routing
         # example model_name = "databricks/*" or model_name = "anthropic/*"
-        elif "*" in deployment.model_name:
+        if "*" in deployment.model_name:
             # store this as a regex pattern - all deployments matching this pattern will be sent to this deployment
             # Store deployment.model_name as a regex pattern
             self.pattern_router.add_pattern(
@@ -5335,25 +5310,6 @@ class Router:
                     messages=messages,
                     request_kwargs=request_kwargs,
                 )
-
-            if messages is not None and is_prompt_caching_valid_prompt(
-                messages=cast(List[AllMessageValues], messages),
-                model=model,
-                custom_llm_provider=None,
-            ):
-                prompt_cache = PromptCachingCache(
-                    cache=self.cache,
-                )
-                healthy_deployment = (
-                    await prompt_cache.async_get_prompt_caching_deployment(
-                        router=self,
-                        messages=cast(List[AllMessageValues], messages),
-                        tools=None,
-                    )
-                )
-                if healthy_deployment is not None:
-                    return healthy_deployment
-
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(  # type: ignore
                 llm_router_instance=self,

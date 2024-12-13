@@ -22,6 +22,8 @@ from litellm.constants import (
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     ROUTER_MAX_FALLBACKS,
     DEFAULT_MAX_RETRIES,
+    DEFAULT_REPLICATE_POLLING_RETRIES,
+    DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
     LITELLM_CHAT_PROVIDERS,
 )
 from litellm.types.guardrails import GuardrailItem

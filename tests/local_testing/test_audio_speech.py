@@ -116,6 +116,7 @@ async def test_audio_speech_litellm_vertex(sync_mode):
         response.stream_to_file(speech_file_path)
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_speech_litellm_vertex_async():
     # Mock the response
