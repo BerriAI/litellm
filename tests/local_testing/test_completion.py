@@ -3094,6 +3094,7 @@ def test_completion_azure_deployment_id():
 import asyncio
 
 
+@pytest.mark.skip(reason="replicate endpoints are extremely flaky")
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_completion_replicate_llama3(sync_mode):
