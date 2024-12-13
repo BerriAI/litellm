@@ -66,3 +66,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lm_studio",
     "galadriel",
 ]
+
+
+# makes it clear this is a rate limit error for a litellm virtual key
+RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
