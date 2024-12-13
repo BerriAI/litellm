@@ -25,12 +25,13 @@ class PatternUtils:
             Tuple of (length, complexity) for sorting
         """
         complexity_chars = ["*", "+", "?", "\\", "^", "$", "|", "(", ")"]
-        return (
+        ret_val = (
             len(pattern),  # Longer patterns more specific
             sum(
                 pattern.count(char) for char in complexity_chars
             ),  # More regex complexity
         )
+        return ret_val
 
     @staticmethod
     def sorted_patterns(

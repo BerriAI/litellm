@@ -291,3 +291,25 @@ def test_pattern_matching_router_with_default_wildcard_and_model_wildcard():
     deployments = pattern_router.route("llmengine/gpt-3.5-turbo")
     assert len(deployments) == 1
     assert deployments[0]["model_name"] == "llmengine/*"
+
+
+def test_sorted_patterns():
+    """
+    Tests that the pattern specificity is calculated correctly
+    """
+    from litellm.router_utils.pattern_match_deployments import PatternUtils
+
+    sorted_patterns = PatternUtils.sorted_patterns(
+        {
+            "llmengine/*": [{"model_name": "anthropic/claude-3-5-sonnet"}],
+            "*": [{"model_name": "openai/*"}],
+        },
+    )
+    assert sorted_patterns[0][0] == "llmengine/*"
+
+
+def test_calculate_pattern_specificity():
+    from litellm.router_utils.pattern_match_deployments import PatternUtils
+
+    assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
+    assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)
