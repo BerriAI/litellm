@@ -1,3 +1,5 @@
+from fastapi import HTTPException
+
 API_KEY = "api_key"
 API_BASE = "api_base"
 API_VERSION = "api_version"
@@ -12,6 +14,12 @@ AWS_REGION_NAME = "AWS_REGION_NAME"
 OLLAMA_API_BASE = "OLLAMA_API_BASE"
 
 
+class RagaHTTPException(Exception):
+    def __init__(self, status_code, detail = None):
+        self.ex = HTTPException(status_code, detail)
+        super().__init__(detail)
+
+
 def modify_user_request(data):
     try:
         if "provider" in data:
@@ -21,6 +29,8 @@ def modify_user_request(data):
             set_api_keys_from_vault(data)
             del data["user_id"]
         return data, None
+    except RagaHTTPException as e:
+        return None, e
     except Exception as e:
         return None, {"error": {"message": f"Error: {str(e)}", "code": 400}}
 
@@ -63,4 +73,5 @@ def validate_api_keys(vault_secrets, model_name, required_keys):
             not_set_keys.append(key)
 
     if len(not_set_keys) > 0:
-        raise Exception(f"Required API Keys are not set for {model_name}: {not_set_keys}")
+        detail = {"error": {"message": f"Error: Required API Keys are not set for {model_name}: {not_set_keys}", "code": 401}}
+        raise RagaHTTPException(401, detail)
