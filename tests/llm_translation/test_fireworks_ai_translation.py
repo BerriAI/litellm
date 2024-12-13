@@ -78,7 +78,7 @@ def test_map_response_format():
 class TestFireworksAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct"
+            "model": "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct"
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):

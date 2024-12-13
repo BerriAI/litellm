@@ -207,6 +207,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
+            print(f"e.response.text: {e.response.text}")
             raise OpenAILikeError(
                 status_code=e.response.status_code,
                 message=e.response.text,
@@ -214,6 +215,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         except httpx.TimeoutException:
             raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
+            print(f"e: {e}")
             raise OpenAILikeError(status_code=500, message=str(e))
 
         return OpenAILikeChatConfig._transform_response(
@@ -247,8 +249,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         api_key: Optional[str],
         logging_obj,
         optional_params: dict,
-        litellm_params: dict,
         acompletion=None,
+        litellm_params=None,
         logger_fn=None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -272,38 +274,27 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         )
 
         stream: bool = optional_params.pop("stream", None) or False
+        extra_body = optional_params.pop("extra_body", {})
         json_mode = optional_params.pop("json_mode", None)
         optional_params.pop("max_retries", None)
         if not fake_stream:
             optional_params["stream"] = stream
 
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
-
-        if messages is not None:
-
+        if messages is not None and custom_llm_provider is not None:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
             if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
                 provider_config, OpenAIConfig
             ):
                 messages = provider_config._transform_messages(messages)
 
-        if isinstance(provider_config, OpenAILikeChatConfig):
-            data = provider_config.transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
-        else:  # ensures 'extra_body' is correctly handled
-            data = OpenAILikeChatConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
+        data = {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+            **extra_body,
+        }
 
         ## LOGGING
         logging_obj.pre_call(

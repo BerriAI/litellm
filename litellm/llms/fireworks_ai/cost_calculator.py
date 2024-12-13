@@ -40,7 +40,7 @@ def get_base_model_for_pricing(model_name: str) -> str:
         if params_billion <= 16.0:
             return "fireworks-ai-up-to-16b"
         elif params_billion <= 80.0:
-            return "fireworks-ai-16.1b-to-80b"
+            return "fireworks-ai-16b-80b"
 
     # If no matches, return the original model_name
     return "fireworks-ai-default"
