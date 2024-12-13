@@ -79,6 +79,7 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    get_fallback_model_group,
     log_failure_fallback_event,
     log_success_fallback_event,
     run_async_fallback,
@@ -2753,19 +2754,14 @@ class Router:
                         )
 
                         e.message += "\n{}".format(error_message)
-                if fallbacks is not None:
+                if fallbacks is not None and model_group is not None:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
-                    generic_fallback_idx: Optional[int] = None
-                    ## check for specific model group-specific fallbacks
-                    for idx, item in enumerate(fallbacks):
-                        if isinstance(item, dict):
-                            if list(item.keys())[0] == model_group:
-                                fallback_model_group = item[model_group]
-                                break
-                            elif list(item.keys())[0] == "*":
-                                generic_fallback_idx = idx
-                        elif isinstance(item, str):
-                            fallback_model_group = [fallbacks.pop(idx)]
+                    fallback_model_group, generic_fallback_idx = (
+                        get_fallback_model_group(
+                            fallbacks=fallbacks,
+                            model_group=cast(str, model_group),
+                        )
+                    )
                     ## if none, check for generic fallback
                     if (
                         fallback_model_group is None
