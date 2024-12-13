@@ -1,11 +1,4 @@
 model_list:
   - model_name: openai/*
     litellm_params:
-      model: openai/gpt-4o
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: anthropic/*
-    litellm_params:
-      model: anthropic/fake
-      api_base: https://exampleanthropicendpoint-production.up.railway.app/
-litellm_settings:
-  callbacks: ["datadog"] 
+      model: openai/*

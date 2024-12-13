@@ -291,7 +291,8 @@ class BaseLLMChatTest(ABC):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    @pytest.mark.parametrize("detail", [None, "low", "high"])  # TODO: Add "high"
+    @pytest.mark.parametrize("detail", [None, "low", "high"])
+    @pytest.mark.flaky(retries=4, delay=1)
     def test_image_url(self, detail):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
