@@ -428,7 +428,7 @@ class VertexGeminiConfig(BaseConfig):
             # check if grounding
             if tool.get("googleSearch", None) is not None:
                 googleSearch = tool["googleSearch"]
-            if tool.get("googleSearchRetrieval", None) is not None:
+            elif tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
             elif tool.get("code_execution", None) is not None:
                 code_execution = tool["code_execution"]
