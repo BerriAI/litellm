@@ -72,3 +72,6 @@ LITELLM_CHAT_PROVIDERS = [
 MAX_SPENDLOG_ROWS_TO_QUERY = (
     1_000_000  # if spendLogs has more than 1M rows, do not query the DB
 )
+# makes it clear this is a rate limit error for a litellm virtual key
+RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
+
