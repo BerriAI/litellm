@@ -170,7 +170,7 @@ class BaseLLMChatTest(ABC):
         ],
     )
     @pytest.mark.flaky(retries=6, delay=1)
-    def test_json_response_format(self, response_format):
+    async def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
         """
@@ -188,7 +188,7 @@ class BaseLLMChatTest(ABC):
             },
         ]
 
-        response = self.completion_function(
+        response = await self.async_completion_function(
             **base_completion_call_args,
             messages=messages,
             response_format=response_format,
@@ -239,8 +239,7 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
     @pytest.mark.flaky(retries=6, delay=1)
-    @pytest.mark.asyncio
-    async def test_json_response_format_stream(self):
+    def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API
         """
@@ -259,7 +258,7 @@ class BaseLLMChatTest(ABC):
         ]
 
         try:
-            response = await self.async_completion_function(
+            response = self.completion_function(
                 **base_completion_call_args,
                 messages=messages,
                 response_format={"type": "json_object"},
@@ -271,7 +270,7 @@ class BaseLLMChatTest(ABC):
         print(response)
 
         content = ""
-        async for chunk in response:
+        for chunk in response:
             content += chunk.choices[0].delta.content or ""
 
         print(f"content={content}<END>")
