@@ -2590,10 +2590,11 @@ class StandardLoggingPayloadSetup:
                     clean_metadata["user_api_key_hash"] = metadata.get(
                         "user_api_key"
                     )  # this is the hash
-            _potential_requester_metadata = metadata.get("metadata", None)
+            _potential_requester_metadata = metadata.get(
+                "metadata", None
+            )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
             if (
-                not StandardLoggingPayloadSetup._is_llm_router_or_proxy_call(metadata)
-                and clean_metadata["requester_metadata"] is None
+                clean_metadata["requester_metadata"] is None
                 and _potential_requester_metadata is not None
                 and isinstance(_potential_requester_metadata, dict)
             ):

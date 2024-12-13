@@ -454,7 +454,7 @@ def test_get_response_time():
     "metadata, expected_requester_metadata",
     [
         ({"metadata": {"test": "test2"}}, {"test": "test2"}),
-        ({"metadata": {"test": "test2"}, "model_id": "test-model"}, None),
+        ({"metadata": {"test": "test2"}, "model_id": "test-model"}, {"test": "test2"}),
         (
             {
                 "metadata": {
