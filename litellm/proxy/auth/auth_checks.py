@@ -757,6 +757,7 @@ async def get_key_object(
     except DB_CONNECTION_ERROR_TYPES as e:
         return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception:
+        traceback.print_exc()
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
@@ -870,7 +871,6 @@ async def can_key_call_model(
     access_groups = defaultdict(list)
     if llm_router:
         access_groups = llm_router.get_model_access_groups(model_name=model)
-
     if (
         len(access_groups) > 0 and llm_router is not None
     ):  # check if token contains any model access groups

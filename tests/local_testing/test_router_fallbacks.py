@@ -1521,3 +1521,49 @@ def test_router_fallbacks_with_model_id():
         messages=[{"role": "user", "content": "hi"}],
         mock_testing_fallbacks=True,
     )
+
+
+def test_router_fallbacks_with_wildcard_model_name():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                    "mock_response": "Hi this is claude!",
+                },
+            },
+        ],
+        fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+    )
+
+    response = router.completion(
+        model="openai/gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+    )
+
+    print(response)
+    assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
+
+
+def test_get_fallback_model_group():
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    args = {
+        "fallbacks": [
+            {"gpt-3.5-turbo": ["claude-3-haiku"]},
+            {"*": ["claude-3-sonnet"]},
+        ],
+        "model_group": "openai/gpt-3.5-turbo",
+    }
+    fallback_model_group, _ = get_fallback_model_group(**args)
+    assert fallback_model_group == ["claude-3-haiku"]

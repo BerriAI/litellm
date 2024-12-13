@@ -25,8 +25,6 @@ from typing import (
     get_type_hints,
 )
 
-import requests
-
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -120,7 +118,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
-from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
@@ -164,6 +162,7 @@ from litellm.proxy.common_utils.load_config_utils import (
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -327,6 +326,7 @@ premium_user: bool = _license_check.is_premium()
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
+proxy_state = ProxyState()
 if global_max_parallel_request_retries_env is None:
     global_max_parallel_request_retries: int = 3
 else:
@@ -526,7 +526,7 @@ async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
 ### DB WRITER ###
-db_writer_client: Optional[HTTPHandler] = None
+db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
 
@@ -2090,7 +2090,10 @@ class ProxyConfig:
         """
         global user_config_file_path, llm_router
         combined_id_list = []
-        if llm_router is None:
+
+        ## BASE CASES ##
+        # if llm_router is None or db_models is empty, return 0
+        if llm_router is None or len(db_models) == 0:
             return 0
 
         ## DB MODELS ##
@@ -2420,6 +2423,19 @@ class ProxyConfig:
 
         return config
 
+    async def _get_models_from_db(self, prisma_client: PrismaClient) -> list:
+        try:
+            new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
+                    str(e)
+                )
+            )
+            new_models = []
+
+        return new_models
+
     async def add_deployment(
         self,
         prisma_client: PrismaClient,
@@ -2437,15 +2453,9 @@ class ProxyConfig:
                 raise ValueError(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            try:
-                new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
-                        str(e)
-                    )
-                )
-                new_models = []
+
+            new_models = await self._get_models_from_db(prisma_client=prisma_client)
+
             # update llm router
             await self._update_llm_router(
                 new_models=new_models, proxy_logging_obj=proxy_logging_obj
@@ -3046,6 +3056,10 @@ class ProxyStartupEvent:
             asyncio.create_task(
                 prisma_client.check_view_exists()
             )  # check if all necessary views exist. Don't block execution
+
+            asyncio.create_task(
+                prisma_client._set_spend_logs_row_count_in_proxy_state()
+            )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
             await prisma_client.health_check()
@@ -8060,7 +8074,8 @@ def get_image():
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
         # Download the image and cache it
-        response = requests.get(logo_path)
+        client = HTTPHandler()
+        response = client.get(logo_path)
         if response.status_code == 200:
             # Save the image to a local file
             cache_path = os.path.join(current_dir, "cached_logo.jpg")

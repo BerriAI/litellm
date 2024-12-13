@@ -113,7 +113,14 @@ import os
         ({"prompt": "Hello world"}, "image_generation"),
     ],
 )
-def test_azure_extra_headers(input, call_type):
+@pytest.mark.parametrize(
+    "header_value",
+    [
+        "headers",
+        "extra_headers",
+    ],
+)
+def test_azure_extra_headers(input, call_type, header_value):
     from litellm import embedding, image_generation
 
     http_client = Client()
@@ -128,18 +135,21 @@ def test_azure_extra_headers(input, call_type):
                 func = embedding
             elif call_type == "image_generation":
                 func = image_generation
-            response = func(
-                model="azure/chatgpt-v-2",
-                api_base="https://openai-gpt-4-test-v-1.openai.azure.com",
-                api_version="2023-07-01-preview",
-                api_key="my-azure-api-key",
-                extra_headers={
+
+            data = {
+                "model": "azure/chatgpt-v-2",
+                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+                "api_version": "2023-07-01-preview",
+                "api_key": "my-azure-api-key",
+                header_value: {
                     "Authorization": "my-bad-key",
                     "Ocp-Apim-Subscription-Key": "hello-world-testing",
                 },
                 **input,
-            )
+            }
+            response = func(**data)
             print(response)
+
         except Exception as e:
             print(e)
 

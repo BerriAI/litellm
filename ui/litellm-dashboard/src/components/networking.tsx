@@ -2818,7 +2818,7 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
-export const getProxyBaseUrlAndLogoutUrl = async (
+export const getProxyUISettings = async (
   accessToken: String,
 ) => {
   /**

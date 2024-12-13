@@ -3,6 +3,7 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
+import { ProxySettings } from "./user_dashboard";
 import { 
   Grid, Col, Text, 
   LineChart, TabPanel, TabPanels, 
@@ -35,6 +36,7 @@ import {
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
+  getProxyUISettings
 } from "./networking";
 import { start } from "repl";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
@@ -166,6 +168,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
+  const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -193,6 +196,22 @@ const UsagePage: React.FC<UsagePageProps> = ({
   
     return formatter.format(number);
   }
+
+  useEffect(() => {
+    const fetchProxySettings = async () => {
+      if (accessToken) {
+        try {
+          const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+          console.log("usage tab: proxy_settings", proxy_settings);
+          setProxySettings(proxy_settings);
+        } catch (error) {
+          console.error("Error fetching proxy settings:", error);
+        }
+      }
+    };
+    fetchProxySettings();
+  }, [accessToken]);
+
 
   useEffect(() => {
     updateTagSpendData(dateValue.from, dateValue.to);
@@ -386,6 +405,9 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   useEffect(() => {
     if (accessToken && token && userRole && userID) {
+      if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+        return;  // Don't run expensive queries
+      }
 
 
       fetchOverallSpend();
@@ -405,9 +427,29 @@ const UsagePage: React.FC<UsagePageProps> = ({
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
 
+  if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+    return (
+      <div style={{ width: "100%" }} className="p-8">      
+        <Card>
+          <Title>Database Query Limit Reached</Title>
+          <Text className="mt-4">
+            SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows. 
+            <br></br>
+            Please follow our guide to view usage when SpendLogs has more than 1M rows.
+          </Text>
+          <Button className="mt-4">
+            <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
+              View Usage Guide
+            </a>
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      
+    <div style={{ width: "100%" }} className="p-8">      
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>
