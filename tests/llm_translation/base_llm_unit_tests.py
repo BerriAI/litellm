@@ -1,4 +1,3 @@
-import asyncio
 import httpx
 import json
 import pytest
@@ -69,8 +68,7 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
-    @pytest.mark.asyncio
-    async def test_content_list_handling(self):
+    def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
@@ -80,7 +78,7 @@ class BaseLLMChatTest(ABC):
             }
         ]
         try:
-            response = await self.async_completion_function(
+            response = self.completion_function(
                 **base_completion_call_args,
                 messages=messages,
             )
@@ -91,8 +89,7 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
-    @pytest.mark.asyncio
-    async def test_pydantic_model_input(self):
+    def test_pydantic_model_input(self):
         litellm.set_verbose = True
 
         from litellm import completion, Message
@@ -100,13 +97,10 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [Message(content="Hello, how are you?", role="user")]
 
-        await self.async_completion_function(
-            **base_completion_call_args, messages=messages
-        )
+        self.completion_function(**base_completion_call_args, messages=messages)
 
     @pytest.mark.parametrize("image_url", ["str", "dict"])
-    @pytest.mark.asyncio
-    async def test_pdf_handling(self, pdf_messages, image_url):
+    def test_pdf_handling(self, pdf_messages, image_url):
         from litellm.utils import supports_pdf_input
 
         if image_url == "str":
@@ -129,33 +123,31 @@ class BaseLLMChatTest(ABC):
         if not supports_pdf_input(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
 
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=image_messages,
         )
         assert response is not None
 
-    @pytest.mark.asyncio
-    async def test_message_with_name(self):
+    def test_message_with_name(self):
         litellm.set_verbose = True
         base_completion_call_args = self.get_base_completion_call_args()
         messages = [
             {"role": "user", "content": "Hello", "name": "test_name"},
         ]
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **base_completion_call_args, messages=messages
         )
         assert response is not None
 
-    @pytest.mark.asyncio
-    async def test_multilingual_requests(self):
+    def test_multilingual_requests(self):
         """
         Tests that the provider can handle multilingual requests and invalid utf-8 sequences
 
         Context: https://github.com/openai/openai-python/issues/1921
         """
         base_completion_call_args = self.get_base_completion_call_args()
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
         )
@@ -170,7 +162,7 @@ class BaseLLMChatTest(ABC):
         ],
     )
     @pytest.mark.flaky(retries=6, delay=1)
-    async def test_json_response_format(self, response_format):
+    def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
         """
@@ -188,7 +180,7 @@ class BaseLLMChatTest(ABC):
             },
         ]
 
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=messages,
             response_format=response_format,
@@ -201,8 +193,7 @@ class BaseLLMChatTest(ABC):
         assert response.choices[0].message.content is not None
 
     @pytest.mark.flaky(retries=6, delay=1)
-    @pytest.mark.asyncio
-    async def test_json_response_pydantic_obj(self):
+    def test_json_response_pydantic_obj(self):
         litellm.set_verbose = True
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
@@ -218,7 +209,7 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model does not support response schema")
 
         try:
-            res = await self.async_completion_function(
+            res = self.completion_function(
                 **base_completion_call_args,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant."},
@@ -301,8 +292,7 @@ class BaseLLMChatTest(ABC):
         pass
 
     @pytest.mark.parametrize("detail", [None, "low", "high"])  # TODO: Add "high"
-    @pytest.mark.asyncio
-    async def test_image_url(self, detail):
+    def test_image_url(self, detail):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
 
@@ -344,13 +334,12 @@ class BaseLLMChatTest(ABC):
                     ],
                 }
             ]
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **base_completion_call_args, messages=messages
         )
         assert response is not None
 
-    @pytest.mark.asyncio
-    async def test_prompt_caching(self):
+    def test_prompt_caching(self):
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
 
@@ -364,7 +353,7 @@ class BaseLLMChatTest(ABC):
 
         try:
             for _ in range(2):
-                response = await self.async_completion_function(
+                response = self.completion_function(
                     **base_completion_call_args,
                     messages=[
                         # System Message
@@ -439,15 +428,14 @@ class BaseLLMChatTest(ABC):
 
         return url
 
-    @pytest.mark.asyncio
-    async def test_completion_cost(self):
+    def test_completion_cost(self):
         from litellm import completion_cost
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm.set_verbose = True
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **self.get_base_completion_call_args(),
             messages=[{"role": "user", "content": "Hello, how are you?"}],
         )
