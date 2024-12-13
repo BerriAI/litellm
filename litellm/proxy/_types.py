@@ -2205,3 +2205,11 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     providers: Dict[str, ProviderBudgetResponseObject] = (
         {}
     )  # Dictionary mapping provider names to their budget configurations
+
+
+class ProxyStateVariables(TypedDict):
+    """
+    TypedDict for Proxy state variables.
+    """
+
+    spend_logs_row_count: int
