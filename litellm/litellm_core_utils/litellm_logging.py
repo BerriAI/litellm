@@ -2544,6 +2544,12 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
+    def _is_llm_router_or_proxy_call(metadata: Optional[dict]) -> bool:
+        if metadata is None:
+            return False
+        return metadata.get("model_id") is not None
+
+    @staticmethod
     def get_standard_logging_metadata(
         metadata: Optional[Dict[str, Any]]
     ) -> StandardLoggingMetadata:
@@ -2584,6 +2590,14 @@ class StandardLoggingPayloadSetup:
                     clean_metadata["user_api_key_hash"] = metadata.get(
                         "user_api_key"
                     )  # this is the hash
+            _potential_requester_metadata = metadata.get("metadata", None)
+            if (
+                not StandardLoggingPayloadSetup._is_llm_router_or_proxy_call(metadata)
+                and clean_metadata["requester_metadata"] is None
+                and _potential_requester_metadata is not None
+                and isinstance(_potential_requester_metadata, dict)
+            ):
+                clean_metadata["requester_metadata"] = _potential_requester_metadata
         return clean_metadata
 
     @staticmethod
