@@ -33,9 +33,10 @@ from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
 from litellm.types.router import (
+    DeploymentTypedDict,
+    GenericBudgetConfigType,
+    GenericBudgetInfo,
     LiteLLM_Params,
-    ProviderBudgetConfigType,
-    ProviderBudgetInfo,
     RouterErrors,
 )
 from litellm.types.utils import StandardLoggingPayload
@@ -51,34 +52,23 @@ DEFAULT_REDIS_SYNC_INTERVAL = 1
 
 
 class RouterBudgetLimiting(CustomLogger):
-    def __init__(self, router_cache: DualCache, provider_budget_config: dict):
+    def __init__(
+        self,
+        router_cache: DualCache,
+        provider_budget_config: Optional[dict],
+        model_list: Optional[
+            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
+        ] = None,
+    ):
         self.router_cache = router_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
-
-        # cast elements of provider_budget_config to ProviderBudgetInfo
-        for provider, config in provider_budget_config.items():
-            if config is None:
-                raise ValueError(
-                    f"No budget config found for provider {provider}, provider_budget_config: {provider_budget_config}"
-                )
-
-            if not isinstance(config, ProviderBudgetInfo):
-                provider_budget_config[provider] = ProviderBudgetInfo(
-                    budget_limit=config.get("budget_limit"),
-                    time_period=config.get("time_period"),
-                )
-            asyncio.create_task(
-                self._init_provider_budget_in_cache(
-                    provider=provider,
-                    budget_config=provider_budget_config[provider],
-                )
-            )
-
-        self.provider_budget_config: ProviderBudgetConfigType = provider_budget_config
-        verbose_router_logger.debug(
-            f"Initalized Provider budget config: {self.provider_budget_config}"
+        self.provider_budget_config: Optional[GenericBudgetConfigType] = (
+            provider_budget_config
         )
+        self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
+        self._init_provider_budgets()
+        self._init_deployment_budgets(model_list=model_list)
 
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
@@ -114,77 +104,92 @@ class RouterBudgetLimiting(CustomLogger):
             request_kwargs
         )
 
-        # Collect all providers and their budget configs
-        # {"openai": ProviderBudgetInfo, "anthropic": ProviderBudgetInfo, "azure": None}
-        _provider_configs: Dict[str, Optional[ProviderBudgetInfo]] = {}
-        for deployment in healthy_deployments:
-            provider = self._get_llm_provider_for_deployment(deployment)
-            if provider is None:
-                continue
-            budget_config = self._get_budget_config_for_provider(provider)
-            _provider_configs[provider] = budget_config
-
-        # Filter out providers without budget config
-        provider_configs: Dict[str, ProviderBudgetInfo] = {
-            provider: config
-            for provider, config in _provider_configs.items()
-            if config is not None
-        }
-
-        # Build cache keys for batch retrieval
+        # Build combined cache keys for both provider and deployment budgets
         cache_keys = []
-        for provider, config in provider_configs.items():
-            cache_keys.append(f"provider_spend:{provider}:{config.time_period}")
+        provider_configs: Dict[str, GenericBudgetInfo] = {}
+        deployment_configs: Dict[str, GenericBudgetInfo] = {}
 
-        # Fetch current spend for all providers using batch cache
-        _current_spends = await self.router_cache.async_batch_get_cache(
-            keys=cache_keys,
-            parent_otel_span=parent_otel_span,
-        )
-        current_spends: List = _current_spends or [0.0] * len(provider_configs)
-
-        # Map providers to their current spend values
-        provider_spend_map: Dict[str, float] = {}
-        for idx, provider in enumerate(provider_configs.keys()):
-            provider_spend_map[provider] = float(current_spends[idx] or 0.0)
-
-        # Filter healthy deployments based on budget constraints
-        deployment_above_budget_info: str = ""  # used to return in error message
         for deployment in healthy_deployments:
-            provider = self._get_llm_provider_for_deployment(deployment)
-            if provider is None:
-                continue
-            budget_config = provider_configs.get(provider)
+            # Check provider budgets
+            if self.provider_budget_config:
+                provider = self._get_llm_provider_for_deployment(deployment)
+                if provider is not None:
+                    budget_config = self._get_budget_config_for_provider(provider)
+                    if budget_config is not None:
+                        provider_configs[provider] = budget_config
+                        cache_keys.append(
+                            f"provider_spend:{provider}:{budget_config.time_period}"
+                        )
 
-            if not budget_config:
-                continue
+            # Check deployment budgets
+            if self.deployment_budget_config:
+                model_id = deployment.get("model_info", {}).get("id")
+                if model_id is not None:
+                    budget_config = self._get_budget_config_for_deployment(model_id)
+                    if budget_config is not None:
+                        deployment_configs[model_id] = budget_config
+                        cache_keys.append(
+                            f"deployment_spend:{model_id}:{budget_config.time_period}"
+                        )
 
-            current_spend = provider_spend_map.get(provider, 0.0)
-            budget_limit = budget_config.budget_limit
-
-            verbose_router_logger.debug(
-                f"Current spend for {provider}: {current_spend}, budget limit: {budget_limit}"
+        # Single cache read for all spend values
+        if len(cache_keys) > 0:
+            _current_spends = await self.router_cache.async_batch_get_cache(
+                keys=cache_keys,
+                parent_otel_span=parent_otel_span,
             )
-            self._track_provider_remaining_budget_prometheus(
-                provider=provider,
-                spend=current_spend,
-                budget_limit=budget_limit,
-            )
+            current_spends: List = _current_spends or [0.0] * len(cache_keys)
 
-            if current_spend >= budget_limit:
-                debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {budget_limit}"
-                verbose_router_logger.debug(debug_msg)
-                deployment_above_budget_info += f"{debug_msg}\n"
-                continue
+            # Map spends to their respective keys
+            spend_map: Dict[str, float] = {}
+            for idx, key in enumerate(cache_keys):
+                spend_map[key] = float(current_spends[idx] or 0.0)
 
-            potential_deployments.append(deployment)
+            # Filter deployments based on both provider and deployment budgets
+            deployment_above_budget_info: str = ""
+            for deployment in healthy_deployments:
+                is_within_budget = True
 
-        if len(potential_deployments) == 0:
-            raise ValueError(
-                f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: {deployment_above_budget_info}"
-            )
+                # Check provider budget
+                if self.provider_budget_config:
+                    provider = self._get_llm_provider_for_deployment(deployment)
+                    if provider in provider_configs:
+                        config = provider_configs[provider]
+                        current_spend = spend_map.get(
+                            f"provider_spend:{provider}:{config.time_period}", 0.0
+                        )
+                        if current_spend >= config.budget_limit:
+                            debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.budget_limit}"
+                            deployment_above_budget_info += f"{debug_msg}\n"
+                            is_within_budget = False
+                            continue
 
-        return potential_deployments
+                # Check deployment budget
+                if self.deployment_budget_config and is_within_budget:
+                    model_id = deployment.get("model_info", {}).get("id")
+                    if model_id in deployment_configs:
+                        config = deployment_configs[model_id]
+                        current_spend = spend_map.get(
+                            f"deployment_spend:{model_id}:{config.time_period}", 0.0
+                        )
+                        if current_spend >= config.budget_limit:
+                            debug_msg = f"Exceeded budget for deployment {model_id}: {current_spend} >= {config.budget_limit}"
+                            verbose_router_logger.debug(debug_msg)
+                            deployment_above_budget_info += f"{debug_msg}\n"
+                            is_within_budget = False
+                            continue
+
+                if is_within_budget:
+                    potential_deployments.append(deployment)
+
+            if len(potential_deployments) == 0:
+                raise ValueError(
+                    f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: {deployment_above_budget_info}"
+                )
+
+            return potential_deployments
+        else:
+            return healthy_deployments
 
     async def _get_or_set_budget_start_time(
         self, start_time_key: str, current_time: float, ttl_seconds: int
@@ -272,36 +277,36 @@ class RouterBudgetLimiting(CustomLogger):
             raise ValueError("custom_llm_provider is required")
 
         budget_config = self._get_budget_config_for_provider(custom_llm_provider)
-        if budget_config is None:
-            raise ValueError(
-                f"No budget config found for provider {custom_llm_provider}, self.provider_budget_config: {self.provider_budget_config}"
+        if budget_config:
+            # increment spend for provider
+            spend_key = (
+                f"provider_spend:{custom_llm_provider}:{budget_config.time_period}"
+            )
+            start_time_key = f"provider_budget_start_time:{custom_llm_provider}"
+            await self._increment_spend_for_key(
+                budget_config=budget_config,
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                response_cost=response_cost,
             )
 
-        # increment spend for provider
-        spend_key = f"provider_spend:{custom_llm_provider}:{budget_config.time_period}"
-        start_time_key = f"provider_budget_start_time:{custom_llm_provider}"
-        await self._increment_spend_for_key(
-            budget_config=budget_config,
-            spend_key=spend_key,
-            start_time_key=start_time_key,
-            response_cost=response_cost,
-        )
-
-        # increment spend for specific deployment id
-        deployment_spend_key = (
-            f"deployment_spend:{model_id}:{budget_config.time_period}"
-        )
-        deployment_start_time_key = f"deployment_budget_start_time:{model_id}"
-        await self._increment_spend_for_key(
-            budget_config=budget_config,
-            spend_key=deployment_spend_key,
-            start_time_key=deployment_start_time_key,
-            response_cost=response_cost,
-        )
+        deployment_budget_config = self._get_budget_config_for_deployment(model_id)
+        if deployment_budget_config:
+            # increment spend for specific deployment id
+            deployment_spend_key = (
+                f"deployment_spend:{model_id}:{deployment_budget_config.time_period}"
+            )
+            deployment_start_time_key = f"deployment_budget_start_time:{model_id}"
+            await self._increment_spend_for_key(
+                budget_config=deployment_budget_config,
+                spend_key=deployment_spend_key,
+                start_time_key=deployment_start_time_key,
+                response_cost=response_cost,
+            )
 
     async def _increment_spend_for_key(
         self,
-        budget_config: ProviderBudgetInfo,
+        budget_config: GenericBudgetInfo,
         spend_key: str,
         start_time_key: str,
         response_cost: float,
@@ -418,10 +423,20 @@ class RouterBudgetLimiting(CustomLogger):
 
             # 2. Fetch all current provider spend from Redis to update in-memory cache
             cache_keys = []
-            for provider, config in self.provider_budget_config.items():
-                if config is None:
-                    continue
-                cache_keys.append(f"provider_spend:{provider}:{config.time_period}")
+
+            if self.provider_budget_config is not None:
+                for provider, config in self.provider_budget_config.items():
+                    if config is None:
+                        continue
+                    cache_keys.append(f"provider_spend:{provider}:{config.time_period}")
+
+            if self.deployment_budget_config is not None:
+                for model_id, config in self.deployment_budget_config.items():
+                    if config is None:
+                        continue
+                    cache_keys.append(
+                        f"deployment_spend:{model_id}:{config.time_period}"
+                    )
 
             # Batch fetch current spend values from Redis
             redis_values = await self.router_cache.redis_cache.async_batch_get_cache(
@@ -444,9 +459,19 @@ class RouterBudgetLimiting(CustomLogger):
                 f"Error syncing in-memory cache with Redis: {str(e)}"
             )
 
+    def _get_budget_config_for_deployment(
+        self,
+        model_id: str,
+    ) -> Optional[GenericBudgetInfo]:
+        if self.deployment_budget_config is None:
+            return None
+        return self.deployment_budget_config.get(model_id, None)
+
     def _get_budget_config_for_provider(
         self, provider: str
-    ) -> Optional[ProviderBudgetInfo]:
+    ) -> Optional[GenericBudgetInfo]:
+        if self.provider_budget_config is None:
+            return None
         return self.provider_budget_config.get(provider, None)
 
     def _get_llm_provider_for_deployment(self, deployment: Dict) -> Optional[str]:
@@ -530,7 +555,7 @@ class RouterBudgetLimiting(CustomLogger):
         return (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
 
     async def _init_provider_budget_in_cache(
-        self, provider: str, budget_config: ProviderBudgetInfo
+        self, provider: str, budget_config: GenericBudgetInfo
     ):
         """
         Initialize provider budget in cache by storing the following keys if they don't exist:
@@ -553,3 +578,92 @@ class RouterBudgetLimiting(CustomLogger):
             await self.router_cache.async_set_cache(
                 key=spend_key, value=0.0, ttl=ttl_seconds
             )
+
+    @staticmethod
+    def should_init_router_budget_limiter(
+        provider_budget_config: Optional[dict],
+        model_list: Optional[
+            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
+        ] = None,
+    ):
+        """
+        Returns `True` if the router budget routing settings are set and RouterBudgetLimiting should be initialized
+
+        Either:
+         - provider_budget_config is set
+         - budgets are set for deployments in the model_list
+        """
+        if provider_budget_config is not None:
+            return True
+
+        if model_list is None:
+            return False
+
+        for _model in model_list:
+            _litellm_params = _model.get("litellm_params", {})
+            if (
+                _litellm_params.get("max_budget")
+                or _litellm_params.get("budget_duration") is not None
+            ):
+                return True
+        return False
+
+    def _init_provider_budgets(self):
+        if self.provider_budget_config is not None:
+            # cast elements of provider_budget_config to GenericBudgetInfo
+            for provider, config in self.provider_budget_config.items():
+                if config is None:
+                    raise ValueError(
+                        f"No budget config found for provider {provider}, provider_budget_config: {self.provider_budget_config}"
+                    )
+
+                if not isinstance(config, GenericBudgetInfo):
+                    self.provider_budget_config[provider] = GenericBudgetInfo(
+                        budget_limit=config.get("budget_limit"),
+                        time_period=config.get("time_period"),
+                    )
+                asyncio.create_task(
+                    self._init_provider_budget_in_cache(
+                        provider=provider,
+                        budget_config=self.provider_budget_config[provider],
+                    )
+                )
+
+            verbose_router_logger.debug(
+                f"Initalized Provider budget config: {self.provider_budget_config}"
+            )
+
+    def _init_deployment_budgets(
+        self,
+        model_list: Optional[
+            Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
+        ] = None,
+    ):
+        if model_list is None:
+            return
+        for _model in model_list:
+            _litellm_params = _model.get("litellm_params", {})
+            _model_info = _model.get("model_info", {})
+            _model_id = _model_info.get("id")
+            _max_budget = _litellm_params.get("max_budget")
+            _budget_duration = _litellm_params.get("budget_duration")
+
+            verbose_router_logger.debug(
+                f"Init Deployment Budget: max_budget: {_max_budget}, budget_duration: {_budget_duration}, model_id: {_model_id}"
+            )
+            if (
+                _max_budget is not None
+                and _budget_duration is not None
+                and _model_id is not None
+            ):
+                _budget_config = GenericBudgetInfo(
+                    time_period=_budget_duration,
+                    budget_limit=_max_budget,
+                )
+                if self.deployment_budget_config is None:
+                    self.deployment_budget_config = {}
+                self.deployment_budget_config[_model_id] = _budget_config
+
+        verbose_router_logger.debug(
+            f"Initialized Deployment Budget Config: {self.deployment_budget_config}"
+        )
