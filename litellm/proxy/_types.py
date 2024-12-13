@@ -261,10 +261,6 @@ class LiteLLMRoutes(enum.Enum):
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
     master_key_only_routes = ["/global/spend/reset", "/key/list"]
 
-    sso_only_routes = [
-        "/sso/get/ui_settings",
-    ]
-
     management_routes = [  # key
         "/key/generate",
         "/key/{token_id}/regenerate",
@@ -347,28 +343,24 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
-    internal_user_routes = (
-        [
-            "/key/generate",
-            "/key/{token_id}/regenerate",
-            "/key/update",
-            "/key/delete",
-            "/key/health",
-            "/key/info",
-            "/global/spend/tags",
-            "/global/spend/keys",
-            "/global/spend/models",
-            "/global/spend/provider",
-            "/global/spend/end_users",
-            "/global/activity",
-            "/global/activity/model",
-        ]
-        + spend_tracking_routes
-        + sso_only_routes
-    )
+    internal_user_routes = [
+        "/key/generate",
+        "/key/{token_id}/regenerate",
+        "/key/update",
+        "/key/delete",
+        "/key/health",
+        "/key/info",
+        "/global/spend/tags",
+        "/global/spend/keys",
+        "/global/spend/models",
+        "/global/spend/provider",
+        "/global/spend/end_users",
+        "/global/activity",
+        "/global/activity/model",
+    ] + spend_tracking_routes
 
     internal_user_view_only_routes = (
-        spend_tracking_routes + global_spend_tracking_routes + sso_only_routes
+        spend_tracking_routes + global_spend_tracking_routes
     )
 
     self_managed_routes = [
@@ -2205,3 +2197,11 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     providers: Dict[str, ProviderBudgetResponseObject] = (
         {}
     )  # Dictionary mapping provider names to their budget configurations
+
+
+class ProxyStateVariables(TypedDict):
+    """
+    TypedDict for Proxy state variables.
+    """
+
+    spend_logs_row_count: int
