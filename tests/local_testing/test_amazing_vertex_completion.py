@@ -865,6 +865,50 @@ def test_gemini_pro_grounding(value_in_dict):
     except litellm.RateLimitError:
         pass
 
+@pytest.mark.parametrize("value_in_dict", [{}, {"disable_attribution": False}])  #
+def test_gemini_2_0_grounding(value_in_dict):
+    try:
+        load_vertex_ai_credentials()
+        litellm.set_verbose = True
+
+        tools = [{"googleSearch": value_in_dict}]
+
+        litellm.set_verbose = True
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+
+        with patch.object(
+            client, "post", side_effect=vertex_httpx_grounding_post
+        ) as mock_call:
+            resp = litellm.completion(
+                model="vertex_ai_beta/gemini-2.0-flash-exp",
+                messages=[{"role": "user", "content": "Who won the world cup?"}],
+                tools=tools,
+                client=client,
+            )
+
+            mock_call.assert_called_once()
+
+            print(mock_call.call_args.kwargs["json"]["tools"][0])
+
+            assert (
+                "googleSearch"
+                in mock_call.call_args.kwargs["json"]["tools"][0]
+            )
+            assert (
+                mock_call.call_args.kwargs["json"]["tools"][0]["googleSearch"]
+                == value_in_dict
+            )
+
+            assert "vertex_ai_grounding_metadata" in resp._hidden_params
+            assert isinstance(resp._hidden_params["vertex_ai_grounding_metadata"], list)
+
+    except litellm.InternalServerError:
+        pass
+    except litellm.RateLimitError:
+        pass
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize(
