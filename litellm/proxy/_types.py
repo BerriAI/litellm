@@ -1421,6 +1421,7 @@ class UserAPIKeyAuth(
     Return the row in the db
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     api_key: Optional[str] = None
     user_role: Optional[LitellmUserRoles] = None
     allowed_model_region: Optional[AllowedModelRegion] = None
@@ -1440,9 +1441,6 @@ class UserAPIKeyAuth(
             ).startswith("sk-"):
                 values.update({"api_key": hash_token(values.get("api_key"))})
         return values
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):
