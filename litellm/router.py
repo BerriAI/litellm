@@ -538,7 +538,7 @@ class Router:
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
         if self.provider_budget_config is not None:
-            self.provider_budget_logger = RouterBudgetLimiting(
+            self.router_budget_logger = RouterBudgetLimiting(
                 router_cache=self.cache,
                 provider_budget_config=self.provider_budget_config,
             )
@@ -5320,7 +5320,7 @@ class Router:
 
             if self.provider_budget_config is not None:
                 healthy_deployments = (
-                    await self.provider_budget_logger.async_filter_deployments(
+                    await self.router_budget_logger.async_filter_deployments(
                         healthy_deployments=healthy_deployments,
                         request_kwargs=request_kwargs,
                     )
