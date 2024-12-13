@@ -2088,7 +2088,10 @@ class ProxyConfig:
         """
         global user_config_file_path, llm_router
         combined_id_list = []
-        if llm_router is None:
+
+        ## BASE CASES ##
+        # if llm_router is None or db_models is empty, return 0
+        if llm_router is None or len(db_models) == 0:
             return 0
 
         ## DB MODELS ##
@@ -2418,6 +2421,19 @@ class ProxyConfig:
 
         return config
 
+    async def _get_models_from_db(self, prisma_client: PrismaClient) -> list:
+        try:
+            new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
+                    str(e)
+                )
+            )
+            new_models = []
+
+        return new_models
+
     async def add_deployment(
         self,
         prisma_client: PrismaClient,
@@ -2435,15 +2451,9 @@ class ProxyConfig:
                 raise ValueError(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            try:
-                new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
-                        str(e)
-                    )
-                )
-                new_models = []
+
+            new_models = await self._get_models_from_db(prisma_client=prisma_client)
+
             # update llm router
             await self._update_llm_router(
                 new_models=new_models, proxy_logging_obj=proxy_logging_obj
