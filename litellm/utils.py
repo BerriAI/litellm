@@ -1214,7 +1214,9 @@ def client(original_function):  # noqa: PLR0915
 
 
 @lru_cache(maxsize=128)
-def _select_tokenizer(model: str):
+def _select_tokenizer(
+    model: str,
+):
     if model in litellm.cohere_models and "command-r" in model:
         # cohere
         cohere_tokenizer = Tokenizer.from_pretrained(
@@ -1235,19 +1237,10 @@ def _select_tokenizer(model: str):
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # default - tiktoken
     else:
-        tokenizer = None
-        if (
-            model in litellm.open_ai_chat_completion_models
-            or model in litellm.open_ai_text_completion_models
-            or model in litellm.open_ai_embedding_models
-        ):
-            return {"type": "openai_tokenizer", "tokenizer": encoding}
-
-        try:
-            tokenizer = Tokenizer.from_pretrained(model)
-            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-        except Exception:
-            return {"type": "openai_tokenizer", "tokenizer": encoding}
+        return {
+            "type": "openai_tokenizer",
+            "tokenizer": encoding,
+        }  # default to openai tokenizer
 
 
 def encode(model="", text="", custom_tokenizer: Optional[dict] = None):

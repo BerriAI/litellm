@@ -342,7 +342,8 @@ class AzureChatCompletion(BaseLLM):
         headers: Optional[dict] = None,
         client=None,
     ):
-        super().completion()
+        if headers:
+            optional_params["extra_headers"] = headers
         try:
             if model is None or messages is None:
                 raise AzureOpenAIError(
@@ -851,8 +852,10 @@ class AzureChatCompletion(BaseLLM):
         max_retries: Optional[int] = None,
         client=None,
         aembedding=None,
+        headers: Optional[dict] = None,
     ) -> litellm.EmbeddingResponse:
-        super().embedding()
+        if headers:
+            optional_params["extra_headers"] = headers
         if self._client_session is None:
             self._client_session = self.create_client_session()
         try:
