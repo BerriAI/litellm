@@ -264,7 +264,7 @@ class ProviderBudgetLimiting(CustomLogger):
             raise ValueError("standard_logging_payload is required")
 
         response_cost: float = standard_logging_payload.get("response_cost", 0)
-
+        model_id: str = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: str = kwargs.get("litellm_params", {}).get(
             "custom_llm_provider", None
         )
@@ -277,9 +277,35 @@ class ProviderBudgetLimiting(CustomLogger):
                 f"No budget config found for provider {custom_llm_provider}, self.provider_budget_config: {self.provider_budget_config}"
             )
 
+        # increment spend for provider
         spend_key = f"provider_spend:{custom_llm_provider}:{budget_config.time_period}"
         start_time_key = f"provider_budget_start_time:{custom_llm_provider}"
+        await self._increment_spend_for_key(
+            budget_config=budget_config,
+            spend_key=spend_key,
+            start_time_key=start_time_key,
+            response_cost=response_cost,
+        )
 
+        # increment spend for specific deployment id
+        deployment_spend_key = (
+            f"deployment_spend:{model_id}:{budget_config.time_period}"
+        )
+        deployment_start_time_key = f"deployment_budget_start_time:{model_id}"
+        await self._increment_spend_for_key(
+            budget_config=budget_config,
+            spend_key=deployment_spend_key,
+            start_time_key=deployment_start_time_key,
+            response_cost=response_cost,
+        )
+
+    async def _increment_spend_for_key(
+        self,
+        budget_config: ProviderBudgetInfo,
+        spend_key: str,
+        start_time_key: str,
+        response_cost: float,
+    ):
         current_time = datetime.now(timezone.utc).timestamp()
         ttl_seconds = duration_in_seconds(budget_config.time_period)
 
