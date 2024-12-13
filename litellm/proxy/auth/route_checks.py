@@ -65,8 +65,6 @@ class RouteChecks:
                 pass
             elif route == "/team/info":
                 pass  # handled by function itself
-        elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-            pass
         elif (
             route in LiteLLMRoutes.global_spend_tracking_routes.value
             and getattr(valid_token, "permissions", None) is not None

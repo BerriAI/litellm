@@ -10,6 +10,7 @@ import litellm.proxy.proxy_server
 
 load_dotenv()
 import io
+import json
 import os
 
 # this file is to test litellm/proxy
@@ -2064,7 +2065,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):
 
 @pytest.mark.asyncio
 async def test_proxy_server_prisma_setup():
-    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_state
     from litellm.proxy.utils import ProxyLogging
     from litellm.caching import DualCache
 
@@ -2077,6 +2078,9 @@ async def test_proxy_server_prisma_setup():
         mock_client.connect = AsyncMock()  # Mock the connect method
         mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
         mock_client.health_check = AsyncMock()  # Mock the health_check method
+        mock_client._set_spend_logs_row_count_in_proxy_state = (
+            AsyncMock()
+        )  # Mock the _set_spend_logs_row_count_in_proxy_state method
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -2091,6 +2095,10 @@ async def test_proxy_server_prisma_setup():
         # Note: This is REALLY IMPORTANT to check that the health check is called
         # This is how we ensure the DB is ready before proceeding
         mock_client.health_check.assert_called_once()
+
+        # check that the spend logs row count is set in proxy state
+        mock_client._set_spend_logs_row_count_in_proxy_state.assert_called_once()
+        assert proxy_state.get_proxy_state_variable("spend_logs_row_count") is not None
 
 
 @pytest.mark.asyncio
@@ -2125,3 +2133,57 @@ async def test_proxy_server_prisma_setup_invalid_db():
 
     if _old_db_url:
         os.environ["DATABASE_URL"] = _old_db_url
+
+
+@pytest.mark.asyncio
+async def test_get_ui_settings_spend_logs_threshold():
+    """
+    Test that get_ui_settings correctly sets DISABLE_EXPENSIVE_DB_QUERIES based on spend_logs_row_count threshold
+    """
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+    from litellm.proxy.proxy_server import proxy_state
+    from fastapi import Request
+    from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
+
+    # Create a mock request
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
+    )
+
+    # Test case 1: When spend_logs_row_count > MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY + 1
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is True
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY + 1
+
+    # Test case 2: When spend_logs_row_count < MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY - 1
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is False
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY - 1
+
+    # Test case 3: Edge case - exactly MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is False
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY
+
+    # Clean up
+    proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
