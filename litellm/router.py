@@ -61,7 +61,7 @@ from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
-from litellm.router_strategy.provider_budgets import ProviderBudgetLimiting
+from litellm.router_strategy.provider_budgets import RouterBudgetLimiting
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.batch_utils import (
@@ -538,7 +538,7 @@ class Router:
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
         if self.provider_budget_config is not None:
-            self.provider_budget_logger = ProviderBudgetLimiting(
+            self.provider_budget_logger = RouterBudgetLimiting(
                 router_cache=self.cache,
                 provider_budget_config=self.provider_budget_config,
             )

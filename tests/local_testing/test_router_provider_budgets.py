@@ -11,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 import pytest
 from litellm import Router
-from litellm.router_strategy.provider_budgets import ProviderBudgetLimiting
+from litellm.router_strategy.provider_budgets import RouterBudgetLimiting
 from litellm.types.router import (
     RoutingStrategy,
     ProviderBudgetConfigType,
@@ -175,7 +175,7 @@ async def test_get_llm_provider_for_deployment():
 
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -212,7 +212,7 @@ async def test_get_budget_config_for_provider():
         "anthropic": ProviderBudgetInfo(time_period="7d", budget_limit=500),
     }
 
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config=config
     )
 
@@ -244,7 +244,7 @@ async def test_prometheus_metric_tracking():
     mock_prometheus = MagicMock(spec=PrometheusLogger)
 
     # Setup provider budget limiting
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(),
         provider_budget_config={
             "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100)
@@ -308,7 +308,7 @@ async def test_handle_new_budget_window():
     Current
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -349,7 +349,7 @@ async def test_get_or_set_budget_start_time():
     scenario 2: existing start time in cache, should return existing start time
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -390,7 +390,7 @@ async def test_increment_spend_in_current_window():
     - Queue the increment operation to Redis
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -441,7 +441,7 @@ async def test_sync_in_memory_spend_with_redis():
         "anthropic": ProviderBudgetInfo(time_period="1d", budget_limit=200),
     }
 
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(
             redis_cache=RedisCache(
                 host=os.getenv("REDIS_HOST"),
@@ -491,7 +491,7 @@ async def test_get_current_provider_spend():
     3. Provider with budget config and spend returns correct value
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(),
         provider_budget_config={
             "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
@@ -526,7 +526,7 @@ async def test_get_current_provider_budget_reset_at():
     3. Provider with budget config and TTL returns correct ISO timestamp
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(
             redis_cache=RedisCache(
                 host=os.getenv("REDIS_HOST"),

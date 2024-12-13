@@ -11,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 import pytest
 from litellm import Router
-from litellm.router_strategy.provider_budgets import ProviderBudgetLimiting
+from litellm.router_strategy.provider_budgets import RouterBudgetLimiting
 from litellm.types.router import (
     RoutingStrategy,
     ProviderBudgetConfigType,

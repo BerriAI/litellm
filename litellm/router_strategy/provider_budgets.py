@@ -50,7 +50,7 @@ else:
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
 
-class ProviderBudgetLimiting(CustomLogger):
+class RouterBudgetLimiting(CustomLogger):
     def __init__(self, router_cache: DualCache, provider_budget_config: dict):
         self.router_cache = router_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
@@ -256,7 +256,7 @@ class ProviderBudgetLimiting(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
-        verbose_router_logger.debug("in ProviderBudgetLimiting.async_log_success_event")
+        verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
         )
