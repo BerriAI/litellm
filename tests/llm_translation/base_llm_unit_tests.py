@@ -170,8 +170,7 @@ class BaseLLMChatTest(ABC):
         ],
     )
     @pytest.mark.flaky(retries=6, delay=1)
-    @pytest.mark.asyncio
-    async def test_json_response_format(self, response_format):
+    def test_json_response_format(self, response_format):
         """
         Test that the JSON response format is supported by the LLM API
         """
@@ -189,7 +188,7 @@ class BaseLLMChatTest(ABC):
             },
         ]
 
-        response = await self.async_completion_function(
+        response = self.completion_function(
             **base_completion_call_args,
             messages=messages,
             response_format=response_format,
