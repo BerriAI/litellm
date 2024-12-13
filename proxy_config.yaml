@@ -1,0 +1,5 @@
+model_list:
+  - model_name: deepseek/deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: sk-354c3ec4f73542f681d15f2369d9fa95

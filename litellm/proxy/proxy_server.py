@@ -225,6 +225,13 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payloa
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
+from litellm.proxy.wuban.models import (
+    set_model_list_def as set_model_list
+)
+from litellm.proxy.wuban.models import (
+    router as wuban_router
+)
+
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -9150,6 +9157,7 @@ def cleanup_router_config_variables():
     health_check_interval = None
     prisma_client = None
 
+set_model_list(model_list)
 
 app.include_router(router)
 app.include_router(rerank_router)
@@ -9172,3 +9180,4 @@ app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
+app.include_router(wuban_router)
