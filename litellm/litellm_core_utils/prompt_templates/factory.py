@@ -2529,6 +2529,38 @@ def return_assistant_continue_message(
         return DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
 
+def skip_empty_text_blocks(
+    message: ChatCompletionAssistantMessage,
+) -> ChatCompletionAssistantMessage:
+    """
+    Skips empty text blocks in message content text blocks.
+
+    Do not insert content here. This is a helper function, which can also be used in base case.
+    """
+    content_block = message.get("content", None)
+    if content_block is None:
+        return message
+    if (
+        isinstance(content_block, str)
+        and not content_block.strip()
+        and is_non_content_values_set(message)
+    ):
+        modified_message = message.copy()
+        modified_message["content"] = None
+        return modified_message
+    elif isinstance(content_block, list):
+        modified_content_block = [
+            item
+            for item in content_block
+            if not (item["type"] == "text" and not item["text"].strip())
+        ]
+        modified_message = message.copy()
+        modified_message["content"] = modified_content_block
+        return modified_message
+
+    return message
+
+
 def process_empty_text_blocks(
     message: ChatCompletionAssistantMessage,
     assistant_continue_message: Optional[
@@ -2586,7 +2618,7 @@ def get_assistant_message_block_or_continue_message(
     if content_block is None or (
         assistant_continue_message is None and litellm.modify_params is False
     ):
-        return message
+        return skip_empty_text_blocks(message=message)
 
     # Handle string case
     if isinstance(content_block, str):
