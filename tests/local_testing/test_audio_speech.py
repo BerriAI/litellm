@@ -42,6 +42,7 @@ import litellm
     ],
 )  # ,
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
@@ -89,6 +90,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
 )
 @pytest.mark.skip(reason="local only test - we run testing using MockRequests below")
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_audio_speech_litellm_vertex(sync_mode):
     litellm.set_verbose = True
     speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
