@@ -829,3 +829,128 @@ def test_anthropic_tool_with_image():
     )
 
     assert b64_data in json.dumps(result)
+
+
+def test_anthropic_map_openai_params_tools_and_json_schema():
+    import json
+
+    args = {
+        "non_default_params": {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "question": {"title": "Question", "type": "string"},
+                            "answer": {"title": "Answer", "type": "string"},
+                        },
+                        "required": ["question", "answer"],
+                        "title": "RFormat",
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                    "name": "RFormat",
+                    "strict": True,
+                },
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "tool_choice": "required",
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
+    )
+
+    assert "Question" in json.dumps(mapped_params)
+
+
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+
+@pytest.mark.parametrize(
+    "json_mode, tool_calls, expect_null_response",
+    [
+        (
+            True,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            True,
+        ),
+        (
+            True,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            False,
+        ),
+        (
+            False,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            True,
+        ),
+    ],
+)
+def test_anthropic_json_mode_and_tool_call_response(
+    json_mode, tool_calls, expect_null_response
+):
+    result = litellm.AnthropicConfig()._transform_response_for_json_mode(
+        json_mode=json_mode,
+        tool_calls=tool_calls,
+    )
+
+    assert (
+        result is None if expect_null_response else result is not None
+    ), f"Expected result to be {None if expect_null_response else 'not None'}, but got {result}"

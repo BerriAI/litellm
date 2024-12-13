@@ -63,3 +63,4 @@ LITELLM_CHAT_PROVIDERS = [
     "lm_studio",
     "galadriel",
 ]
+RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
