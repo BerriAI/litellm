@@ -197,21 +197,18 @@ const UsagePage: React.FC<UsagePageProps> = ({
     return formatter.format(number);
   }
 
-  useEffect(() => {
-    const fetchProxySettings = async () => {
-      if (accessToken) {
-        try {
-          const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
-          console.log("usage tab: proxy_settings", proxy_settings);
-          setProxySettings(proxy_settings);
-        } catch (error) {
-          console.error("Error fetching proxy settings:", error);
-        }
-      }
-    };
-    fetchProxySettings();
-  }, [accessToken]);
 
+  const fetchProxySettings = async () => {
+    if (accessToken) {
+      try {
+        const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+        console.log("usage tab: proxy_settings", proxy_settings);
+        return proxy_settings;
+      } catch (error) {
+        console.error("Error fetching proxy settings:", error);
+      }
+    }
+  };
 
   useEffect(() => {
     updateTagSpendData(dateValue.from, dateValue.to);
@@ -404,26 +401,37 @@ const UsagePage: React.FC<UsagePageProps> = ({
   };
 
   useEffect(() => {
-    if (accessToken && token && userRole && userID) {
-      if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
-        return;  // Don't run expensive queries
+    const initlizeUsageData = async () => {
+      if (accessToken && token && userRole && userID) {
+        const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+        if (proxy_settings) {
+          setProxySettings(proxy_settings); // saved in state so it can be used when rendering UI
+          if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+            return;  // Don't run expensive UI queries - return out of initlizeUsageData at this point
+          }
+        }
+        
+
+        console.log("fetching data - valiue of proxySettings", proxySettings);
+
+
+        fetchOverallSpend();
+        fetchProviderSpend();
+        fetchTopKeys();
+        fetchTopModels();
+        fetchGlobalActivity();
+        fetchGlobalActivityPerModel();
+
+        if (isAdminOrAdminViewer(userRole)) {
+          fetchTeamSpend();
+          fetchTagNames();
+          fetchTopTags();
+          fetchTopEndUsers();
+        }
       }
+  };
 
-
-      fetchOverallSpend();
-      fetchProviderSpend();
-      fetchTopKeys();
-      fetchTopModels();
-      fetchGlobalActivity();
-      fetchGlobalActivityPerModel();
-
-      if (isAdminOrAdminViewer(userRole)) {
-        fetchTeamSpend();
-        fetchTagNames();
-        fetchTopTags();
-        fetchTopEndUsers();
-      }
-    }
+  initlizeUsageData();
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
 
