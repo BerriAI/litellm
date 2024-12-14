@@ -75,7 +75,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         custom_llm_provider: str,
         base_model: Optional[str],
     ) -> ModelResponse:
-        print(f"response: {response}")
         response_json = response.json()
         logging_obj.post_call(
             input=messages,
