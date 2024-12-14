@@ -20,7 +20,7 @@ anthropic:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -145,48 +145,15 @@ class RouterBudgetLimiting(CustomLogger):
             for idx, key in enumerate(cache_keys):
                 spend_map[key] = float(current_spends[idx] or 0.0)
 
-            # Filter deployments based on both provider and deployment budgets
-            deployment_above_budget_info: str = ""
-            for deployment in healthy_deployments:
-                is_within_budget = True
-
-                # Check provider budget
-                if self.provider_budget_config:
-                    provider = self._get_llm_provider_for_deployment(deployment)
-                    if provider in provider_configs:
-                        config = provider_configs[provider]
-                        current_spend = spend_map.get(
-                            f"provider_spend:{provider}:{config.time_period}", 0.0
-                        )
-                        self._track_provider_remaining_budget_prometheus(
-                            provider=provider,
-                            spend=current_spend,
-                            budget_limit=config.budget_limit,
-                        )
-
-                        if current_spend >= config.budget_limit:
-                            debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.budget_limit}"
-                            deployment_above_budget_info += f"{debug_msg}\n"
-                            is_within_budget = False
-                            continue
-
-                # Check deployment budget
-                if self.deployment_budget_config and is_within_budget:
-                    model_id = deployment.get("model_info", {}).get("id")
-                    if model_id in deployment_configs:
-                        config = deployment_configs[model_id]
-                        current_spend = spend_map.get(
-                            f"deployment_spend:{model_id}:{config.time_period}", 0.0
-                        )
-                        if current_spend >= config.budget_limit:
-                            debug_msg = f"Exceeded budget for deployment {model_id}: {current_spend} >= {config.budget_limit}"
-                            verbose_router_logger.debug(debug_msg)
-                            deployment_above_budget_info += f"{debug_msg}\n"
-                            is_within_budget = False
-                            continue
-
-                if is_within_budget:
-                    potential_deployments.append(deployment)
+            potential_deployments, deployment_above_budget_info = (
+                self._filter_out_deployments_above_budget(
+                    healthy_deployments=healthy_deployments,
+                    provider_configs=provider_configs,
+                    deployment_configs=deployment_configs,
+                    spend_map=spend_map,
+                    potential_deployments=potential_deployments,
+                )
+            )
 
             if len(potential_deployments) == 0:
                 raise ValueError(
@@ -196,6 +163,70 @@ class RouterBudgetLimiting(CustomLogger):
             return potential_deployments
         else:
             return healthy_deployments
+
+    def _filter_out_deployments_above_budget(
+        self,
+        potential_deployments: List[Dict[str, Any]],
+        healthy_deployments: List[Dict[str, Any]],
+        provider_configs: Dict[str, GenericBudgetInfo],
+        deployment_configs: Dict[str, GenericBudgetInfo],
+        spend_map: Dict[str, float],
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """
+        Filter out deployments that have exceeded their budget limit.
+        Follow budget checks are run here:
+            - Provider budget
+            - Deployment budget
+
+        Returns:
+            Tuple[List[Dict[str, Any]], str]:
+                - A tuple containing the filtered deployments
+                - A string containing debug information about deployments that exceeded their budget limit.
+        """
+        # Filter deployments based on both provider and deployment budgets
+        deployment_above_budget_info: str = ""
+        for deployment in healthy_deployments:
+            is_within_budget = True
+
+            # Check provider budget
+            if self.provider_budget_config:
+                provider = self._get_llm_provider_for_deployment(deployment)
+                if provider in provider_configs:
+                    config = provider_configs[provider]
+                    current_spend = spend_map.get(
+                        f"provider_spend:{provider}:{config.time_period}", 0.0
+                    )
+                    self._track_provider_remaining_budget_prometheus(
+                        provider=provider,
+                        spend=current_spend,
+                        budget_limit=config.budget_limit,
+                    )
+
+                    if current_spend >= config.budget_limit:
+                        debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.budget_limit}"
+                        deployment_above_budget_info += f"{debug_msg}\n"
+                        is_within_budget = False
+                        continue
+
+            # Check deployment budget
+            if self.deployment_budget_config and is_within_budget:
+                model_id = deployment.get("model_info", {}).get("id")
+                if model_id in deployment_configs:
+                    config = deployment_configs[model_id]
+                    current_spend = spend_map.get(
+                        f"deployment_spend:{model_id}:{config.time_period}", 0.0
+                    )
+                    if current_spend >= config.budget_limit:
+                        debug_msg = f"Exceeded budget for deployment {model_id}: {current_spend} >= {config.budget_limit}"
+                        verbose_router_logger.debug(debug_msg)
+                        deployment_above_budget_info += f"{debug_msg}\n"
+                        is_within_budget = False
+                        continue
+
+            if is_within_budget:
+                potential_deployments.append(deployment)
+
+        return potential_deployments, deployment_above_budget_info
 
     async def _get_or_set_budget_start_time(
         self, start_time_key: str, current_time: float, ttl_seconds: int
