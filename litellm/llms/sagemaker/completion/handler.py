@@ -10,12 +10,16 @@ from enum import Enum
 from functools import partial
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -31,8 +35,6 @@ from litellm.utils import (
     get_secret,
 )
 
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import AWSEventStreamDecoder, SagemakerError
 from .transformation import SagemakerConfig
 

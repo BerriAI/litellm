@@ -6,10 +6,6 @@ import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 
-import dotenv
-import requests
-from pydantic import BaseModel
-
 from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
