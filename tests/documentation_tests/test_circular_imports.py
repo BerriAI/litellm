@@ -144,7 +144,7 @@ def find_litellm_type_hints(directory: str) -> List[Tuple[str, int, str]]:
 
 def main():
     # Get directory from command line argument or use current directory
-    directory = "../../litellm/"
+    directory = "./litellm/"
 
     # Find LiteLLM type hints
     results = find_litellm_type_hints(directory)
