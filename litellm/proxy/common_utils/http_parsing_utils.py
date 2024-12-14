@@ -21,7 +21,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     try:
         if request is None:
             return {}
-        _request_headers: dict = getattr(request, "headers", None) or {}
+        _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
         if "form" in content_type:
             return dict(await request.form())
@@ -48,6 +48,21 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
             "Unexpected error reading request body - {}".format(e)
+        )
+        return {}
+
+
+def _safe_get_request_headers(request: Optional[Request]) -> dict:
+    """
+    [Non-Blocking] Safely get the request headers
+    """
+    try:
+        if request is None:
+            return {}
+        return dict(request.headers)
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Unexpected error reading request headers - {}".format(e)
         )
         return {}
 
