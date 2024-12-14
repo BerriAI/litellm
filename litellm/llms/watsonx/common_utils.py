@@ -23,6 +23,12 @@ class WatsonXAIError(BaseLLMException):
 iam_token_cache = InMemoryCache()
 
 
+def get_watsonx_iam_url():
+    return (
+        get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
+    )
+
+
 def generate_iam_token(api_key=None, **params) -> str:
     result: Optional[str] = iam_token_cache.get_cache(api_key)  # type: ignore
 
@@ -38,15 +44,14 @@ def generate_iam_token(api_key=None, **params) -> str:
             "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
             "apikey": api_key,
         }
+        iam_token_url = get_watsonx_iam_url()
         verbose_logger.debug(
             "calling ibm `/identity/token` to retrieve IAM token.\nURL=%s\nheaders=%s\ndata=%s",
-            "https://iam.cloud.ibm.com/identity/token",
+            iam_token_url,
             headers,
             data,
         )
-        response = httpx.post(
-            "https://iam.cloud.ibm.com/identity/token", data=data, headers=headers
-        )
+        response = httpx.post(iam_token_url, data=data, headers=headers)
         response.raise_for_status()
         json_data = response.json()
 
