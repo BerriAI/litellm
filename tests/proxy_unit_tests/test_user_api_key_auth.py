@@ -527,7 +527,7 @@ async def test_auth_with_form_data_and_model():
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "prisma_client", "not-connected")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     # Create request with form data
     request = Request(
