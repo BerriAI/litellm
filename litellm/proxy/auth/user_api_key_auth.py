@@ -899,12 +899,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 # the validation will occur when checking the team has access to this model
                 pass
             else:
-                try:
-                    data = await request.json()
-                except json.JSONDecodeError:
-                    data = {}  # Provide a default value, such as an empty dictionary
-                model = data.get("model", None)
-                fallback_models: Optional[List[str]] = data.get("fallbacks", None)
+                model = request_data.get("model", None)
+                fallback_models: Optional[List[str]] = request_data.get(
+                    "fallbacks", None
+                )
 
                 if model is not None:
                     await can_key_call_model(
