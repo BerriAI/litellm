@@ -11,11 +11,11 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 import pytest
 from litellm import Router
-from litellm.router_strategy.provider_budgets import ProviderBudgetLimiting
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.router import (
     RoutingStrategy,
-    ProviderBudgetConfigType,
-    ProviderBudgetInfo,
+    GenericBudgetConfigType,
+    GenericBudgetInfo,
 )
 from litellm.caching.caching import DualCache, RedisCache
 import logging
@@ -43,6 +43,9 @@ def cleanup_redis():
         for key in redis_client.scan_iter("provider_spend:*"):
             print("deleting key", key)
             redis_client.delete(key)
+        for key in redis_client.scan_iter("deployment_spend:*"):
+            print("deleting key", key)
+            redis_client.delete(key)
     except Exception as e:
         print(f"Error cleaning up Redis: {str(e)}")
 
@@ -59,9 +62,9 @@ async def test_provider_budgets_e2e_test():
     """
     cleanup_redis()
     # Modify for test
-    provider_budget_config: ProviderBudgetConfigType = {
-        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
-        "azure": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+    provider_budget_config: GenericBudgetConfigType = {
+        "openai": GenericBudgetInfo(time_period="1d", budget_limit=0.000000000001),
+        "azure": GenericBudgetInfo(time_period="1d", budget_limit=100),
     }
 
     router = Router(
@@ -175,7 +178,7 @@ async def test_get_llm_provider_for_deployment():
 
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -208,11 +211,11 @@ async def test_get_budget_config_for_provider():
     """
     cleanup_redis()
     config = {
-        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
-        "anthropic": ProviderBudgetInfo(time_period="7d", budget_limit=500),
+        "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
+        "anthropic": GenericBudgetInfo(time_period="7d", budget_limit=500),
     }
 
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config=config
     )
 
@@ -244,18 +247,18 @@ async def test_prometheus_metric_tracking():
     mock_prometheus = MagicMock(spec=PrometheusLogger)
 
     # Setup provider budget limiting
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(),
         provider_budget_config={
-            "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100)
+            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100)
         },
     )
 
     litellm._async_success_callback = [mock_prometheus]
 
-    provider_budget_config: ProviderBudgetConfigType = {
-        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=0.000000000001),
-        "azure": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+    provider_budget_config: GenericBudgetConfigType = {
+        "openai": GenericBudgetInfo(time_period="1d", budget_limit=0.000000000001),
+        "azure": GenericBudgetInfo(time_period="1d", budget_limit=100),
     }
 
     router = Router(
@@ -308,7 +311,7 @@ async def test_handle_new_budget_window():
     Current
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -349,7 +352,7 @@ async def test_get_or_set_budget_start_time():
     scenario 2: existing start time in cache, should return existing start time
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -390,7 +393,7 @@ async def test_increment_spend_in_current_window():
     - Queue the increment operation to Redis
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(), provider_budget_config={}
     )
 
@@ -437,11 +440,11 @@ async def test_sync_in_memory_spend_with_redis():
     """
     cleanup_redis()
     provider_budget_config = {
-        "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
-        "anthropic": ProviderBudgetInfo(time_period="1d", budget_limit=200),
+        "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
+        "anthropic": GenericBudgetInfo(time_period="1d", budget_limit=200),
     }
 
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(
             redis_cache=RedisCache(
                 host=os.getenv("REDIS_HOST"),
@@ -491,10 +494,10 @@ async def test_get_current_provider_spend():
     3. Provider with budget config and spend returns correct value
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(),
         provider_budget_config={
-            "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
+            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
         },
     )
 
@@ -526,7 +529,7 @@ async def test_get_current_provider_budget_reset_at():
     3. Provider with budget config and TTL returns correct ISO timestamp
     """
     cleanup_redis()
-    provider_budget = ProviderBudgetLimiting(
+    provider_budget = RouterBudgetLimiting(
         router_cache=DualCache(
             redis_cache=RedisCache(
                 host=os.getenv("REDIS_HOST"),
@@ -535,8 +538,8 @@ async def test_get_current_provider_budget_reset_at():
             )
         ),
         provider_budget_config={
-            "openai": ProviderBudgetInfo(time_period="1d", budget_limit=100),
-            "vertex_ai": ProviderBudgetInfo(time_period="1h", budget_limit=100),
+            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
+            "vertex_ai": GenericBudgetInfo(time_period="1h", budget_limit=100),
         },
     )
 
@@ -565,3 +568,109 @@ async def test_get_current_provider_budget_reset_at():
     # Allow for small time differences (within 5 seconds)
     time_difference = abs((reset_time - expected_time).total_seconds())
     assert time_difference < 5
+
+
+@pytest.mark.asyncio
+async def test_deployment_budget_limits_e2e_test():
+    """
+    Expected behavior:
+    - First request forced to openai/gpt-4o
+    - Hit budget limit for openai/gpt-4o
+    - Next 3 requests all go to openai/gpt-4o-mini
+
+    """
+    litellm.set_verbose = True
+    cleanup_redis()
+    # Modify for test
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "openai/gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "max_budget": 0.000000000001,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": "openai-gpt-4o"},
+            },
+            {
+                "model_name": "gpt-4o",  # openai model name
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "max_budget": 10,
+                    "budget_duration": "20d",
+                },
+                "model_info": {"id": "openai-gpt-4o-mini"},
+            },
+        ],
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        model="openai-gpt-4o",
+    )
+    print(response)
+
+    await asyncio.sleep(2.5)
+
+    for _ in range(3):
+        response = await router.acompletion(
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            model="gpt-4o",
+        )
+        print(response)
+        await asyncio.sleep(1)
+
+        print("response.hidden_params", response._hidden_params)
+        assert response._hidden_params.get("model_id") == "openai-gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_deployment_budgets_e2e_test_expect_to_fail():
+    """
+    Expected behavior:
+    - first request passes, all subsequent requests fail
+
+    """
+    cleanup_redis()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",  # openai model name
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "max_budget": 0.000000000001,
+                    "budget_duration": "1d",
+                },
+            },
+        ],
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_port=int(os.getenv("REDIS_PORT")),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        model="openai/gpt-4o-mini",
+    )
+    print(response)
+
+    await asyncio.sleep(2.5)
+
+    for _ in range(3):
+        with pytest.raises(Exception) as exc_info:
+            response = await router.acompletion(
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="openai/gpt-4o-mini",
+            )
+            print(response)
+            print("response.hidden_params", response._hidden_params)
+
+        await asyncio.sleep(0.5)
+        # Verify the error is related to budget exceeded
+
+        assert "Exceeded budget for deployment" in str(exc_info.value)

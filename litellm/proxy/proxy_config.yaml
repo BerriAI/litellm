@@ -1,4 +1,14 @@
 model_list:
-  - model_name: openai/*
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/*
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      max_budget: 0.000000000001 # (USD)
+      budget_duration: 1d # (Duration)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      max_budget: 100 # (USD)
+      budget_duration: 1d # (Duration)
+
