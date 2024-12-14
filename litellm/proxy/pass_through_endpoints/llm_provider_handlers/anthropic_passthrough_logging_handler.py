@@ -16,7 +16,7 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -88,9 +88,7 @@ class AnthropicPassthroughLoggingHandler:
 
     @staticmethod
     def _create_anthropic_response_logging_payload(
-        litellm_model_response: Union[
-            litellm.ModelResponse, litellm.TextCompletionResponse
-        ],
+        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
         kwargs: dict,
         start_time: datetime,
@@ -203,7 +201,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[litellm.ModelResponse, litellm.TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Builds complete response from raw Anthropic chunks
 
