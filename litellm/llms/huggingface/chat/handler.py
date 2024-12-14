@@ -20,7 +20,6 @@ from typing import (
 )
 
 import httpx
-import requests
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

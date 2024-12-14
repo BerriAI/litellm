@@ -11,9 +11,6 @@ import traceback
 import uuid
 from typing import List, Optional, Union
 
-import dotenv
-import requests  # type: ignore
-
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS

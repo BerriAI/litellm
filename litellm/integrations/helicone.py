@@ -4,7 +4,6 @@ import os
 import traceback
 
 import dotenv
-import requests  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger
@@ -179,7 +178,7 @@ class HeliconeLogger:
                     },
                 },  # {"seconds": .., "milliseconds": ..}
             }
-            response = requests.post(url, headers=headers, json=data)
+            response = litellm.module_level_client.post(url, headers=headers, json=data)
             if response.status_code == 200:
                 print_verbose("Helicone Logging - Success!")
             else:

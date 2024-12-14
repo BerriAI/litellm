@@ -9,9 +9,6 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional, TypedDict, Union
 
-import dotenv
-import requests  # type: ignore
-
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger

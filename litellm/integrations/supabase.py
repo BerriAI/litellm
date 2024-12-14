@@ -8,7 +8,6 @@ import sys
 import traceback
 
 import dotenv
-import requests  # type: ignore
 
 import litellm
 

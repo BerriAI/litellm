@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, TypedDict, Union
 
 import dotenv  # type: ignore
 import httpx
-import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
 import litellm
@@ -481,7 +480,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
 
         url = f"{langsmith_api_base}/runs/{run_id}"
-        response = requests.get(
+        response = litellm.module_level_client.get(
             url=url,
             headers={"x-api-key": langsmith_api_key},
         )
