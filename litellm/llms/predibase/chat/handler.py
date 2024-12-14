@@ -12,7 +12,6 @@ from functools import partial
 from typing import Callable, List, Literal, Optional, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
@@ -62,7 +61,7 @@ async def make_call(
     return completion_stream
 
 
-class PredibaseChatCompletion(BaseLLM):
+class PredibaseChatCompletion:
     def __init__(self) -> None:
         super().__init__()
 
@@ -89,7 +88,7 @@ class PredibaseChatCompletion(BaseLLM):
     def process_response(  # noqa: PLR0915
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        response: httpx.Response,
         model_response: ModelResponse,
         stream: bool,
         logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
@@ -346,7 +345,7 @@ class PredibaseChatCompletion(BaseLLM):
 
         ### SYNC STREAMING
         if stream is True:
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 completion_url,
                 headers=headers,
                 data=json.dumps(data),
@@ -362,7 +361,7 @@ class PredibaseChatCompletion(BaseLLM):
             return _response
         ### SYNC COMPLETION
         else:
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),
