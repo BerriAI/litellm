@@ -107,7 +107,7 @@ class RouterBudgetLimiting(CustomLogger):
             request_kwargs
         )
 
-        cache_keys = self._get_cache_keys_for_router_budget_limiting(
+        cache_keys = await self._async_get_cache_keys_for_router_budget_limiting(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
@@ -233,7 +233,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         return potential_deployments, deployment_above_budget_info
 
-    def _get_cache_keys_for_router_budget_limiting(
+    async def _async_get_cache_keys_for_router_budget_limiting(
         self,
         healthy_deployments: List[Dict[str, Any]],
         request_kwargs: Optional[Dict] = None,
