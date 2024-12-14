@@ -2,7 +2,7 @@ import json
 import traceback
 from datetime import datetime, timezone
 
-import requests  # type: ignore
+import litellm
 
 
 class GreenscaleLogger:
@@ -54,7 +54,7 @@ class GreenscaleLogger:
             if self.greenscale_logging_url is None:
                 raise Exception("Greenscale Logger Error - No logging URL found")
 
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 self.greenscale_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),
