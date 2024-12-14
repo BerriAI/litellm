@@ -2533,13 +2533,15 @@ async def provider_budgets() -> ProviderBudgetResponse:
 
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
+            if llm_router.router_budget_logger is None:
+                raise ValueError("No router budget logger found")
             _provider_spend = (
-                await llm_router.provider_budget_logger._get_current_provider_spend(
+                await llm_router.router_budget_logger._get_current_provider_spend(
                     _provider
                 )
                 or 0.0
             )
-            _provider_budget_ttl = await llm_router.provider_budget_logger._get_current_provider_budget_reset_at(
+            _provider_budget_ttl = await llm_router.router_budget_logger._get_current_provider_budget_reset_at(
                 _provider
             )
             provider_budget_response_object = ProviderBudgetResponseObject(
