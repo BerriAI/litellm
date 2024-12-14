@@ -18,7 +18,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponse,
     ContentBlockDelta,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 
 
 class AnthropicAdapter(CustomLogger):
@@ -41,7 +41,7 @@ class AnthropicAdapter(CustomLogger):
         return translated_body
 
     def translate_completion_output_params(
-        self, response: litellm.ModelResponse
+        self, response: ModelResponse
     ) -> Optional[AnthropicResponse]:
 
         return litellm.AnthropicExperimentalPassThroughConfig().translate_openai_response_to_anthropic(

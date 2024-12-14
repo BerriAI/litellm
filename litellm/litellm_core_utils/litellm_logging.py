@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import (
+    _custom_logger_compatible_callbacks_literal,
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
@@ -2142,7 +2143,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
 
 
 def _init_custom_logger_compatible_class(  # noqa: PLR0915
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+    logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
         Any
@@ -2362,7 +2363,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+    logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
