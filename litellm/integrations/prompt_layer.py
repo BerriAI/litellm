@@ -3,9 +3,9 @@
 import os
 import traceback
 
-import dotenv
-import requests  # type: ignore
 from pydantic import BaseModel
+
+import litellm
 
 
 class PromptLayerLogger:
@@ -47,7 +47,7 @@ class PromptLayerLogger:
             if isinstance(response_obj, BaseModel):
                 response_obj = response_obj.model_dump()
 
-            request_response = requests.post(
+            request_response = litellm.module_level_client.post(
                 "https://api.promptlayer.com/rest/track-request",
                 json={
                     "function_name": "openai.ChatCompletion.create",
@@ -74,7 +74,7 @@ class PromptLayerLogger:
 
             if "request_id" in response_json:
                 if metadata:
-                    response = requests.post(
+                    response = litellm.module_level_client.post(
                         "https://api.promptlayer.com/rest/track-metadata",
                         json={
                             "request_id": response_json["request_id"],
