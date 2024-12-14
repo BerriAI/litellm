@@ -1,7 +1,7 @@
 import os
 import ast
 import sys
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 def find_litellm_type_hints(directory: str) -> List[Tuple[str, int, str]]:
@@ -19,15 +19,54 @@ def find_litellm_type_hints(directory: str) -> List[Tuple[str, int, str]]:
 
     def is_litellm_type_hint(node):
         """
-        Check if a type annotation node contains 'litellm.'
+        Recursively check if a type annotation contains 'litellm.'
+
+        Handles more complex type hints like:
+        - Optional[litellm.Type]
+        - Union[litellm.Type1, litellm.Type2]
+        - Nested type hints
         """
-        if isinstance(node, ast.Attribute):
-            return "litellm." in ast.unparse(node)
-        elif isinstance(node, ast.Name):
-            return "litellm" in node.id
-        elif isinstance(node, ast.Subscript):
-            return is_litellm_type_hint(node.value)
-        return False
+        try:
+            # Convert node to string representation
+            type_str = ast.unparse(node)
+
+            # Direct check for litellm in type string
+            if "litellm." in type_str:
+                return True
+
+            # Handle more complex type hints
+            if isinstance(node, ast.Subscript):
+                # Check Union or Optional types
+                if isinstance(node.value, ast.Name) and node.value.id in [
+                    "Union",
+                    "Optional",
+                ]:
+                    # Check each element in the Union/Optional type
+                    if isinstance(node.slice, ast.Tuple):
+                        return any(is_litellm_type_hint(elt) for elt in node.slice.elts)
+                    else:
+                        return is_litellm_type_hint(node.slice)
+
+                # Recursive check for subscripted types
+                return is_litellm_type_hint(node.value) or is_litellm_type_hint(
+                    node.slice
+                )
+
+            # Recursive check for attribute types
+            if isinstance(node, ast.Attribute):
+                return "litellm." in ast.unparse(node)
+
+            # Recursive check for name types
+            if isinstance(node, ast.Name):
+                return "litellm" in node.id
+
+            return False
+        except Exception:
+            # Fallback to string checking if parsing fails
+            try:
+                return "litellm." in ast.unparse(node)
+            except:
+                return False
 
     def scan_file(file_path: str):
         """
