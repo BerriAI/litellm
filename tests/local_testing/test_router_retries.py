@@ -768,3 +768,38 @@ async def test_router_retries_model_specific_and_global():
         mock_async_function_with_retries.assert_called_once()
 
         assert mock_async_function_with_retries.call_args.kwargs["num_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_timeout_model_specific_and_global():
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "timeout": 1,
+                },
+            }
+        ],
+        timeout=10,
+    )
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            await router.acompletion(
+                model="anthropic-claude",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                client=client,
+            )
+        except Exception as e:
+            print("got exception", e)
+
+        mock_client.assert_called()
+
+        assert mock_client.call_args.kwargs["timeout"] == 1

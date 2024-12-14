@@ -1013,6 +1013,9 @@ class Router:
             }
         )
         kwargs["model_info"] = deployment.get("model_info", {})
+        kwargs["timeout"] = self._get_timeout(
+            kwargs=kwargs, data=deployment["litellm_params"]
+        )
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs)
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
@@ -1376,7 +1379,6 @@ class Router:
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._image_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
 
@@ -1436,7 +1438,6 @@ class Router:
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -1798,7 +1799,6 @@ class Router:
         messages = [{"role": "user", "content": "dummy-text"}]
         try:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
@@ -1842,7 +1842,6 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
@@ -1922,7 +1921,6 @@ class Router:
                     "prompt": prompt,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": self.timeout,
                     **kwargs,
                 }
             )
@@ -1978,7 +1976,6 @@ class Router:
             kwargs["adapter_id"] = adapter_id
             kwargs["original_function"] = self._aadapter_completion
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -2022,7 +2019,6 @@ class Router:
                     "adapter_id": adapter_id,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": self.timeout,
                     **kwargs,
                 }
             )
@@ -2076,7 +2072,6 @@ class Router:
             kwargs["input"] = input
             kwargs["original_function"] = self._embedding
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = self.function_with_fallbacks(**kwargs)
             return response
@@ -2243,7 +2238,6 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -2299,7 +2293,6 @@ class Router:
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": self.timeout,
                     **kwargs,
                 }
             )
@@ -2350,7 +2343,6 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -2395,13 +2387,7 @@ class Router:
             kwargs["model_info"] = deployment.get("model_info", {})
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == metadata_variable_name:
-                    kwargs[k].update(v)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             model_client = self._get_async_openai_model_client(
                 deployment=deployment,
@@ -2418,7 +2404,6 @@ class Router:
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": self.timeout,
                     **kwargs,
                 }
             )
