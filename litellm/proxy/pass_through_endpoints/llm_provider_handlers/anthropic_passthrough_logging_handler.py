@@ -16,6 +16,7 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -43,9 +44,7 @@ class AnthropicPassthroughLoggingHandler:
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
         model = response_body.get("model", "")
-        litellm_model_response: (
-            litellm.ModelResponse
-        ) = AnthropicConfig().transform_response(
+        litellm_model_response: ModelResponse = AnthropicConfig().transform_response(
             raw_response=httpx_response,
             model_response=litellm.ModelResponse(),
             model=model,

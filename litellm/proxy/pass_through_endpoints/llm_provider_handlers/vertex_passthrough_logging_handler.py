@@ -15,6 +15,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -40,7 +41,7 @@ class VertexPassthroughLoggingHandler:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()
-            litellm_model_response: litellm.ModelResponse = (
+            litellm_model_response: ModelResponse = (
                 instance_of_vertex_llm.transform_response(
                     model=model,
                     messages=[
