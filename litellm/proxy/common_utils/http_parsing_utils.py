@@ -21,8 +21,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     try:
         if request is None:
             return {}
-
-        content_type = request.headers.get("content-type", "")
+        _request_headers: dict = getattr(request, "headers", None) or {}
+        content_type = _request_headers.get("content-type", "")
         if "form" in content_type:
             return dict(await request.form())
         else:
