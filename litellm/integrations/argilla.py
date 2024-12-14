@@ -15,19 +15,20 @@ from typing import Any, Dict, List, Optional, TypedDict, Union
 
 import dotenv  # type: ignore
 import httpx
-import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_content_from_model_response,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_content_from_model_response
 from litellm.types.integrations.argilla import (
     SUPPORTED_PAYLOAD_FIELDS,
     ArgillaCredentialsObject,
@@ -223,7 +224,7 @@ class ArgillaLogger(CustomBatchLogger):
         headers = {"X-Argilla-Api-Key": argilla_api_key}
 
         try:
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 url=url,
                 json=self.log_queue,
                 headers=headers,

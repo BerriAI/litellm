@@ -431,7 +431,7 @@ class HTTPHandler:
         self,
         url: str,
         data: Optional[Union[dict, str]] = None,
-        json: Optional[Union[dict, str]] = None,
+        json: Optional[Union[dict, str, List]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
