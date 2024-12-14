@@ -158,6 +158,12 @@ class RouterBudgetLimiting(CustomLogger):
                         current_spend = spend_map.get(
                             f"provider_spend:{provider}:{config.time_period}", 0.0
                         )
+                        self._track_provider_remaining_budget_prometheus(
+                            provider=provider,
+                            spend=current_spend,
+                            budget_limit=config.budget_limit,
+                        )
+
                         if current_spend >= config.budget_limit:
                             debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.budget_limit}"
                             deployment_above_budget_info += f"{debug_msg}\n"
