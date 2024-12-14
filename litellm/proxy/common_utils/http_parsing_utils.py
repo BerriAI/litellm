@@ -22,18 +22,22 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         if request is None:
             return {}
 
-        # Read the request body
-        body = await request.body()
+        content_type = request.headers.get("content-type", "")
+        if "form" in content_type:
+            return dict(await request.form())
+        else:
+            # Read the request body
+            body = await request.body()
 
-        # Return empty dict if body is empty or None
-        if not body:
-            return {}
+            # Return empty dict if body is empty or None
+            if not body:
+                return {}
 
-        # Decode the body to a string
-        body_str = body.decode()
+            # Decode the body to a string
+            body_str = body.decode()
 
-        # Attempt JSON parsing (safe for untrusted input)
-        return json.loads(body_str)
+            # Attempt JSON parsing (safe for untrusted input)
+            return json.loads(body_str)
 
     except json.JSONDecodeError:
         # Log detailed information for debugging
