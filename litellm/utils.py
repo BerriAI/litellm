@@ -126,6 +126,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     Function,
     ImageResponse,
+    LlmProviders,
     Message,
     ModelInfo,
     ModelResponse,
@@ -147,6 +148,7 @@ claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -162,6 +164,8 @@ from typing import (
 )
 
 from openai import OpenAIError as OriginalError
+
+from litellm.llms.base_llm.transformation import BaseConfig
 
 from ._logging import verbose_logger
 from .caching.caching import (
@@ -234,7 +238,6 @@ local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
 ######## Model Response #########################
-
 
 # All liteLLM Model responses will be in this format, Follows the OpenAI Format
 # https://docs.litellm.ai/docs/completion/output
@@ -6205,13 +6208,10 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     return messages
 
 
-from litellm.llms.base_llm.transformation import BaseConfig
-
-
 class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
-        model: str, provider: litellm.LlmProviders
+        model: str, provider: LlmProviders
     ) -> BaseConfig:
         """
         Returns the provider config for a given provider.
