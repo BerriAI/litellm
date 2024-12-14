@@ -13,7 +13,6 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm

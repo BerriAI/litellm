@@ -21,6 +21,49 @@ def find_requests_usage(directory: str) -> List[Tuple[str, int, str]]:
     """
     requests_usages = []
 
+    def is_likely_requests_usage(node):
+        """
+        More precise check to avoid false positives
+        """
+        try:
+            # Convert node to string representation
+            node_str = ast.unparse(node)
+
+            # Specific checks to ensure it's the requests library
+            requests_identifiers = [
+                # HTTP methods
+                "requests.get",
+                "requests.post",
+                "requests.put",
+                "requests.delete",
+                "requests.head",
+                "requests.patch",
+                "requests.options",
+                "requests.request",
+                "requests.session",
+                # Types and exceptions
+                "requests.Response",
+                "requests.Request",
+                "requests.Session",
+                "requests.ConnectionError",
+                "requests.HTTPError",
+                "requests.Timeout",
+                "requests.TooManyRedirects",
+                "requests.RequestException",
+                # Additional modules and attributes
+                "requests.api",
+                "requests.exceptions",
+                "requests.models",
+                "requests.auth",
+                "requests.cookies",
+                "requests.structures",
+            ]
+
+            # Check for specific requests library identifiers
+            return any(identifier in node_str for identifier in requests_identifiers)
+        except:
+            return False
+
     def scan_file(file_path: str):
         """
         Scan a single Python file for requests library usage
@@ -34,28 +77,29 @@ def find_requests_usage(directory: str) -> List[Tuple[str, int, str]]:
                 # Check import statements
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        if alias.name.startswith("requests"):
+                        if alias.name == "requests":
                             requests_usages.append(
                                 (file_path, node.lineno, f"Import: {alias.name}")
                             )
 
                 # Check import from statements
                 elif isinstance(node, ast.ImportFrom):
-                    if node.module and node.module.startswith("requests"):
+                    if node.module == "requests":
                         requests_usages.append(
                             (file_path, node.lineno, f"Import from: {node.module}")
                         )
 
                 # Check method calls
                 elif isinstance(node, ast.Call):
-                    # Check function calls that might be from requests
+                    # More precise check for requests usage
                     try:
-                        func_name = ast.unparse(node.func)
-                        if "requests." in func_name and func_name.startswith(
-                            "requests."
-                        ):
+                        if is_likely_requests_usage(node.func):
                             requests_usages.append(
-                                (file_path, node.lineno, f"Method Call: {func_name}")
+                                (
+                                    file_path,
+                                    node.lineno,
+                                    f"Method Call: {ast.unparse(node.func)}",
+                                )
                             )
                     except:
                         pass
@@ -63,15 +107,13 @@ def find_requests_usage(directory: str) -> List[Tuple[str, int, str]]:
                 # Check attribute access
                 elif isinstance(node, ast.Attribute):
                     try:
-                        attr_name = ast.unparse(node)
-                        if "requests." in attr_name and attr_name.startswith(
-                            "requests."
-                        ):
+                        # More precise check
+                        if is_likely_requests_usage(node):
                             requests_usages.append(
                                 (
                                     file_path,
                                     node.lineno,
-                                    f"Attribute Access: {attr_name}",
+                                    f"Attribute Access: {ast.unparse(node)}",
                                 )
                             )
                     except:
