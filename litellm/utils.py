@@ -43,7 +43,6 @@ import aiohttp
 import dotenv
 import httpx
 import openai
-import requests
 import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
@@ -4196,7 +4195,7 @@ def get_max_tokens(model: str) -> Optional[int]:
         config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
         try:
             # Make the HTTP request to get the raw JSON file
-            response = requests.get(config_url)
+            response = litellm.module_level_client.get(config_url)
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
@@ -4207,7 +4206,7 @@ def get_max_tokens(model: str) -> Optional[int]:
                 return max_position_embeddings
             else:
                 return None
-        except requests.exceptions.RequestException:
+        except Exception:
             return None
 
     try:
@@ -4382,7 +4381,7 @@ def get_model_info(  # noqa: PLR0915
 
         try:
             # Make the HTTP request to get the raw JSON file
-            response = requests.get(config_url)
+            response = litellm.module_level_client.get(config_url)
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
@@ -4395,7 +4394,7 @@ def get_model_info(  # noqa: PLR0915
                 return max_position_embeddings
             else:
                 return None
-        except requests.exceptions.RequestException:
+        except Exception:
             return None
 
     try:
