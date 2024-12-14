@@ -244,7 +244,11 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;
     }
 
-    if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+    
+    // we refetch because the state variable can be None when the user refreshes the page
+    const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+
+    if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
       return;  // Don't run expensive DB queries - return out when SpendLogs has more than 1M rows
     }
 
