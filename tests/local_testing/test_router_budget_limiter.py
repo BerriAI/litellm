@@ -623,3 +623,51 @@ async def test_deployment_budget_limits_e2e_test():
 
         print("response.hidden_params", response._hidden_params)
         assert response._hidden_params.get("model_id") == "openai-gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_deployment_budgets_e2e_test_expect_to_fail():
+    """
+    Expected behavior:
+    - first request passes, all subsequent requests fail
+
+    """
+    cleanup_redis()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",  # openai model name
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "max_budget": 0.000000000001,
+                    "budget_duration": "1d",
+                },
+            },
+        ],
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_port=int(os.getenv("REDIS_PORT")),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        model="openai/gpt-4o-mini",
+    )
+    print(response)
+
+    await asyncio.sleep(2.5)
+
+    for _ in range(3):
+        with pytest.raises(Exception) as exc_info:
+            response = await router.acompletion(
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="openai/gpt-4o-mini",
+            )
+            print(response)
+            print("response.hidden_params", response._hidden_params)
+
+        await asyncio.sleep(0.5)
+        # Verify the error is related to budget exceeded
+
+        assert "Exceeded budget for deployment" in str(exc_info.value)
