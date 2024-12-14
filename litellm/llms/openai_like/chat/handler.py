@@ -207,7 +207,6 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            print(f"e.response.text: {e.response.text}")
             raise OpenAILikeError(
                 status_code=e.response.status_code,
                 message=e.response.text,
@@ -215,7 +214,6 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         except httpx.TimeoutException:
             raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
-            print(f"e: {e}")
             raise OpenAILikeError(status_code=500, message=str(e))
 
         return OpenAILikeChatConfig._transform_response(
