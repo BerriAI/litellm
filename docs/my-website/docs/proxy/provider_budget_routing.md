@@ -73,7 +73,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 </TabItem>
 <TabItem label="Unsuccessful call" value = "not-allowed">
 
-Expect this to fail since since `ishaan@berri.ai` in the request is PII
+Expect this to fail since since we cross the budget for provider `openai`
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
@@ -203,13 +203,13 @@ model_list:
       model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
       max_budget: 0.000000000001 # (USD)
-      budget_duration: 1d # (Duration)
+      budget_duration: 1d # (Duration. can be 1s, 1m, 1h, 1d, 1mo)
   - model_name: gpt-4o-mini
     litellm_params:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
       max_budget: 100 # (USD)
-      budget_duration: 1d # (Duration)
+      budget_duration: 30d # (Duration. can be 1s, 1m, 1h, 1d, 1mo)
 
 
 ```
@@ -239,7 +239,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 </TabItem>
 <TabItem label="Unsuccessful call" value = "not-allowed">
 
-Expect this to fail since since `ishaan@berri.ai` in the request is PII
+Expect this to fail since since we cross the budget for `openai/gpt-4o`
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
@@ -257,12 +257,12 @@ Expected response on failure
 
 ```json
 {
-  "error": {
-    "message": "No deployments available - crossed budget for provider: Exceeded budget for provider openai: 0.0007350000000000001 >= 1e-12",
-    "type": "None",
-    "param": "None",
-    "code": "429"
-  }
+    "error": {
+        "message": "No deployments available - crossed budget: Exceeded budget for deployment model_name: gpt-4o, litellm_params.model: openai/gpt-4o, model_id: dbe80f2fe2b2465f7bfa9a5e77e0f143a2eb3f7d167a8b55fb7fe31aed62587f: 0.00015250000000000002 >= 1e-12",
+        "type": "None",
+        "param": "None",
+        "code": "429"
+    }
 }
 ```
 </TabItem>

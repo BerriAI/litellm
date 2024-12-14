@@ -210,6 +210,9 @@ class RouterBudgetLimiting(CustomLogger):
 
             # Check deployment budget
             if self.deployment_budget_config and is_within_budget:
+                _model_name = deployment.get("model_name")
+                _litellm_params = deployment.get("litellm_params") or {}
+                _litellm_model_name = _litellm_params.get("model")
                 model_id = deployment.get("model_info", {}).get("id")
                 if model_id in deployment_configs:
                     config = deployment_configs[model_id]
@@ -217,7 +220,7 @@ class RouterBudgetLimiting(CustomLogger):
                         f"deployment_spend:{model_id}:{config.time_period}", 0.0
                     )
                     if current_spend >= config.budget_limit:
-                        debug_msg = f"Exceeded budget for deployment {model_id}: {current_spend} >= {config.budget_limit}"
+                        debug_msg = f"Exceeded budget for deployment model_name: {_model_name}, litellm_params.model: {_litellm_model_name}, model_id: {model_id}: {current_spend} >= {config.budget_limit}"
                         verbose_router_logger.debug(debug_msg)
                         deployment_above_budget_info += f"{debug_msg}\n"
                         is_within_budget = False
