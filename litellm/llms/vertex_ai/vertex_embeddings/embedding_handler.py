@@ -15,12 +15,10 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai.vertex_ai_non_gemini import (
-    VertexAIError,
-)
+from litellm.llms.vertex_ai.vertex_ai_non_gemini import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import *
-from litellm.utils import Usage
+from litellm.types.utils import EmbeddingResponse, Usage
 
 from .transformation import VertexAITextEmbeddingConfig
 from .types import *
@@ -35,7 +33,7 @@ class VertexEmbedding(VertexBase):
         model: str,
         input: Union[list, str],
         print_verbose,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: Literal[
@@ -52,7 +50,7 @@ class VertexEmbedding(VertexBase):
         vertex_credentials: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         if aembedding is True:
             return self.async_embedding(  # type: ignore
                 model=model,
