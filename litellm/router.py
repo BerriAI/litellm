@@ -812,7 +812,6 @@ class Router:
             kwargs["messages"] = messages
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             request_priority = kwargs.get("priority") or self.default_priority
@@ -1825,7 +1824,7 @@ class Router:
                 kwargs["model"] = model
                 kwargs["messages"] = messages
                 kwargs["original_function"] = self._arealtime
-                return self.function_with_retries(**kwargs)
+                return await self.async_function_with_retries(**kwargs)
             else:
                 raise e
 
@@ -2912,7 +2911,11 @@ class Router:
         except Exception as e:
             current_attempt = None
             original_exception = e
-
+            deployment_num_retries = getattr(e, "num_retries", None)
+            if deployment_num_retries is not None and isinstance(
+                deployment_num_retries, int
+            ):
+                num_retries = deployment_num_retries
             """
             Retry Logic
             """
@@ -3208,106 +3211,6 @@ class Router:
             )
 
         return timeout
-
-    def function_with_retries(self, *args, **kwargs):
-        """
-        Try calling the model 3 times. Shuffle-between available deployments.
-        """
-        verbose_router_logger.debug(
-            f"Inside function with retries: args - {args}; kwargs - {kwargs}"
-        )
-        original_function = kwargs.pop("original_function")
-        num_retries = kwargs.pop("num_retries")
-        fallbacks = kwargs.pop("fallbacks", self.fallbacks)
-        context_window_fallbacks = kwargs.pop(
-            "context_window_fallbacks", self.context_window_fallbacks
-        )
-        content_policy_fallbacks = kwargs.pop(
-            "content_policy_fallbacks", self.content_policy_fallbacks
-        )
-        model_group = kwargs.get("model")
-
-        try:
-            # if the function call is successful, no exception will be raised and we'll break out of the loop
-            self._handle_mock_testing_rate_limit_error(
-                kwargs=kwargs, model_group=model_group
-            )
-            response = original_function(*args, **kwargs)
-            return response
-        except Exception as e:
-            current_attempt = None
-            original_exception = e
-            _model: Optional[str] = kwargs.get("model")  # type: ignore
-
-            if _model is None:
-                raise e  # re-raise error, if model can't be determined for loadbalancing
-            ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
-            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-            _healthy_deployments, _all_deployments = self._get_healthy_deployments(
-                model=_model,
-                parent_otel_span=parent_otel_span,
-            )
-
-            # raises an exception if this error should not be retries
-            self.should_retry_this_error(
-                error=e,
-                healthy_deployments=_healthy_deployments,
-                all_deployments=_all_deployments,
-                context_window_fallbacks=context_window_fallbacks,
-                regular_fallbacks=fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-            )
-
-            # decides how long to sleep before retry
-            _timeout = self._time_to_sleep_before_retry(
-                e=original_exception,
-                remaining_retries=num_retries,
-                num_retries=num_retries,
-                healthy_deployments=_healthy_deployments,
-                all_deployments=_all_deployments,
-            )
-
-            ## LOGGING
-            if num_retries > 0:
-                kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
-
-            time.sleep(_timeout)
-            for current_attempt in range(num_retries):
-                verbose_router_logger.debug(
-                    f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}"
-                )
-                try:
-                    # if the function call is successful, no exception will be raised and we'll break out of the loop
-                    response = original_function(*args, **kwargs)
-                    return response
-
-                except Exception as e:
-                    ## LOGGING
-                    kwargs = self.log_retry(kwargs=kwargs, e=e)
-                    _model: Optional[str] = kwargs.get("model")  # type: ignore
-
-                    if _model is None:
-                        raise e  # re-raise error, if model can't be determined for loadbalancing
-                    parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-                    _healthy_deployments, _ = self._get_healthy_deployments(
-                        model=_model,
-                        parent_otel_span=parent_otel_span,
-                    )
-                    remaining_retries = num_retries - current_attempt
-                    _timeout = self._time_to_sleep_before_retry(
-                        e=e,
-                        remaining_retries=remaining_retries,
-                        num_retries=num_retries,
-                        healthy_deployments=_healthy_deployments,
-                        all_deployments=_all_deployments,
-                    )
-                    time.sleep(_timeout)
-
-            if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
-                setattr(original_exception, "max_retries", num_retries)
-                setattr(original_exception, "num_retries", current_attempt)
-
-            raise original_exception
 
     ### HELPER FUNCTIONS
 

@@ -733,3 +733,38 @@ def test_no_retry_when_no_healthy_deployments():
             )
         except Exception as e:
             print("got exception", e)
+
+
+@pytest.mark.asyncio
+async def test_router_retries_model_specific_and_global():
+    from unittest.mock import patch, MagicMock
+
+    litellm.num_retries = 0
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "num_retries": 1,
+                },
+            }
+        ]
+    )
+
+    with patch.object(
+        router, "_time_to_sleep_before_retry"
+    ) as mock_async_function_with_retries:
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except Exception as e:
+            print("got exception", e)
+
+        mock_async_function_with_retries.assert_called_once()
+
+        assert mock_async_function_with_retries.call_args.kwargs["num_retries"] == 1
