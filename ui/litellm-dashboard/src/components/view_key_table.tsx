@@ -699,7 +699,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       formValues.metadata = JSON.parse(formValues.metadata);
     } catch (error) {
       console.error("Error parsing metadata JSON:", error);
-      message.error("Invalid metadata JSON");
+      message.error("Invalid metadata JSON for formValue " + formValues.metadata);
       return;
     }
   }
