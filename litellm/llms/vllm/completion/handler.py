@@ -29,8 +29,7 @@ class VLLMError(Exception):
 def validate_environment(model: str):
     global llm
     try:
-        from litellm.llms.vllm.completion.handler import LLM  # type: ignore
-        from litellm.llms.vllm.completion.handler import SamplingParams  # type: ignore
+        from vllm import LLM, SamplingParams # type: ignore
 
         if llm is None:
             llm = LLM(model=model)
