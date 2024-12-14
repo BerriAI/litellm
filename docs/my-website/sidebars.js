@@ -127,6 +127,7 @@ const sidebars = {
             "oidc"
           ]
         },
+        "proxy/prompt_management",
         "proxy/caching",
         "proxy/call_hooks",
         "proxy/rules", 
