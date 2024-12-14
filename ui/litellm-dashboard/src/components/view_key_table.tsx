@@ -261,6 +261,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     const [errorModels, setErrorModels] = useState<string[]>([]);
     const [errorBudget, setErrorBudget] = useState<boolean>(false);
 
+    let metadataString = '';
+    try {
+      metadataString = JSON.stringify(token.metadata, null, 2);
+    } catch (error) {
+      console.error("Error stringifying metadata:", error);
+      // You can choose a fallback, such as an empty string or a warning message
+      metadataString = '';
+    }
+
+    // Ensure token is defined and handle gracefully if not
+    const initialValues = token ? {
+      ...token,
+      budget_duration: token.budget_duration,
+      metadata: metadataString
+    } : { metadata: metadataString };
+
+
     const handleOk = () => {
       form
         .validateFields()
@@ -286,11 +303,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={{
-            ...token, 
-            budget_duration: token.budget_duration,
-            metadata: JSON.stringify(token.metadata, null, 2) // Convert to JSON string
-          }} // Pass initial values here
+          initialValues={initialValues}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
