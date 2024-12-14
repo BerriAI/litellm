@@ -474,12 +474,9 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         from detect_secrets import SecretsCollection
         from detect_secrets.settings import default_settings
 
-        print("INSIDE SECRET DETECTION PRE-CALL HOOK!")
-
         if await self.should_run_check(user_api_key_dict) is False:
             return
 
-        print("RUNNING CHECK!")
         if "messages" in data and isinstance(data["messages"], list):
             for message in data["messages"]:
                 if "content" in message and isinstance(message["content"], str):
