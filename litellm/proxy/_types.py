@@ -366,6 +366,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/model/new",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

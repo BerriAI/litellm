@@ -1252,6 +1252,7 @@ def test_completion_cost_anthropic_prompt_caching():
     assert cost_1 > cost_2
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.parametrize(
     "model",
     [

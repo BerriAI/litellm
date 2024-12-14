@@ -91,6 +91,13 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Team Management",
+          items: [
+            "proxy/team_model_add"
+          ],
+        },
+        {
+          type: "category",
           label: "Spend Tracking + Budgets",
           items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
         },
@@ -127,6 +134,7 @@ const sidebars = {
             "oidc"
           ]
         },
+        "proxy/prompt_management",
         "proxy/caching",
         "proxy/call_hooks",
         "proxy/rules", 

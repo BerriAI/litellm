@@ -103,6 +103,7 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
+    team_id: Optional[str] = None  # the team id that this model belongs to
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
