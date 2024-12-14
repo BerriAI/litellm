@@ -4,12 +4,14 @@ import time
 from enum import Enum
 from typing import Any, Callable, Optional
 
-import requests  # type: ignore
-
+import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import OobaboogaError
 from .transformation import OobaboogaConfig
 
@@ -129,9 +131,9 @@ def embedding(
         messages=[],
         optional_params=optional_params,
     )
-    response = requests.post(embeddings_url, headers=headers, json=data)
-    if not response.ok:
-        raise OobaboogaError(message=response.text, status_code=response.status_code)
+    response = litellm.module_level_client.post(
+        embeddings_url, headers=headers, json=data
+    )
     completion_response = response.json()
 
     # Check for errors in response
