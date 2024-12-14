@@ -544,7 +544,7 @@ class Router:
             self.router_budget_logger = RouterBudgetLimiting(
                 router_cache=self.cache,
                 provider_budget_config=self.provider_budget_config,
-                model_list=model_list,
+                model_list=self.model_list,
             )
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
