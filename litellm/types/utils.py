@@ -1725,3 +1725,19 @@ class LlmProviders(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
+
+
+class LiteLLMLoggingBaseClass:
+    """
+    Base class for logging pre and post call
+
+    Meant to simplify type checking for logging obj.
+    """
+
+    def pre_call(self, input, api_key, model=None, additional_args={}):
+        pass
+
+    def post_call(
+        self, original_response, input=None, api_key=None, additional_args={}
+    ):
+        pass
