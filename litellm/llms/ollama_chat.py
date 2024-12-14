@@ -8,7 +8,6 @@ from typing import Any, List, Optional
 
 import aiohttp
 import httpx
-import requests
 from pydantic import BaseModel
 
 import litellm
@@ -303,7 +302,7 @@ def get_ollama_response(  # noqa: PLR0915
     }
     if api_key is not None:
         _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
-    response = requests.post(**_request)  # type: ignore
+    response = litellm.module_level_client.post(**_request)
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 
