@@ -1660,3 +1660,8 @@ class PersonalUIKeyGenerationConfig(KeyGenerationConfig):
 class StandardKeyGenerationConfig(TypedDict, total=False):
     team_key_generation: TeamUIKeyGenerationConfig
     personal_key_generation: PersonalUIKeyGenerationConfig
+
+
+class BudgetConfig(BaseModel):
+    max_budget: float
+    budget_duration: str
