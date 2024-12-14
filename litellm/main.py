@@ -2833,8 +2833,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 return response
             response = model_response
         elif custom_llm_provider == "custom":
-            import requests
-
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
                 raise ValueError(
@@ -2843,7 +2841,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             """
             assume input to custom LLM api bases follow this format:
-            resp = requests.post(
+            resp = litellm.module_level_client.post(
                 api_base,
                 json={
                     'model': 'meta-llama/Llama-2-13b-hf', # model name
@@ -2859,7 +2857,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             """
             prompt = " ".join([message["content"] for message in messages])  # type: ignore
-            resp = requests.post(
+            resp = litellm.module_level_client.post(
                 url,
                 json={
                     "model": model,
