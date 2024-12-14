@@ -2869,7 +2869,6 @@ def completion(  # type: ignore # noqa: PLR0915
                         "top_k": kwargs.get("top_k", 40),
                     },
                 },
-                verify=litellm.ssl_verify,
             )
             response_json = resp.json()
             """

@@ -299,10 +299,15 @@ def get_ollama_response(  # noqa: PLR0915
     _request = {
         "url": f"{url}",
         "json": data,
+        "headers": None,
     }
     if api_key is not None:
         _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
-    response = litellm.module_level_client.post(**_request)
+    response = litellm.module_level_client.post(
+        url=_request["url"],
+        json=_request["json"],
+        headers=_request["headers"],
+    )
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 
