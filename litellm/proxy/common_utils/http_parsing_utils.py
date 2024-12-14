@@ -21,19 +21,23 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     try:
         if request is None:
             return {}
+        _request_headers: dict = _safe_get_request_headers(request=request)
+        content_type = _request_headers.get("content-type", "")
+        if "form" in content_type:
+            return dict(await request.form())
+        else:
+            # Read the request body
+            body = await request.body()
 
-        # Read the request body
-        body = await request.body()
+            # Return empty dict if body is empty or None
+            if not body:
+                return {}
 
-        # Return empty dict if body is empty or None
-        if not body:
-            return {}
+            # Decode the body to a string
+            body_str = body.decode()
 
-        # Decode the body to a string
-        body_str = body.decode()
-
-        # Attempt JSON parsing (safe for untrusted input)
-        return json.loads(body_str)
+            # Attempt JSON parsing (safe for untrusted input)
+            return json.loads(body_str)
 
     except json.JSONDecodeError:
         # Log detailed information for debugging
@@ -44,6 +48,21 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
             "Unexpected error reading request body - {}".format(e)
+        )
+        return {}
+
+
+def _safe_get_request_headers(request: Optional[Request]) -> dict:
+    """
+    [Non-Blocking] Safely get the request headers
+    """
+    try:
+        if request is None:
+            return {}
+        return dict(request.headers)
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Unexpected error reading request headers - {}".format(e)
         )
         return {}
 
