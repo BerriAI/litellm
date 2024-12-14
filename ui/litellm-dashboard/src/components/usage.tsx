@@ -244,6 +244,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
       return;
     }
 
+    if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+      return;  // Don't run expensive DB queries - return out when SpendLogs has more than 1M rows
+    }
+
     // the endTime put it to the last hour of the selected date
     endTime.setHours(23, 59, 59, 999);
 
