@@ -47,6 +47,9 @@ def cleanup_redis():
         for key in redis_client.scan_iter("deployment_spend:*"):
             print("deleting key", key)
             redis_client.delete(key)
+        for key in redis_client.scan_iter("tag_spend:*"):
+            print("deleting key", key)
+            redis_client.delete(key)
     except Exception as e:
         print(f"Error cleaning up Redis: {str(e)}")
 
@@ -686,8 +689,10 @@ async def test_tag_budgets_e2e_test_expect_to_fail():
     """
     cleanup_redis()
     TAG_NAME = "product:chat-bot"
+    TAG_NAME_2 = "product:chat-bot-2"
     litellm.tag_budget_config = {
         TAG_NAME: BudgetConfig(max_budget=0.000000000001, budget_duration="1d"),
+        TAG_NAME_2: BudgetConfig(max_budget=100, budget_duration="1d"),
     }
 
     router = Router(
@@ -727,3 +732,12 @@ async def test_tag_budgets_e2e_test_expect_to_fail():
         # Verify the error is related to budget exceeded
 
         assert f"Exceeded budget for tag='{TAG_NAME}'" in str(exc_info.value)
+
+    # test with tag-2 expect to pass
+    for _ in range(2):
+        response = await router.acompletion(
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            model="openai/gpt-4o-mini",
+            metadata={"tags": [TAG_NAME_2]},
+        )
+        print(response)
