@@ -13,10 +13,13 @@ from httpx._models import Headers, Response
 
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelResponse, Usage
 
 from ..common_utils import SagemakerError
 
@@ -197,7 +200,7 @@ class SagemakerConfig(BaseConfig):
         self,
         model: str,
         raw_response: Response,
-        model_response: litellm.ModelResponse,
+        model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
@@ -206,7 +209,7 @@ class SagemakerConfig(BaseConfig):
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         completion_response = raw_response.json()
         ## LOGGING
         logging_obj.post_call(
