@@ -83,7 +83,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   );
 
   // Assuming useSearchParams() hook exists and works in your setup
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams()!;
   const viewSpend = searchParams.get("viewSpend");
   const router = useRouter();
 
