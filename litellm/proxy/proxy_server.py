@@ -6273,6 +6273,24 @@ async def _add_team_model_to_db(
     return model_response
 
 
+def check_if_team_id_matches_key(
+    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
+) -> bool:
+    can_make_call = True
+    if (
+        user_api_key_dict.user_role
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    ):
+        return True
+    if team_id is None:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            can_make_call = False
+    else:
+        if user_api_key_dict.team_id != team_id:
+            can_make_call = False
+    return can_make_call
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
@@ -6288,14 +6306,20 @@ async def add_new_model(
     try:
         import base64
 
-        global prisma_client
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
                 detail={
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
+            )
+
+        if not check_if_team_id_matches_key(
+            team_id=model_params.model_info.team_id, user_api_key_dict=user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Team ID does not match the API key's team ID"},
             )
 
         model_response = None
