@@ -43,6 +43,9 @@ def cleanup_redis():
         for key in redis_client.scan_iter("provider_spend:*"):
             print("deleting key", key)
             redis_client.delete(key)
+        for key in redis_client.scan_iter("deployment_spend:*"):
+            print("deleting key", key)
+            redis_client.delete(key)
     except Exception as e:
         print(f"Error cleaning up Redis: {str(e)}")
 
