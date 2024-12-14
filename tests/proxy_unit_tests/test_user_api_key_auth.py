@@ -496,3 +496,57 @@ def test_read_request_body():
     request.body = return_body
     result = _read_request_body(request)
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_auth_with_form_data_and_model():
+    """
+    Test user_api_key_auth when:
+    1. Request has form data instead of JSON body
+    2. Virtual key has a model set
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL, FormData
+    from litellm.proxy.proxy_server import (
+        hash_token,
+        user_api_key_cache,
+        user_api_key_auth,
+    )
+
+    # Setup
+    user_key = "sk-12345678"
+
+    # Create a virtual key with a specific model
+    valid_token = UserAPIKeyAuth(
+        token=hash_token(user_key),
+        models=["gpt-4"],
+    )
+
+    # Store the virtual key in cache
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    # Create request with form data
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        }
+    )
+    request._url = URL(url="/chat/completions")
+
+    # Mock form data
+    form_data = FormData([("key1", "value1"), ("key2", "value2")])
+
+    async def return_form_data():
+        return form_data
+
+    request.form = return_form_data
+
+    # Test user_api_key_auth with form data request
+    response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    assert response.models == ["gpt-4"], "Model from virtual key should be preserved"
