@@ -108,3 +108,27 @@ async def get_deployments_for_tag(
         healthy_deployments,
     )
     return healthy_deployments
+
+
+def _get_tags_from_request_kwargs(
+    request_kwargs: Optional[Dict[Any, Any]] = None
+) -> List[str]:
+    """
+    Helper to get tags from request kwargs
+
+    Args:
+        request_kwargs: The request kwargs to get tags from
+
+    Returns:
+        List[str]: The tags from the request kwargs
+    """
+    if request_kwargs is None:
+        return []
+    if "metadata" in request_kwargs:
+        metadata = request_kwargs["metadata"]
+        return metadata.get("tags", [])
+    elif "litellm_params" in request_kwargs:
+        litellm_params = request_kwargs["litellm_params"]
+        _metadata = litellm_params.get("metadata", {})
+        return _metadata.get("tags", [])
+    return []
