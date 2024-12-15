@@ -689,6 +689,19 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             raise e
 
+    def _get_num_retries(
+        kwargs: Dict[str, Any], exception: Exception
+    ) -> Tuple[Optional[int], Dict[str, Any]]:
+        num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
+        if kwargs.get("retry_policy", None):
+            num_retries = get_num_retries_from_retry_policy(
+                exception=exception,
+                retry_policy=kwargs.get("retry_policy"),
+            )
+            kwargs["retry_policy"] = reset_retry_policy()
+
+        return num_retries, kwargs
+
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
@@ -1159,20 +1172,8 @@ def client(original_function):  # noqa: PLR0915
                     raise e
 
             call_type = original_function.__name__
+            num_retries, kwargs = _get_num_retries(kwargs=kwargs, exception=e)
             if call_type == CallTypes.acompletion.value:
-                num_retries = (
-                    kwargs.get("num_retries", None) or litellm.num_retries or None
-                )
-                if kwargs.get("retry_policy", None):
-                    num_retries = get_num_retries_from_retry_policy(
-                        exception=e,
-                        retry_policy=kwargs.get("retry_policy"),
-                    )
-                    kwargs["retry_policy"] = reset_retry_policy()
-
-                litellm.num_retries = (
-                    None  # set retries to None to prevent infinite loops
-                )
                 context_window_fallback_dict = kwargs.get(
                     "context_window_fallback_dict", {}
                 )
@@ -1184,6 +1185,9 @@ def client(original_function):  # noqa: PLR0915
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
+                        litellm.num_retries = (
+                            None  # set retries to None to prevent infinite loops
+                        )
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
                         if isinstance(
@@ -1205,6 +1209,10 @@ def client(original_function):  # noqa: PLR0915
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
+
+            setattr(
+                e, "num_retries", num_retries
+            )  ## IMPORTANT: returns the deployment's num_retries to the router
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
