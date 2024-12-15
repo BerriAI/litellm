@@ -1,22 +1,15 @@
 from json import dumps
 from typing import Callable
 
-import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 
-import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
-    AlertType,
-    CallInfo,
-    ProxyErrorTypes,
-    ProxyException,
     UserAPIKeyAuth,
-    WebhookEvent,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from .WLog import log
 
-
+TAG = "models"
 router = APIRouter()
 model_list: Callable
 
@@ -31,30 +24,28 @@ def set_model_list_def(model_list_from_proxy: Callable):
 )
 async def models(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
     originData = await model_list(user_api_key_dict)
-    ## todo transform data
-    print(originData)
-    # "data": [
-    #     {"id": "deepseek/deepseek-chat",
-    #      "object": "model",
-    #      "created": 1677610602,
-    #      "owned_by": "openai"}
-    # ],
+    log(TAG, originData)
+
+    # myTest = {'data': [{'id': 'deepseek/deepseek-chat', 'object': 'model', 'created': 1677610602, 'owned_by': 'openai'}
+    #     ,{'id': 'deepseek/deepseek-chat2', 'object': 'model', 'created': 1677610602, 'owned_by': 'openai'}
+    #     ,{'id': 'openai/deepseek-chat3', 'object': 'model', 'created': 1677610602, 'owned_by': 'openai'}], 'object': 'list'}
+    # data = myTest['data']
+
     data = originData['data']
     if data is not None:
         if len(data) > 0:
             outData = {}
             for item in data:
-                group = outData[item["owned_by"]]
+                log(TAG, item)
+                group_name = str(item['id']).split("/")[0]
+                group = outData.get(group_name)
                 if group is None:
                     group = []
-                    outData[item["owned_by"]] = group
+                    outData[group_name] = group
                 group.append(item["id"])
+            print(TAG, outData)
             return outData
-    ## mock data
-    outData = {}
-    outData["openAI"] = ["chatgpt-4o-latest", "gpt-4o-2024-08-06"]
-    outData["deepseek"] = ["deepseek/chat", "deepseek/code"]
-    return outData
+    return {}
 
 
 @router.get(
@@ -63,11 +54,17 @@ async def models(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth))
     tags=["model management"]
 )
 async def endpoints(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
-    originData = await model_list(user_api_key_dict)
-    ## todo transform data
-    print(originData)
-    # outData = []
-    return originData
+    models_dict = await models(user_api_key_dict)
+    log(TAG, models_dict)
+    outData = {}
+    idx = 0
+    for key in models_dict:
+        outData[key] = {
+            'userProvide': True,
+            'order': idx
+        }
+        idx += 1
+    return outData
 
 
 @router.get(
@@ -76,9 +73,10 @@ async def endpoints(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_aut
     tags=["model management"]
 )
 async def keys(name):
-    map = {}
-    map.expiresAt = "2034-11-17T06:58:35.462Z"
-    return dumps(map)
+    return {
+        'id': name,
+        'expiresAt': "2034-11-17T06:58:35.462Z"
+    }
 
 
 @router.post(
