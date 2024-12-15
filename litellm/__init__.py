@@ -9,6 +9,7 @@ from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+from litellm.types.utils import ImageObject, BudgetConfig
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -291,6 +292,7 @@ max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 internal_user_budget_duration: Optional[str] = None
+tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -989,7 +991,6 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
-from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
