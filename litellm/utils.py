@@ -1069,6 +1069,39 @@ def client(original_function):  # noqa: PLR0915
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
+
+
+            # ADD HIDDEN PARAMS - additional call metadata
+            if not hasattr(result, "_hidden_params"):
+                result._hidden_params = {}
+            result._hidden_params["litellm_call_id"] = getattr(
+                logging_obj, "litellm_call_id", None
+            )
+            result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
+                "id", None
+            )
+            result._hidden_params["api_base"] = get_api_base(
+                model=model,
+                optional_params=kwargs,
+            )
+            result._hidden_params["response_cost"] = (
+                logging_obj._response_cost_calculator(result=result)
+            )
+            result._hidden_params["additional_headers"] = process_response_headers(
+                result._hidden_params.get("additional_headers") or {}
+            )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+            if (
+                isinstance(result, ModelResponse)
+                or isinstance(result, EmbeddingResponse)
+                or isinstance(result, TranscriptionResponse)
+            ):
+                setattr(
+                    result,
+                    "_response_ms",
+                    (end_time - start_time).total_seconds() * 1000,
+                )  # return response latency in ms like openai
+
+            ### return chunked responses ###
             if "stream" in kwargs and kwargs["stream"] is True:
                 if (
                     "complete_response" in kwargs
@@ -1084,35 +1117,6 @@ def client(original_function):  # noqa: PLR0915
                     return result
             elif call_type == CallTypes.arealtime.value:
                 return result
-
-            # ADD HIDDEN PARAMS - additional call metadata
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["litellm_call_id"] = getattr(
-                    logging_obj, "litellm_call_id", None
-                )
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model,
-                    optional_params=kwargs,
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
-                or isinstance(result, TranscriptionResponse)
-            ):
-                setattr(
-                    result,
-                    "_response_ms",
-                    (end_time - start_time).total_seconds() * 1000,
-                )  # return response latency in ms like openai
 
             ### POST-CALL RULES ###
             post_call_processing(
