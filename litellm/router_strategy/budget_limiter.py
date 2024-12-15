@@ -40,7 +40,7 @@ from litellm.types.router import (
     LiteLLM_Params,
     RouterErrors,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -801,6 +801,8 @@ class RouterBudgetLimiting(CustomLogger):
             self.tag_budget_config = {}
 
         for _tag, _tag_budget_config in litellm.tag_budget_config.items():
+            if isinstance(_tag_budget_config, dict):
+                _tag_budget_config = BudgetConfig(**_tag_budget_config)
             _generic_budget_config = GenericBudgetInfo(
                 time_period=_tag_budget_config.budget_duration,
                 budget_limit=_tag_budget_config.max_budget,
