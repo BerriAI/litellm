@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure_ai.rerank import AzureAIRerank
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.cohere.rerank import CohereRerank
+from litellm.llms.infinity.rerank import InfinityRerank
 from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.secret_managers.main import get_secret
@@ -23,6 +24,7 @@ together_rerank = TogetherAIRerank()
 azure_ai_rerank = AzureAIRerank()
 jina_ai_rerank = JinaAIRerank()
 bedrock_rerank = BedrockRerankHandler()
+infinity_rerank = InfinityRerank()
 #################################################
 
 
@@ -76,7 +78,7 @@ def rerank(  # noqa: PLR0915
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[Literal["cohere", "together_ai", "azure_ai"]] = None,
+    custom_llm_provider: Optional[Literal["cohere", "together_ai", "azure_ai", "infinity"]] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = True,
@@ -290,6 +292,70 @@ def rerank(  # noqa: PLR0915
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 api_base=api_base,
                 logging_obj=litellm_logging_obj,
+            )
+        elif _custom_llm_provider == "infinity":
+            # Implement Infinity rerank logic
+            api_key: Optional[str] = (
+                dynamic_api_key
+                or optional_params.api_key
+                or litellm.infinity_key
+                or get_secret("INFINITY_API_KEY")  # type: ignore
+                or litellm.api_key
+            )
+
+            if api_key is None:
+                raise ValueError(
+                    "Infinity API key is required, please set 'INFINITY_API_KEY' in your environment"
+                )
+
+            api_base: Optional[str] = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret("INFINITY_API_BASE")  # type: ignore
+            )
+
+            if api_base is None:
+                raise Exception(
+                    "Invalid api base. api_base=None. Set in call or via `INFINITY_API_BASE` env var."
+                )
+            
+            # api_key: Optional[str] = (
+            #     dynamic_api_key
+            #     or get_secret("ELLM_API_KEY")
+            # )
+            
+            # if api_key is None:
+            #     api_key = "DUMMY_KEY"
+            #     # raise ValueError(
+            #     #     "Cohere API key is required, please set 'COHERE_API_KEY' in your environment"
+            #     # )
+
+            # api_base: Optional[str] = (
+            #     dynamic_api_base
+            #     or get_secret("ELLM_API_BASE")  # type: ignore
+            # )
+
+            # if api_base is None:
+            #     raise Exception(
+            #         "Invalid api base. api_base=None. Set in call or via `COHERE_API_BASE` env var."
+            #     )
+
+            headers = headers or litellm.headers or {}
+
+            response = infinity_rerank.rerank(
+                model=model,
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
         else:
             raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
