@@ -122,13 +122,16 @@ def _get_tags_from_request_kwargs(
     Returns:
         List[str]: The tags from the request kwargs
     """
+    tags: List[str] = []
     if request_kwargs is None:
         return []
     if "metadata" in request_kwargs:
         metadata = request_kwargs["metadata"]
-        return metadata.get("tags", [])
+        tags.extend(metadata.get("tags", []))
     elif "litellm_params" in request_kwargs:
         litellm_params = request_kwargs["litellm_params"]
         _metadata = litellm_params.get("metadata", {})
-        return _metadata.get("tags", [])
-    return []
+        tags.extend(_metadata.get("tags", []))
+    elif "tags" in request_kwargs:
+        tags.extend(request_kwargs["tags"])
+    return tags
