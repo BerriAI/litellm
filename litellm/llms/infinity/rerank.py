@@ -113,7 +113,6 @@ class InfinityRerank(BaseLLM):
             headers=headers,
             json=request_data_dict,
         )
-        print(f"response.json(): {response.json()}")
         returned_response = RerankResponse(
             id=response.json()["id"],
             results=response.json()["results"],
