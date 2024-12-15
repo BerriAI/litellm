@@ -22,6 +22,7 @@ import logging
 from litellm._logging import verbose_router_logger
 import litellm
 from datetime import timezone, timedelta
+from litellm.types.utils import BudgetConfig
 
 verbose_router_logger.setLevel(logging.DEBUG)
 
@@ -44,6 +45,9 @@ def cleanup_redis():
             print("deleting key", key)
             redis_client.delete(key)
         for key in redis_client.scan_iter("deployment_spend:*"):
+            print("deleting key", key)
+            redis_client.delete(key)
+        for key in redis_client.scan_iter("tag_spend:*"):
             print("deleting key", key)
             redis_client.delete(key)
     except Exception as e:
@@ -674,3 +678,66 @@ async def test_deployment_budgets_e2e_test_expect_to_fail():
         # Verify the error is related to budget exceeded
 
         assert "Exceeded budget for deployment" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_tag_budgets_e2e_test_expect_to_fail():
+    """
+    Expected behavior:
+    - first request passes, all subsequent requests fail
+
+    """
+    cleanup_redis()
+    TAG_NAME = "product:chat-bot"
+    TAG_NAME_2 = "product:chat-bot-2"
+    litellm.tag_budget_config = {
+        TAG_NAME: BudgetConfig(max_budget=0.000000000001, budget_duration="1d"),
+        TAG_NAME_2: BudgetConfig(max_budget=100, budget_duration="1d"),
+    }
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",  # openai model name
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                },
+            },
+        ],
+        redis_host=os.getenv("REDIS_HOST"),
+        redis_port=int(os.getenv("REDIS_PORT")),
+        redis_password=os.getenv("REDIS_PASSWORD"),
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        model="openai/gpt-4o-mini",
+        metadata={"tags": [TAG_NAME]},
+    )
+    print(response)
+
+    await asyncio.sleep(2.5)
+
+    for _ in range(3):
+        with pytest.raises(Exception) as exc_info:
+            response = await router.acompletion(
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model="openai/gpt-4o-mini",
+                metadata={"tags": [TAG_NAME]},
+            )
+            print(response)
+            print("response.hidden_params", response._hidden_params)
+
+        await asyncio.sleep(0.5)
+        # Verify the error is related to budget exceeded
+
+        assert f"Exceeded budget for tag='{TAG_NAME}'" in str(exc_info.value)
+
+    # test with tag-2 expect to pass
+    for _ in range(2):
+        response = await router.acompletion(
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            model="openai/gpt-4o-mini",
+            metadata={"tags": [TAG_NAME_2]},
+        )
+        print(response)
