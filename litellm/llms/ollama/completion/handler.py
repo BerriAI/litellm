@@ -14,11 +14,20 @@ import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelInfo,
+    ModelResponse,
+    ProviderField,
+    StreamingChoices,
+)
 
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import OllamaError
 from .transformation import OllamaConfig
 
@@ -53,7 +62,7 @@ def _convert_image(image):
 
 # ollama implementation
 def get_ollama_response(
-    model_response: litellm.ModelResponse,
+    model_response: ModelResponse,
     model: str,
     prompt: str,
     optional_params: dict,
@@ -391,7 +400,7 @@ async def ollama_aembeddings(
     api_base: str,
     model: str,
     prompts: List[str],
-    model_response: litellm.EmbeddingResponse,
+    model_response: EmbeddingResponse,
     optional_params: dict,
     logging_obj: Any,
     encoding: Any,
@@ -479,7 +488,7 @@ def ollama_embeddings(
     model: str,
     prompts: list,
     optional_params: dict,
-    model_response: litellm.EmbeddingResponse,
+    model_response: EmbeddingResponse,
     logging_obj: Any,
     encoding=None,
 ):

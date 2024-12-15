@@ -145,6 +145,7 @@ from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import (
     CustomStreamWrapper,
+    EmbeddingResponse,
     ModelResponse,
     _is_region_eu,
     calculate_max_parallel_requests,
@@ -2071,7 +2072,7 @@ class Router:
         input: Union[str, List],
         is_async: Optional[bool] = False,
         **kwargs,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         try:
             kwargs["model"] = model
             kwargs["input"] = input
@@ -2146,7 +2147,7 @@ class Router:
         input: Union[str, List],
         is_async: Optional[bool] = True,
         **kwargs,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         try:
             kwargs["model"] = model
             kwargs["input"] = input

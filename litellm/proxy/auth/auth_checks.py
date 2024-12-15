@@ -35,6 +35,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.router import Router
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
@@ -61,7 +62,7 @@ def common_checks(  # noqa: PLR0915
     global_proxy_spend: Optional[float],
     general_settings: dict,
     route: str,
-    llm_router: Optional[litellm.Router],
+    llm_router: Optional[Router],
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -347,7 +348,7 @@ async def get_end_user_object(
 
 
 def model_in_access_group(
-    model: str, team_models: Optional[List[str]], llm_router: Optional[litellm.Router]
+    model: str, team_models: Optional[List[str]], llm_router: Optional[Router]
 ) -> bool:
     from collections import defaultdict
 

@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
+)
 from litellm.llms.base_llm.base_model_iterator import FakeStreamResponseIterator
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -152,7 +154,7 @@ class ClarifaiConfig(BaseConfig):
         encoding: str,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         logging_obj.post_call(
             input=messages,
             api_key=api_key,
