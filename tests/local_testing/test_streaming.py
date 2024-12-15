@@ -606,14 +606,14 @@ def test_completion_azure_function_calling_stream():
 @pytest.mark.skip("Flaky ollama test - needs to be fixed")
 def test_completion_ollama_hosted_stream():
     try:
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         response = completion(
             model="ollama/phi",
             messages=messages,
-            max_tokens=10,
+            max_tokens=100,
             num_retries=3,
             timeout=20,
-            api_base="https://test-ollama-endpoint.onrender.com",
+            # api_base="https://test-ollama-endpoint.onrender.com",
             stream=True,
         )
         # Add any assertions here to check the response

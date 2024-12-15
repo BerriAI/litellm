@@ -2645,45 +2645,40 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            if model in custom_prompt_dict:
-                # check if the model has a registered custom prompt
-                model_prompt_details = custom_prompt_dict[model]
-                ollama_prompt = custom_prompt(
-                    role_dict=model_prompt_details["roles"],
-                    initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                    final_prompt_value=model_prompt_details["final_prompt_value"],
-                    messages=messages,
-                )
-            else:
-                modified_prompt = ollama_pt(model=model, messages=messages)
-                if isinstance(modified_prompt, dict):
-                    # for multimode models - ollama/llava prompt_factory returns a dict {
-                    #     "prompt": prompt,
-                    #     "images": images
-                    # }
-                    ollama_prompt, images = (
-                        modified_prompt["prompt"],
-                        modified_prompt["images"],
-                    )
-                    optional_params["images"] = images
-                else:
-                    ollama_prompt = modified_prompt
-            ## LOGGING
-            generator = ollama.get_ollama_response(
-                api_base=api_base,
-                model=model,
-                prompt=ollama_prompt,
-                optional_params=optional_params,
-                logging_obj=logging,
-                acompletion=acompletion,
-                model_response=model_response,
-                encoding=encoding,
-            )
-            if acompletion is True or optional_params.get("stream", False) is True:
-                return generator
 
-            response = generator
+            # ## LOGGING
+            # generator = ollama.get_ollama_response(
+            #     api_base=api_base,
+            #     model=model,
+            #     prompt=ollama_prompt,
+            #     optional_params=optional_params,
+            #     logging_obj=logging,
+            #     acompletion=acompletion,
+            #     model_response=model_response,
+            #     encoding=encoding,
+            # )
+            # if acompletion is True or optional_params.get("stream", False) is True:
+            #     return generator
+
+            # response = generator
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="ollama",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+            )
+
         elif custom_llm_provider == "ollama_chat":
             api_base = (
                 litellm.api_base

@@ -2350,8 +2350,8 @@ def test_completion_ollama_hosted():
         response = completion(
             model="ollama/phi",
             messages=messages,
-            max_tokens=2,
-            api_base="https://test-ollama-endpoint.onrender.com",
+            max_tokens=20,
+            # api_base="https://test-ollama-endpoint.onrender.com",
         )
         # Add any assertions here to check the response
         print(response)
