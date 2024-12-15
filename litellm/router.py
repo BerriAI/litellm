@@ -897,17 +897,12 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            timeout: Optional[Union[float, int]] = self._get_timeout(
-                kwargs=kwargs, data=data
-            )
-
             _response = litellm.acompletion(
                 **{
                     **data,
                     "messages": messages,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": timeout,
                     **kwargs,
                 }
             )
@@ -1016,6 +1011,7 @@ class Router:
         kwargs["timeout"] = self._get_timeout(
             kwargs=kwargs, data=deployment["litellm_params"]
         )
+
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs)
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
@@ -1047,16 +1043,16 @@ class Router:
     def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
         """Helper to get timeout from kwargs or deployment params"""
         timeout = (
-            data.get(
+            kwargs.get("timeout", None)  # the params dynamically set by user
+            or kwargs.get("request_timeout", None)  # the params dynamically set by user
+            or data.get(
                 "timeout", None
             )  # timeout set on litellm_params for this deployment
             or data.get(
                 "request_timeout", None
             )  # timeout set on litellm_params for this deployment
             or self.timeout  # timeout set on router
-            or kwargs.get(
-                "timeout", None
-            )  # this uses default_litellm_params when nothing is set
+            or self.default_litellm_params.get("timeout", None)
         )
 
         return timeout
@@ -1767,17 +1763,11 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            timeout: Optional[Union[float, int]] = self._get_timeout(
-                kwargs=kwargs,
-                data=data,
-            )
-
             response = await litellm.arerank(
                 **{
                     **data,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    "timeout": timeout,
                     **kwargs,
                 }
             )
