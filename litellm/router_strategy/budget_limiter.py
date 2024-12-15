@@ -107,13 +107,12 @@ class RouterBudgetLimiting(CustomLogger):
             request_kwargs
         )
 
-        cache_keys = await self._async_get_cache_keys_for_router_budget_limiting(
-            healthy_deployments=healthy_deployments,
-            request_kwargs=request_kwargs,
+        cache_keys, provider_configs, deployment_configs = (
+            await self._async_get_cache_keys_for_router_budget_limiting(
+                healthy_deployments=healthy_deployments,
+                request_kwargs=request_kwargs,
+            )
         )
-
-        provider_configs: Dict[str, GenericBudgetInfo] = {}
-        deployment_configs: Dict[str, GenericBudgetInfo] = {}
 
         # Single cache read for all spend values
         if len(cache_keys) > 0:
@@ -237,11 +236,15 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         healthy_deployments: List[Dict[str, Any]],
         request_kwargs: Optional[Dict] = None,
-    ) -> List[str]:
+    ) -> Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo]]:
         """
-        Returns list of cache keys to fetch from router cache for budget limiting
+        Returns list of cache keys to fetch from router cache for budget limiting and provider and deployment configs
 
-        eg. Get keys for provider budget, deployment budget, and tag budget
+        Returns:
+            Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo]]:
+                - List of cache keys to fetch from router cache for budget limiting
+                - Dict of provider budget configs `provider_configs`
+                - Dict of deployment budget configs `deployment_configs`
         """
         cache_keys: List[str] = []
         provider_configs: Dict[str, GenericBudgetInfo] = {}
@@ -280,7 +283,7 @@ class RouterBudgetLimiting(CustomLogger):
                         cache_keys.append(
                             f"tag_spend:{_tag}:{_tag_budget_config.time_period}"
                         )
-        return cache_keys
+        return cache_keys, provider_configs, deployment_configs
 
     async def _get_or_set_budget_start_time(
         self, start_time_key: str, current_time: float, ttl_seconds: int
