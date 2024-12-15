@@ -10,6 +10,7 @@ from litellm.llms.base_llm.transformation import (
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from ..common_utils import PetalsError
 
@@ -111,7 +112,7 @@ class PetalsConfig(BaseConfig):
         self,
         model: str,
         raw_response: Response,
-        model_response: litellm.ModelResponse,
+        model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
@@ -120,7 +121,7 @@ class PetalsConfig(BaseConfig):
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         raise NotImplementedError(
             "Petals transformation currently done in handler.py. [TODO] Move to the transformation.py"
         )

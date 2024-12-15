@@ -27,6 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.types.utils import LiteLLMLoggingBaseClass
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
 from ...base import BaseLLM
@@ -92,7 +93,7 @@ class PredibaseChatCompletion(BaseLLM):
         response: Union[requests.Response, httpx.Response],
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+        logging_obj: LiteLLMLoggingBaseClass,
         optional_params: dict,
         api_key: str,
         data: Union[dict, str],

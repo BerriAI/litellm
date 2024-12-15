@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.bedrock import CohereEmbeddingRequest
+from litellm.types.utils import EmbeddingResponse
 from litellm.utils import Choices, Message, ModelResponse, Usage
 
 from .transformation import CohereEmbeddingConfig
@@ -118,7 +119,7 @@ async def async_embedding(
 def embedding(
     model: str,
     input: list,
-    model_response: litellm.EmbeddingResponse,
+    model_response: EmbeddingResponse,
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     headers: dict,
