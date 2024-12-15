@@ -30,7 +30,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -45,6 +45,7 @@ from litellm.types.guardrails import (
     BedrockTextContent,
     GuardrailEventHooks,
 )
+from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -70,7 +71,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def convert_to_bedrock_format(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
-        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
         bedrock_request_content: List[BedrockContentItem] = []

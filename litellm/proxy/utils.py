@@ -289,7 +289,7 @@ class ProxyLogging:
 
     def startup_event(
         self,
-        llm_router: Optional[litellm.Router],
+        llm_router: Optional[Router],
         redis_usage_cache: Optional[RedisCache],
     ):
         """Initialize logging and alerting on proxy startup"""
@@ -359,7 +359,7 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
-    def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
+    def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
         litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
         litellm.callbacks.append(self.cache_control_check)  # type: ignore
@@ -1485,7 +1485,8 @@ class PrismaClient:
             elif table_name == "team":
                 if query_type == "find_unique":
                     response = await self.db.litellm_teamtable.find_unique(
-                        where={"team_id": team_id}  # type: ignore
+                        where={"team_id": team_id},  # type: ignore
+                        include={"litellm_model_table": True},  # type: ignore
                     )
                 elif query_type == "find_all" and reset_at is not None:
                     response = await self.db.litellm_teamtable.find_many(
@@ -2182,6 +2183,35 @@ class PrismaClient:
                 )
             )
             raise e
+
+    async def _get_spend_logs_row_count(self) -> int:
+        try:
+            sql_query = """
+            SELECT reltuples::BIGINT
+            FROM pg_class
+            WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
+            """
+            result = await self.db.query_raw(query=sql_query)
+            return result[0]["reltuples"]
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error getting LiteLLM_SpendLogs row count: {e}"
+            )
+            return 0
+
+    async def _set_spend_logs_row_count_in_proxy_state(self) -> None:
+        """
+        Set the `LiteLLM_SpendLogs`row count in proxy state.
+
+        This is used later to determine if we should run expensive UI Usage queries.
+        """
+        from litellm.proxy.proxy_server import proxy_state
+
+        _num_spend_logs_rows = await self._get_spend_logs_row_count()
+        proxy_state.set_proxy_state_variable(
+            variable_name="spend_logs_row_count",
+            value=_num_spend_logs_rows,
+        )
 
 
 ### CUSTOM FILE ###

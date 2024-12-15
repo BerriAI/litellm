@@ -25,8 +25,6 @@ from typing import (
     get_type_hints,
 )
 
-import requests
-
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -111,6 +109,7 @@ from litellm import (
     CreateBatchRequest,
     ListBatchRequest,
     RetrieveBatchRequest,
+    Router,
 )
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
@@ -120,7 +119,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
-from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
@@ -164,6 +163,7 @@ from litellm.proxy.common_utils.load_config_utils import (
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
+from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
@@ -200,6 +200,7 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
+from litellm.proxy.management_endpoints.team_endpoints import update_team
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
@@ -334,6 +335,7 @@ premium_user: bool = _license_check.is_premium()
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
+proxy_state = ProxyState()
 if global_max_parallel_request_retries_env is None:
     global_max_parallel_request_retries: int = 3
 else:
@@ -488,7 +490,7 @@ user_config_file_path: Optional[str] = None
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
-llm_router: Optional[litellm.Router] = None
+llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
 callback_settings: dict = {}
@@ -533,7 +535,7 @@ async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
 ### DB WRITER ###
-db_writer_client: Optional[HTTPHandler] = None
+db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
 
@@ -2097,7 +2099,10 @@ class ProxyConfig:
         """
         global user_config_file_path, llm_router
         combined_id_list = []
-        if llm_router is None:
+
+        ## BASE CASES ##
+        # if llm_router is None or db_models is empty, return 0
+        if llm_router is None or len(db_models) == 0:
             return 0
 
         ## DB MODELS ##
@@ -2427,6 +2432,19 @@ class ProxyConfig:
 
         return config
 
+    async def _get_models_from_db(self, prisma_client: PrismaClient) -> list:
+        try:
+            new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
+                    str(e)
+                )
+            )
+            new_models = []
+
+        return new_models
+
     async def add_deployment(
         self,
         prisma_client: PrismaClient,
@@ -2444,15 +2462,9 @@ class ProxyConfig:
                 raise ValueError(
                     f"Master key is not initialized or formatted. master_key={master_key}"
                 )
-            try:
-                new_models = await prisma_client.db.litellm_proxymodeltable.find_many()
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "litellm.proxy_server.py::add_deployment() - Error getting new models from DB - {}".format(
-                        str(e)
-                    )
-                )
-                new_models = []
+
+            new_models = await self._get_models_from_db(prisma_client=prisma_client)
+
             # update llm router
             await self._update_llm_router(
                 new_models=new_models, proxy_logging_obj=proxy_logging_obj
@@ -2829,7 +2841,7 @@ class ProxyStartupEvent:
     @classmethod
     def _initialize_startup_logging(
         cls,
-        llm_router: Optional[litellm.Router],
+        llm_router: Optional[Router],
         proxy_logging_obj: ProxyLogging,
         redis_usage_cache: Optional[RedisCache],
     ):
@@ -3053,6 +3065,10 @@ class ProxyStartupEvent:
             asyncio.create_task(
                 prisma_client.check_view_exists()
             )  # check if all necessary views exist. Don't block execution
+
+            asyncio.create_task(
+                prisma_client._set_spend_logs_row_count_in_proxy_state()
+            )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
             await prisma_client.health_check()
@@ -6195,6 +6211,94 @@ async def delete_budget(
 #### MODEL MANAGEMENT ####
 
 
+async def _add_model_to_db(
+    model_params: Deployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+):
+    # encrypt litellm params #
+    _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
+    _orignal_litellm_model_name = model_params.litellm_params.model
+    for k, v in _litellm_params_dict.items():
+        encrypted_value = encrypt_value_helper(value=v)
+        model_params.litellm_params[k] = encrypted_value
+    _data: dict = {
+        "model_id": model_params.model_info.id,
+        "model_name": model_params.model_name,
+        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
+        "model_info": model_params.model_info.model_dump_json(  # type: ignore
+            exclude_none=True
+        ),
+        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+    }
+    if model_params.model_info.id is not None:
+        _data["model_id"] = model_params.model_info.id
+    model_response = await prisma_client.db.litellm_proxymodeltable.create(
+        data=_data  # type: ignore
+    )
+    return model_response
+
+
+async def _add_team_model_to_db(
+    model_params: Deployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+):
+    """
+    If 'team_id' is provided,
+
+    - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
+    - store the model in the db with the unique 'model_name'
+    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
+    """
+    _team_id = model_params.model_info.team_id
+    original_model_name = model_params.model_name
+    if _team_id is None:
+        return None
+
+    unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
+
+    model_params.model_name = unique_model_name
+
+    ## CREATE MODEL IN DB ##
+    model_response = await _add_model_to_db(
+        model_params=model_params,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    ## CREATE MODEL ALIAS IN DB ##
+    await update_team(
+        data=UpdateTeamRequest(
+            team_id=_team_id,
+            model_aliases={original_model_name: unique_model_name},
+        ),
+        user_api_key_dict=user_api_key_dict,
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    return model_response
+
+
+def check_if_team_id_matches_key(
+    team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
+) -> bool:
+    can_make_call = True
+    if (
+        user_api_key_dict.user_role
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    ):
+        return True
+    if team_id is None:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            can_make_call = False
+    else:
+        if user_api_key_dict.team_id != team_id:
+            can_make_call = False
+    return can_make_call
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
@@ -6210,14 +6314,20 @@ async def add_new_model(
     try:
         import base64
 
-        global prisma_client
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
                 detail={
                     "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
                 },
+            )
+
+        if not check_if_team_id_matches_key(
+            team_id=model_params.model_info.team_id, user_api_key_dict=user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Team ID does not match the API key's team ID"},
             )
 
         model_response = None
@@ -6227,43 +6337,35 @@ async def add_new_model(
             - store model_list in db
             - store keys separately
             """
-            # encrypt litellm params #
-            _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
-            _orignal_litellm_model_name = model_params.litellm_params.model
-            for k, v in _litellm_params_dict.items():
-                encrypted_value = encrypt_value_helper(value=v)
-                model_params.litellm_params[k] = encrypted_value
-            _data: dict = {
-                "model_id": model_params.model_info.id,
-                "model_name": model_params.model_name,
-                "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
-                "model_info": model_params.model_info.model_dump_json(  # type: ignore
-                    exclude_none=True
-                ),
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }
-            if model_params.model_info.id is not None:
-                _data["model_id"] = model_params.model_info.id
-            model_response = await prisma_client.db.litellm_proxymodeltable.create(
-                data=_data  # type: ignore
-            )
 
-            await proxy_config.add_deployment(
-                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-            )
             try:
+                _original_litellm_model_name = model_params.model_name
+                if model_params.model_info.team_id is None:
+                    model_response = await _add_model_to_db(
+                        model_params=model_params,
+                        user_api_key_dict=user_api_key_dict,
+                        prisma_client=prisma_client,
+                    )
+                else:
+                    model_response = await _add_team_model_to_db(
+                        model_params=model_params,
+                        user_api_key_dict=user_api_key_dict,
+                        prisma_client=prisma_client,
+                    )
+                await proxy_config.add_deployment(
+                    prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+                )
                 # don't let failed slack alert block the /model/new response
                 _alerting = general_settings.get("alerting", []) or []
                 if "slack" in _alerting:
                     # send notification - new model added
                     await proxy_logging_obj.slack_alerting_instance.model_added_alert(
                         model_name=model_params.model_name,
-                        litellm_model_name=_orignal_litellm_model_name,
+                        litellm_model_name=_original_litellm_model_name,
                         passed_model_info=model_params.model_info,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_proxy_logger.exception(f"Exception in add_new_model: {e}")
 
         else:
             raise HTTPException(
@@ -8067,7 +8169,8 @@ def get_image():
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
         # Download the image and cache it
-        response = requests.get(logo_path)
+        client = HTTPHandler()
+        response = client.get(logo_path)
         if response.status_code == 200:
             # Save the image to a local file
             cache_path = os.path.join(current_dir, "cached_logo.jpg")

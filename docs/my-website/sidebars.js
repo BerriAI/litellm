@@ -91,6 +91,13 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Team Management",
+          items: [
+            "proxy/team_model_add"
+          ],
+        },
+        {
+          type: "category",
           label: "Spend Tracking + Budgets",
           items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
         },
@@ -102,7 +109,7 @@ const sidebars = {
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/team_logging","proxy/alerting", "proxy/prometheus",],
+          items: ["proxy/logging", "proxy/logging_spec", "proxy/team_logging","proxy/alerting", "proxy/prometheus"],
         },
         {
           type: "category",
@@ -127,6 +134,7 @@ const sidebars = {
             "oidc"
           ]
         },
+        "proxy/prompt_management",
         "proxy/caching",
         "proxy/call_hooks",
         "proxy/rules", 
@@ -190,11 +198,9 @@ const sidebars = {
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
-        "providers/palm", 
         "providers/sambanova", 
         "providers/custom_llm_server",
         "providers/petals",
-        
       ],
     },
     {

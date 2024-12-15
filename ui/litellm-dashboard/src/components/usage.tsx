@@ -3,6 +3,7 @@ import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, Tabl
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
+import { ProxySettings } from "./user_dashboard";
 import { 
   Grid, Col, Text, 
   LineChart, TabPanel, TabPanels, 
@@ -35,6 +36,7 @@ import {
   adminspendByProvider,
   adminGlobalActivity,
   adminGlobalActivityPerModel,
+  getProxyUISettings
 } from "./networking";
 import { start } from "repl";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
@@ -166,6 +168,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
     to: new Date(),
   });
+  const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -193,6 +196,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
   
     return formatter.format(number);
   }
+
+
+  const fetchProxySettings = async () => {
+    if (accessToken) {
+      try {
+        const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+        console.log("usage tab: proxy_settings", proxy_settings);
+        return proxy_settings;
+      } catch (error) {
+        console.error("Error fetching proxy settings:", error);
+      }
+    }
+  };
 
   useEffect(() => {
     updateTagSpendData(dateValue.from, dateValue.to);
@@ -226,6 +242,14 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const updateTagSpendData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
     if (!startTime || !endTime || !accessToken) {
       return;
+    }
+
+    
+    // we refetch because the state variable can be None when the user refreshes the page
+    const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+
+    if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+      return;  // Don't run expensive DB queries - return out when SpendLogs has more than 1M rows
     }
 
     // the endTime put it to the last hour of the selected date
@@ -385,29 +409,63 @@ const UsagePage: React.FC<UsagePageProps> = ({
   };
 
   useEffect(() => {
-    if (accessToken && token && userRole && userID) {
+    const initlizeUsageData = async () => {
+      if (accessToken && token && userRole && userID) {
+        const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+        if (proxy_settings) {
+          setProxySettings(proxy_settings); // saved in state so it can be used when rendering UI
+          if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+            return;  // Don't run expensive UI queries - return out of initlizeUsageData at this point
+          }
+        }
+        
+
+        console.log("fetching data - valiue of proxySettings", proxySettings);
 
 
-      fetchOverallSpend();
-      fetchProviderSpend();
-      fetchTopKeys();
-      fetchTopModels();
-      fetchGlobalActivity();
-      fetchGlobalActivityPerModel();
+        fetchOverallSpend();
+        fetchProviderSpend();
+        fetchTopKeys();
+        fetchTopModels();
+        fetchGlobalActivity();
+        fetchGlobalActivityPerModel();
 
-      if (isAdminOrAdminViewer(userRole)) {
-        fetchTeamSpend();
-        fetchTagNames();
-        fetchTopTags();
-        fetchTopEndUsers();
+        if (isAdminOrAdminViewer(userRole)) {
+          fetchTeamSpend();
+          fetchTagNames();
+          fetchTopTags();
+          fetchTopEndUsers();
+        }
       }
-    }
+  };
+
+  initlizeUsageData();
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
 
+  if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+    return (
+      <div style={{ width: "100%" }} className="p-8">      
+        <Card>
+          <Title>Database Query Limit Reached</Title>
+          <Text className="mt-4">
+            SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows. 
+            <br></br>
+            Please follow our guide to view usage when SpendLogs has more than 1M rows.
+          </Text>
+          <Button className="mt-4">
+            <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
+              View Usage Guide
+            </a>
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      
+    <div style={{ width: "100%" }} className="p-8">      
       <TabGroup>
         <TabList className="mt-2">
           <Tab>All Up</Tab>

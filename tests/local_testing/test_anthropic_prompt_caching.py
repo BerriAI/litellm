@@ -23,7 +23,7 @@ import pytest
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -603,6 +603,9 @@ def test_is_prompt_caching_enabled(anthropic_messages):
     [("anthropic_messages", True), ("normal_messages", False)],
 )
 @pytest.mark.asyncio()
+@pytest.mark.skip(
+    reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
+)
 async def test_router_prompt_caching_model_stored(
     messages, expected_model_id, anthropic_messages
 ):
@@ -650,6 +653,9 @@ async def test_router_prompt_caching_model_stored(
 
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(
+    reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
+)
 async def test_router_with_prompt_caching(anthropic_messages):
     """
     if prompt caching supported model called with prompt caching valid prompt,

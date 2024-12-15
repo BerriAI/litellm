@@ -33,6 +33,28 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
+class LiteLLMPydanticObjectBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump(**kwargs)  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict(**kwargs)
+
+    def fields_set(self):
+        try:
+            return self.model_fields_set  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.__fields_set__
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
 
@@ -1410,6 +1432,8 @@ all_litellm_params = [
     "user_continue_message",
     "fallback_depth",
     "max_fallbacks",
+    "max_budget",
+    "budget_duration",
 ]
 
 
@@ -1523,6 +1547,12 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: Optional[bool]
 
 
+class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
+    error_code: Optional[str]
+    error_class: Optional[str]
+    llm_provider: Optional[str]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
@@ -1538,9 +1568,10 @@ class StandardLoggingPayload(TypedDict):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    startTime: float
+    startTime: float  # Note: making this camelCase was a mistake, everything should be snake case
     endTime: float
     completionStartTime: float
+    response_time: float
     model_map_information: StandardLoggingModelInformation
     model: str
     model_id: Optional[str]
@@ -1556,6 +1587,7 @@ class StandardLoggingPayload(TypedDict):
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
 
@@ -1628,3 +1660,89 @@ class PersonalUIKeyGenerationConfig(KeyGenerationConfig):
 class StandardKeyGenerationConfig(TypedDict, total=False):
     team_key_generation: TeamUIKeyGenerationConfig
     personal_key_generation: PersonalUIKeyGenerationConfig
+
+
+class BudgetConfig(BaseModel):
+    max_budget: float
+    budget_duration: str
+
+
+class LlmProviders(str, Enum):
+    OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"  # embedding only
+    JINA_AI = "jina_ai"
+    XAI = "xai"
+    CUSTOM_OPENAI = "custom_openai"
+    TEXT_COMPLETION_OPENAI = "text-completion-openai"
+    COHERE = "cohere"
+    COHERE_CHAT = "cohere_chat"
+    CLARIFAI = "clarifai"
+    ANTHROPIC = "anthropic"
+    ANTHROPIC_TEXT = "anthropic_text"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
+    TOGETHER_AI = "together_ai"
+    OPENROUTER = "openrouter"
+    VERTEX_AI = "vertex_ai"
+    VERTEX_AI_BETA = "vertex_ai_beta"
+    GEMINI = "gemini"
+    AI21 = "ai21"
+    BASETEN = "baseten"
+    AZURE = "azure"
+    AZURE_TEXT = "azure_text"
+    AZURE_AI = "azure_ai"
+    SAGEMAKER = "sagemaker"
+    SAGEMAKER_CHAT = "sagemaker_chat"
+    BEDROCK = "bedrock"
+    VLLM = "vllm"
+    NLP_CLOUD = "nlp_cloud"
+    PETALS = "petals"
+    OOBABOOGA = "oobabooga"
+    OLLAMA = "ollama"
+    OLLAMA_CHAT = "ollama_chat"
+    DEEPINFRA = "deepinfra"
+    PERPLEXITY = "perplexity"
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    NVIDIA_NIM = "nvidia_nim"
+    CEREBRAS = "cerebras"
+    AI21_CHAT = "ai21_chat"
+    VOLCENGINE = "volcengine"
+    CODESTRAL = "codestral"
+    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DEEPSEEK = "deepseek"
+    SAMBANOVA = "sambanova"
+    MARITALK = "maritalk"
+    VOYAGE = "voyage"
+    CLOUDFLARE = "cloudflare"
+    XINFERENCE = "xinference"
+    FIREWORKS_AI = "fireworks_ai"
+    FRIENDLIAI = "friendliai"
+    WATSONX = "watsonx"
+    WATSONX_TEXT = "watsonx_text"
+    TRITON = "triton"
+    PREDIBASE = "predibase"
+    DATABRICKS = "databricks"
+    EMPOWER = "empower"
+    GITHUB = "github"
+    CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
+    HOSTED_VLLM = "hosted_vllm"
+    LM_STUDIO = "lm_studio"
+    GALADRIEL = "galadriel"
+
+
+class LiteLLMLoggingBaseClass:
+    """
+    Base class for logging pre and post call
+
+    Meant to simplify type checking for logging obj.
+    """
+
+    def pre_call(self, input, api_key, model=None, additional_args={}):
+        pass
+
+    def post_call(
+        self, original_response, input=None, api_key=None, additional_args={}
+    ):
+        pass

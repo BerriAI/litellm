@@ -45,8 +45,6 @@ from litellm.utils import (
 )
 
 from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
-
 
 class CustomLLMError(Exception):  # use this for all your exceptions
     def __init__(

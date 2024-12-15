@@ -40,13 +40,13 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
-from litellm.llms.OpenAI.cost_calculation import (
+from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
-from litellm.llms.OpenAI.cost_calculation import cost_per_token as openai_cost_per_token
-from litellm.llms.OpenAI.cost_calculation import cost_router as openai_cost_router
+from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
+from litellm.llms.openai.cost_calculation import cost_router as openai_cost_router
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
-from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.cost_calculator import (
+from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -484,7 +484,7 @@ def completion_cost(  # noqa: PLR0915
         completion_characters: Optional[int] = None
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
-        cost_per_token_usage_object: Optional[litellm.Usage] = _get_usage_object(
+        cost_per_token_usage_object: Optional[Usage] = _get_usage_object(
             completion_response=completion_response
         )
         if completion_response is not None and (
@@ -492,7 +492,7 @@ def completion_cost(  # noqa: PLR0915
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
 
-            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(  # type: ignore
+            usage_obj: Optional[Union[dict, Usage]] = completion_response.get(  # type: ignore
                 "usage", {}
             )
             if isinstance(usage_obj, BaseModel) and not isinstance(

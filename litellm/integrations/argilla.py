@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.llms.prompt_templates.common_utils import get_content_from_model_response
+from litellm.litellm_core_utils.prompt_templates.common_utils import get_content_from_model_response
 from litellm.types.integrations.argilla import (
     SUPPORTED_PAYLOAD_FIELDS,
     ArgillaCredentialsObject,

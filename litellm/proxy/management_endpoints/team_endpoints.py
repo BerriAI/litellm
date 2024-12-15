@@ -363,13 +363,18 @@ async def _update_model_table(
             created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
             updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         )
-        model_dict = await prisma_client.db.litellm_modeltable.upsert(
-            where={"id": model_id},
-            data={
-                "update": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
-                "create": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
-            },
-        )  # type: ignore
+        if model_id is None:
+            model_dict = await prisma_client.db.litellm_modeltable.create(
+                data={**litellm_modeltable.json(exclude_none=True)}  # type: ignore
+            )
+        else:
+            model_dict = await prisma_client.db.litellm_modeltable.upsert(
+                where={"id": model_id},
+                data={
+                    "update": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
+                    "create": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
+                },
+            )  # type: ignore
 
         _model_id = model_dict.id
 

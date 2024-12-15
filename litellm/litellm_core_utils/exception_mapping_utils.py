@@ -189,7 +189,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             #################### Start of Provider Exception mapping ####################
             ################################################################################
 
-            if "Request Timeout Error" in error_str or "Request timed out" in error_str:
+            if (
+                "Request Timeout Error" in error_str
+                or "Request timed out" in error_str
+                or "Timed out generating response" in error_str
+            ):
                 exception_mapping_worked = True
                 raise Timeout(
                     message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
@@ -649,6 +653,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                    )
+                elif "model_no_support_for_function" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"{custom_llm_provider}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                     )

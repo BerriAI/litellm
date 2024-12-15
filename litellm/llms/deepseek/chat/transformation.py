@@ -12,8 +12,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
-from ...prompt_templates.common_utils import (
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
 

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import (
+    _custom_logger_compatible_callbacks_literal,
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
@@ -41,6 +42,7 @@ from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMLoggingBaseClass,
     ModelResponse,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
@@ -49,6 +51,7 @@ from litellm.types.utils import (
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -189,7 +192,7 @@ in_memory_trace_id_cache = ServiceTraceIDCache()
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
-class Logging:
+class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
     stream_options = None
@@ -2141,7 +2144,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
 
 
 def _init_custom_logger_compatible_class(  # noqa: PLR0915
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+    logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
         Any
@@ -2361,7 +2364,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+    logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
@@ -2583,6 +2586,15 @@ class StandardLoggingPayloadSetup:
                     clean_metadata["user_api_key_hash"] = metadata.get(
                         "user_api_key"
                     )  # this is the hash
+            _potential_requester_metadata = metadata.get(
+                "metadata", None
+            )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
+            if (
+                clean_metadata["requester_metadata"] is None
+                and _potential_requester_metadata is not None
+                and isinstance(_potential_requester_metadata, dict)
+            ):
+                clean_metadata["requester_metadata"] = _potential_requester_metadata
         return clean_metadata
 
     @staticmethod
@@ -2729,6 +2741,45 @@ class StandardLoggingPayloadSetup:
             return api_base.rstrip("/")
         return api_base
 
+    @staticmethod
+    def get_error_information(
+        original_exception: Optional[Exception],
+    ) -> StandardLoggingPayloadErrorInformation:
+        error_status: str = str(getattr(original_exception, "status_code", ""))
+        error_class: str = (
+            str(original_exception.__class__.__name__) if original_exception else ""
+        )
+        _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
+        return StandardLoggingPayloadErrorInformation(
+            error_code=error_status,
+            error_class=error_class,
+            llm_provider=_llm_provider_in_exception,
+        )
+
+    @staticmethod
+    def get_response_time(
+        start_time_float: float,
+        end_time_float: float,
+        completion_start_time_float: float,
+        stream: bool,
+    ) -> float:
+        """
+        Get the response time for the LLM response
+
+        Args:
+            start_time_float: float - start time of the LLM call
+            end_time_float: float - end time of the LLM call
+            completion_start_time_float: float - time to first token of the LLM response (for streaming responses)
+            stream: bool - True when a stream response is returned
+
+        Returns:
+            float: The response time for the LLM response
+        """
+        if stream is True:
+            return completion_start_time_float - start_time_float
+        else:
+            return end_time_float - start_time_float
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2802,6 +2853,12 @@ def get_standard_logging_object_payload(
                 completion_start_time=completion_start_time,
             )
         )
+        response_time = StandardLoggingPayloadSetup.get_response_time(
+            start_time_float=start_time_float,
+            end_time_float=end_time_float,
+            completion_start_time_float=completion_start_time_float,
+            stream=kwargs.get("stream", False),
+        )
         # clean up litellm hidden params
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
             hidden_params
@@ -2833,6 +2890,10 @@ def get_standard_logging_object_payload(
         )
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+        )
+
         ## get final response object ##
         final_response_obj = StandardLoggingPayloadSetup.get_final_response_obj(
             response_obj=response_obj,
@@ -2850,6 +2911,7 @@ def get_standard_logging_object_payload(
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
+            response_time=response_time,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
@@ -2872,6 +2934,7 @@ def get_standard_logging_object_payload(
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
+            error_information=error_information,
             response_cost_failure_debug_info=kwargs.get(
                 "response_cost_failure_debug_information"
             ),
