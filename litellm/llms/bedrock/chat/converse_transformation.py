@@ -378,6 +378,12 @@ class AmazonConverseConfig:
         for key in additional_request_keys:
             inference_params.pop(key, None)
 
+        if 'topK' in inference_params:
+            additional_request_params["inferenceConfig"] = {'topK': inference_params.pop("topK")}
+        elif 'top_k' in inference_params:
+            additional_request_params["inferenceConfig"] = {'topK': inference_params.pop("top_k")}
+
+
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
         )
