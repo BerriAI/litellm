@@ -5,6 +5,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM Supports setting the following budgets:
 - Provider budget - $100/day for OpenAI, $100/day for Azure.
 - Model budget - $100/day for gpt-4  https://api-base-1, $100/day for gpt-4o https://api-base-2
+- Tag budget - $10/day for tag=`product:chat-bot`, $100/day for tag=`product:chat-bot-2`
 
 
 ## Provider Budgets
@@ -250,6 +251,88 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi my name is test request"}
     ]
+  }'
+```
+
+Expected response on failure
+
+```json
+{
+    "error": {
+        "message": "No deployments available - crossed budget: Exceeded budget for deployment model_name: gpt-4o, litellm_params.model: openai/gpt-4o, model_id: dbe80f2fe2b2465f7bfa9a5e77e0f143a2eb3f7d167a8b55fb7fe31aed62587f: 0.00015250000000000002 >= 1e-12",
+        "type": "None",
+        "param": "None",
+        "code": "429"
+    }
+}
+```
+</TabItem>
+
+</Tabs>
+
+## Tag Budgets
+
+Use this to set budgets for tags - example $10/day for tag=`product:chat-bot`, $100/day for tag=`product:chat-bot-2`
+
+
+### Quick Start
+
+Set tag budgets by setting `tag_budget_config` in your `proxy_config.yaml` file
+
+```yaml
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  tag_budget_config:
+    product:chat-bot: # (Tag that will be used in request)
+      max_budget: 100 # (USD)
+      time_period: 1d # (Duration)
+    product:chat-bot-2: # (Tag that will be used in request)
+      max_budget: 100 # (USD)
+      time_period: 1d # (Duration)
+```
+
+#### Make a test request
+
+We expect the first request to succeed, and the second request to fail since we cross the budget for `openai/gpt-4o`
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+
+<Tabs>
+<TabItem label="Successful Call " value = "allowed">
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "hi my name is test request"}
+    ],
+    "tags": ["product:chat-bot"]
+  }'
+```
+
+</TabItem>
+<TabItem label="Unsuccessful call" value = "not-allowed">
+
+Expect this to fail since since we cross the budget for tag=`product:chat-bot`
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "hi my name is test request"}
+    ],
+    "tags": ["product:chat-bot"]
   }'
 ```
 
