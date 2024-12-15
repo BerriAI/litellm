@@ -545,6 +545,12 @@ class RouterBudgetLimiting(CustomLogger):
                         f"deployment_spend:{model_id}:{config.time_period}"
                     )
 
+            if self.tag_budget_config is not None:
+                for tag, config in self.tag_budget_config.items():
+                    if config is None:
+                        continue
+                    cache_keys.append(f"tag_spend:{tag}:{config.time_period}")
+
             # Batch fetch current spend values from Redis
             redis_values = await self.router_cache.redis_cache.async_batch_get_cache(
                 key_list=cache_keys
