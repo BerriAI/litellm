@@ -5,20 +5,20 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import os
-from typing import List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
     response_schema_prompt,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -48,6 +48,13 @@ from ..common_utils import (
     get_supports_response_schema,
     get_supports_system_message,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 def _process_gemini_image(image_url: str) -> PartType:
@@ -348,7 +355,7 @@ def sync_transform_request_body(
     timeout: Optional[Union[float, httpx.Timeout]],
     extra_headers: Optional[dict],
     optional_params: dict,
-    logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
+    logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
 ) -> RequestBody:

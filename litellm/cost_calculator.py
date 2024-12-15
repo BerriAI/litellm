@@ -484,7 +484,7 @@ def completion_cost(  # noqa: PLR0915
         completion_characters: Optional[int] = None
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
-        cost_per_token_usage_object: Optional[litellm.Usage] = _get_usage_object(
+        cost_per_token_usage_object: Optional[Usage] = _get_usage_object(
             completion_response=completion_response
         )
         if completion_response is not None and (
@@ -492,7 +492,7 @@ def completion_cost(  # noqa: PLR0915
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
 
-            usage_obj: Optional[Union[dict, litellm.Usage]] = completion_response.get(  # type: ignore
+            usage_obj: Optional[Union[dict, Usage]] = completion_response.get(  # type: ignore
                 "usage", {}
             )
             if isinstance(usage_obj, BaseModel) and not isinstance(

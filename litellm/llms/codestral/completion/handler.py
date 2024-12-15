@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.llms.databricks import GenericStreamingChunk
+from litellm.types.utils import TextChoices
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -169,7 +170,7 @@ class CodestralTextCompletion(BaseLLM):
             raise TextCompletionCodestralError(message=response.text, status_code=422)
 
         _original_choices = completion_response.get("choices", [])
-        _choices: List[litellm.utils.TextChoices] = []
+        _choices: List[TextChoices] = []
         for choice in _original_choices:
             # This is what 1 choice looks like from codestral API
             # {
