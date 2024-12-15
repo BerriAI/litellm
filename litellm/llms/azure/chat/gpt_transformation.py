@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_to_azure_openai_messages,
+)
 from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.types.utils import ModelResponse
 
 from ....exceptions import UnsupportedParamsError
 from ....types.llms.openai import (
@@ -14,9 +18,7 @@ from ....types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-
 from ...base_llm.transformation import BaseConfig
-from litellm.litellm_core_utils.prompt_templates.factory import convert_to_azure_openai_messages
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
 
 class AzureOpenAIConfig(BaseConfig):
     """
@@ -221,7 +224,7 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         model: str,
         raw_response: Response,
-        model_response: litellm.ModelResponse,
+        model_response: ModelResponse,
         logging_obj: LoggingClass,
         request_data: dict,
         messages: List[AllMessageValues],
@@ -230,7 +233,7 @@ class AzureOpenAIConfig(BaseConfig):
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         raise NotImplementedError(
             "Azure OpenAI handler.py has custom logic for transforming response, as it uses the OpenAI SDK."
         )

@@ -28,24 +28,31 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ProviderField
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ProviderField,
+    TextCompletionResponse,
+    Usage,
+)
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
     Message,
-    ModelResponse,
     ProviderConfigManager,
-    TextCompletionResponse,
-    Usage,
     convert_to_model_response_object,
 )
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from .chat.gpt_transformation import OpenAIGPTConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 
@@ -882,7 +889,7 @@ class OpenAIChatCompletion(BaseLLM):
         self,
         input: list,
         data: dict,
-        model_response: litellm.utils.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
@@ -911,9 +918,7 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            returned_response: (
-                litellm.EmbeddingResponse
-            ) = convert_to_model_response_object(
+            returned_response: EmbeddingResponse = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
@@ -953,14 +958,14 @@ class OpenAIChatCompletion(BaseLLM):
         input: list,
         timeout: float,
         logging_obj,
-        model_response: litellm.utils.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         super().embedding()
         try:
             model = model
@@ -1011,7 +1016,7 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=sync_embedding_response,
             )
-            response: litellm.EmbeddingResponse = convert_to_model_response_object(
+            response: EmbeddingResponse = convert_to_model_response_object(
                 response_object=sync_embedding_response.model_dump(),
                 model_response_object=model_response,
                 _response_headers=headers,
@@ -1068,7 +1073,7 @@ class OpenAIChatCompletion(BaseLLM):
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=prompt,
                 api_key=api_key,
                 original_response=str(e),
             )
@@ -1083,10 +1088,10 @@ class OpenAIChatCompletion(BaseLLM):
         logging_obj: Any,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model_response: Optional[litellm.utils.ImageResponse] = None,
+        model_response: Optional[ImageResponse] = None,
         client=None,
         aimg_generation=None,
-    ) -> litellm.ImageResponse:
+    ) -> ImageResponse:
         data = {}
         try:
             model = model

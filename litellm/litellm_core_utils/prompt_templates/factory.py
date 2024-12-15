@@ -13,7 +13,6 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 import litellm
 import litellm.types
 import litellm.types.llms
-import litellm.types.llms.vertex_ai
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.completion import (
@@ -40,6 +39,9 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
 )
+from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
+from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
+from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import convert_content_list_to_str, is_non_content_values_set
@@ -965,11 +967,11 @@ def infer_protocol_value(
 
 def _gemini_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
-) -> Optional[litellm.types.llms.vertex_ai.FunctionCall]:
+) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
     arguments_dict = json.loads(arguments)
-    function_call = litellm.types.llms.vertex_ai.FunctionCall(
+    function_call = VertexFunctionCall(
         name=name,
         args=arguments_dict,
     )
@@ -978,7 +980,7 @@ def _gemini_tool_call_invoke_helper(
 
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
-) -> List[litellm.types.llms.vertex_ai.PartType]:
+) -> List[VertexPartType]:
     """
     OpenAI tool invokes:
     {
@@ -1019,22 +1021,20 @@ def convert_to_gemini_tool_call_invoke(
     - json.load the arguments
     """
     try:
-        _parts_list: List[litellm.types.llms.vertex_ai.PartType] = []
+        _parts_list: List[VertexPartType] = []
         tool_calls = message.get("tool_calls", None)
         function_call = message.get("function_call", None)
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        litellm.types.llms.vertex_ai.FunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
-                            litellm.types.llms.vertex_ai.PartType(
-                                function_call=gemini_function_call
-                            )
+                            VertexPartType(function_call=gemini_function_call)
                         )
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
@@ -1047,11 +1047,7 @@ def convert_to_gemini_tool_call_invoke(
                 function_call_params=function_call
             )
             if gemini_function_call is not None:
-                _parts_list.append(
-                    litellm.types.llms.vertex_ai.PartType(
-                        function_call=gemini_function_call
-                    )
-                )
+                _parts_list.append(VertexPartType(function_call=gemini_function_call))
             else:  # don't silently drop params. Make it clear to user what's happening.
                 raise Exception(
                     "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(
@@ -1070,7 +1066,7 @@ def convert_to_gemini_tool_call_invoke(
 def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
-) -> litellm.types.llms.vertex_ai.PartType:
+) -> VertexPartType:
     """
     OpenAI message with a tool result looks like:
     {
@@ -1119,11 +1115,11 @@ def convert_to_gemini_tool_call_result(
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
-    _function_response = litellm.types.llms.vertex_ai.FunctionResponse(
+    _function_response = VertexFunctionResponse(
         name=name, response={"content": content_str}  # type: ignore
     )
 
-    _part = litellm.types.llms.vertex_ai.PartType(function_response=_function_response)
+    _part = VertexPartType(function_response=_function_response)
 
     return _part
 

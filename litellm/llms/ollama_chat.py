@@ -17,7 +17,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
-from litellm.types.utils import StreamingChoices
+from litellm.types.utils import ModelResponse, StreamingChoices
 
 
 class OllamaError(Exception):
@@ -198,7 +198,7 @@ class OllamaChatConfig(OpenAIGPTConfig):
 
 # ollama implementation
 def get_ollama_response(  # noqa: PLR0915
-    model_response: litellm.ModelResponse,
+    model_response: ModelResponse,
     messages: list,
     optional_params: dict,
     model: str,
