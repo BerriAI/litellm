@@ -1662,6 +1662,11 @@ class StandardKeyGenerationConfig(TypedDict, total=False):
     personal_key_generation: PersonalUIKeyGenerationConfig
 
 
+class BudgetConfig(BaseModel):
+    max_budget: float
+    budget_duration: str
+
+
 class LlmProviders(str, Enum):
     OPENAI = "openai"
     OPENAI_LIKE = "openai_like"  # embedding only
