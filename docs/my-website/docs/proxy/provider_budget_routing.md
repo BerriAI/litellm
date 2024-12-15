@@ -281,19 +281,19 @@ Set tag budgets by setting `tag_budget_config` in your `proxy_config.yaml` file
 
 ```yaml
 model_list:
-  - model_name: gpt-4o-mini
+  - model_name: gpt-4o
     litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
   tag_budget_config:
-    product:chat-bot: # (Tag that will be used in request)
+    product:chat-bot: # (Tag)
+      max_budget: 0.000000000001 # (USD)
+      budget_duration: 1d # (Duration)
+    product:chat-bot-2: # (Tag)
       max_budget: 100 # (USD)
-      time_period: 1d # (Duration)
-    product:chat-bot-2: # (Tag that will be used in request)
-      max_budget: 100 # (USD)
-      time_period: 1d # (Duration)
+      budget_duration: 1d # (Duration)
 ```
 
 #### Make a test request
@@ -314,7 +314,7 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi my name is test request"}
     ],
-    "tags": ["product:chat-bot"]
+    "metadata": {"tags": ["product:chat-bot"]}
   }'
 ```
 
@@ -332,8 +332,9 @@ curl -i http://localhost:4000/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "hi my name is test request"}
     ],
-    "tags": ["product:chat-bot"]
-  }'
+    "metadata": {"tags": ["product:chat-bot"]}
+  }
+
 ```
 
 Expected response on failure
@@ -341,13 +342,14 @@ Expected response on failure
 ```json
 {
     "error": {
-        "message": "No deployments available - crossed budget: Exceeded budget for deployment model_name: gpt-4o, litellm_params.model: openai/gpt-4o, model_id: dbe80f2fe2b2465f7bfa9a5e77e0f143a2eb3f7d167a8b55fb7fe31aed62587f: 0.00015250000000000002 >= 1e-12",
+        "message": "No deployments available - crossed budget: Exceeded budget for tag='product:chat-bot', tag_spend=0.00015250000000000002, tag_budget_limit=1e-12",
         "type": "None",
         "param": "None",
         "code": "429"
     }
 }
 ```
+
 </TabItem>
 
 </Tabs>
