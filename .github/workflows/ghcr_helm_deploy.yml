@@ -33,7 +33,7 @@ jobs:
 
       - name: Get LiteLLM Latest Tag
         id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
+        uses: WyriHaximus/github-action-get-previous-tag@v1.4.0
 
       - name: Get last published chart version
         id: current_version
@@ -45,7 +45,7 @@ jobs:
       # Automatically update the helm chart version one "patch" level
       - name: Bump release version
         id: bump_version
-        uses: christian-draeger/increment-semantic-version@1.1.0
+        uses: christian-draeger/increment-semantic-version@1.2.0
         with:
           current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
           version-fragment: 'bug'
