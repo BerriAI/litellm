@@ -866,6 +866,7 @@ def test_gemini_pro_grounding(value_in_dict):
     except litellm.RateLimitError:
         pass
 
+
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize(
     "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-sonnet@20240229"]
