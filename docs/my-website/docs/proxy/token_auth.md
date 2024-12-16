@@ -7,7 +7,7 @@ Use JWT's to auth admins / projects into the proxy.
 
 :::info
 
-✨ JWT-based Auth  is on LiteLLM Enterprise starting at $250/mo
+✨ JWT-based Auth  is on LiteLLM Enterprise
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
