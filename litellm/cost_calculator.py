@@ -598,7 +598,6 @@ def completion_cost(  # noqa: PLR0915
                     "n", 1
                 )  # openai default
         else:
-            traceback.print_stack()
             if model is None:
                 raise ValueError(
                     f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
@@ -766,7 +765,6 @@ def completion_cost(  # noqa: PLR0915
 
         return _final_cost
     except Exception as e:
-        traceback.print_stack()
         raise e
 
 
