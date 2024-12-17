@@ -45,7 +45,7 @@ if litellm_mode == "DEV":
 if set_verbose == True:
     _turn_on_debug()
 #############################################
-### Callbacks /Logging / Success / Failure Handlers ###
+### Callbacks /Logging / Success / Failure Handlers ####
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
@@ -65,6 +65,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
+    "azure_storage",
     "opik",
     "argilla",
     "mlflow",

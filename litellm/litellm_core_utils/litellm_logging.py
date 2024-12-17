@@ -67,6 +67,7 @@ from litellm.utils import (
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
+from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -2226,6 +2227,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _gcs_bucket_logger = GCSBucketLogger()
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger  # type: ignore
+    elif logging_integration == "azure_storage":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, AzureBlobStorageLogger):
+                return callback  # type: ignore
+
+        _azure_storage_logger = AzureBlobStorageLogger()
+        _in_memory_loggers.append(_azure_storage_logger)
+        return _azure_storage_logger  # type: ignore
     elif logging_integration == "opik":
         for callback in _in_memory_loggers:
             if isinstance(callback, OpikLogger):
@@ -2409,6 +2418,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
     elif logging_integration == "gcs_bucket":
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
+                return callback
+    elif logging_integration == "azure_storage":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, AzureBlobStorageLogger):
                 return callback
     elif logging_integration == "opik":
         for callback in _in_memory_loggers:

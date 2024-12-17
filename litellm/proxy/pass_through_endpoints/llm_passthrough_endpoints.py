@@ -32,6 +32,7 @@ from starlette.datastructures import QueryParams
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import FileObject
+from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
 from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -247,7 +248,7 @@ async def bedrock_proxy_route(
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
     aws_region_name = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
-    if endpoint.startswith("agents/"):  # handle bedrock agents
+    if _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
         base_target_url = (
             f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
         )
@@ -301,6 +302,16 @@ async def bedrock_proxy_route(
     )
 
     return received_value
+
+
+def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
+    """
+    Return True, if the endpoint should be routed to the `bedrock-agent-runtime` endpoint.
+    """
+    for _route in BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES:
+        if _route in endpoint:
+            return True
+    return False
 
 
 @router.api_route(
