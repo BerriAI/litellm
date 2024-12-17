@@ -260,10 +260,6 @@ async def bedrock_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Remove agent from knowledgebase url /agents/knowledgebases/ -> /knowledgebases/
-    if "knowledgebases" in encoded_endpoint:
-        encoded_endpoint = encoded_endpoint.replace("/agents", "")
-
     # Construct the full target URL using httpx
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(path=encoded_endpoint)
