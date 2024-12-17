@@ -87,6 +87,9 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_streaming_response_async,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
+    get_formatted_prompt,
+)
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -3951,54 +3954,6 @@ def _count_characters(text: str) -> int:
     # Remove white spaces and count characters
     filtered_text = "".join(char for char in text if not char.isspace())
     return len(filtered_text)
-
-
-def get_formatted_prompt(
-    data: dict,
-    call_type: Literal[
-        "completion",
-        "embedding",
-        "image_generation",
-        "audio_transcription",
-        "moderation",
-        "text_completion",
-    ],
-) -> str:
-    """
-    Extracts the prompt from the input data based on the call type.
-
-    Returns a string.
-    """
-    prompt = ""
-    if call_type == "completion":
-        for message in data["messages"]:
-            if message.get("content", None) is not None:
-                content = message.get("content")
-                if isinstance(content, str):
-                    prompt += message["content"]
-                elif isinstance(content, List):
-                    for c in content:
-                        if c["type"] == "text":
-                            prompt += c["text"]
-            if "tool_calls" in message:
-                for tool_call in message["tool_calls"]:
-                    if "function" in tool_call:
-                        function_arguments = tool_call["function"]["arguments"]
-                        prompt += function_arguments
-    elif call_type == "text_completion":
-        prompt = data["prompt"]
-    elif call_type == "embedding" or call_type == "moderation":
-        if isinstance(data["input"], str):
-            prompt = data["input"]
-        elif isinstance(data["input"], list):
-            for m in data["input"]:
-                prompt += m
-    elif call_type == "image_generation":
-        prompt = data["prompt"]
-    elif call_type == "audio_transcription":
-        if "prompt" in data:
-            prompt = data["prompt"]
-    return prompt
 
 
 def get_response_string(response_obj: ModelResponse) -> str:

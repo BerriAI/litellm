@@ -93,6 +93,7 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
+from .llm_response_utils.get_formatted_prompt import get_formatted_prompt
 from .logging_utils import _assemble_complete_response_from_streaming_chunks
 
 try:
@@ -733,6 +734,16 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         )
 
+        prompt = ""  # use for tts cost calc
+
+        if self.model_call_details.get("messages") is not None and isinstance(
+            self.model_call_details.get("messages"), list
+        ):
+            prompt = get_formatted_prompt(
+                data=self.model_call_details,
+                call_type="completion",
+            )
+
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
@@ -750,6 +761,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "call_type": self.call_type,
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
+                "prompt": prompt,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             self.model_call_details["response_cost_failure_debug_information"] = (
@@ -764,7 +776,6 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
-
             return response_cost
         except Exception as e:  # error calculating cost
             self.model_call_details["response_cost_failure_debug_information"] = (

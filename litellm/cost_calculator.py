@@ -198,9 +198,6 @@ def cost_per_token(  # noqa: PLR0915
         model = model_without_prefix
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    print_verbose(
-        f"Looking up model={model} in model_cost_map, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
-    )
     if call_type == "speech" or call_type == "aspeech":
         if prompt_characters is None:
             raise ValueError(
@@ -366,7 +363,7 @@ def _get_provider_for_cost_calc(
 
 def _select_model_name_for_cost_calc(
     model: Optional[str],
-    completion_response: Union[BaseModel, dict, str],
+    completion_response: Optional[Any],
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
@@ -391,7 +388,7 @@ def _select_model_name_for_cost_calc(
         return_model = base_model
 
     completion_response_model: Optional[str] = None
-    if isinstance(completion_response, BaseModel):
+    if completion_response is not None and isinstance(completion_response, BaseModel):
         completion_response_model = getattr(completion_response, "model", None)
         hidden_params = getattr(completion_response, "_hidden_params", None)
         if completion_response_model is None and hidden_params is not None:
@@ -405,7 +402,7 @@ def _select_model_name_for_cost_calc(
             and hidden_params.get("region_name", None) is not None
         ):
             region_name = hidden_params.get("region_name", None)
-    elif isinstance(completion_response, dict):
+    elif completion_response is not None and isinstance(completion_response, dict):
         completion_response_model = completion_response.get("model", None)
 
     if return_model is None and completion_response_model is not None:
@@ -536,11 +533,17 @@ def completion_cost(  # noqa: PLR0915
         cost_per_token_usage_object: Optional[Usage] = _get_usage_object(
             completion_response=completion_response
         )
+        model = _select_model_name_for_cost_calc(
+            model=model,
+            completion_response=completion_response,
+            custom_llm_provider=custom_llm_provider,
+            custom_pricing=custom_pricing,
+            base_model=base_model,
+        )
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
-
             usage_obj: Optional[Union[dict, Usage]] = completion_response.get(  # type: ignore
                 "usage", {}
             )
@@ -575,13 +578,7 @@ def completion_cost(  # noqa: PLR0915
             verbose_logger.debug(
                 f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
             )
-            model = _select_model_name_for_cost_calc(
-                model=model,
-                completion_response=completion_response,
-                custom_llm_provider=custom_llm_provider,
-                custom_pricing=custom_pricing,
-                base_model=base_model,
-            )
+
             hidden_params = getattr(completion_response, "_hidden_params", None)
             if hidden_params is not None:
                 custom_llm_provider = hidden_params.get(
@@ -802,6 +799,7 @@ def response_cost_calculator(
     cache_hit: Optional[bool] = None,
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
+    prompt: str = "",
 ) -> Optional[float]:
     """
     Returns
@@ -822,6 +820,7 @@ def response_cost_calculator(
                 optional_params=optional_params,
                 custom_pricing=custom_pricing,
                 base_model=base_model,
+                prompt=prompt,
             )
         return response_cost
     except Exception as e:
