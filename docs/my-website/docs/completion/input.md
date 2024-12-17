@@ -191,6 +191,10 @@ def completion(
         
 - `top_logprobs`: *int (optional)* - An integer between 0 and 5 specifying the number of most likely tokens to return at each token position, each with an associated log probability. `logprobs` must be set to true if this parameter is used.
 
+- `headers`: *dict (optional)* - A dictionary of headers to be sent with the request.
+
+- `extra_headers`: *dict (optional)* - Alternative to `headers`, used to send extra headers in LLM API request. 
+
 #### Deprecated Params
 - `functions`: *array* - A list of functions that the model may use to generate JSON inputs. Each function should have the following properties:
 
