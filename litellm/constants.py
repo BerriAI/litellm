@@ -71,6 +71,9 @@ LITELLM_CHAT_PROVIDERS = [
 
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
+########################### Logging Callback Constants ###########################
+AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
+
 ########################### LiteLLM Proxy Specific Constants ###########################
 MAX_SPENDLOG_ROWS_TO_QUERY = (
     1_000_000  # if spendLogs has more than 1M rows, do not query the DB
