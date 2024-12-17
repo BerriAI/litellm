@@ -29,6 +29,7 @@ from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
 from .default_encoding import encoding
 from .exception_mapping_utils import exception_type
+from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
 MAX_THREADS = 100
@@ -86,8 +87,17 @@ class CustomStreamWrapper:
             )
             or {}
         )
+
+        _api_base = get_api_base(
+            model=model or "",
+            optional_params=self.logging_obj.model_call_details.get(
+                "litellm_params", {}
+            ),
+        )
+
         self._hidden_params = {
             "model_id": (_model_info.get("id", None)),
+            "api_base": _api_base,
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
