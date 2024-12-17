@@ -2601,12 +2601,12 @@ def skip_empty_text_blocks(
 
         # Type-specific casting based on message role
         if message["role"] == "assistant":
-            modified_message_alt["content"] = cast(
+            modified_message_alt["content"] = cast(  # type: ignore
                 Optional[List[OpenAIMessageContentListBlock]],
                 modified_content_block or None,
             )
         elif message["role"] == "user" and modified_content_block is not None:
-            modified_message_alt["content"] = cast(
+            modified_message_alt["content"] = cast(  # type: ignore
                 Optional[List[ChatCompletionTextObject]], modified_content_block
             )
 
