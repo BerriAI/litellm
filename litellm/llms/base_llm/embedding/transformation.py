@@ -15,7 +15,7 @@ from typing import (
 
 import httpx
 
-from litellm.llms.base_llm.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 

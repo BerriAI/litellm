@@ -3,7 +3,7 @@ from typing import Callable, Optional, Union
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 
 

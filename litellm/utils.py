@@ -165,8 +165,8 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.transformation import BaseConfig
 
 from ._logging import verbose_logger
 from .caching.caching import (

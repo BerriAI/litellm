@@ -24,7 +24,8 @@ from typing import (
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.litellm_core_utils.prompt_templates import factory as ptf
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -36,7 +37,6 @@ from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_re
 
 from ...base import BaseLLM
 from ...base_llm.transformation import BaseConfig
-from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
 
 if TYPE_CHECKING:

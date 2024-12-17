@@ -31,15 +31,15 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_generic_image_chunk_to_openai_image_obj,
+    convert_to_anthropic_image_obj,
+)
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
-)
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_generic_image_chunk_to_openai_image_obj,
-    convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
