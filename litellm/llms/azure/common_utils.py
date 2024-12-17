@@ -56,7 +56,7 @@ def get_azure_ad_token_from_entrata_id(
     scope: str = "https://cognitiveservices.azure.com/.default",
 ) -> Callable[[], str]:
     """
-    Get Azure AD token from `client_id`, `client_secret`, and `tenant_id`
+    Get Azure AD token provider from `client_id`, `client_secret`, and `tenant_id`
 
     Args:
         tenant_id: str

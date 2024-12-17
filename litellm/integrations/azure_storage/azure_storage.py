@@ -42,12 +42,41 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "AzureBlobStorageLogger: in init azure blob storage logger"
             )
             # check if the correct env variables are set
-            self.tenant_id = os.getenv("AZURE_STORAGE_TENANT_ID")
-            self.client_id = os.getenv("AZURE_STORAGE_CLIENT_ID")
-            self.client_secret = os.getenv("AZURE_STORAGE_CLIENT_SECRET")
+            _tenant_id = os.getenv("AZURE_STORAGE_TENANT_ID")
+            if not _tenant_id:
+                raise ValueError(
+                    "Missing required environment variable: AZURE_STORAGE_TENANT_ID"
+                )
+            self.tenant_id: str = _tenant_id
 
-            self.azure_storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
-            self.azure_storage_file_system = os.getenv("AZURE_STORAGE_FILE_SYSTEM")
+            _client_id = os.getenv("AZURE_STORAGE_CLIENT_ID")
+            if not _client_id:
+                raise ValueError(
+                    "Missing required environment variable: AZURE_STORAGE_CLIENT_ID"
+                )
+            self.client_id: str = _client_id
+
+            _client_secret = os.getenv("AZURE_STORAGE_CLIENT_SECRET")
+            if not _client_secret:
+                raise ValueError(
+                    "Missing required environment variable: AZURE_STORAGE_CLIENT_SECRET"
+                )
+            self.client_secret: str = _client_secret
+
+            _azure_storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+            if not _azure_storage_account_name:
+                raise ValueError(
+                    "Missing required environment variable: AZURE_STORAGE_ACCOUNT_NAME"
+                )
+            self.azure_storage_account_name: str = _azure_storage_account_name
+
+            _azure_storage_file_system = os.getenv("AZURE_STORAGE_FILE_SYSTEM")
+            if not _azure_storage_file_system:
+                raise ValueError(
+                    "Missing required environment variable: AZURE_STORAGE_FILE_SYSTEM"
+                )
+            self.azure_storage_file_system: str = _azure_storage_file_system
+
             self.azure_auth_token: Optional[str] = (
                 None  # the Azure AD token to use for Azure Storage API requests
             )
@@ -255,10 +284,13 @@ class AzureBlobStorageLogger(CustomBatchLogger):
 
     def get_azure_ad_token_from_azure_storage(
         self,
-        tenant_id: Optional[str],
-        client_id: Optional[str],
-        client_secret: Optional[str],
+        tenant_id: str,
+        client_id: str,
+        client_secret: str,
     ) -> str:
+        """
+        Gets Azure AD token to use for Azure Storage API requests
+        """
         verbose_logger.debug("Getting Azure AD Token from Azure Storage")
         verbose_logger.debug(
             "tenant_id %s, client_id %s, client_secret %s",
@@ -266,13 +298,6 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             client_id,
             client_secret,
         )
-        if tenant_id is None:
-            raise ValueError("tenant_id is not set")
-        if client_id is None:
-            raise ValueError("client_id is not set")
-        if client_secret is None:
-            raise ValueError("client_secret is not set")
-
         token_provider = get_azure_ad_token_from_entrata_id(
             tenant_id=tenant_id,
             client_id=client_id,
