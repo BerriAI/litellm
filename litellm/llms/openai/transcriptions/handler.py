@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import FileTypes
 from litellm.utils import TranscriptionResponse, convert_to_model_response_object
+
 from ..openai import OpenAIChatCompletion
 
 
@@ -103,6 +104,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             timeout=timeout,
             max_retries=max_retries,
         )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=None,
+            api_key=openai_client.api_key,
+            additional_args={
+                "api_base": openai_client._base_url._uri_reference,
+                "atranscription": True,
+                "complete_input_dict": data,
+            },
+        )
         _, response = self.make_sync_openai_audio_transcriptions_request(
             openai_client=openai_client,
             data=data,
@@ -147,6 +159,16 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 client=client,
             )
 
+            ## LOGGING
+            logging_obj.pre_call(
+                input=None,
+                api_key=openai_aclient.api_key,
+                additional_args={
+                    "api_base": openai_aclient._base_url._uri_reference,
+                    "atranscription": True,
+                    "complete_input_dict": data,
+                },
+            )
             headers, response = await self.make_openai_audio_transcriptions_request(
                 openai_aclient=openai_aclient,
                 data=data,
