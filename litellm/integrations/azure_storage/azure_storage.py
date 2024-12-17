@@ -188,7 +188,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             )
             json_payload = json.dumps(payload) + "\n"  # Add newline for each log entry
             payload_bytes = json_payload.encode("utf-8")
-            filename = payload.get("id") or str(uuid.uuid4())
+            filename = f"{payload.get('id') or str(uuid.uuid4())}.json"
             base_url = f"https://{self.azure_storage_account_name}.dfs.core.windows.net/{self.azure_storage_file_system}/{filename}"
 
             # Execute the 3-step upload process
