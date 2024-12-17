@@ -601,26 +601,30 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.00000375,
+        "cache_creation_input_token_cost": 0.000001875,
         "output_cost_per_token": 0.000015,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "ft:gpt-4o-mini-2024-07-18": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 0.0000003,
+        "cache_read_input_token_cost": 0.00000015,
         "output_cost_per_token": 0.0000012,
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true
     },
     "ft:davinci-002": {
         "max_tokens": 16384,
