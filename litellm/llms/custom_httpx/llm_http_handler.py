@@ -22,6 +22,7 @@ import litellm.types.utils
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.transformation.embedding import BaseEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -418,8 +419,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         aembedding: bool = False,
         headers={},
-        custom_endpoint: Optional[bool] = None,
-    ) -> EmbeddingResponse:
+    ):
 
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -456,6 +456,21 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        if aembedding is True:
+            return self.aembedding(
+                request_data=data,
+                api_base=api_base,
+                headers=headers,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                provider_config=provider_config,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
+
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
         else:
@@ -481,6 +496,46 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=data,
+        )
+
+    async def aembedding(
+        self,
+        request_data: dict,
+        api_base: str,
+        headers: dict,
+        model: str,
+        custom_llm_provider: str,
+        provider_config: BaseEmbeddingConfig,
+        model_response: EmbeddingResponse,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> EmbeddingResponse:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider)
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(request_data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_embedding_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=request_data,
         )
 
     def _handle_error(self, e: Exception, provider_config: BaseConfig):
