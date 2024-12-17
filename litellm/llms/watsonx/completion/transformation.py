@@ -36,7 +36,7 @@ from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
 from ...base import BaseLLM
-from ...base_llm.transformation import BaseConfig
+from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
 
 if TYPE_CHECKING:

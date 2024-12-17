@@ -18,7 +18,7 @@ from ....types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from ...base_llm.transformation import BaseConfig
+from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
