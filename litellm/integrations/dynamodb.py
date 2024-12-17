@@ -8,7 +8,6 @@ import uuid
 from typing import Any
 
 import dotenv
-import requests  # type: ignore
 
 import litellm
 

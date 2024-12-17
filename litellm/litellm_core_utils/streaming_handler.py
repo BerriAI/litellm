@@ -570,40 +570,6 @@ class CustomStreamWrapper:
             )
             return ""
 
-    def handle_ollama_stream(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                json_chunk = chunk
-            else:
-                json_chunk = json.loads(chunk)
-            if "error" in json_chunk:
-                raise Exception(f"Ollama Error - {json_chunk}")
-
-            text = ""
-            is_finished = False
-            finish_reason = None
-            if json_chunk["done"] is True:
-                text = ""
-                is_finished = True
-                finish_reason = "stop"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            elif json_chunk["response"]:
-                print_verbose(f"delta content: {json_chunk}")
-                text = json_chunk["response"]
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            else:
-                raise Exception(f"Ollama Error - {json_chunk}")
-        except Exception as e:
-            raise e
-
     def handle_ollama_chat_stream(self, chunk):
         # for ollama_chat/ provider
         try:
@@ -1111,12 +1077,6 @@ class CustomStreamWrapper:
                 new_chunk = self.completion_stream[:chunk_size]
                 completion_obj["content"] = new_chunk
                 self.completion_stream = self.completion_stream[chunk_size:]
-            elif self.custom_llm_provider == "ollama":
-                response_obj = self.handle_ollama_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "ollama_chat":
                 response_obj = self.handle_ollama_chat_stream(chunk)
                 completion_obj["content"] = response_obj["text"]

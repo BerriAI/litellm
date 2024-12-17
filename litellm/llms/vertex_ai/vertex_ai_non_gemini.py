@@ -7,19 +7,18 @@ import uuid
 from enum import Enum
 from typing import Any, Callable, List, Literal, Optional, Union, cast
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
 )
+from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,

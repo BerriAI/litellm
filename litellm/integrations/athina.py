@@ -1,5 +1,7 @@
 import datetime
 
+import litellm
+
 
 class AthinaLogger:
     def __init__(self):
@@ -26,8 +28,6 @@ class AthinaLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         import json
         import traceback
-
-        import requests  # type: ignore
 
         try:
             is_stream = kwargs.get("stream", False)
@@ -81,7 +81,7 @@ class AthinaLogger:
                     if key in metadata:
                         data[key] = metadata[key]
 
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),
