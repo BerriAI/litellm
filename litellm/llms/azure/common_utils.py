@@ -1,7 +1,6 @@
 from typing import Callable, Optional, Union
 
 import httpx
-import importlib_metadata
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.transformation import BaseLLMException
