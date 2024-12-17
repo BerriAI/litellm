@@ -2,9 +2,19 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import datetime
-from re import S
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from datetime import datetime, timedelta
+from re import S, T
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypedDict,
+    Union,
+)
 
 import httpx
 from pydantic import BaseModel, Field
@@ -13,6 +23,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.llms.azure.common_utils import get_azure_ad_token_from_entrata_id
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -31,10 +42,18 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "AzureBlobStorageLogger: in init azure blob storage logger"
             )
             # check if the correct env variables are set
+            self.tenant_id = os.getenv("AZURE_STORAGE_TENANT_ID")
+            self.client_id = os.getenv("AZURE_STORAGE_CLIENT_ID")
+            self.client_secret = os.getenv("AZURE_STORAGE_CLIENT_SECRET")
 
             self.azure_storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
             self.azure_storage_file_system = os.getenv("AZURE_STORAGE_FILE_SYSTEM")
-            self.azure_auth_token = os.getenv("AZURE_STORAGE_AUTH_TOKEN")
+            self.azure_auth_token: Optional[str] = (
+                None  # the Azure AD token to use for Azure Storage API requests
+            )
+            self.token_expiry: Optional[datetime] = (
+                None  # the expiry time of the currentAzure AD token
+            )
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -112,6 +131,9 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "AzureBlobStorageLogger - about to flush %s events",
                 len(self.log_queue),
             )
+
+            # Get a valid token instead of always requesting a new one
+            await self.set_valid_azure_ad_token()
 
             for payload in self.log_queue:
                 await self.async_upload_payload_to_azure_blob_storage(payload=payload)
@@ -207,3 +229,68 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception(f"Error flushing data: {str(e)}")
             raise
+
+    ####### Helper methods to managing Authentication to Azure Storage #######
+    ##########################################################################
+
+    async def set_valid_azure_ad_token(self):
+        """
+        Wrapper to set self.azure_auth_token to a valid Azure AD token, refreshing if necessary
+
+        Refreshes the token when:
+        - Token is expired
+        - Token is not set
+        """
+        # Check if token needs refresh
+        if self._azure_ad_token_is_expired() or self.azure_auth_token is None:
+            verbose_logger.debug("Azure AD token needs refresh")
+            self.azure_auth_token = self.get_azure_ad_token_from_azure_storage(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            # Token typically expires in 1 hour
+            self.token_expiry = datetime.now() + timedelta(hours=1)
+            verbose_logger.debug(f"New token will expire at {self.token_expiry}")
+
+    def get_azure_ad_token_from_azure_storage(
+        self,
+        tenant_id: Optional[str],
+        client_id: Optional[str],
+        client_secret: Optional[str],
+    ) -> str:
+        verbose_logger.debug("Getting Azure AD Token from Azure Storage")
+        verbose_logger.debug(
+            "tenant_id %s, client_id %s, client_secret %s",
+            tenant_id,
+            client_id,
+            client_secret,
+        )
+        if tenant_id is None:
+            raise ValueError("tenant_id is not set")
+        if client_id is None:
+            raise ValueError("client_id is not set")
+        if client_secret is None:
+            raise ValueError("client_secret is not set")
+
+        token_provider = get_azure_ad_token_from_entrata_id(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            scope="https://storage.azure.com/.default",
+        )
+        token = token_provider()
+
+        verbose_logger.debug("azure auth token %s", token)
+
+        return token
+
+    def _azure_ad_token_is_expired(self):
+        """
+        Returns True if Azure AD token is expired, False otherwise
+        """
+        if self.azure_auth_token and self.token_expiry:
+            if datetime.now() + timedelta(minutes=5) >= self.token_expiry:
+                verbose_logger.debug("Azure AD token is expired. Requesting new token")
+                return True
+        return False
