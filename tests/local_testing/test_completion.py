@@ -1819,6 +1819,43 @@ async def test_litellm_gateway_from_sdk():
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk_structured_output():
+    from pydantic import BaseModel
+
+    class Result(BaseModel):
+        answer: str
+
+    litellm.set_verbose = True
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            litellm.completion(
+                model="litellm_proxy/openai/gpt-4o",
+                messages=[
+                    {"role": "user", "content": "What is the capital of France?"}
+                ],
+                api_key="my-test-api-key",
+                user="test",
+                response_format=Result,
+                base_url="https://litellm.ml-serving-internal.scale.com",
+                client=openai_client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+        json_schema = mock_call.call_args.kwargs["response_format"]
+        assert "json_schema" in json_schema
+
+
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:
