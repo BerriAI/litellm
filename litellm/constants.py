@@ -80,4 +80,12 @@ MAX_SPENDLOG_ROWS_TO_QUERY = (
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
 
 # pass through route constansts
-BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = ["agents/", "knowledgebases/"]
+BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
+    "agents/",
+    "knowledgebases/",
+    "flows/",
+    "retrieveAndGenerate/",
+    "rerank/",
+    "generateQuery/",
+    "optimize-prompt/",
+]
