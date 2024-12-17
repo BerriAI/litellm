@@ -83,6 +83,9 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.token_expiry: Optional[datetime] = (
                 None  # the expiry time of the currentAzure AD token
             )
+            self.azure_storage_account_key: Optional[str] = os.getenv(
+                "AZURE_STORAGE_ACCOUNT_KEY"
+            )
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -183,22 +186,30 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         3. Flush the data
         """
         try:
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
-            )
-            json_payload = json.dumps(payload) + "\n"  # Add newline for each log entry
-            payload_bytes = json_payload.encode("utf-8")
-            filename = f"{payload.get('id') or str(uuid.uuid4())}.json"
-            base_url = f"https://{self.azure_storage_account_name}.dfs.core.windows.net/{self.azure_storage_file_system}/{filename}"
 
-            # Execute the 3-step upload process
-            await self._create_file(async_client, base_url)
-            await self._append_data(async_client, base_url, json_payload)
-            await self._flush_data(async_client, base_url, len(payload_bytes))
+            if self.azure_storage_account_key:
+                await self.upload_to_azure_data_lake_with_azure_account_key(
+                    payload=payload
+                )
+            else:
+                async_client = get_async_httpx_client(
+                    llm_provider=httpxSpecialProvider.LoggingCallback
+                )
+                json_payload = (
+                    json.dumps(payload) + "\n"
+                )  # Add newline for each log entry
+                payload_bytes = json_payload.encode("utf-8")
+                filename = f"{payload.get('id') or str(uuid.uuid4())}.json"
+                base_url = f"https://{self.azure_storage_account_name}.dfs.core.windows.net/{self.azure_storage_file_system}/{filename}"
 
-            verbose_logger.debug(
-                f"Successfully uploaded log to Azure Blob Storage: {filename}"
-            )
+                # Execute the 3-step upload process
+                await self._create_file(async_client, base_url)
+                await self._append_data(async_client, base_url, json_payload)
+                await self._flush_data(async_client, base_url, len(payload_bytes))
+
+                verbose_logger.debug(
+                    f"Successfully uploaded log to Azure Blob Storage: {filename}"
+                )
 
         except Exception as e:
             verbose_logger.exception(f"Error uploading to Azure Blob Storage: {str(e)}")
@@ -331,3 +342,58 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             raise ValueError(
                 f"AzureBlobStorageLogger is only available for premium users. {CommonProxyErrors.not_premium_user}"
             )
+
+    async def upload_to_azure_data_lake_with_azure_account_key(
+        self, payload: StandardLoggingPayload
+    ):
+        """
+        Uploads the payload to Azure Data Lake using the Azure SDK
+
+        This is used when Azure Storage Account Key is set - Azure Storage Account Key does not work directly with Azure Rest API
+        """
+        from azure.storage.filedatalake.aio import DataLakeServiceClient
+
+        # Create an async service client
+        service_client = DataLakeServiceClient(
+            account_url=f"https://{self.azure_storage_account_name}.dfs.core.windows.net",
+            credential=self.azure_storage_account_key,
+        )
+        # Get file system client
+        file_system_client = service_client.get_file_system_client(
+            file_system=self.azure_storage_file_system
+        )
+
+        try:
+            # Create directory with today's date
+            from datetime import datetime
+
+            today = datetime.now().strftime("%Y-%m-%d")
+            directory_client = file_system_client.get_directory_client(today)
+
+            # check if the directory exists
+            if not await directory_client.exists():
+                await directory_client.create_directory()
+                verbose_logger.debug(f"Created directory: {today}")
+
+            # Create a file client
+            file_name = f"{payload.get('id') or str(uuid.uuid4())}.json"
+            file_client = directory_client.get_file_client(file_name)
+
+            # Create the file
+            await file_client.create_file()
+
+            # Content to append
+            content = json.dumps(payload).encode("utf-8")
+
+            # Append content to the file
+            await file_client.append_data(data=content, offset=0, length=len(content))
+
+            # Flush the content to finalize the file
+            await file_client.flush_data(position=len(content), offset=0)
+
+            verbose_logger.debug(
+                f"Successfully uploaded and wrote to {today}/{file_name}"
+            )
+
+        except Exception as e:
+            verbose_logger.exception(f"Error occurred: {str(e)}")
