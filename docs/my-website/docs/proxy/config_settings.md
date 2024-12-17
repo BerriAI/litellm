@@ -317,6 +317,7 @@ router_settings:
 | AZURE_CLIENT_SECRET | Client secret for Azure services
 | AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
 | AZURE_KEY_VAULT_URI | URI for Azure Key Vault
+| AZURE_STORAGE_ACCOUNT_KEY | The Azure Storage Account Key to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_ACCOUNT_NAME | Name of the Azure Storage Account to use for logging to Azure Blob Storage
 | AZURE_STORAGE_FILE_SYSTEM | Name of the Azure Storage File System to use for logging to Azure Blob Storage.  (Typically the Container name)
 | AZURE_STORAGE_TENANT_ID | The Application Tenant ID to use for Authentication to Azure Blob Storage logging
