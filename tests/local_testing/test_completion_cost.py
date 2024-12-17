@@ -191,6 +191,8 @@ def test_cost_ft_gpt_35():
         from litellm import Choices, Message, ModelResponse
         from litellm.utils import Usage
 
+        litellm.set_verbose = True
+
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
             choices=[
@@ -223,6 +225,7 @@ def test_cost_ft_gpt_35():
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
+        print(f"Error: {e}")
         pytest.fail(
             f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}"
         )
@@ -1156,7 +1159,7 @@ def test_completion_cost_azure_common_deployment_name():
         mock_client.assert_called()
 
         print(f"mock_client.call_args: {mock_client.call_args.kwargs}")
-        assert "azure/gpt-4" == mock_client.call_args.kwargs["model"]
+        assert "azure/gpt-4" == mock_client.call_args.kwargs["base_model"]
 
 
 def test_completion_cost_anthropic_prompt_caching():

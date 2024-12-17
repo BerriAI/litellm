@@ -30,7 +30,6 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     ## GET MODEL INFO
     model_info = get_model_info(model=model, custom_llm_provider="openai")
-
     ## CALCULATE INPUT COST
     ### Non-cached text tokens
     non_cached_text_tokens = usage.prompt_tokens

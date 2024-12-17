@@ -345,6 +345,25 @@ def has_hidden_params(obj: Any) -> bool:
     return hasattr(obj, "_hidden_params")
 
 
+def _get_provider_for_cost_calc(
+    model: Optional[str],
+    custom_llm_provider: Optional[str] = None,
+) -> Optional[str]:
+    if custom_llm_provider is not None:
+        return custom_llm_provider
+    if model is None:
+        return None
+    try:
+        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+    except Exception as e:
+        verbose_logger.debug(
+            f"litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - {str(e)}"
+        )
+        return None
+
+    return custom_llm_provider
+
+
 def _select_model_name_for_cost_calc(
     model: Optional[str],
     completion_response: Union[BaseModel, dict, str],
@@ -360,6 +379,11 @@ def _select_model_name_for_cost_calc(
     4. If model is passed in return that
     """
     return_model: Optional[str] = None
+    region_name: Optional[str] = None
+    custom_llm_provider = _get_provider_for_cost_calc(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
     if custom_pricing is True:
         return_model = model
 
@@ -376,6 +400,11 @@ def _select_model_name_for_cost_calc(
                 and len(hidden_params["model"]) > 0
             ):
                 return_model = hidden_params.get("model", model)
+        if (
+            hidden_params is not None
+            and hidden_params.get("region_name", None) is not None
+        ):
+            region_name = hidden_params.get("region_name", None)
     elif isinstance(completion_response, dict):
         completion_response_model = completion_response.get("model", None)
 
@@ -384,20 +413,16 @@ def _select_model_name_for_cost_calc(
 
     if return_model is None and model is not None:
         return_model = model
-    elif model is not None and custom_llm_provider is None:
-        try:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-        except Exception as e:
-            verbose_logger.debug(
-                f"litellm.cost_calculator.py::_select_model_name_for_cost_calc() - Error inferring custom_llm_provider - {str(e)}"
-            )
-            custom_llm_provider = None
+
     if (
         return_model is not None
         and custom_llm_provider is not None
         and not return_model.startswith(custom_llm_provider)
     ):  # add provider prefix if not already present, to match model_cost
-        return_model = f"{custom_llm_provider}/{return_model}"
+        if region_name is not None:
+            return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
+        else:
+            return_model = f"{custom_llm_provider}/{return_model}"
 
     return return_model
 
@@ -460,6 +485,8 @@ def completion_cost(  # noqa: PLR0915
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
     optional_params: Optional[dict] = None,
+    custom_pricing: Optional[bool] = None,
+    base_model: Optional[str] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -551,6 +578,9 @@ def completion_cost(  # noqa: PLR0915
             model = _select_model_name_for_cost_calc(
                 model=model,
                 completion_response=completion_response,
+                custom_llm_provider=custom_llm_provider,
+                custom_pricing=custom_pricing,
+                base_model=base_model,
             )
             hidden_params = getattr(completion_response, "_hidden_params", None)
             if hidden_params is not None:
@@ -786,14 +816,14 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
-            if base_model is not None:
-                model = base_model
             response_cost = completion_cost(
                 completion_response=response_object,
                 model=model,
                 call_type=call_type,
                 custom_llm_provider=custom_llm_provider,
                 optional_params=optional_params,
+                custom_pricing=custom_pricing,
+                base_model=base_model,
             )
         return response_cost
     except Exception as e:
