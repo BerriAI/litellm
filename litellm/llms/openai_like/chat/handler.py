@@ -13,8 +13,7 @@ from enum import Enum
 from functools import partial
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
 from litellm import LlmProviders
