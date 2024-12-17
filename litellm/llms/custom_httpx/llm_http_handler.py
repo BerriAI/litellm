@@ -28,6 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.types.utils import EmbeddingResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -403,6 +404,85 @@ class BaseLLMHTTPHandler:
 
         return completion_stream, response.headers
 
+    def embedding(
+        self,
+        model: str,
+        input: list,
+        timeout: float,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: Optional[str],
+        optional_params: dict,
+        model_response: EmbeddingResponse,
+        api_key: Optional[str] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        aembedding: bool = False,
+        headers={},
+        custom_endpoint: Optional[bool] = None,
+    ) -> EmbeddingResponse:
+
+        provider_config = ProviderConfigManager.get_provider_embedding_config(
+            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        )
+        # get config from model, custom llm provider
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
+            messages=[],
+            optional_params=optional_params,
+        )
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+        )
+
+        data = provider_config.transform_embedding_request(
+            model=model,
+            input=input,
+            optional_params=optional_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_embedding_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=data,
+        )
+
     def _handle_error(self, e: Exception, provider_config: BaseConfig):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
@@ -421,6 +501,3 @@ class BaseLLMHTTPHandler:
             status_code=status_code,
             headers=error_headers,
         )
-
-    def embedding(self):
-        pass
