@@ -2374,6 +2374,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         final_params = {**optional_params, **kwargs}
         return final_params
+    elif custom_llm_provider == "voyage":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="voyage",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VoyageEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -6345,6 +6360,15 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
         return litellm.OpenAIGPTConfig()
+
+    @staticmethod
+    def get_provider_embedding_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseConfig:
+        if litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageEmbeddingConfig()
+        return litellm.VoyageEmbeddingConfig()
 
 
 def get_end_user_id_for_cost_tracking(
