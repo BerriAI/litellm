@@ -157,6 +157,20 @@
         "supports_vision": false,
         "supports_prompt_caching": true
     },
+    "o1-2024-12-17": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000060,
+        "cache_read_input_token_cost": 0.0000075,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "supports_prompt_caching": true
+    },
     "chatgpt-4o-latest": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
