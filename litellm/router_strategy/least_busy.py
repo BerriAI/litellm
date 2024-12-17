@@ -11,9 +11,6 @@ import random
 import traceback
 from typing import Optional
 
-import dotenv  # type: ignore
-import requests
-
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 
