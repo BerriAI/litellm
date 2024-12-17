@@ -34,7 +34,6 @@ def _generic_cost_per_character(
     Raises:
         Exception if 'input_cost_per_character' or 'output_cost_per_character' is missing from model_info
     """
-    args = locals()
     ## GET MODEL INFO
     model_info = litellm.get_model_info(
         model=model, custom_llm_provider=custom_llm_provider

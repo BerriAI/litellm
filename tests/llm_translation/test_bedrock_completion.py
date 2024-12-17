@@ -2232,6 +2232,24 @@ def test_bedrock_nova_topk(top_k_param):
         assert 'inferenceConfig' in captured_data['additionalModelRequestFields']
         assert captured_data['additionalModelRequestFields']['inferenceConfig']['topK'] == 10
 
+def test_bedrock_empty_content_real_call():
+    completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "",
+                    },
+                    {"type": "text", "text": "Hey, how's it going?"},
+                ],
+            }
+        ],
+    )
+
+
 def test_bedrock_process_empty_text_blocks():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         process_empty_text_blocks,
