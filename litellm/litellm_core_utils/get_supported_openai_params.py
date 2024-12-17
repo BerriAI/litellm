@@ -170,6 +170,8 @@ def get_supported_openai_params(  # noqa: PLR0915
         ]
     elif custom_llm_provider == "watsonx":
         return litellm.IBMWatsonXChatConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "watsonx_text":
+        return litellm.IBMWatsonXAIConfig().get_supported_openai_params(model=model)
     elif (
         custom_llm_provider == "custom_openai"
         or custom_llm_provider == "text-completion-openai"
