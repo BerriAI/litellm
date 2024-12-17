@@ -24,7 +24,7 @@ else:
 def increment_deployment_successes_for_current_minute(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
-):
+) -> str:
     """
     In-Memory: Increments the number of successes for the current minute for a deployment_id
     """
@@ -35,6 +35,7 @@ def increment_deployment_successes_for_current_minute(
         value=1,
         ttl=60,
     )
+    return key
 
 
 def increment_deployment_failures_for_current_minute(

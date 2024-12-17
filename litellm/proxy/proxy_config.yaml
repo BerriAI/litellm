@@ -1,33 +1,14 @@
 model_list:
- - model_name: gpt-3.5-turbo
-   litellm_params:
-     model: openai/gpt-3.5-turbo
-     api_key: fake-key
-     api_base: https://exampleopenaiendpoint-production.up.railway.app/
-   model_info:
-     supported_environments: ["development", "production", "staging"]
- - model_name: rerank-english-v3.0
-   litellm_params:
-     model: cohere/rerank-english-v3.0
-     api_key: os.environ/COHERE_API_KEY
-   model_info:
-     supported_environments: ["production", "staging"]
- - model_name: llava-hf
-   litellm_params:
-     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
-     api_key: fake-key
-   model_info:
-     supported_environments: ["production", "staging"]
-
-general_settings:
-    service_account_settings: 
-        enforced_params: ["user"]
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  cache: true
-  # callbacks: ["otel"]
-
-
-general_settings:
-  service_account_settings:
-    enforced_params: ["user"]
+  tag_budget_config:
+    product:chat-bot: # (Tag)
+      max_budget: 0.000000000001 # (USD)
+      budget_duration: 1d # (Duration)
+    product:chat-bot-2: # (Tag)
+      max_budget: 100 # (USD)
+      budget_duration: 1d # (Duration)

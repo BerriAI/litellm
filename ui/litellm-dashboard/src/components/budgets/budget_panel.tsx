@@ -49,6 +49,7 @@ export interface budgetItem {
   max_budget: string | null;
   rpm_limit: number | null;
   tpm_limit: number | null;
+  updated_at: string;
 }
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
@@ -65,13 +66,17 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     });
   }, [accessToken]);
 
-
   const handleEditCall = async (budget_id: string, index: number) => {
+    console.log("budget_id", budget_id)
     if (accessToken == null) {
       return;
     }
-    setSelectedBudget(budgetList[index])
-    setIsEditModalVisible(true)
+    // Find the budget first
+    const budget = budgetList.find(budget => budget.budget_id === budget_id) || null;
+    
+    // Update state and show modal after state is updated
+    setSelectedBudget(budget);
+    setIsEditModalVisible(true);
   };
   
   const handleDeleteCall = async (budget_id: string, index: number) => {
@@ -89,6 +94,15 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
     message.success("Budget Deleted.");
   };
+
+  const handleUpdateCall = async () => {
+    if (accessToken == null) {
+      return;
+    }
+    getBudgetList(accessToken).then((data) => {
+      setBudgetList(data);
+    });
+  }
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
@@ -113,6 +127,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           setIsModalVisible={setIsEditModalVisible}
           setBudgetList={setBudgetList}
           existingBudget={selectedBudget}
+          handleUpdateCall={handleUpdateCall}
         />
       }
       <Card>
@@ -128,30 +143,27 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           </TableHead>
 
           <TableBody>
-            {budgetList.map((value: budgetItem, index: number) => (
-              <TableRow key={index}>
-                <TableCell>{value.budget_id}</TableCell>
-                <TableCell>
-                  {value.max_budget ? value.max_budget : "n/a"}
-                </TableCell>
-                <TableCell>
-                  {value.tpm_limit ? value.tpm_limit : "n/a"}
-                </TableCell>
-                <TableCell>
-                  {value.rpm_limit ? value.rpm_limit : "n/a"}
-                </TableCell>
-                <Icon
-                  icon={PencilAltIcon}
-                  size="sm"
-                  onClick={() => handleEditCall(value.budget_id, index)}
-                />
-                <Icon
-                  icon={TrashIcon}
-                  size="sm"
-                  onClick={() => handleDeleteCall(value.budget_id, index)}
-                />
-              </TableRow>
-            ))}
+            {budgetList
+              .slice() // Creates a shallow copy to avoid mutating the original array
+              .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()) // Sort by updated_at in descending order
+              .map((value: budgetItem, index: number) => (
+                <TableRow key={index}>
+                  <TableCell>{value.budget_id}</TableCell>
+                  <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
+                  <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
+                  <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
+                  <Icon
+                    icon={PencilAltIcon}
+                    size="sm"
+                    onClick={() => handleEditCall(value.budget_id, index)}
+                  />
+                  <Icon
+                    icon={TrashIcon}
+                    size="sm"
+                    onClick={() => handleDeleteCall(value.budget_id, index)}
+                  />
+                </TableRow>
+              ))}
           </TableBody>
         </Table>
       </Card>

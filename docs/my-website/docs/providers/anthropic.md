@@ -10,6 +10,35 @@ LiteLLM supports all anthropic models.
 - `claude-2.1`
 - `claude-instant-1.2`
 
+
+| Property | Details |
+|-------|-------|
+| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. |
+| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`) |
+| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview) |
+| API Endpoint for Provider | https://api.anthropic.com |
+| Supported Endpoints | `/chat/completions` |
+
+
+## Supported OpenAI Parameters
+
+Check this in code, [here](../completion/input.md#translated-openai-params)
+
+```
+"stream",
+"stop",
+"temperature",
+"top_p",
+"max_tokens",
+"max_completion_tokens",
+"tools",
+"tool_choice",
+"extra_headers",
+"parallel_tool_calls",
+"response_format",
+"user"
+```
+
 :::info
 
 Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
@@ -721,6 +750,37 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
+### Computer Tools
+
+```python
+from litellm import completion
+
+tools = [
+    {
+        "type": "computer_20241022",
+        "function": {
+            "name": "computer",
+            "parameters": {
+                "display_height_px": 100,
+                "display_width_px": 100,
+                "display_number": 1,
+            },
+        },
+    }
+]
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "Save a picture of a cat to my desktop."}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+    # headers={"anthropic-beta": "computer-use-2024-10-22"},
+)
+
+print(resp)
+```
+
 ## Usage - Vision 
 
 ```python
@@ -833,3 +893,145 @@ Human: How do I boil water?
 Assistant:
 ```
 
+
+## Usage - PDF 
+
+Pass base64 encoded PDF files to Anthropic models using the `image_url` field.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+### **using base64**
+```python
+from litellm import completion, supports_pdf_input
+import base64
+import requests
+
+# URL of the file
+url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
+
+# Download the file
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+
+## check if model supports pdf input - (2024/11/11) only claude-3-5-haiku-20241022 supports it
+supports_pdf_input("anthropic/claude-3-5-haiku-20241022") # True
+
+response = completion(
+    model="anthropic/claude-3-5-haiku-20241022",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
+                {
+                    "type": "image_url",
+                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                },
+            ],
+        }
+    ],
+    max_tokens=300,
+)
+
+print(response.choices[0])
+```
+</TabItem>
+<TabItem value="proxy" lable="PROXY">
+
+1. Add model to config 
+
+```yaml
+- model_name: claude-3-5-haiku-20241022
+  litellm_params:
+    model: anthropic/claude-3-5-haiku-20241022
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-5-haiku-20241022",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a very professional document summarization specialist. Please summarize the given document"
+          },
+          {
+                "type": "image_url",
+                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+            }
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300
+  }'
+
+```
+</TabItem>
+</Tabs>
+
+## Usage - passing 'user_id' to Anthropic
+
+LiteLLM translates the OpenAI `user` param to Anthropic's `metadata[user_id]` param.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+    user="user_123",
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-3-5-sonnet-20240620
+      litellm_params:
+        model: anthropic/claude-3-5-sonnet-20240620
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "claude-3-5-sonnet-20240620",
+    "messages": [{"role": "user", "content": "What is Anthropic?"}],
+    "user": "user_123"
+  }'
+```
+
+</TabItem>
+</Tabs>

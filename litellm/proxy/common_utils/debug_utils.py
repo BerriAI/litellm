@@ -6,13 +6,14 @@ import tracemalloc
 from fastapi import APIRouter
 
 import litellm
+from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_proxy_logger
 
 router = APIRouter()
 
 if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     try:
-        import objgraph
+        import objgraph  # type: ignore
 
         print("growth of objects")  # noqa
         objgraph.show_growth()
@@ -21,8 +22,10 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
         roots = objgraph.get_leaking_objects()
         print("\n\nLeaking objects")  # noqa
         objgraph.show_most_common_types(objects=roots)
-    except:
-        pass
+    except ImportError:
+        raise ImportError(
+            "objgraph not found. Please install objgraph to use this feature."
+        )
 
     tracemalloc.start(10)
 
@@ -57,15 +60,20 @@ async def memory_usage_in_mem_cache():
         user_api_key_cache,
     )
 
+    if llm_router is None:
+        num_items_in_llm_router_cache = 0
+    else:
+        num_items_in_llm_router_cache = len(
+            llm_router.cache.in_memory_cache.cache_dict
+        ) + len(llm_router.cache.in_memory_cache.ttl_dict)
+
     num_items_in_user_api_key_cache = len(
         user_api_key_cache.in_memory_cache.cache_dict
     ) + len(user_api_key_cache.in_memory_cache.ttl_dict)
-    num_items_in_llm_router_cache = len(
-        llm_router.cache.in_memory_cache.cache_dict
-    ) + len(llm_router.cache.in_memory_cache.ttl_dict)
+
     num_items_in_proxy_logging_obj_cache = len(
-        proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict
-    ) + len(proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict)
+        proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
+    ) + len(proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.ttl_dict)
 
     return {
         "num_items_in_user_api_key_cache": num_items_in_user_api_key_cache,
@@ -89,13 +97,20 @@ async def memory_usage_in_mem_cache_items():
         user_api_key_cache,
     )
 
+    if llm_router is None:
+        llm_router_in_memory_cache_dict = {}
+        llm_router_in_memory_ttl_dict = {}
+    else:
+        llm_router_in_memory_cache_dict = llm_router.cache.in_memory_cache.cache_dict
+        llm_router_in_memory_ttl_dict = llm_router.cache.in_memory_cache.ttl_dict
+
     return {
         "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
         "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
-        "llm_router_cache": llm_router.cache.in_memory_cache.cache_dict,
-        "llm_router_ttl": llm_router.cache.in_memory_cache.ttl_dict,
-        "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.in_memory_cache.cache_dict,
-        "proxy_logging_obj_ttl": proxy_logging_obj.internal_usage_cache.in_memory_cache.ttl_dict,
+        "llm_router_cache": llm_router_in_memory_cache_dict,
+        "llm_router_ttl": llm_router_in_memory_ttl_dict,
+        "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict,
+        "proxy_logging_obj_ttl": proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.ttl_dict,
     }
 
 
@@ -104,9 +119,18 @@ async def get_otel_spans():
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.proxy_server import open_telemetry_logger
 
-    open_telemetry_logger: OpenTelemetry = open_telemetry_logger
+    if open_telemetry_logger is None:
+        return {
+            "otel_spans": [],
+            "spans_grouped_by_parent": {},
+            "most_recent_parent": None,
+        }
+
     otel_exporter = open_telemetry_logger.OTEL_EXPORTER
-    recorded_spans = otel_exporter.get_finished_spans()
+    if hasattr(otel_exporter, "get_finished_spans"):
+        recorded_spans = otel_exporter.get_finished_spans()  # type: ignore
+    else:
+        recorded_spans = []
 
     print("Spans: ", recorded_spans)  # noqa
 
@@ -137,11 +161,13 @@ async def get_otel_spans():
 # Helper functions for debugging
 def init_verbose_loggers():
     try:
-        worker_config = litellm.get_secret("WORKER_CONFIG")
+        worker_config = get_secret_str("WORKER_CONFIG")
+        # if not, assume it's a json string
+        if worker_config is None:
+            return
         if os.path.isfile(worker_config):
             return
-        # if not, assume it's a json string
-        _settings = json.loads(os.getenv("WORKER_CONFIG"))
+        _settings = json.loads(worker_config)
         if not isinstance(_settings, dict):
             return
 
@@ -162,7 +188,7 @@ def init_verbose_loggers():
                 level=logging.INFO
             )  # set router logs to info
             verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
-        if detailed_debug == True:
+        if detailed_debug is True:
             import logging
 
             from litellm._logging import (
@@ -178,10 +204,10 @@ def init_verbose_loggers():
             verbose_proxy_logger.setLevel(
                 level=logging.DEBUG
             )  # set proxy logs to debug
-        elif debug == False and detailed_debug == False:
+        elif debug is False and detailed_debug is False:
             # users can control proxy debugging using env variable = 'LITELLM_LOG'
             litellm_log_setting = os.environ.get("LITELLM_LOG", "")
-            if litellm_log_setting != None:
+            if litellm_log_setting is not None:
                 if litellm_log_setting.upper() == "INFO":
                     import logging
 
@@ -213,4 +239,6 @@ def init_verbose_loggers():
                         level=logging.DEBUG
                     )  # set proxy logs to debug
     except Exception as e:
-        verbose_logger.warning(f"Failed to init verbose loggers: {str(e)}")
+        import logging
+
+        logging.warning(f"Failed to init verbose loggers: {str(e)}")

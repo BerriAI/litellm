@@ -64,7 +64,7 @@ Allow others to create/delete their own keys.
 Features here are behind a commercial license in our `/enterprise` folder. [**See Code**](https://github.com/BerriAI/litellm/tree/main/enterprise)
 
 
-### Setup SSO/Auth for UI
+### SSO for UI
 
 #### Step 1: Set upperbounds for keys
 Control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
@@ -87,12 +87,6 @@ litellm_settings:
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
 #### Step 2: Setup Oauth Client
-
-:::tip
-
-Looking for how to use Oauth 2.0 for /chat, /completions API requests to the proxy? [Follow this doc](oauth2)
-
-:::
 
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
@@ -196,6 +190,13 @@ GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not e
 
 </Tabs>
 
+### Default Login, Logout URLs
+
+Some SSO providers require a specific redirect url for login and logout. You can input the following values.
+
+- Login: `<your-proxy-base-url>/sso/key/generate`
+- Logout: `<your-proxy-base-url>`
+
 #### Step 3. Set `PROXY_BASE_URL` in your .env
 
 Set this in your .env (so the proxy can set the correct redirect url)
@@ -216,9 +217,9 @@ export ALLOWED_EMAIL_DOMAINS="berri.ai"
 
 This will check if the user email we receive from SSO contains this domain, before allowing access.
 
-### Set Admin view w/ SSO 
+### Set Proxy Admin
 
-You just need to set Proxy Admin ID
+Set a Proxy Admin when SSO is enabled. Once SSO is enabled, the `user_id` for users is retrieved from the SSO provider. In order to set a Proxy Admin, you need to copy the `user_id` from the UI and set it in your `.env` as `PROXY_ADMIN_ID`.
 
 #### Step 1: Copy your ID from the UI 
 
@@ -256,7 +257,7 @@ general_settings:
   default_team_disabled: true # OR you can set env var PROXY_DEFAULT_TEAM_DISABLED="true"
 ```
 
-### Sign in with Username, Password when SSO is on
+### Use Username, Password when SSO is on
 
 If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
 

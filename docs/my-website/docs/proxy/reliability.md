@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔥 Load Balancing, Fallbacks, Retries, Timeouts
+# Proxy - Fallbacks, Retries
 
 - Quick Start [load balancing](#test---load-balancing)
 - Quick Start [client side fallbacks](#test---client-side-fallbacks)
@@ -315,6 +315,64 @@ litellm_settings:
   cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
 
+### Fallback to Specific Model ID
+
+If all models in a group are in cooldown (e.g. rate limited), LiteLLM will fallback to the model with the specific model ID.
+
+This skips any cooldown check for the fallback model.
+
+1. Specify the model ID in `model_info`
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+    model_info:
+      id: my-specific-model-id # 👈 KEY CHANGE
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: anthropic-claude
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+**Note:** This will only fallback to the model with the specific model ID. If you want to fallback to another model group, you can set `fallbacks=[{"gpt-4": ["anthropic-claude"]}]`
+
+2. Set fallbacks in config
+
+```yaml
+litellm_settings:
+  fallbacks: [{"gpt-4": ["my-specific-model-id"]}]
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true
+}'
+```
+
+Validate it works, by checking the response header `x-litellm-model-id`
+
+```bash
+x-litellm-model-id: my-specific-model-id
+```
+
 ### Test Fallbacks! 
 
 Check if your fallbacks are working as expected. 
@@ -336,6 +394,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 '
 ```
+
 
 #### **Content Policy Fallbacks**
 ```bash
@@ -699,3 +758,68 @@ print(response)
 ```
 </TabItem>
 </Tabs>
+
+### Setting Fallbacks for Wildcard Models
+
+You can set fallbacks for wildcard models (e.g. `azure/*`) in your config file.
+
+1. Setup config
+```yaml
+model_list:
+  - model_name: "gpt-4o"
+    litellm_params:
+      model: "openai/gpt-4o"
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "azure/*"
+    litellm_params:
+      model: "azure/*"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+
+litellm_settings:
+  fallbacks: [{"gpt-4o": ["azure/gpt-4o"]}]
+```
+
+2. Start Proxy
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": [    
+          {
+            "type": "text",
+            "text": "what color is red"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "mock_testing_fallbacks": true
+}'
+```
+
+### Disable Fallbacks per key
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "disable_fallbacks": true
+    }
+}'
+```

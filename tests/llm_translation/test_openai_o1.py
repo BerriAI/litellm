@@ -2,7 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -18,87 +18,75 @@ from litellm import Choices, Message, ModelResponse
 
 
 @pytest.mark.asyncio
-@pytest.mark.respx
-async def test_o1_handle_system_role(respx_mock: MockRouter):
+async def test_o1_handle_system_role():
     """
     Tests that:
     - max_tokens is translated to 'max_completion_tokens'
     - role 'system' is translated to 'user'
     """
+    from openai import AsyncOpenAI
+
     litellm.set_verbose = True
 
-    mock_response = ModelResponse(
-        id="cmpl-mock",
-        choices=[Choices(message=Message(content="Mocked response", role="assistant"))],
-        created=int(datetime.now().timestamp()),
-        model="o1-preview",
-    )
+    client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_request = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=mock_response.dict())
-    )
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="o1-preview",
+                max_tokens=10,
+                messages=[{"role": "system", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
-    response = await litellm.acompletion(
-        model="o1-preview",
-        max_tokens=10,
-        messages=[{"role": "system", "content": "Hello!"}],
-    )
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
 
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
+        print("request_body: ", request_body)
 
-    print("request_body: ", request_body)
-
-    assert request_body == {
-        "model": "o1-preview",
-        "max_completion_tokens": 10,
-        "messages": [{"role": "user", "content": "Hello!"}],
-    }
-
-    print(f"response: {response}")
-    assert isinstance(response, ModelResponse)
+        assert request_body["model"] == "o1-preview"
+        assert request_body["max_completion_tokens"] == 10
+        assert request_body["messages"] == [{"role": "user", "content": "Hello!"}]
 
 
 @pytest.mark.asyncio
-@pytest.mark.respx
 @pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0314", "gpt-4-32k", "o1-preview"])
-async def test_o1_max_completion_tokens(respx_mock: MockRouter, model: str):
+async def test_o1_max_completion_tokens(model: str):
     """
     Tests that:
     - max_completion_tokens is passed directly to OpenAI chat completion models
     """
+    from openai import AsyncOpenAI
+
     litellm.set_verbose = True
 
-    mock_response = ModelResponse(
-        id="cmpl-mock",
-        choices=[Choices(message=Message(content="Mocked response", role="assistant"))],
-        created=int(datetime.now().timestamp()),
-        model=model,
-    )
+    client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_request = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=mock_response.dict())
-    )
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
-    response = await litellm.acompletion(
-        model=model,
-        max_completion_tokens=10,
-        messages=[{"role": "user", "content": "Hello!"}],
-    )
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
 
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
+        print("request_body: ", request_body)
 
-    print("request_body: ", request_body)
-
-    assert request_body == {
-        "model": model,
-        "max_completion_tokens": 10,
-        "messages": [{"role": "user", "content": "Hello!"}],
-    }
-
-    print(f"response: {response}")
-    assert isinstance(response, ModelResponse)
+        assert request_body["model"] == model
+        assert request_body["max_completion_tokens"] == 10
+        assert request_body["messages"] == [{"role": "user", "content": "Hello!"}]
 
 
 def test_litellm_responses():

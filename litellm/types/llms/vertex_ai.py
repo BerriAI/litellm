@@ -13,23 +13,14 @@ from typing_extensions import (
 )
 
 
-class Field(TypedDict):
-    key: str
-    value: Dict[str, Any]
-
-
-class FunctionCallArgs(TypedDict):
-    fields: Field
-
-
 class FunctionResponse(TypedDict):
     name: str
-    response: FunctionCallArgs
+    response: Optional[dict]
 
 
 class FunctionCall(TypedDict):
     name: str
-    args: FunctionCallArgs
+    args: Optional[dict]
 
 
 class FileDataType(TypedDict):
@@ -55,17 +46,29 @@ class HttpxFunctionCall(TypedDict):
     args: dict
 
 
+class HttpxExecutableCode(TypedDict):
+    code: str
+    language: str
+
+
+class HttpxCodeExecutionResult(TypedDict):
+    outcome: str
+    output: str
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType
     functionCall: HttpxFunctionCall
     function_response: FunctionResponse
+    executableCode: HttpxExecutableCode
+    codeExecutionResult: HttpxCodeExecutionResult
 
 
 class HttpxContentType(TypedDict, total=False):
     role: Literal["user", "model"]
-    parts: Required[List[HttpxPartType]]
+    parts: List[HttpxPartType]
 
 
 class ContentType(TypedDict, total=False):
@@ -155,11 +158,14 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     seed: int
+    responseLogprobs: bool
+    logprobs: int
 
 
 class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
     googleSearchRetrieval: dict
+    code_execution: dict
     retrieval: Retrieval
 
 
@@ -257,6 +263,21 @@ class GroundingMetadata(TypedDict, total=False):
     groundingAttributions: List[dict]
 
 
+class LogprobsCandidate(TypedDict):
+    token: str
+    tokenId: int
+    logProbability: float
+
+
+class LogprobsTopCandidate(TypedDict):
+    candidates: List[LogprobsCandidate]
+
+
+class LogprobsResult(TypedDict, total=False):
+    topCandidates: List[LogprobsTopCandidate]
+    chosenCandidates: List[LogprobsCandidate]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
@@ -275,6 +296,7 @@ class Candidates(TypedDict, total=False):
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata
     finishMessage: str
+    logprobsResult: LogprobsResult
 
 
 class PromptFeedback(TypedDict):
@@ -339,14 +361,36 @@ class InstanceVideo(TypedDict, total=False):
     videoSegmentConfig: Tuple[float, float, float]
 
 
+class InstanceImage(TypedDict, total=False):
+    gcsUri: Optional[str]
+    bytesBase64Encoded: Optional[str]
+    mimeType: Optional[str]
+
+
 class Instance(TypedDict, total=False):
     text: str
-    image: Dict[str, str]
+    image: InstanceImage
     video: InstanceVideo
 
 
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: List[Instance]
+
+
+class VideoEmbedding(TypedDict):
+    startOffsetSec: int
+    endOffsetSec: int
+    embedding: List[float]
+
+
+class MultimodalPrediction(TypedDict, total=False):
+    textEmbedding: List[float]
+    imageEmbedding: List[float]
+    videoEmbeddings: List[VideoEmbedding]
+
+
+class MultimodalPredictions(TypedDict, total=False):
+    predictions: List[MultimodalPrediction]
 
 
 class VertexAICachedContentResponseObject(TypedDict):
@@ -390,3 +434,43 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: List[ContentEmbeddings]
+
+
+# Vertex AI Batch Prediction
+
+
+class GcsSource(TypedDict):
+    uris: str
+
+
+class InputConfig(TypedDict):
+    instancesFormat: str
+    gcsSource: GcsSource
+
+
+class GcsDestination(TypedDict):
+    outputUriPrefix: str
+
+
+class OutputConfig(TypedDict, total=False):
+    predictionsFormat: str
+    gcsDestination: GcsDestination
+
+
+class VertexAIBatchPredictionJob(TypedDict):
+    displayName: str
+    model: str
+    inputConfig: InputConfig
+    outputConfig: OutputConfig
+
+
+class VertexBatchPredictionResponse(TypedDict, total=False):
+    name: str
+    displayName: str
+    model: str
+    inputConfig: InputConfig
+    outputConfig: OutputConfig
+    state: str
+    createTime: str
+    updateTime: str
+    modelVersionId: str

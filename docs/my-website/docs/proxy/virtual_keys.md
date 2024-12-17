@@ -1,14 +1,14 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 🔑 Virtual Keys
+# Virtual Keys
 Track Spend, and control model access via virtual keys for the proxy
 
 :::info
 
 - 🔑 [UI to Generate, Edit, Delete Keys (with SSO)](https://docs.litellm.ai/docs/proxy/ui)
 - [Deploy LiteLLM Proxy with Key Management](https://docs.litellm.ai/docs/proxy/deploy#deploy-with-database)
-- [Dockerfile.database for LiteLLM Proxy + Key Management](https://github.com/BerriAI/litellm/blob/main/Dockerfile.database)
+- [Dockerfile.database for LiteLLM Proxy + Key Management](https://github.com/BerriAI/litellm/blob/main/docker/Dockerfile.database)
 
 
 :::
@@ -810,6 +810,83 @@ litellm_settings:
     metadata: {"setting":"default"}
     team_id: "core-infra"
 ```
+
+### Restricting Key Generation
+
+Use this to control who can generate keys. Useful when letting others create keys on the UI. 
+
+```yaml
+litellm_settings:
+  key_generation_settings:
+    team_key_generation:
+      allowed_team_member_roles: ["admin"]
+      required_params: ["tags"] # require team admins to set tags for cost-tracking when generating a team key
+    personal_key_generation: # maps to 'Default Team' on UI 
+      allowed_user_roles: ["proxy_admin"]
+```
+
+#### Spec 
+
+```python
+key_generation_settings: Optional[StandardKeyGenerationConfig] = None
+```
+
+#### Types
+
+```python
+class StandardKeyGenerationConfig(TypedDict, total=False):
+    team_key_generation: TeamUIKeyGenerationConfig
+    personal_key_generation: PersonalUIKeyGenerationConfig
+
+class TeamUIKeyGenerationConfig(TypedDict):
+    allowed_team_member_roles: List[str] # either 'user' or 'admin'
+    required_params: List[str] # require params on `/key/generate` to be set if a team key (team_id in request) is being generated
+
+
+class PersonalUIKeyGenerationConfig(TypedDict):
+    allowed_user_roles: List[LitellmUserRoles] 
+    required_params: List[str] # require params on `/key/generate` to be set if a personal key (no team_id in request) is being generated
+
+
+class LitellmUserRoles(str, enum.Enum):
+    """
+    Admin Roles:
+    PROXY_ADMIN: admin over the platform
+    PROXY_ADMIN_VIEW_ONLY: can login, view all own keys, view all spend
+    ORG_ADMIN: admin over a specific organization, can create teams, users only within their organization
+
+    Internal User Roles:
+    INTERNAL_USER: can login, view/create/delete their own keys, view their spend
+    INTERNAL_USER_VIEW_ONLY: can login, view their own keys, view their own spend
+
+
+    Team Roles:
+    TEAM: used for JWT auth
+
+
+    Customer Roles:
+    CUSTOMER: External users -> these are customers
+
+    """
+
+    # Admin Roles
+    PROXY_ADMIN = "proxy_admin"
+    PROXY_ADMIN_VIEW_ONLY = "proxy_admin_viewer"
+
+    # Organization admins
+    ORG_ADMIN = "org_admin"
+
+    # Internal User Roles
+    INTERNAL_USER = "internal_user"
+    INTERNAL_USER_VIEW_ONLY = "internal_user_viewer"
+
+    # Team Roles
+    TEAM = "team"
+
+    # Customer Roles - External users of proxy
+    CUSTOMER = "customer"
+```
+
 
 ## **Next Steps - Set Budgets, Rate Limits per Virtual Key**
 

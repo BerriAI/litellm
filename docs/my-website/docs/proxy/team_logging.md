@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 👥📊 Team/Key Based Logging
+# Team/Key Based Logging
 
 Allow each key/team to use their own Langfuse Project / custom callbacks
 
@@ -11,15 +11,13 @@ Allow each key/team to use their own Langfuse Project / custom callbacks
 Team 1 -> Logs to Langfuse Project 1 
 Team 2 -> Logs to Langfuse Project 2
 Team 3 -> Disabled Logging (for GDPR compliance)
-
 ```
 
 ## Team Based Logging
 
-[👉 Tutorial - Allow each team to use their own Langfuse Project / custom callbacks](team_logging.md)
 
 
-## Logging / Caching
+### Setting Team Logging via `config.yaml`
 
 Turn on/off logging and caching for a specific team id. 
 
@@ -30,11 +28,11 @@ This config would send langfuse logs to 2 different langfuse projects, based on 
 ```yaml
 litellm_settings:
   default_team_settings: 
-    - team_id: my-secret-project
+    - team_id: "dbe2f686-a686-4896-864a-4c3924458709"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_1 # Project 1
       langfuse_secret: os.environ/LANGFUSE_PRIVATE_KEY_1 # Project 1
-    - team_id: ishaans-secret-project
+    - team_id: "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"
       success_callback: ["langfuse"]
       langfuse_public_key: os.environ/LANGFUSE_PUB_KEY_2 # Project 2
       langfuse_secret: os.environ/LANGFUSE_SECRET_2 # Project 2
@@ -46,7 +44,7 @@ Now, when you [generate keys](./virtual_keys.md) for this team-id
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--d '{"team_id": "ishaans-secret-project"}'
+-d '{"team_id": "06ed1e01-3fa7-4b9e-95bc-f2e59b74f3a8"}'
 ```
 
 All requests made with these keys will log data to their team-specific logging. -->
@@ -86,12 +84,14 @@ curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/cal
 
 | Field | Supported Values | Notes |
 |-------|------------------|-------|
-| `callback_name` | `"langfuse"` | Currently only supports "langfuse" |
+| `callback_name` | `"langfuse"`, `"gcs_bucket"`| Currently only supports `"langfuse"`, `"gcs_bucket"` |
 | `callback_type` | `"success"`, `"failure"`, `"success_and_failure"` | |
 | `callback_vars` | | dict of callback settings |
-| &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_public_key` | string | Required |
-| &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_secret_key` | string | Required |
-| &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_host` | string | Optional (defaults to https://cloud.langfuse.com) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_public_key` | string | Required for Langfuse |
+| &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_secret_key` | string | Required for Langfuse |
+| &nbsp;&nbsp;&nbsp;&nbsp;`langfuse_host` | string | Optional for Langfuse (defaults to https://cloud.langfuse.com) |
+| &nbsp;&nbsp;&nbsp;&nbsp;`gcs_bucket_name` | string | Required for GCS Bucket. Name of your GCS bucket |
+| &nbsp;&nbsp;&nbsp;&nbsp;`gcs_path_service_account` | string | Required for GCS Bucket. Path to your service account json |
 
 #### 2. Create key for team
 
@@ -201,6 +201,14 @@ Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a
 
 :::
 
+### How key based logging works:
+
+- If **Key has no callbacks** configured, it will use the default callbacks specified in the config.yaml file
+- If **Key has callbacks** configured, it will use the callbacks specified in the key
+
+<Tabs>
+<TabItem label="Langfuse" value="langfuse">
+
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
@@ -208,7 +216,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{
     "metadata": {
         "logging": [{
-            "callback_name": "langfuse", # "otel", "langfuse", "lunary"
+            "callback_name": "langfuse", # "otel", "gcs_bucket"
             "callback_type": "success", # "success", "failure", "success_and_failure"
             "callback_vars": {
                 "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY", # [RECOMMENDED] reference key in proxy environment
@@ -223,8 +231,234 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 <iframe width="840" height="500" src="https://www.youtube.com/embed/8iF0Hvwk0YU" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+</TabItem>
+<TabItem label="GCS Bucket" value="gcs_bucket">
+
+1. Create Virtual Key to log to a specific GCS Bucket
+
+  Set `GCS_SERVICE_ACCOUNT` in your environment to the path of the service account json
+  ```bash
+  export GCS_SERVICE_ACCOUNT=/path/to/service-account.json # GCS_SERVICE_ACCOUNT=/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json
+  ```
+
+  ```bash
+  curl -X POST 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+      "metadata": {
+          "logging": [{
+              "callback_name": "gcs_bucket", # "otel", "gcs_bucket"
+              "callback_type": "success", # "success", "failure", "success_and_failure"
+              "callback_vars": {
+                  "gcs_bucket_name": "my-gcs-bucket", # Name of your GCS Bucket to log to
+                  "gcs_path_service_account": "os.environ/GCS_SERVICE_ACCOUNT" # environ variable for this service account
+              }
+          }]
+      }
+  }'
+
+  ```
+
+2. Test it - `/chat/completions` request
+
+  Use the virtual key from step 3 to make a `/chat/completions` request
+
+  You should see your logs on GCS Bucket on a successful request
+
+  ```shell
+  curl -i http://localhost:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-Fxq5XSyWKeXDKfPdqXZhPg" \
+    -d '{
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {"role": "user", "content": "Hello, Claude"}
+      ],
+      "user": "hello",
+    }'
+  ```
+
+</TabItem>
+
+<TabItem label="Langsmith" value="langsmith">
+
+1. Create Virtual Key to log to a specific Langsmith Project
+
+  ```bash
+  curl -X POST 'http://0.0.0.0:4000/key/generate' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+      "metadata": {
+          "logging": [{
+              "callback_name": "langsmith", # "otel", "gcs_bucket"
+              "callback_type": "success", # "success", "failure", "success_and_failure"
+              "callback_vars": {
+                  "langsmith_api_key": "os.environ/LANGSMITH_API_KEY", # API Key for Langsmith logging
+                  "langsmith_project": "pr-brief-resemblance-72", # project name on langsmith
+                  "langsmith_base_url": "https://api.smith.langchain.com"
+              }
+          }]
+      }
+  }'
+
+  ```
+
+2. Test it - `/chat/completions` request
+
+  Use the virtual key from step 3 to make a `/chat/completions` request
+
+  You should see your logs on your Langsmith project on a successful request
+
+  ```shell
+  curl -i http://localhost:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-Fxq5XSyWKeXDKfPdqXZhPg" \
+    -d '{
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {"role": "user", "content": "Hello, Claude"}
+      ],
+      "user": "hello",
+    }'
+  ```
+
+</TabItem>
+</Tabs>
 
 ---
 
 Help us improve this feature, by filing a [ticket here](https://github.com/BerriAI/litellm/issues)
+
+### Check if key callbacks are configured correctly `/key/health`
+
+Call `/key/health` with the key to check if the callback settings are configured correctly
+
+Pass the key in the request header
+
+```bash
+curl -X POST "http://localhost:4000/key/health" \
+  -H "Authorization: Bearer <your-key>" \
+  -H "Content-Type: application/json"
+```
+
+<Tabs>
+<TabItem label="Response when key is configured correctly" value="Response when key is configured correctly">
+
+Response when logging callbacks are setup correctly:
+
+A key is **healthy** when the logging callbacks are setup correctly.
+
+```json
+{
+  "key": "healthy",
+  "logging_callbacks": {
+    "callbacks": [
+      "gcs_bucket"
+    ],
+    "status": "healthy",
+    "details": "No logger exceptions triggered, system is healthy. Manually check if logs were sent to ['gcs_bucket']"
+  }
+}
+```
+
+</TabItem>
+
+<TabItem label="Response when key is configured incorrectly" value="Response when key is configured incorrectly">
+
+Response when logging callbacks are not setup correctly
+
+A key is **unhealthy** when the logging callbacks are not setup correctly.
+
+```json
+{
+  "key": "unhealthy",
+  "logging_callbacks": {
+    "callbacks": [
+      "gcs_bucket"
+    ],
+    "status": "unhealthy",
+    "details": "Logger exceptions triggered, system is unhealthy: Failed to load vertex credentials. Check to see if credentials containing partial/invalid information."
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Disable/Enable Message redaction
+
+Use this to enable prompt logging for specific keys when you have globally disabled it
+
+Example config.yaml with globally disabled prompt logging (message redaction)
+```yaml
+model_list:
+ - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+litellm_settings:
+  callbacks: ["datadog"]
+  turn_off_message_logging: True # 👈 Globally logging prompt / response is disabled
+```
+
+**Enable prompt logging for key**
+
+Set `turn_off_message_logging` to `false` for the key you want to enable prompt logging for. This will override the global `turn_off_message_logging` setting.
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "metadata": {
+        "logging": [{
+            "callback_name": "datadog",
+            "callback_vars": {
+                "turn_off_message_logging": false # 👈 Enable prompt logging
+            }
+        }]
+    }
+}'
+```
+
+Response from `/key/generate`
+
+```json
+{
+    "key_alias": null,
+    "key": "sk-9v6I-jf9-eYtg_PwM8OKgQ",
+    "metadata": {
+        "logging": [
+            {
+                "callback_name": "datadog",
+                "callback_vars": {
+                    "turn_off_message_logging": false
+                }
+            }
+        ]
+    },
+    "token_id": "a53a33db8c3cf832ceb28565dbb034f19f0acd69ee7f03b7bf6752f9f804081e"
+}
+```
+
+Use key for `/chat/completions` request
+
+This key will log the prompt to the callback specified in the request
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-9v6I-jf9-eYtg_PwM8OKgQ" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [
+      {"role": "user", "content": "hi my name is ishaan what key alias is this"}
+    ]
+  }'
+```
+
+
+
+
 

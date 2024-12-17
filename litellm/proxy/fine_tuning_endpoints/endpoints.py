@@ -118,13 +118,13 @@ async def create_fine_tuning_job(
         version,
     )
 
+    data = fine_tuning_request.model_dump(exclude_none=True)
     try:
         if premium_user is not True:
             raise ValueError(
                 f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}"
             )
         # Convert Pydantic model to dict
-        data = fine_tuning_request.model_dump(exclude_none=True)
 
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
@@ -146,7 +146,8 @@ async def create_fine_tuning_job(
         )
 
         # add llm_provider_config to data
-        data.update(llm_provider_config)
+        if llm_provider_config is not None:
+            data.update(llm_provider_config)
 
         response = await litellm.acreate_fine_tuning_job(**data)
 
@@ -262,7 +263,8 @@ async def list_fine_tuning_jobs(
             custom_llm_provider=custom_llm_provider
         )
 
-        data.update(llm_provider_config)
+        if llm_provider_config is not None:
+            data.update(llm_provider_config)
 
         response = await litellm.alist_fine_tuning_jobs(
             **data,
@@ -378,7 +380,8 @@ async def retrieve_fine_tuning_job(
             custom_llm_provider=custom_llm_provider
         )
 
-        data.update(llm_provider_config)
+        if llm_provider_config is not None:
+            data.update(llm_provider_config)
 
         response = await litellm.acancel_fine_tuning_job(
             **data,

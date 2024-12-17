@@ -2,14 +2,14 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Proxy Config.yaml
+# Overview
 Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
 
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
-| `router_settings`   | litellm Router settings, example `routing_strategy="least-busy"` [**see all**](https://github.com/BerriAI/litellm/blob/6ef0e8485e0e720c0efa6f3075ce8119f2f62eea/litellm/router.py#L64)|
-| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)|
+| `router_settings`   | litellm Router settings, example `routing_strategy="least-busy"` [**see all**](#router-settings)|
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](#all-settings)|
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
@@ -357,60 +357,6 @@ curl --location 'http://0.0.0.0:4000/v1/model/info' \
 --data ''
 ```
 
- 
-### Provider specific wildcard routing 
-**Proxy all models from a provider**
-
-Use this if you want to **proxy all models from a specific provider without defining them on the config.yaml**
-
-**Step 1** - define provider specific routing on config.yaml
-```yaml
-model_list:
-  # provider specific wildcard routing
-  - model_name: "anthropic/*"
-    litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: "groq/*"
-    litellm_params:
-      model: "groq/*"
-      api_key: os.environ/GROQ_API_KEY
-```
-
-Step 2 - Run litellm proxy 
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-Step 3 Test it 
-
-Test with `anthropic/` - all models with `anthropic/` prefix will get routed to `anthropic/*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "anthropic/claude-3-sonnet-20240229",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
-Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
-```shell
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "groq/llama3-8b-8192",
-    "messages": [
-      {"role": "user", "content": "Hello, Claude!"}
-    ]
-  }'
-```
-
 ### Load Balancing 
 
 :::info
@@ -559,8 +505,8 @@ model_list:
       initial_prompt_value: "\n"
       roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
       final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
+      bos_token: " "
+      eos_token: " "
       max_tokens: 4096
 ```
 
@@ -578,84 +524,6 @@ $ litellm --config /path/to/config.yaml
 general_settings: 
   database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
   database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
-```
-
-## **All settings**
-
-```python
-{
-  "environment_variables": {},
-  "model_list": [
-    {
-      "model_name": "string",
-      "litellm_params": {},
-      "model_info": {
-        "id": "string",
-        "mode": "embedding",
-        "input_cost_per_token": 0,
-        "output_cost_per_token": 0,
-        "max_tokens": 2048,
-        "base_model": "gpt-4-1106-preview",
-        "additionalProp1": {}
-      }
-    }
-  ],
-  "litellm_settings": {
-    "success_callback": "List[str]" # list of success callbacks - eg ["langfuse"]
-    "failure_callback": "List[str]" # list of failure callbacks - eg ["sentry"]
-    "callbacks": "List[str] or str" # list of callbacks - runs on success and failure - eg ["otel"]
-    "service_callbacks": "List[str]" # logs redis, postgres failures on datadog, prometheus
-
-    "turn_off_message_logging": "boolean" # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
-    "redact_user_api_key_info": "boolean" # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
-
-  }, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
-  "callback_settings": {
-    "otel": {        # OTEL logging callback specific settings
-      "message_logging": "boolean"
-    }
-  },
-  "general_settings": {
-    "completion_model": "string",
-    "disable_spend_logs": "boolean", # turn off writing each transaction to the db
-    "disable_master_key_return": "boolean", # turn off returning master key on UI (checked on '/user/info' endpoint)
-    "disable_retry_on_max_parallel_request_limit_error": "boolean", # turn off retries when max parallel request limit is reached
-    "disable_reset_budget": "boolean", # turn off reset budget scheduled task
-    "disable_adding_master_key_hash_to_db": "boolean", # turn off storing master key hash in db, for spend tracking
-    "enable_jwt_auth": "boolean", # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
-    "enforce_user_param": "boolean", # requires all openai endpoint requests to have a 'user' param
-    "allowed_routes": "list", # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
-    "key_management_system": "google_kms", # either google_kms or azure_kms
-    "master_key": "string",
-    "database_url": "string",
-    "database_connection_pool_limit": 0, # default 100
-    "database_connection_timeout": 0, # default 60s
-    "database_type": "dynamo_db",
-    "database_args": {
-      "billing_mode": "PROVISIONED_THROUGHPUT",
-      "read_capacity_units": 0,
-      "write_capacity_units": 0,
-      "ssl_verify": true,
-      "region_name": "string",
-      "user_table_name": "LiteLLM_UserTable",
-      "key_table_name": "LiteLLM_VerificationToken",
-      "config_table_name": "LiteLLM_Config",
-      "spend_table_name": "LiteLLM_SpendLogs"
-    },
-    "otel": true,
-    "custom_auth": "string",
-    "max_parallel_requests": 0, # the max parallel requests allowed per deployment 
-    "global_max_parallel_requests": 0, # the max parallel requests allowed on the proxy all up 
-    "infer_model_from_keys": true,
-    "background_health_checks": true,
-    "health_check_interval": 300,
-    "alerting": [
-      "string"
-    ],
-    "alerting_threshold": 0,
-    "use_client_credentials_pass_through_routes" : "boolean", # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints" https://docs.litellm.ai/docs/pass_through/vertex_ai
-  }
-}
 ```
 
 ## Extras
@@ -698,3 +566,53 @@ $ litellm
 ```
 
 
+### Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
+
+Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
+
+LiteLLM Proxy will read your config.yaml from an s3 Bucket or GCS Bucket 
+
+<Tabs>
+<TabItem value="gcs" label="GCS Bucket">
+
+Set the following .env vars 
+```shell
+LITELLM_CONFIG_BUCKET_TYPE = "gcs"                              # set this to "gcs"         
+LITELLM_CONFIG_BUCKET_NAME = "litellm-proxy"                    # your bucket name on GCS
+LITELLM_CONFIG_BUCKET_OBJECT_KEY = "proxy_config.yaml"         # object key on GCS
+```
+
+Start litellm proxy with these env vars - litellm will read your config from GCS 
+
+```shell
+docker run --name litellm-proxy \
+   -e DATABASE_URL=<database_url> \
+   -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
+   -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -e LITELLM_CONFIG_BUCKET_TYPE="gcs" \
+   -p 4000:4000 \
+   ghcr.io/berriai/litellm-database:main-latest --detailed_debug
+```
+
+</TabItem>
+
+<TabItem value="s3" label="s3">
+
+Set the following .env vars 
+```shell
+LITELLM_CONFIG_BUCKET_NAME = "litellm-proxy"                    # your bucket name on s3 
+LITELLM_CONFIG_BUCKET_OBJECT_KEY = "litellm_proxy_config.yaml"  # object key on s3
+```
+
+Start litellm proxy with these env vars - litellm will read your config from s3 
+
+```shell
+docker run --name litellm-proxy \
+   -e DATABASE_URL=<database_url> \
+   -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
+   -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
+   -p 4000:4000 \
+   ghcr.io/berriai/litellm-database:main-latest
+```
+</TabItem>
+</Tabs>

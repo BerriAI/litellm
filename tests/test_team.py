@@ -5,6 +5,35 @@ import asyncio
 import aiohttp
 import time, uuid
 from openai import AsyncOpenAI
+from typing import Optional
+
+
+async def get_user_info(session, get_user, call_user, view_all: Optional[bool] = None):
+    """
+    Make sure only models user has access to are returned
+    """
+    if view_all is True:
+        url = "http://0.0.0.0:4000/user/info"
+    else:
+        url = f"http://0.0.0.0:4000/user/info?user_id={get_user}"
+    headers = {
+        "Authorization": f"Bearer {call_user}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            if call_user != get_user:
+                return status
+            else:
+                print(f"call_user: {call_user}; get_user: {get_user}")
+                raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
 
 
 async def new_user(
@@ -333,7 +362,7 @@ async def test_team_info():
 
         try:
             await get_team_info(session=session, get_team=team_id, call_key=key)
-            pytest.fail(f"Expected call to fail")
+            pytest.fail("Expected call to fail")
         except Exception as e:
             pass
 
@@ -630,3 +659,13 @@ async def test_users_in_team_budget():
             print("got exception, this is expected")
             print(e)
             assert "Budget has been exceeded" in str(e)
+
+        ## Check user info
+        user_info = await get_user_info(session, get_user, call_user="sk-1234")
+
+        assert (
+            user_info["teams"][0]["team_memberships"][0]["litellm_budget_table"][
+                "max_budget"
+            ]
+            == 0.0000001
+        )

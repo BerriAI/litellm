@@ -128,7 +128,7 @@ const Navbar: React.FC<NavbarProps> = ({
           }}
         >
           <Dropdown menu={{ items }}>
-            <Space>{userEmail}</Space>
+            <Space>{userEmail ? userEmail : userRole}</Space>
           </Dropdown>
         </div>
       </div>

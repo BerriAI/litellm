@@ -12,14 +12,14 @@ vLLM Provides an OpenAI compatible endpoints - here's how to call it with LiteLL
 
 In order to use litellm to call a hosted vllm server add the following to your completion call
 
-* `model="openai/<your-vllm-model-name>"` 
+* `model="hosted_vllm/<your-vllm-model-name>"` 
 * `api_base = "your-hosted-vllm-server"`
 
 ```python
 import litellm 
 
 response = litellm.completion(
-            model="openai/facebook/opt-125m", # pass the vllm model name
+            model="hosted_vllm/facebook/opt-125m", # pass the vllm model name
             messages=messages,
             api_base="https://hosted-vllm-api.co",
             temperature=0.2,
@@ -39,7 +39,7 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   model_list:
     - model_name: my-model
       litellm_params:
-        model: openai/facebook/opt-125m  # add openai/ prefix to route as OpenAI provider
+        model: hosted_vllm/facebook/opt-125m  # add hosted_vllm/ prefix to route as OpenAI provider
         api_base: https://hosted-vllm-api.co      # add api base for OpenAI compatible provider
   ```
 

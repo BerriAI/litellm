@@ -5,7 +5,7 @@ import { modelHubCall } from "@/components/networking";
 import ModelHub from "@/components/model_hub";
 
 export default function PublicModelHub() {
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams()!;
   const key = searchParams.get("key");
   const [accessToken, setAccessToken] = useState<string | null>(null);
 

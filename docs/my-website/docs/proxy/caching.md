@@ -4,6 +4,12 @@ import TabItem from '@theme/TabItem';
 # Caching 
 Cache LLM Responses
 
+:::note 
+
+For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
+
+:::
+
 LiteLLM supports:
 - In Memory Cache
 - Redis Cache 
@@ -43,13 +49,13 @@ litellm_settings:
   cache: true 
   cache_params:        # set cache params for redis
     type: redis
-    namespace: "litellm_caching"
+    namespace: "litellm.caching.caching"
 ```
 
 and keys will be stored like:
 
 ```
-litellm_caching:<hash>
+litellm.caching.caching:<hash>
 ```
 
 #### Redis Cluster 
@@ -130,6 +136,7 @@ litellm_settings:
     type: "redis"
     service_name: "mymaster"
     sentinel_nodes: [["localhost", 26379]]
+    sentinel_password: "password" # [OPTIONAL]
 ```
 
 </TabItem>
@@ -143,6 +150,7 @@ You can configure redis sentinel in your .env by setting `REDIS_SENTINEL_NODES` 
 ```env
 REDIS_SENTINEL_NODES='[["localhost", 26379]]'
 REDIS_SERVICE_NAME = "mymaster"
+REDIS_SENTINEL_PASSWORD = "password"
 ```
 
 :::note
@@ -721,7 +729,7 @@ curl http://localhost:4000/v1/chat/completions \
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
     "user_id": "222",
     "metadata": {
         "cache": {
@@ -737,7 +745,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer <YOUR_NEW_KEY>' \
--D '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "bom dia"}]}'
 ```
 
 ### Deleting Cache Keys - `/cache/delete` 

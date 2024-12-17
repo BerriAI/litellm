@@ -82,9 +82,6 @@ export AZURE_API_KEY=""
 
 ### 2. Start the proxy 
 
-<Tabs>
-<TabItem value="config" label="config.yaml">
-
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -94,27 +91,8 @@ model_list:
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env.
 ```
-</TabItem>
-<TabItem value="config-*" label="config.yaml (Entrata ID) use tenant_id, client_id, client_secret">
-
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_version: "2023-05-15"
-      tenant_id: os.environ/AZURE_TENANT_ID
-      client_id: os.environ/AZURE_CLIENT_ID
-      client_secret: os.environ/AZURE_CLIENT_SECRET
-```
-</TabItem>
-
-</Tabs>
 
 ### 3. Test it
-
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -198,6 +176,8 @@ print(response)
 
 | Model Name       | Function Call                          |
 |------------------|----------------------------------------|
+| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
 | gpt-4o-mini            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4o            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4            | `completion('azure/<your deployment name>', messages)`         |
@@ -301,6 +281,78 @@ response = completion(
 )
 ```
 
+## Azure O1 Models
+
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+
+Set `litellm.enable_preview_features = True` to use Azure O1 Models with streaming support. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.enable_preview_features = True # 👈 KEY CHANGE
+
+response = litellm.completion(
+    model="azure/<your deployment name>",
+    messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: o1-mini
+    litellm_params:
+      model: azure/o1-mini
+      api_base: "os.environ/AZURE_API_BASE"
+      api_key: "os.environ/AZURE_API_KEY"
+      api_version: "os.environ/AZURE_API_VERSION"
+
+litellm_settings:
+    enable_preview_features: true # 👈 KEY CHANGE
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it 
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(model="o1-mini", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+],
+stream=True)
+
+for chunk in response:
+    print(chunk)
+```
+</TabItem>
+</Tabs>
+
 ## Azure Instruct Models
 
 Use `model="azure_text/<your-deployment>"`
@@ -359,6 +411,332 @@ response = speech(
     )
 response.stream_to_file(speech_file_path)
 ```
+
+## **Authentication**
+
+
+### Entrata ID - use `azure_ad_token`
+
+This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
+
+Step 1 - Download Azure CLI 
+Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+```shell
+brew update && brew install azure-cli
+```
+Step 2 - Sign in using `az`
+```shell
+az login --output table
+```
+
+Step 3 - Generate azure ad token
+```shell
+az account get-access-token --resource https://cognitiveservices.azure.com
+```
+
+In this step you should see an `accessToken` generated
+```shell
+{
+  "accessToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSIsImtpZCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSJ9",
+  "expiresOn": "2023-11-14 15:50:46.000000",
+  "expires_on": 1700005846,
+  "subscription": "db38de1f-4bb3..",
+  "tenant": "bdfd79b3-8401-47..",
+  "tokenType": "Bearer"
+}
+```
+
+Step 4 - Make litellm.completion call with Azure AD token
+
+Set `azure_ad_token` = `accessToken` from step 3 or set `os.environ['AZURE_AD_TOKEN']`
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+
+```python
+response = litellm.completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token="", 									# your accessToken from step 3 
+    messages = [{"role": "user", "content": "good morning"}],
+)
+
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: os.environ/AZURE_AD_TOKEN
+```
+
+</TabItem>
+</Tabs>
+
+### Entrata ID - use tenant_id, client_id, client_secret
+
+Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      tenant_id: os.environ/AZURE_TENANT_ID
+      client_id: os.environ/AZURE_CLIENT_ID
+      client_secret: os.environ/AZURE_CLIENT_SECRET
+```
+
+Test it 
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Proxy Server
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+### Azure AD Token Refresh - `DefaultAzureCredential`
+
+Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
+
+
+response = completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token_provider=token_provider
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/your-deployment-name
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+
+litellm_settings:
+    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
+</TabItem>
+</Tabs>
+
+
+## **Azure Batches API** 
+
+Just add the azure env vars to your environment. 
+
+```bash
+export AZURE_API_KEY=""
+export AZURE_API_BASE=""
+```
+
+AND use `/azure/*` for the Batches API calls
+
+```bash
+http://0.0.0.0:4000/azure/v1/batches
+```
+### Usage
+
+**Setup**
+
+- Add Azure API Keys to your environment
+
+#### 1. Upload a File
+
+```bash
+curl http://localhost:4000/azure/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@mydata.jsonl"
+```
+
+**Example File**
+
+Note: `model` should be your azure deployment name.
+
+```json
+{"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
+{"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
+{"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
+```
+
+#### 2. Create a batch 
+
+```bash
+curl http://0.0.0.0:4000/azure/v1/batches \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+
+```
+
+#### 3. Retrieve batch
+
+
+```bash
+curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+```
+
+#### 4. Cancel batch 
+
+```bash
+curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123/cancel \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST
+```
+
+#### 5. List Batch
+
+```bash
+curl http://0.0.0.0:4000/v1/batches?limit=2 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json"
+```
+
+### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
+
+
+### [BETA] Loadbalance Multiple Azure Deployments 
+In your config.yaml, set `enable_loadbalancing_on_batch_endpoints: true`
+
+```yaml
+model_list:
+  - model_name: "batch-gpt-4o-mini"
+    litellm_params:
+      model: "azure/gpt-4o-mini"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+    model_info:
+      mode: batch
+
+litellm_settings:
+  enable_loadbalancing_on_batch_endpoints: true # 👈 KEY CHANGE
+```
+
+Note: This works on `{PROXY_BASE_URL}/v1/files` and `{PROXY_BASE_URL}/v1/batches`.
+Note: Response is in the OpenAI-format. 
+
+1. Upload a file 
+
+Just set `model: batch-gpt-4o-mini` in your .jsonl.
+
+```bash
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@mydata.jsonl"
+```
+
+**Example File**
+
+Note: `model` should be your azure deployment name.
+
+```json
+{"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "batch-gpt-4o-mini", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
+{"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "batch-gpt-4o-mini", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
+{"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "batch-gpt-4o-mini", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
+```
+
+Expected Response (OpenAI-compatible)
+
+```bash
+{"id":"file-f0be81f654454113a922da60acb0eea6",...}
+```
+
+2. Create a batch 
+
+```bash
+curl http://0.0.0.0:4000/v1/batches \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-f0be81f654454113a922da60acb0eea6",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h",
+    "model: "batch-gpt-4o-mini"
+  }'
+```
+
+Expected Response: 
+
+```bash
+{"id":"batch_94e43f0a-d805-477d-adf9-bbb9c50910ed",...}
+```
+
+3. Retrieve a batch 
+
+```bash
+curl http://0.0.0.0:4000/v1/batches/batch_94e43f0a-d805-477d-adf9-bbb9c50910ed \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+```
+
+
+Expected Response: 
+
+```
+{"id":"batch_94e43f0a-d805-477d-adf9-bbb9c50910ed",...}
+```
+
+4. List batch
+
+```bash
+curl http://0.0.0.0:4000/v1/batches?limit=2 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json"
+```
+
+Expected Response:
+
+```bash
+{"data":[{"id":"batch_R3V...}
+```
+
 
 ## Advanced
 ### Azure API Load-Balancing
@@ -489,84 +867,42 @@ print("\nTool Choice:\n", tool_calls)
 ```
 
 
-### Authentication with Azure Active Directory Tokens (Microsoft Entra ID)
-This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
+### Spend Tracking for Azure OpenAI Models (PROXY)
 
-Step 1 - Download Azure CLI 
-Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
-```shell
-brew update && brew install azure-cli
-```
-Step 2 - Sign in using `az`
-```shell
-az login --output table
-```
+Set base model for cost tracking azure image-gen call
 
-Step 3 - Generate azure ad token
-```shell
-az account get-access-token --resource https://cognitiveservices.azure.com
-```
-
-In this step you should see an `accessToken` generated
-```shell
-{
-  "accessToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSIsImtpZCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSJ9",
-  "expiresOn": "2023-11-14 15:50:46.000000",
-  "expires_on": 1700005846,
-  "subscription": "db38de1f-4bb3..",
-  "tenant": "bdfd79b3-8401-47..",
-  "tokenType": "Bearer"
-}
-```
-
-Step 4 - Make litellm.completion call with Azure AD token
-
-Set `azure_ad_token` = `accessToken` from step 3 or set `os.environ['AZURE_AD_TOKEN']`
-
-```python
-response = litellm.completion(
-    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
-    api_base = "",                                      # azure api base
-    api_version = "",                                   # azure api version
-    azure_ad_token="", 									# your accessToken from step 3 
-    messages = [{"role": "user", "content": "good morning"}],
-)
-
-```
-### Azure AD Token Refresh
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-
-token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
-
-
-response = completion(
-    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
-    api_base = "",                                      # azure api base
-    api_version = "",                                   # azure api version
-    azure_ad_token_provider=token_provider
-    messages = [{"role": "user", "content": "good morning"}],
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY config.yaml">
+#### Image Generation 
 
 ```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
+model_list: 
+  - model_name: dall-e-3
     litellm_params:
-      model: azure/your-deployment-name
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-
-litellm_settings:
-    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+        model: azure/dall-e-3-test
+        api_version: 2023-06-01-preview
+        api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+        api_key: os.environ/AZURE_API_KEY
+        base_model: dall-e-3 # 👈 set dall-e-3 as base model
+    model_info:
+        mode: image_generation
 ```
 
-</TabItem>
-</Tabs>
+#### Chat Completions / Embeddings
+
+**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
+
+**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
+
+Get the base model name from [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+Example config with `base_model`
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      base_model: azure/gpt-4-1106-preview
+```

@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# 🐳 Docker, Deployment
+# Docker, Deployment
 
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
@@ -24,7 +24,7 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 # It is used to encrypt / decrypt your LLM API Key credentials
 # We recommned - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
-echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
 source .env
 
@@ -124,8 +124,8 @@ WORKDIR /app
 # Copy the configuration file into the container at /app
 COPY config.yaml .
 
-# Make sure your entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x ./docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
@@ -632,7 +632,7 @@ RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
 WORKDIR /app
 
 # Make sure your entrypoint.sh is executable
-RUN chmod +x entrypoint.sh
+RUN chmod +x ./docker/entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp
@@ -684,7 +684,54 @@ docker run ghcr.io/berriai/litellm:main-latest \
 
 Provide an ssl certificate when starting litellm proxy server 
 
-### 3. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
+### 3. Using Http/2 with Hypercorn
+
+Use this if you want to run the proxy with hypercorn to support http/2
+
+Step 1. Build your custom docker image with hypercorn
+
+```shell
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:main-latest
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Copy the configuration file into the container at /app
+COPY config.yaml .
+
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x ./docker/entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# 👉 Key Change: Install hypercorn
+RUN pip install hypercorn
+
+# Override the CMD instruction with your desired command and arguments
+# WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
+# CMD ["--port", "4000", "--config", "config.yaml"]
+
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
+```
+
+Step 2. Pass the `--run_hypercorn` flag when starting the proxy
+
+```shell
+docker run \
+    -v $(pwd)/proxy_config.yaml:/app/config.yaml \
+    -p 4000:4000 \
+    -e LITELLM_LOG="DEBUG"\
+    -e SERVER_ROOT_PATH="/api/v1"\
+    -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
+    -e LITELLM_MASTER_KEY="sk-1234"\
+    your_custom_docker_image \
+    --config /app/config.yaml
+    --run_hypercorn
+```
+
+### 4. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 

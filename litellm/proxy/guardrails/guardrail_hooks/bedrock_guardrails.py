@@ -25,12 +25,12 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -45,6 +45,7 @@ from litellm.types.guardrails import (
     BedrockTextContent,
     GuardrailEventHooks,
 )
+from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -70,7 +71,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def convert_to_bedrock_format(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
-        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
         bedrock_request_content: List[BedrockContentItem] = []
@@ -106,7 +107,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ):
         try:
             from botocore.credentials import Credentials
-        except ImportError as e:
+        except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
@@ -117,7 +118,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         aws_role_name = self.optional_params.pop("aws_role_name", None)
         aws_session_name = self.optional_params.pop("aws_session_name", None)
         aws_profile_name = self.optional_params.pop("aws_profile_name", None)
-        aws_bedrock_runtime_endpoint = self.optional_params.pop(
+        self.optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = self.optional_params.pop(
@@ -170,7 +171,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
-        except ImportError as e:
+        except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
@@ -214,10 +215,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.url,
             prepared_request.headers,
         )
-        _json_data = json.dumps(request_data)  # type: ignore
+
         response = await self.async_handler.post(
             url=prepared_request.url,
-            json=request_data,  # type: ignore
+            data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
         )
         verbose_proxy_logger.debug("Bedrock AI response: %s", response.text)

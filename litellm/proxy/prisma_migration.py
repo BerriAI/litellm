@@ -47,6 +47,11 @@ retry_count = 0
 max_retries = 3
 exit_code = 1
 
+disable_schema_update = os.getenv("DISABLE_SCHEMA_UPDATE")
+if disable_schema_update is not None and disable_schema_update == "True":
+    print("Skipping schema update...")  # noqa
+    exit(0)
+
 while retry_count < max_retries and exit_code != 0:
     retry_count += 1
     print(f"Attempt {retry_count}...")  # noqa

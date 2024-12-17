@@ -45,5 +45,5 @@ async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
             max_budget=10,
             budget_duration="1d",
         )
-    except Exception as e:
+    except Exception:
         raise Exception("Failed custom auth")

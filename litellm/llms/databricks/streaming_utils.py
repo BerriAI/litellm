@@ -1,7 +1,8 @@
 import json
-from typing import Optional
+from typing import List, Optional
 
 import litellm
+from litellm import verbose_logger
 from litellm.types.llms.openai import (
     ChatCompletionDeltaChunk,
     ChatCompletionResponseMessage,
@@ -9,7 +10,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
 
 
 class ModelResponseIterator:
@@ -54,10 +55,8 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            if hasattr(processed_chunk, "usage") and isinstance(
-                processed_chunk.usage, litellm.Usage
-            ):
-                usage_chunk: litellm.Usage = processed_chunk.usage
+            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
+            if usage_chunk is not None:
 
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=usage_chunk.prompt_tokens,
@@ -82,6 +81,8 @@ class ModelResponseIterator:
         return self
 
     def __next__(self):
+        if not hasattr(self, "response_iterator"):
+            self.response_iterator = self.streaming_response
         try:
             chunk = self.response_iterator.__next__()
         except StopIteration:
@@ -107,7 +108,17 @@ class ModelResponseIterator:
         except StopIteration:
             raise StopIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            verbose_logger.debug(
+                f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here."
+            )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
 
     # Async iterator
     def __aiter__(self):
@@ -120,6 +131,8 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        except Exception as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
         try:
@@ -142,4 +155,14 @@ class ModelResponseIterator:
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            verbose_logger.debug(
+                f"Error parsing chunk: {e},\nReceived chunk: {chunk}. Defaulting to empty chunk here."
+            )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )

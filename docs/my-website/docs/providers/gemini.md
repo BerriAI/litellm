@@ -4,11 +4,24 @@ import TabItem from '@theme/TabItem';
 
 # Gemini - Google AI Studio
 
-## Pre-requisites
-* `pip install -q google-generativeai`
-* Get API Key - https://aistudio.google.com/
+| Property | Details |
+|-------|-------|
+| Description | Google AI Studio is a fully-managed AI development platform for building and using generative AI. |
+| Provider Route on LiteLLM | `gemini/` |
+| Provider Doc | [Google AI Studio ↗](https://ai.google.dev/aistudio) |
+| API Endpoint for Provider | https://generativelanguage.googleapis.com |
+| Supported Endpoints | `/chat/completions`, `/embeddings` |
 
-# Gemini-Pro
+<br />
+
+
+## API Keys
+
+```python
+import os
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+```
+
 ## Sample Usage
 ```python
 from litellm import completion
@@ -103,7 +116,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -174,7 +187,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -324,7 +337,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}

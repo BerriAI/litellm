@@ -45,7 +45,7 @@ def pick_cheapest_chat_model_from_llm_provider(custom_llm_provider: str):
             model_info = litellm.get_model_info(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-        except:
+        except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue

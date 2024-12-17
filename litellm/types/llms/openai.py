@@ -19,6 +19,14 @@ from openai.types.beta.threads.message import Message as OpenAIMessage
 from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
+from openai.types.chat.chat_completion_content_part_input_audio_param import (
+    ChatCompletionContentPartInputAudioParam,
+)
+from openai.types.chat.chat_completion_modality import ChatCompletionModality
+from openai.types.chat.chat_completion_prediction_content_param import (
+    ChatCompletionPredictionContentParam,
+)
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
@@ -293,6 +301,25 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+BatchJobStatus = Literal[
+    "validating",
+    "failed",
+    "in_progress",
+    "finalizing",
+    "completed",
+    "expired",
+    "cancelling",
+    "cancelled",
+]
+
+
+class ChatCompletionAudioDelta(TypedDict, total=False):
+    data: str
+    transcript: str
+    expires_at: int
+    id: str
+
+
 class ChatCompletionToolCallFunctionChunk(TypedDict, total=False):
     name: Optional[str]
     arguments: str
@@ -343,11 +370,33 @@ class ChatCompletionImageObject(TypedDict):
     image_url: Union[str, ChatCompletionImageUrlObject]
 
 
+class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
+    pass
+
+
+OpenAIMessageContentListBlock = Union[
+    ChatCompletionTextObject,
+    ChatCompletionImageObject,
+    ChatCompletionAudioObject,
+]
+
+OpenAIMessageContent = Union[
+    str,
+    Iterable[OpenAIMessageContentListBlock],
+]
+
+# The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
+AllPromptValues = Union[str, List[str], Iterable[int], Iterable[Iterable[int]], None]
+
+
 class OpenAIChatCompletionUserMessage(TypedDict):
     role: Literal["user"]
-    content: Union[
-        str, Iterable[Union[ChatCompletionTextObject, ChatCompletionImageObject]]
-    ]
+    content: OpenAIMessageContent
+
+
+class OpenAITextCompletionUserMessage(TypedDict):
+    role: Literal["user"]
+    content: AllPromptValues
 
 
 class ChatCompletionUserMessage(OpenAIChatCompletionUserMessage, total=False):
@@ -389,6 +438,12 @@ class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False
     cache_control: ChatCompletionCachedContent
 
 
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+
 AllMessageValues = Union[
     ChatCompletionUserMessage,
     ChatCompletionAssistantMessage,
@@ -420,9 +475,13 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     parameters: dict
 
 
-class ChatCompletionToolParam(TypedDict):
-    type: Literal["function"]
+class OpenAIChatCompletionToolParam(TypedDict):
+    type: Union[Literal["function"], str]
     function: ChatCompletionToolParamFunctionChunk
+
+
+class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
+    cache_control: ChatCompletionCachedContent
 
 
 class Function(TypedDict, total=False):
@@ -469,11 +528,16 @@ class ChatCompletionDeltaChunk(TypedDict, total=False):
     role: str
 
 
+ChatCompletionAssistantContentValue = (
+    str  # keep as var, used in stream_chunk_builder as well
+)
+
+
 class ChatCompletionResponseMessage(TypedDict, total=False):
-    content: Optional[str]
-    tool_calls: List[ChatCompletionToolCallChunk]
+    content: Optional[ChatCompletionAssistantContentValue]
+    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
-    function_call: ChatCompletionToolCallFunctionChunk
+    function_call: Optional[ChatCompletionToolCallFunctionChunk]
 
 
 class ChatCompletionUsageBlock(TypedDict):

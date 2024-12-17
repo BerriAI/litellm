@@ -76,13 +76,33 @@ const CreateKeyPage = () => {
   });
 
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
   const token = getCookie('token');
 
-  const [page, setPage] = useState("api-keys");
+  // Get page from URL, default to 'api-keys' if not present
+  const [page, setPage] = useState(() => {
+    return searchParams.get('page') || 'api-keys';
+  });
+
+  // Custom setPage function that updates URL
+  const updatePage = (newPage: string) => {
+    // Update URL without full page reload
+    const newSearchParams = new URLSearchParams(searchParams);
+    newSearchParams.set('page', newPage);
+    
+    // Use Next.js router to update URL
+    window.history.pushState(
+      null, 
+      '', 
+      `?${newSearchParams.toString()}`
+    );
+    
+    setPage(newPage);
+  };
+
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
@@ -162,10 +182,10 @@ const CreateKeyPage = () => {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-8">
-                <Sidebar
-                setPage={setPage}
+              <Sidebar
+                setPage={updatePage}
                 userRole={userRole}
-                defaultSelectedKey={null}
+                defaultSelectedKey={page}
               />            
           </div>
 
@@ -279,7 +299,7 @@ const CreateKeyPage = () => {
             />
           )}
         </div>
-      </div>         
+      </div>
         )
       }
       

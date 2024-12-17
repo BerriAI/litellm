@@ -31,14 +31,16 @@ from litellm import completion
 os.environ["WATSONX_URL"] = ""
 os.environ["WATSONX_APIKEY"] = ""
 
+## Call WATSONX `/text/chat` endpoint - supports function calling
 response = completion(
-  model="watsonx/ibm/granite-13b-chat-v2",
+  model="watsonx/meta-llama/llama-3-1-8b-instruct",
   messages=[{ "content": "what is your favorite colour?","role": "user"}],
   project_id="<my-project-id>" # or pass with os.environ["WATSONX_PROJECT_ID"]
 )
 
+## Call WATSONX `/text/generation` endpoint - not all models support /chat route. 
 response = completion(
-  model="watsonx/meta-llama/llama-3-8b-instruct",
+  model="watsonx/ibm/granite-13b-chat-v2",
   messages=[{ "content": "what is your favorite colour?","role": "user"}],
   project_id="<my-project-id>"
 )
@@ -54,7 +56,7 @@ os.environ["WATSONX_APIKEY"] = ""
 os.environ["WATSONX_PROJECT_ID"] = ""
 
 response = completion(
-  model="watsonx/ibm/granite-13b-chat-v2",
+  model="watsonx/meta-llama/llama-3-1-8b-instruct",
   messages=[{ "content": "what is your favorite colour?","role": "user"}],
   stream=True
 )

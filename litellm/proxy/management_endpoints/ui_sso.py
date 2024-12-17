@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.proxy._types import (
     LitellmUserRoles,
     NewUserRequest,
@@ -23,6 +24,7 @@ from litellm.proxy._types import (
     SSOUserDefinedValues,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import _has_user_setup_sso
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -30,6 +32,10 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     show_missing_vars_in_env,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.sso_helper_utils import (
+    check_is_admin_only_access,
+    has_admin_ui_access,
+)
 from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
@@ -41,7 +47,7 @@ router = APIRouter()
 
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request):
+async def google_login(request: Request):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
@@ -66,7 +72,7 @@ async def google_login(request: Request):
         or google_client_id is not None
         or generic_client_id is not None
     ):
-        if premium_user != True:
+        if premium_user is not True:
             raise ProxyException(
                 message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
@@ -216,7 +222,7 @@ async def google_login(request: Request):
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
-async def auth_callback(request: Request):
+async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
@@ -506,7 +512,7 @@ async def auth_callback(request: Request):
                     result_openid=result,
                     user_defined_values=user_defined_values,
                 )
-    except Exception as e:
+    except Exception:
         pass
 
     if user_defined_values is None:
@@ -544,17 +550,16 @@ async def auth_callback(request: Request):
         f"user_role: {user_role}; ui_access_mode: {ui_access_mode}"
     )
     ## CHECK IF ROLE ALLOWED TO USE PROXY ##
-    if ui_access_mode == "admin_only" and (
-        user_role != LitellmUserRoles.PROXY_ADMIN.value
-        or user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-    ):
-        verbose_proxy_logger.debug("EXCEPTION RAISED")
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
-            },
-        )
+    is_admin_only_access = check_is_admin_only_access(ui_access_mode)
+    if is_admin_only_access:
+        has_access = has_admin_ui_access(user_role)
+        if not has_access:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
+                },
+            )
 
     import jwt
 
@@ -636,11 +641,15 @@ async def insert_sso_user(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_ui_settings(request: Request):
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings, proxy_state
 
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
-
+    _is_sso_enabled = _has_user_setup_sso()
+    disable_expensive_db_queries = (
+        proxy_state.get_proxy_state_variable("spend_logs_row_count")
+        > MAX_SPENDLOG_ROWS_TO_QUERY
+    )
     default_team_disabled = general_settings.get("default_team_disabled", False)
     if "PROXY_DEFAULT_TEAM_DISABLED" in os.environ:
         if os.environ["PROXY_DEFAULT_TEAM_DISABLED"].lower() == "true":
@@ -650,4 +659,9 @@ async def get_ui_settings(request: Request):
         "PROXY_BASE_URL": _proxy_base_url,
         "PROXY_LOGOUT_URL": _logout_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
+        "SSO_ENABLED": _is_sso_enabled,
+        "NUM_SPEND_LOGS_ROWS": proxy_state.get_proxy_state_variable(
+            "spend_logs_row_count"
+        ),
+        "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }

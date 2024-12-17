@@ -8,16 +8,16 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import json
 import os
-from typing import Optional
+from typing import Optional, cast
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable
+from litellm.proxy._types import JWKKeyValue, JWTKeyItem, LiteLLM_JWTAuth
 from litellm.proxy.utils import PrismaClient
 
 
@@ -36,16 +36,19 @@ class JWTHandler:
         self,
     ) -> None:
         self.http_handler = HTTPHandler()
+        self.leeway = 0
 
     def update_environment(
         self,
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         litellm_jwtauth: LiteLLM_JWTAuth,
+        leeway: int = 0,
     ) -> None:
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
+        self.leeway = leeway
 
     def is_jwt(self, token: str):
         parts = token.split(".")
@@ -174,7 +177,7 @@ class JWTHandler:
 
             response_json = response.json()
             if "keys" in response_json:
-                keys = response.json()["keys"]
+                keys: JWKKeyValue = response.json()["keys"]
             else:
                 keys = response_json
 
@@ -186,27 +189,35 @@ class JWTHandler:
         else:
             keys = cached_keys
 
-        public_key: Optional[dict] = None
-
-        if len(keys) == 1:
-            if kid is None or keys["kid"] == kid:
-                public_key = keys[0]
-        elif len(keys) > 1:
-            for key in keys:
-                if kid is not None and key == kid:
-                    public_key = keys[key]
-                elif (
-                    kid is not None
-                    and isinstance(key, dict)
-                    and key.get("kid", None) is not None
-                    and key["kid"] == kid
-                ):
-                    public_key = key
-
+        public_key = self.parse_keys(keys=keys, kid=kid)
         if public_key is None:
             raise Exception(
                 f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}, len(keys)={len(keys)}"
             )
+        return cast(dict, public_key)
+
+    def parse_keys(self, keys: JWKKeyValue, kid: Optional[str]) -> Optional[JWTKeyItem]:
+        public_key: Optional[JWTKeyItem] = None
+        if len(keys) == 1:
+            if isinstance(keys, dict) and (keys.get("kid", None) == kid or kid is None):
+                public_key = keys
+            elif isinstance(keys, list) and (
+                keys[0].get("kid", None) == kid or kid is None
+            ):
+                public_key = keys[0]
+        elif len(keys) > 1:
+            for key in keys:
+                if isinstance(key, dict):
+                    key_kid = key.get("kid", None)
+                else:
+                    key_kid = None
+                if (
+                    kid is not None
+                    and isinstance(key, dict)
+                    and key_kid is not None
+                    and key_kid == kid
+                ):
+                    public_key = key
 
         return public_key
 
@@ -263,6 +274,7 @@ class JWTHandler:
                     algorithms=algorithms,
                     options=decode_options,
                     audience=audience,
+                    leeway=self.leeway,  # allow testing of expired tokens
                 )
                 return payload
 

@@ -151,6 +151,7 @@ enum Providers {
   Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
+  xAI = "xAI",
 }
 
 const provider_map: Record<string, string> = {
@@ -166,6 +167,7 @@ const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  xAI: "xai",
   Deepseek: "deepseek",
   Ollama: "ollama",
 
@@ -342,6 +344,132 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
+
+
+  const updateModelMetrics = async (
+    modelGroup: string | null,
+    startTime: Date | undefined,
+    endTime: Date | undefined,
+  ) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
+      return;
+    }
+    console.log(
+      "inside updateModelMetrics - startTime:",
+      startTime,
+      "endTime:",
+      endTime
+    );
+    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
+
+    let selected_token = selectedAPIKey?.token;
+    if (selected_token === undefined) {
+      selected_token = null;
+    }
+
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
+    // make startTime and endTime to last hour of the day
+    startTime.setHours(0);
+    startTime.setMinutes(0);
+    startTime.setSeconds(0);
+
+    endTime.setHours(23);
+    endTime.setMinutes(59);
+    endTime.setSeconds(59);
+
+
+    try {
+      const modelMetricsResponse = await modelMetricsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+      console.log("Model metrics response:", modelMetricsResponse);
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const streamingModelMetricsResponse = await streamingModelMetricsCall(
+        accessToken,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      );
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setStreamingModelMetrics(streamingModelMetricsResponse.data);
+      setStreamingModelMetricsCategories(
+        streamingModelMetricsResponse.all_api_bases
+      );
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+
+      console.log("slowResponses:", slowResponses);
+
+      setSlowResponsesData(slowResponses);
+
+
+      if (modelGroup) {
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        );
+
+        setGlobalExceptionData(dailyExceptions);
+
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        )
+
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+      }
+
+      
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  };
+
 
   useEffect(() => {
     updateModelMetrics(
@@ -977,131 +1105,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       setHealthCheckResponse("Error running health check");
     }
   };
-
-  const updateModelMetrics = async (
-    modelGroup: string | null,
-    startTime: Date | undefined,
-    endTime: Date | undefined,
-  ) => {
-    console.log("Updating model metrics for group:", modelGroup);
-    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
-      return;
-    }
-    console.log(
-      "inside updateModelMetrics - startTime:",
-      startTime,
-      "endTime:",
-      endTime
-    );
-    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
-
-    let selected_token = selectedAPIKey?.token;
-    if (selected_token === undefined) {
-      selected_token = null;
-    }
-
-    let selected_customer = selectedCustomer;
-    if (selected_customer === undefined) {
-      selected_customer = null;
-    }
-
-    // make startTime and endTime to last hour of the day
-    startTime.setHours(0);
-    startTime.setMinutes(0);
-    startTime.setSeconds(0);
-
-    endTime.setHours(23);
-    endTime.setMinutes(59);
-    endTime.setSeconds(59);
-
-
-    try {
-      const modelMetricsResponse = await modelMetricsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-      console.log("Model metrics response:", modelMetricsResponse);
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setModelMetrics(modelMetricsResponse.data);
-      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
-
-      const streamingModelMetricsResponse = await streamingModelMetricsCall(
-        accessToken,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString()
-      );
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setStreamingModelMetrics(streamingModelMetricsResponse.data);
-      setStreamingModelMetricsCategories(
-        streamingModelMetricsResponse.all_api_bases
-      );
-
-      const modelExceptionsResponse = await modelExceptionsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-      console.log("Model exceptions response:", modelExceptionsResponse);
-      setModelExceptions(modelExceptionsResponse.data);
-      setAllExceptions(modelExceptionsResponse.exception_types);
-
-      const slowResponses = await modelMetricsSlowResponsesCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-
-      console.log("slowResponses:", slowResponses);
-
-      setSlowResponsesData(slowResponses);
-
-
-      if (modelGroup) {
-        const dailyExceptions = await adminGlobalActivityExceptions(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        );
-  
-        setGlobalExceptionData(dailyExceptions);
-  
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        )
-  
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-
-      }
-
-      
-    } catch (error) {
-      console.error("Failed to fetch model metrics", error);
-    }
-  };
-
 
   const FilterByContent = (
       <div >

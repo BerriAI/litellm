@@ -1,6 +1,7 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.4.0 # openai + http req.
-openai==1.45.0 # openai req. 
+httpx==0.27.0 # Pin Httpx dependency
+openai==1.55.3  # openai req. 
 fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.0 # server dep
@@ -21,7 +22,7 @@ prometheus_client==0.20.0 # for /metrics endpoint on proxy
 orjson==3.9.15 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
 fastapi-sso==0.10.0 # admin UI, SSO
-pyjwt[crypto]==2.8.0
+pyjwt[crypto]==2.9.0
 python-multipart==0.0.9 # admin UI
 Pillow==10.3.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
@@ -29,6 +30,7 @@ azure-identity==1.16.1 # for azure content safety
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
+sentry_sdk==2.2.1 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==42.0.7
 
@@ -45,4 +47,5 @@ aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 pydantic==2.7.1 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
+websockets==10.4 # for realtime API
 ####

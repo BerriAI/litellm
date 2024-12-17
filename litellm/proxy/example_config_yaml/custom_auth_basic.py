@@ -10,5 +10,5 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
             user_id="best-user-id-ever",
             team_id="best-team-id-ever",
         )
-    except:
+    except Exception:
         raise Exception
