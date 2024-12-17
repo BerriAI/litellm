@@ -1083,6 +1083,7 @@ from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.openai.chat.o1_transformation import (
