@@ -6369,7 +6369,7 @@ class ProviderConfigManager:
     ) -> BaseEmbeddingConfig:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
-        return litellm.VoyageEmbeddingConfig()
+        raise ValueError(f"Provider {provider} does not support embedding config")
 
 
 def get_end_user_id_for_cost_tracking(
