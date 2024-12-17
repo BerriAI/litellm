@@ -143,7 +143,7 @@ curl "https://bedrock-runtime.us-west-2.amazonaws.com/guardrail/guardrailIdentif
 ### **Example 3: Query Knowledge Base**
 
 ```bash
-curl -X POST "http://0.0.0.0:4000/bedrock/agents/knowledgebases/{knowledgeBaseId}/retrieve" \
+curl -X POST "http://0.0.0.0:4000/bedrock/knowledgebases/{knowledgeBaseId}/retrieve" \
 -H 'Authorization: Bearer sk-anything' \
 -H 'Content-Type: application/json' \
 -d '{
