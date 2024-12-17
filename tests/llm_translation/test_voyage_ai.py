@@ -28,5 +28,7 @@ def test_voyage_ai_embedding_extra_params():
     response = litellm.embedding(
         model="voyage/voyage-3-lite",
         input=["a"],
+        dimensions=512,
+        input_type="document",
     )
     print(response)
