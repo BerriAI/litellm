@@ -1903,10 +1903,11 @@ def test_ollama_image():
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
+        data_json = json.loads(kwargs["data"])
         mock_response.json.return_value = {
             # return the image in the response so that it can be tested
             # against the original
-            "response": kwargs["json"]["images"]
+            "response": data_json["images"]
         }
         return mock_response
 
@@ -1934,9 +1935,10 @@ def test_ollama_image():
         [datauri_base64_data, datauri_base64_data],
     ]
 
+    client = HTTPHandler()
     for test in tests:
         try:
-            with patch("requests.post", side_effect=mock_post):
+            with patch.object(client, "post", side_effect=mock_post):
                 response = completion(
                     model="ollama/llava",
                     messages=[
@@ -1951,6 +1953,7 @@ def test_ollama_image():
                             ],
                         }
                     ],
+                    client=client,
                 )
                 if not test[1]:
                     # the conversion process may not always generate the same image,

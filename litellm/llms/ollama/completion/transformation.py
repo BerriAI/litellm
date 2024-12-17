@@ -28,7 +28,7 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
-from ..common_utils import OllamaError
+from ..common_utils import OllamaError, _convert_image
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -346,7 +346,9 @@ class OllamaConfig(BaseConfig):
         if format is not None:
             data["format"] = format
         if images is not None:
-            data["images"] = [convert_to_ollama_image(image) for image in images]
+            data["images"] = [
+                _convert_image(convert_to_ollama_image(image)) for image in images
+            ]
 
         return data
 
