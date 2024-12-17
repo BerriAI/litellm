@@ -350,32 +350,54 @@ def _select_model_name_for_cost_calc(
     completion_response: Union[BaseModel, dict, str],
     base_model: Optional[str] = None,
     custom_pricing: Optional[bool] = None,
+    custom_llm_provider: Optional[str] = None,
 ) -> Optional[str]:
     """
     1. If custom pricing is true, return received model name
     2. If base_model is set (e.g. for azure models), return that
     3. If completion response has model set return that
+    4. Check if compl
     4. If model is passed in return that
     """
+    return_model: Optional[str] = None
     if custom_pricing is True:
-        return model
+        return_model = model
 
     if base_model is not None:
-        return base_model
-    return_model = model
-    if isinstance(completion_response, str):
-        return return_model
+        return_model = base_model
 
-    elif return_model is None and hasattr(completion_response, "get"):
-        return_model = completion_response.get("model", "")  # type: ignore
-    hidden_params = getattr(completion_response, "_hidden_params", None)
+    completion_response_model: Optional[str] = None
+    if isinstance(completion_response, BaseModel):
+        completion_response_model = getattr(completion_response, "model", None)
+        hidden_params = getattr(completion_response, "_hidden_params", None)
+        if completion_response_model is None and hidden_params is not None:
+            if (
+                hidden_params.get("model", None) is not None
+                and len(hidden_params["model"]) > 0
+            ):
+                return_model = hidden_params.get("model", model)
+    elif isinstance(completion_response, dict):
+        completion_response_model = completion_response.get("model", None)
 
-    if hidden_params is not None:
-        if (
-            hidden_params.get("model", None) is not None
-            and len(hidden_params["model"]) > 0
-        ):
-            return_model = hidden_params.get("model", model)
+    if return_model is None and completion_response_model is not None:
+        return_model = completion_response_model
+
+    if return_model is None and model is not None:
+        return_model = model
+    elif model is not None and custom_llm_provider is None:
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        except Exception as e:
+            verbose_logger.debug(
+                f"litellm.cost_calculator.py::_select_model_name_for_cost_calc() - Error inferring custom_llm_provider - {str(e)}"
+            )
+            custom_llm_provider = None
+    if (
+        return_model is not None
+        and custom_llm_provider is not None
+        and not return_model.startswith(custom_llm_provider)
+    ):  # add provider prefix if not already present, to match model_cost
+        return_model = f"{custom_llm_provider}/{return_model}"
 
     return return_model
 

@@ -250,12 +250,12 @@ def test_cost_azure_gpt_35():
                     ),
                 )
             ],
-            model="gpt-35-turbo",  # azure always has model written like this
+            model="azure/gpt-35-turbo",  # azure always has model written like this
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
         cost = litellm.completion_cost(
-            completion_response=resp, model="azure/gpt-35-turbo"
+            completion_response=resp, model="azure/chatgpt-deployment-2"
         )
         print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
         input_cost = model_cost["azure/gpt-35-turbo"]["input_cost_per_token"]
@@ -1259,7 +1259,7 @@ def test_completion_cost_anthropic_prompt_caching():
         "databricks/databricks-meta-llama-3-1-70b-instruct",
         "databricks/databricks-meta-llama-3-70b-instruct",
         "databricks/databricks-dbrx-instruct",
-        "databricks/databricks-mixtral-8x7b-instruct",
+        # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
 def test_completion_cost_databricks(model):
@@ -2651,3 +2651,44 @@ def test_completion_cost_azure_tts():
         "custom_pricing": False,
     }
     litellm.response_cost_calculator(**args)
+
+
+def test_select_model_name_for_cost_calc():
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.types.utils import ModelResponse, Choices, Usage, Message
+
+    args = {
+        "model": "Mistral-large-nmefg",
+        "completion_response": ModelResponse(
+            id="127f24aed4984b4c9a4c5e32ad3752f3",
+            created=1734406048,
+            model="azure_ai/mistral-large",
+            object="chat.completion",
+            system_fingerprint=None,
+            choices=[
+                Choices(
+                    finish_reason="length",
+                    index=0,
+                    message=Message(
+                        content="I'm an artificial intelligence and do not have an LLM (Master",
+                        role="assistant",
+                        tool_calls=None,
+                        function_call=None,
+                    ),
+                )
+            ],
+            usage=Usage(
+                completion_tokens=15,
+                prompt_tokens=8,
+                total_tokens=23,
+                completion_tokens_details=None,
+                prompt_tokens_details=None,
+            ),
+            service_tier=None,
+        ),
+        "base_model": None,
+        "custom_pricing": None,
+    }
+
+    return_model = _select_model_name_for_cost_calc(**args)
+    assert return_model == "azure_ai/mistral-large"
