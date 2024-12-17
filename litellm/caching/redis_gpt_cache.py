@@ -15,7 +15,8 @@ from gptcache.similarity_evaluation import SbertCrossencoderEvaluation
 from langchain_community.cache import GPTCache
 from langchain.embeddings.base import Embeddings
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from .caching import BaseCache, print_verbose
+from litellm._logging import print_verbose
+from .base_cache import BaseCache
 import uuid
 
 class BudServeMemoryCacheEviction(MemoryCacheEviction):

@@ -200,7 +200,6 @@ from .types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from .types.router import LiteLLM_Params
-from .redis_gpt_cache import RedisGPTCache
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
