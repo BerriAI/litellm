@@ -5,7 +5,17 @@ import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple, cast
+from typing import (
+    Any,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    cast,
+    overload,
+)
 
 from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -2459,7 +2469,7 @@ def get_user_message_block_or_continue_message(
     if content_block is None or (
         user_continue_message is None and litellm.modify_params is False
     ):
-        return message
+        return skip_empty_text_blocks(message=message)
 
     # Handle string case
     if isinstance(content_block, str):
@@ -2525,9 +2535,40 @@ def return_assistant_continue_message(
         return DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
 
+def _skip_empty_dict_blocks(blocks: List[dict]) -> List[dict]:
+    """
+    Filter out empty text blocks from a list of dictionaries.
+
+    Args:
+        blocks: List of dictionaries representing message content blocks
+
+    Returns:
+        Filtered list of non-empty text blocks
+    """
+    return [
+        item
+        for item in blocks
+        if not (item.get("type") == "text" and not item.get("text", "").strip())
+    ]
+
+
+@overload
 def skip_empty_text_blocks(
     message: ChatCompletionAssistantMessage,
 ) -> ChatCompletionAssistantMessage:
+    pass
+
+
+@overload
+def skip_empty_text_blocks(
+    message: ChatCompletionUserMessage,
+) -> ChatCompletionUserMessage:
+    pass
+
+
+def skip_empty_text_blocks(
+    message: Union[ChatCompletionAssistantMessage, ChatCompletionUserMessage],
+) -> Union[ChatCompletionAssistantMessage, ChatCompletionUserMessage]:
     """
     Skips empty text blocks in message content text blocks.
 
@@ -2540,19 +2581,36 @@ def skip_empty_text_blocks(
         isinstance(content_block, str)
         and not content_block.strip()
         and is_non_content_values_set(message)
+        and message["role"] == "assistant"
     ):
         modified_message = message.copy()
-        modified_message["content"] = None
+        modified_message["content"] = None  # user message content cannot be None
         return modified_message
     elif isinstance(content_block, list):
-        modified_content_block = [
-            item
-            for item in content_block
-            if not (item["type"] == "text" and not item["text"].strip())
-        ]
-        modified_message = message.copy()
-        modified_message["content"] = modified_content_block
-        return modified_message
+        modified_content_block = _skip_empty_dict_blocks(
+            cast(List[dict], content_block)
+        )
+
+        # If no content remains and it's an assistant message, set content to None
+        if not modified_content_block and message["role"] == "assistant":
+            modified_message = message.copy()
+            modified_message["content"] = None
+            return modified_message
+
+        modified_message_alt = message.copy()
+
+        # Type-specific casting based on message role
+        if message["role"] == "assistant":
+            modified_message_alt["content"] = cast(  # type: ignore
+                Optional[List[OpenAIMessageContentListBlock]],
+                modified_content_block or None,
+            )
+        elif message["role"] == "user" and modified_content_block is not None:
+            modified_message_alt["content"] = cast(  # type: ignore
+                Optional[List[ChatCompletionTextObject]], modified_content_block
+            )
+
+        return modified_message_alt
 
     return message
 

@@ -3978,3 +3978,13 @@ def test_streaming_tool_calls_valid_json_str(model):
     for k, v in tool_call_id_arg_map.items():
         print("k={}, v={}".format(k, v))
         json.loads(v)  # valid json str
+
+
+def test_streaming_api_base():
+    litellm.set_verbose = False
+    stream = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+    )
+    assert "https://api.openai.com" in stream._hidden_params["api_base"]
