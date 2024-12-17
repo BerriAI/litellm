@@ -125,7 +125,7 @@ def is_port_in_use(port):
 )
 @click.option(
     "--request_timeout",
-    default=6000,
+    default=None,
     type=int,
     help="Set timeout in seconds for completion calls",
 )
