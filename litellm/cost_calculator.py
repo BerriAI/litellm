@@ -111,6 +111,7 @@ def cost_per_token(  # noqa: PLR0915
     usage_object: Optional[Usage] = None,  # just read the usage object if provided
     ### CALL TYPE ###
     call_type: CallTypesLiteral = "completion",
+    audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -236,6 +237,12 @@ def cost_per_token(  # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
         )
+    elif call_type == "atranscription" or call_type == "transcription":
+        return openai_cost_per_second(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            duration=audio_transcription_file_duration,
+        )
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
@@ -261,13 +268,7 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        openai_cost_route = openai_cost_router(call_type=CallTypes(call_type))
-        if openai_cost_route == "cost_per_token":
-            return openai_cost_per_token(model=model, usage=usage_block)
-        elif openai_cost_route == "cost_per_second":
-            return openai_cost_per_second(
-                model=model, usage=usage_block, response_time_ms=response_time_ms
-            )
+        return openai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -484,6 +485,7 @@ def completion_cost(  # noqa: PLR0915
         completion_characters: Optional[int] = None
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
+        audio_transcription_file_duration: float = 0.0
         cost_per_token_usage_object: Optional[Usage] = _get_usage_object(
             completion_response=completion_response
         )
@@ -633,6 +635,13 @@ def completion_cost(  # noqa: PLR0915
         ):
             prompt_characters = litellm.utils._count_characters(text=prompt)
         elif (
+            call_type == CallTypes.atranscription.value
+            or call_type == CallTypes.transcription.value
+        ):
+            audio_transcription_file_duration = getattr(
+                completion_response, "duration", 0.0
+            )
+        elif (
             call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
         ):
             if completion_response is not None and isinstance(
@@ -708,6 +717,7 @@ def completion_cost(  # noqa: PLR0915
             cache_read_input_tokens=cache_read_input_tokens,
             usage_object=cost_per_token_usage_object,
             call_type=call_type,
+            audio_transcription_file_duration=audio_transcription_file_duration,
         )
         _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
@@ -814,3 +824,11 @@ def rerank_cost(
         )
     except Exception as e:
         raise e
+
+
+def transcription_cost(
+    model: str, custom_llm_provider: Optional[str], duration: float
+) -> Tuple[float, float]:
+    return openai_cost_per_second(
+        model=model, custom_llm_provider=custom_llm_provider, duration=duration
+    )

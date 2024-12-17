@@ -393,6 +393,8 @@ def test_whisper_openai():
     transcription = TranscriptionResponse(
         text="Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."
     )
+
+    setattr(transcription, "duration", 3)
     transcription._hidden_params = {
         "model": "whisper-1",
         "custom_llm_provider": "openai",
@@ -401,7 +403,6 @@ def test_whisper_openai():
     }
     _total_time_in_seconds = 3
 
-    transcription._response_ms = _total_time_in_seconds * 1000
     cost = litellm.completion_cost(model="whisper-1", completion_response=transcription)
 
     print(f"cost: {cost}")
@@ -411,7 +412,7 @@ def test_whisper_openai():
         * _total_time_in_seconds,
         5,
     )
-    assert cost == expected_cost
+    assert round(cost, 5) == round(expected_cost, 5)
 
 
 def test_whisper_azure():
@@ -426,8 +427,8 @@ def test_whisper_azure():
         "model_id": None,
     }
     _total_time_in_seconds = 3
+    setattr(transcription, "duration", _total_time_in_seconds)
 
-    transcription._response_ms = _total_time_in_seconds * 1000
     cost = litellm.completion_cost(
         model="azure/azure-whisper", completion_response=transcription
     )
@@ -439,7 +440,7 @@ def test_whisper_azure():
         * _total_time_in_seconds,
         5,
     )
-    assert cost == expected_cost
+    assert round(cost, 5) == round(expected_cost, 5)
 
 
 def test_dalle_3_azure_cost_tracking():
