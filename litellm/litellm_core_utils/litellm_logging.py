@@ -225,6 +225,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ] = None,
         kwargs: Optional[Dict] = None,
     ):
+        _input: Optional[str] = messages  # save original value of messages
         if messages is not None:
             if isinstance(messages, str):
                 messages = [
@@ -251,7 +252,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: List[Any] = (
             []
         )  # for generating complete stream response
-        self.model_call_details: Dict[Any, Any] = {}
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: Optional[
@@ -285,6 +285,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details = {
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
+            "input": _input,
         }
 
     def process_dynamic_callbacks(self):
@@ -735,14 +736,9 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         prompt = ""  # use for tts cost calc
-
-        if self.model_call_details.get("messages") is not None and isinstance(
-            self.model_call_details.get("messages"), list
-        ):
-            prompt = get_formatted_prompt(
-                data=self.model_call_details,
-                call_type="completion",
-            )
+        _input = self.model_call_details.get("input", None)
+        if _input is not None and isinstance(_input, str):
+            prompt = _input
 
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)

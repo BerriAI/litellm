@@ -267,3 +267,38 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
             "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
             "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
         }
+
+
+def test_audio_speech_cost_calc():
+    from litellm.integrations.custom_logger import CustomLogger
+
+    model = "azure/azure-tts"
+    api_base = os.getenv("AZURE_SWEDEN_API_BASE")
+    api_key = os.getenv("AZURE_SWEDEN_API_KEY")
+
+    custom_logger = CustomLogger()
+    litellm.set_verbose = True
+
+    with patch.object(custom_logger, "log_success_event") as mock_cost_calc:
+        litellm.callbacks = [custom_logger]
+        litellm.speech(
+            model=model,
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+            api_base=api_base,
+            api_key=api_key,
+            base_model="azure/tts-1",
+        )
+
+        time.sleep(1)
+
+        mock_cost_calc.assert_called_once()
+
+        print(
+            f"mock_cost_calc.call_args: {mock_cost_calc.call_args.kwargs['kwargs'].keys()}"
+        )
+        standard_logging_payload = mock_cost_calc.call_args.kwargs["kwargs"][
+            "standard_logging_object"
+        ]
+        print(f"standard_logging_payload: {standard_logging_payload}")
+        assert standard_logging_payload["response_cost"] > 0
