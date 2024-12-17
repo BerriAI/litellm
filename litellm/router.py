@@ -4653,7 +4653,9 @@ class Router:
             return returned_models
         return None
 
-    def get_model_access_groups(self, model_name: Optional[str] = None):
+    def get_model_access_groups(
+        self, model_name: Optional[str] = None
+    ) -> Dict[str, List[str]]:
         """
         If model_name is provided, only return access groups for that model.
         """
