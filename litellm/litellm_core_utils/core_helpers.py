@@ -14,44 +14,70 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+FinishReason = Literal["stop", "length", "tool_calls", "content_filter"]
 
-def map_finish_reason(
-    finish_reason: str,
-):  # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
-    # anthropic mapping
-    if finish_reason == "stop_sequence":
-        return "stop"
-    # cohere mapping - https://docs.cohere.com/reference/generate
-    elif finish_reason == "COMPLETE":
-        return "stop"
-    elif finish_reason == "MAX_TOKENS":  # cohere + vertex ai
-        return "length"
-    elif finish_reason == "ERROR_TOXIC":
-        return "content_filter"
-    elif (
-        finish_reason == "ERROR"
-    ):  # openai currently doesn't support an 'error' finish reason
-        return "stop"
-    # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
-    elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
-        return "stop"
-    elif (
-        finish_reason == "FINISH_REASON_UNSPECIFIED" or finish_reason == "STOP"
-    ):  # vertex ai - got from running `print(dir(response_obj.candidates[0].finish_reason))`: ['FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'OTHER', 'RECITATION', 'SAFETY', 'STOP',]
-        return "stop"
-    elif finish_reason == "SAFETY" or finish_reason == "RECITATION":  # vertex ai
-        return "content_filter"
-    elif finish_reason == "STOP":  # vertex ai
-        return "stop"
-    elif finish_reason == "end_turn" or finish_reason == "stop_sequence":  # anthropic
-        return "stop"
-    elif finish_reason == "max_tokens":  # anthropic
-        return "length"
-    elif finish_reason == "tool_use":  # anthropic
-        return "tool_calls"
-    elif finish_reason == "content_filtered":
-        return "content_filter"
-    return finish_reason
+def map_finish_reason(finish_reason: str) -> FinishReason:
+    """
+    Maps finish reasons from various AI providers to a standardized format.
+    
+    This function normalizes finish reason strings from different AI providers 
+    (OpenAI, Vertex AI, HuggingFace, Cohere, Anthropic) to a consistent set 
+    of values.
+
+    Args:
+        finish_reason (str): The finish reason string from the AI provider
+
+    Returns:
+        FinishReason: One of the following standardized finish reasons:
+            - "stop": Normal completion (includes EOS token, complete, etc.)
+            - "length": Maximum token limit reached
+            - "tool_calls": Stopped due to tool/function calls
+            - "content_filter": Stopped due to content filtering/safety
+
+    Provider-specific mappings:
+    - OpenAI: 'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
+    - Vertex AI: 'FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'STOP', 'SAFETY', 'RECITATION'
+    - HuggingFace: 'stop_sequence', 'eos_token', 'max_tokens'
+    - Cohere: 'COMPLETE', 'ERROR_TOXIC', 'ERROR', 'MAX_TOKENS'
+    - Anthropic: 'stop_sequence', 'max_tokens', 'end_turn'
+
+    Provider-speicific mappings source:
+     - openai.types.chat.chat_completion.Choice.model_fields['finish_reason']
+     - google.generativeai.protos.Candidate.FinishReason.__members__.keys()
+     - cohere.types.ChatFinishReason
+     - anthropic.types.Message.model_fields['stop_reason']
+    """
+    # Mapping of provider-specific finish reasons to standardized values
+    finish_reason_mapping = {
+        # Normal completion reasons
+        "stop": "stop",
+        "COMPLETE": "stop",
+        "ERROR": "stop",
+        "eos_token": "stop",
+        "stop_sequence": "stop",
+        "FINISH_REASON_UNSPECIFIED": "stop",
+        "STOP": "stop",
+        "end_turn": "stop",
+        
+        # Length-related reasons
+        "length": "length",
+        "MAX_TOKENS": "length",
+        "max_tokens": "length",
+        
+        # Tool/function call reasons
+        "tool_calls": "tool_calls",
+        "tool_use": "tool_calls",
+        "function_call": "tool_calls",
+        
+        # Content filtering/safety reasons
+        "content_filter": "content_filter",
+        "ERROR_TOXIC": "content_filter",
+        "SAFETY": "content_filter",
+        "RECITATION": "content_filter",
+        "content_filtered": "content_filter"
+    }
+    
+    return finish_reason_mapping.get(finish_reason, finish_reason)
 
 
 def remove_index_from_tool_calls(messages, tool_calls):
