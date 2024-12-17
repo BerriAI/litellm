@@ -107,7 +107,7 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(self, api_base: str, model: str) -> str:
         """
         OPTIONAL
 
@@ -115,7 +115,7 @@ class BaseConfig(ABC):
 
         Some providers need `model` in `api_base`
         """
-        return api_base or ""
+        return api_base
 
     @abstractmethod
     def transform_request(

@@ -53,6 +53,16 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
     ) -> EmbeddingResponse:
         return model_response
 
+    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+        """
+        OPTIONAL
+
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        return api_base or ""
+
     def transform_request(
         self,
         model: str,
