@@ -87,6 +87,7 @@ def get_ollama_response(
     stream = optional_params.pop("stream", False)
     format = optional_params.pop("format", None)
     images = optional_params.pop("images", None)
+    extra_headers = optional_params.pop("extra_headers", {})
     data = {
         "model": model,
         "prompt": prompt,
@@ -105,7 +106,7 @@ def get_ollama_response(
         additional_args={
             "api_base": url,
             "complete_input_dict": data,
-            "headers": {},
+            "headers": extra_headers,
             "acompletion": acompletion,
         },
     )
@@ -117,6 +118,7 @@ def get_ollama_response(
                 model_response=model_response,
                 encoding=encoding,
                 logging_obj=logging_obj,
+                extra_headers=extra_headers,
             )
         else:
             response = ollama_acompletion(
@@ -125,10 +127,11 @@ def get_ollama_response(
                 model_response=model_response,
                 encoding=encoding,
                 logging_obj=logging_obj,
+                extra_headers=extra_headers,
             )
         return response
     elif stream is True:
-        return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
+        return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj, extra_headers=extra_headers)
 
     response = requests.post(
         url=f"{url}", json={**data, "stream": stream}, timeout=litellm.request_timeout
@@ -146,7 +149,7 @@ def get_ollama_response(
         api_key="",
         original_response=response.text,
         additional_args={
-            "headers": None,
+            "headers": extra_headers,
             "api_base": api_base,
         },
     )
@@ -192,9 +195,9 @@ def get_ollama_response(
     return model_response
 
 
-def ollama_completion_stream(url, data, logging_obj):
+def ollama_completion_stream(url, data, logging_obj, extra_headers={}):
     with httpx.stream(
-        url=url, json=data, method="POST", timeout=litellm.request_timeout
+        url=url, json=data, method="POST", timeout=litellm.request_timeout, headers=extra_headers
     ) as response:
         try:
             if response.status_code != 200:
@@ -251,14 +254,14 @@ def ollama_completion_stream(url, data, logging_obj):
             raise e
 
 
-async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
+async def ollama_async_streaming(url, data, model_response, encoding, logging_obj, extra_headers={}):
     try:
         _async_http_client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.OLLAMA
         )
         client = _async_http_client.client
         async with client.stream(
-            url=f"{url}", json=data, method="POST", timeout=litellm.request_timeout
+            url=f"{url}", json=data, method="POST", timeout=litellm.request_timeout, headers=extra_headers
         ) as response:
             if response.status_code != 200:
                 raise OllamaError(
@@ -324,7 +327,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
 
 
 async def ollama_acompletion(
-    url, data, model_response: litellm.ModelResponse, encoding, logging_obj
+    url, data, model_response: litellm.ModelResponse, encoding, logging_obj, extra_headers={}
 ):
     data["stream"] = False
     try:
@@ -346,7 +349,7 @@ async def ollama_acompletion(
                 api_key="",
                 original_response=resp.text,
                 additional_args={
-                    "headers": None,
+                    "headers": extra_headers,
                     "api_base": url,
                 },
             )
@@ -405,6 +408,7 @@ async def ollama_aembeddings(
     logging_obj: Any,
     encoding: Any,
 ):
+    extra_headers = optional_params.pop("extra_headers", {})
     if api_base.endswith("/api/embed"):
         url = api_base
     else:
@@ -441,7 +445,7 @@ async def ollama_aembeddings(
             additional_args={
                 "api_base": url,
                 "complete_input_dict": data,
-                "headers": {},
+                "headers": extra_headers,
             },
         )
 
