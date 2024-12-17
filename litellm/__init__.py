@@ -65,6 +65,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
+    "azure_storage",
     "opik",
     "argilla",
     "mlflow",
