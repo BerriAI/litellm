@@ -164,6 +164,7 @@ class GenerationConfig(TypedDict, total=False):
 
 class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
+    googleSearch: dict
     googleSearchRetrieval: dict
     code_execution: dict
     retrieval: Retrieval
