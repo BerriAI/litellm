@@ -234,25 +234,73 @@ async def bedrock_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
+    Route for `bedrock-runtime` requests.
+
     [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
     """
     create_request_copy(request)
+    aws_region_name = get_secret_str(secret_name="AWS_REGION_NAME")
+    base_target_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
+    return await _handle_bedrock_pass_through_request(
+        endpoint=endpoint,
+        base_target_url=base_target_url,
+        aws_region_name=aws_region_name,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+@router.api_route(
+    "/bedrock/agent/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Bedrock Pass-through", "pass-through"],
+)
+async def bedrock_agent_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Route for `bedrock-agent-runtime` requests.
+
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
+    """
+    aws_region_name = get_secret_str(secret_name="AWS_REGION_NAME")
+    base_target_url = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+    return await _handle_bedrock_pass_through_request(
+        endpoint=endpoint,
+        base_target_url=base_target_url,
+        aws_region_name=aws_region_name,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def _handle_bedrock_pass_through_request(
+    endpoint: str,
+    base_target_url: str,
+    aws_region_name: Optional[str],
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Helper to handle Bedrock pass-through requests
+
+    Common helper to handle `bedrock-runtime` and `bedrock-agent-runtime` requests.
+    """
     try:
-        import boto3
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
         from botocore.credentials import Credentials
     except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
-    aws_region_name = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
-    if endpoint.startswith("agents/"):  # handle bedrock agents
-        base_target_url = (
-            f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
-        )
-    else:
-        base_target_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+    create_request_copy(request)
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
