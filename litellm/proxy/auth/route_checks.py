@@ -182,6 +182,8 @@ class RouteChecks:
         # Pass through Bedrock, VertexAI, and Cohere Routes
         if "/bedrock/" in route:
             return True
+        if "/bedrock/agent/" in route:
+            return True
         if "/vertex-ai/" in route:
             return True
         if "/gemini/" in route:
