@@ -14,34 +14,20 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-FinishReason = Literal["stop", "length", "tool_calls", "content_filter"]
 
-def map_finish_reason(finish_reason: str) -> FinishReason:
+def map_finish_reason(finish_reason: str) -> str:
     """
-    Maps finish reasons from various AI providers to a standardized format.
-    
-    This function normalizes finish reason strings from different AI providers 
-    (OpenAI, Vertex AI, HuggingFace, Cohere, Anthropic) to a consistent set 
-    of values.
+    Maps finish reasons from various AI providers (OpenAI, Vertex AI, HuggingFace, Cohere, Anthropic) to a consistent set 
+    of values based on OpenAI's finish reason values.
 
-    Args:
-        finish_reason (str): The finish reason string from the AI provider
-
-    Returns:
-        FinishReason: One of the following standardized finish reasons:
-            - "stop": Normal completion (includes EOS token, complete, etc.)
-            - "length": Maximum token limit reached
-            - "tool_calls": Stopped due to tool/function calls
-            - "content_filter": Stopped due to content filtering/safety
-
-    Provider-specific mappings:
+    Provider-specific values:
     - OpenAI: 'stop', 'length', 'tool_calls', 'content_filter', 'function_call'
-    - Vertex AI: 'FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'STOP', 'SAFETY', 'RECITATION'
+    - Vertex AI: 'FINISH_REASON_UNSPECIFIED', 'STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'LANGUAGE', 'OTHER', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL'
     - HuggingFace: 'stop_sequence', 'eos_token', 'max_tokens'
-    - Cohere: 'COMPLETE', 'ERROR_TOXIC', 'ERROR', 'MAX_TOKENS'
-    - Anthropic: 'stop_sequence', 'max_tokens', 'end_turn'
+    - Cohere: 'COMPLETE', 'STOP_SEQUENCE', 'MAX_TOKENS', 'TOOL_CALL', 'ERROR'
+    - Anthropic: 'end_turn', 'max_tokens', 'stop_sequence', 'tool_use'
 
-    Provider-speicific mappings source:
+    Provider-speicific values source:
      - openai.types.chat.chat_completion.Choice.model_fields['finish_reason']
      - google.generativeai.protos.Candidate.FinishReason.__members__.keys()
      - cohere.types.ChatFinishReason
@@ -55,10 +41,17 @@ def map_finish_reason(finish_reason: str) -> FinishReason:
         "ERROR": "stop",
         "eos_token": "stop",
         "stop_sequence": "stop",
-        "FINISH_REASON_UNSPECIFIED": "stop",
+        "STOP_SEQUENCE": "stop",
         "STOP": "stop",
         "end_turn": "stop",
-        
+        "OTHER": "stop",
+        "FINISH_REASON_UNSPECIFIED": "stop",
+
+        # Error completions reasons
+        # Mapping to stop since our set of finish reasons doesn't include error
+        "ERROR": "stop",
+        "MALFORMED_FUNCTION_CALL": "stop",
+
         # Length-related reasons
         "length": "length",
         "MAX_TOKENS": "length",
@@ -68,13 +61,17 @@ def map_finish_reason(finish_reason: str) -> FinishReason:
         "tool_calls": "tool_calls",
         "tool_use": "tool_calls",
         "function_call": "tool_calls",
+        "TOOL_CALL": "tool_calls",
         
         # Content filtering/safety reasons
         "content_filter": "content_filter",
         "ERROR_TOXIC": "content_filter",
         "SAFETY": "content_filter",
         "RECITATION": "content_filter",
-        "content_filtered": "content_filter"
+        "content_filtered": "content_filter",
+        "BLOCKLIST": "content_filter",
+        "PROHIBITED_CONTENT": "content_filter",
+        "SPII": "content_filter",
     }
     
     return finish_reason_mapping.get(finish_reason, finish_reason)
