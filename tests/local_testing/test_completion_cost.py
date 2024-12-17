@@ -2635,3 +2635,19 @@ def test_completion_cost_azure_ai_meta():
     cost = completion_cost(model_response, custom_llm_provider="azure_ai")
 
     assert cost > 0
+
+
+def test_completion_cost_azure_tts():
+    from unittest.mock import MagicMock
+
+    args = {
+        "response_object": MagicMock,
+        "model": "tts-1",
+        "cache_hit": None,
+        "custom_llm_provider": "azure",
+        "base_model": None,
+        "call_type": "aspeech",
+        "optional_params": {},
+        "custom_pricing": False,
+    }
+    litellm.response_cost_calculator(**args)

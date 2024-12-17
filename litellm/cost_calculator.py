@@ -546,6 +546,7 @@ def completion_cost(  # noqa: PLR0915
                     "n", 1
                 )  # openai default
         else:
+            traceback.print_stack()
             if model is None:
                 raise ValueError(
                     f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
@@ -713,6 +714,7 @@ def completion_cost(  # noqa: PLR0915
 
         return _final_cost
     except Exception as e:
+        traceback.print_stack()
         raise e
 
 
@@ -762,26 +764,15 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 response_object._hidden_params["optional_params"] = optional_params
-            if isinstance(response_object, ImageResponse):
-                if base_model is not None:
-                    model = base_model
-                response_cost = completion_cost(
-                    completion_response=response_object,
-                    model=model,
-                    call_type=call_type,
-                    custom_llm_provider=custom_llm_provider,
-                    optional_params=optional_params,
-                )
-            else:
-                if custom_pricing is True:  # override defaults if custom pricing is set
-                    base_model = model
-                # base_model defaults to None if not set on model_info
-                response_cost = completion_cost(
-                    completion_response=response_object,
-                    call_type=call_type,
-                    model=base_model,
-                    custom_llm_provider=custom_llm_provider,
-                )
+            if base_model is not None:
+                model = base_model
+            response_cost = completion_cost(
+                completion_response=response_object,
+                model=model,
+                call_type=call_type,
+                custom_llm_provider=custom_llm_provider,
+                optional_params=optional_params,
+            )
         return response_cost
     except Exception as e:
         raise e
