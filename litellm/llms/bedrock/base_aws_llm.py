@@ -10,8 +10,6 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from litellm.llms.base import BaseLLM
-
 if TYPE_CHECKING:
     from botocore.credentials import Credentials
 else:
@@ -37,7 +35,7 @@ class AwsAuthError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class BaseAWSLLM(BaseLLM):
+class BaseAWSLLM:
     def __init__(self) -> None:
         self.iam_cache = DualCache()
         super().__init__()

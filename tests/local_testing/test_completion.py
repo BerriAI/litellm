@@ -1819,6 +1819,43 @@ async def test_litellm_gateway_from_sdk():
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk_structured_output():
+    from pydantic import BaseModel
+
+    class Result(BaseModel):
+        answer: str
+
+    litellm.set_verbose = True
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            litellm.completion(
+                model="litellm_proxy/openai/gpt-4o",
+                messages=[
+                    {"role": "user", "content": "What is the capital of France?"}
+                ],
+                api_key="my-test-api-key",
+                user="test",
+                response_format=Result,
+                base_url="https://litellm.ml-serving-internal.scale.com",
+                client=openai_client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_call.assert_called_once()
+
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+        json_schema = mock_call.call_args.kwargs["response_format"]
+        assert "json_schema" in json_schema
+
+
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:
@@ -1903,10 +1940,11 @@ def test_ollama_image():
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
+        data_json = json.loads(kwargs["data"])
         mock_response.json.return_value = {
             # return the image in the response so that it can be tested
             # against the original
-            "response": kwargs["json"]["images"]
+            "response": data_json["images"]
         }
         return mock_response
 
@@ -1934,9 +1972,10 @@ def test_ollama_image():
         [datauri_base64_data, datauri_base64_data],
     ]
 
+    client = HTTPHandler()
     for test in tests:
         try:
-            with patch("requests.post", side_effect=mock_post):
+            with patch.object(client, "post", side_effect=mock_post):
                 response = completion(
                     model="ollama/llava",
                     messages=[
@@ -1951,6 +1990,7 @@ def test_ollama_image():
                             ],
                         }
                     ],
+                    client=client,
                 )
                 if not test[1]:
                     # the conversion process may not always generate the same image,
@@ -2350,8 +2390,8 @@ def test_completion_ollama_hosted():
         response = completion(
             model="ollama/phi",
             messages=messages,
-            max_tokens=2,
-            api_base="https://test-ollama-endpoint.onrender.com",
+            max_tokens=20,
+            # api_base="https://test-ollama-endpoint.onrender.com",
         )
         # Add any assertions here to check the response
         print(response)

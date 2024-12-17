@@ -5,11 +5,12 @@ from enum import Enum
 from typing import Any, Callable
 
 import httpx
-import requests  # type: ignore
 
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.utils import ModelResponse, Usage
-
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 
 llm = None
 

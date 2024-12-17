@@ -24,7 +24,6 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
@@ -395,6 +394,7 @@ class VertexGeminiConfig(BaseConfig):
 
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
+        googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
         code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
@@ -425,7 +425,9 @@ class VertexGeminiConfig(BaseConfig):
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
             # check if grounding
-            if tool.get("googleSearchRetrieval", None) is not None:
+            if tool.get("googleSearch", None) is not None:
+                googleSearch = tool["googleSearch"]
+            elif tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
             elif tool.get("code_execution", None) is not None:
                 code_execution = tool["code_execution"]
@@ -449,6 +451,8 @@ class VertexGeminiConfig(BaseConfig):
         _tools = Tools(
             function_declarations=gtool_func_declarations,
         )
+        if googleSearch is not None:
+            _tools["googleSearch"] = googleSearch
         if googleSearchRetrieval is not None:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
         if code_execution is not None:

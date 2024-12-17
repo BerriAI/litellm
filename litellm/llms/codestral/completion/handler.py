@@ -12,7 +12,6 @@ from functools import partial
 from typing import Callable, List, Literal, Optional, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
@@ -22,7 +21,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
 )
-from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -95,7 +93,7 @@ async def make_call(
     return completion_stream
 
 
-class CodestralTextCompletion(BaseLLM):
+class CodestralTextCompletion:
     def __init__(self) -> None:
         super().__init__()
 
@@ -139,7 +137,7 @@ class CodestralTextCompletion(BaseLLM):
     def process_text_completion_response(
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        response: httpx.Response,
         model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: LiteLLMLogging,
@@ -317,7 +315,7 @@ class CodestralTextCompletion(BaseLLM):
 
         ### SYNC STREAMING
         if stream is True:
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 completion_url,
                 headers=headers,
                 data=json.dumps(data),
@@ -333,7 +331,7 @@ class CodestralTextCompletion(BaseLLM):
         ### SYNC COMPLETION
         else:
 
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 url=completion_url,
                 headers=headers,
                 data=json.dumps(data),

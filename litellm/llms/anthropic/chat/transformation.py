@@ -16,7 +16,6 @@ from typing import (
 )
 
 import httpx
-import requests
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME

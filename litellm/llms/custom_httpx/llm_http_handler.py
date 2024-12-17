@@ -419,7 +419,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         aembedding: bool = False,
         headers={},
-    ):
+    ) -> EmbeddingResponse:
 
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -457,7 +457,7 @@ class BaseLLMHTTPHandler:
         )
 
         if aembedding is True:
-            return self.aembedding(
+            return self.aembedding(  # type: ignore
                 request_data=data,
                 api_base=api_base,
                 headers=headers,

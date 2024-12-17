@@ -25,7 +25,6 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
@@ -316,7 +315,7 @@ class BedrockLLM(BaseAWSLLM):
     def process_response(  # noqa: PLR0915
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        response: httpx.Response,
         model_response: ModelResponse,
         stream: bool,
         logging_obj: Logging,
@@ -1040,9 +1039,6 @@ class BedrockLLM(BaseAWSLLM):
             logging_obj=logging_obj,
         )
         return streaming_response
-
-    def embedding(self, *args, **kwargs):
-        return super().embedding(*args, **kwargs)
 
 
 def get_response_stream_shape():

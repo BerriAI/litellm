@@ -1,20 +1,34 @@
+import json
+import time
 import types
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+import uuid
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_to_ollama_image,
+    custom_prompt,
+    ollama_pt,
+)
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+)
 from litellm.types.utils import (
+    GenericStreamingChunk,
     ModelInfo,
     ModelResponse,
     ProviderField,
     StreamingChoices,
 )
 
-from ..common_utils import OllamaError
+from ..common_utils import OllamaError, _convert_image
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -247,7 +261,47 @@ class OllamaConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError("transformation currently done in handler.py")
+        response_json = raw_response.json()
+        ## RESPONSE OBJECT
+        model_response.choices[0].finish_reason = "stop"
+        if request_data.get("format", "") == "json":
+            function_call = json.loads(response_json["response"])
+            message = litellm.Message(
+                content=None,
+                tool_calls=[
+                    {
+                        "id": f"call_{str(uuid.uuid4())}",
+                        "function": {
+                            "name": function_call["name"],
+                            "arguments": json.dumps(function_call["arguments"]),
+                        },
+                        "type": "function",
+                    }
+                ],
+            )
+            model_response.choices[0].message = message  # type: ignore
+            model_response.choices[0].finish_reason = "tool_calls"
+        else:
+            model_response.choices[0].message.content = response_json["response"]  # type: ignore
+        model_response.created = int(time.time())
+        model_response.model = "ollama/" + model
+        _prompt = request_data.get("prompt", "")
+        prompt_tokens = response_json.get(
+            "prompt_eval_count", len(encoding.encode(_prompt, disallowed_special=()))  # type: ignore
+        )
+        completion_tokens = response_json.get(
+            "eval_count", len(response_json.get("message", dict()).get("content", ""))
+        )
+        setattr(
+            model_response,
+            "usage",
+            litellm.Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            ),
+        )
+        return model_response
 
     def transform_request(
         self,
@@ -257,7 +311,46 @@ class OllamaConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        raise NotImplementedError("transformation currently done in handler.py")
+        custom_prompt_dict = (
+            litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
+        )
+        if model in custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = custom_prompt_dict[model]
+            ollama_prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],
+                final_prompt_value=model_prompt_details["final_prompt_value"],
+                messages=messages,
+            )
+        else:
+            modified_prompt = ollama_pt(model=model, messages=messages)
+            if isinstance(modified_prompt, dict):
+                ollama_prompt, images = (
+                    modified_prompt["prompt"],
+                    modified_prompt["images"],
+                )
+                optional_params["images"] = images
+            else:
+                ollama_prompt = modified_prompt
+        stream = optional_params.pop("stream", False)
+        format = optional_params.pop("format", None)
+        images = optional_params.pop("images", None)
+        data = {
+            "model": model,
+            "prompt": ollama_prompt,
+            "options": optional_params,
+            "stream": stream,
+        }
+
+        if format is not None:
+            data["format"] = format
+        if images is not None:
+            data["images"] = [
+                _convert_image(convert_to_ollama_image(image)) for image in images
+            ]
+
+        return data
 
     def validate_environment(
         self,
@@ -267,4 +360,77 @@ class OllamaConfig(BaseConfig):
         optional_params: dict,
         api_key: Optional[str] = None,
     ) -> dict:
-        raise NotImplementedError("validation currently done in handler.py")
+        return headers
+
+    def get_complete_url(self, api_base: str, model: str) -> str:
+        """
+        OPTIONAL
+
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        if api_base.endswith("/api/generate"):
+            url = api_base
+        else:
+            url = f"{api_base}/api/generate"
+
+        return url
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return OllamaTextCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
+    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+        return self.chunk_parser(json.loads(str_line))
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            if "error" in chunk:
+                raise Exception(f"Ollama Error - {chunk}")
+
+            text = ""
+            is_finished = False
+            finish_reason = None
+            if chunk["done"] is True:
+                text = ""
+                is_finished = True
+                finish_reason = "stop"
+                prompt_eval_count: Optional[int] = chunk.get("prompt_eval_count", None)
+                eval_count: Optional[int] = chunk.get("eval_count", None)
+
+                usage: Optional[ChatCompletionUsageBlock] = None
+                if prompt_eval_count is not None and eval_count is not None:
+                    usage = ChatCompletionUsageBlock(
+                        prompt_tokens=prompt_eval_count,
+                        completion_tokens=eval_count,
+                        total_tokens=prompt_eval_count + eval_count,
+                    )
+                return GenericStreamingChunk(
+                    text=text,
+                    is_finished=is_finished,
+                    finish_reason=finish_reason,
+                    usage=usage,
+                )
+            elif chunk["response"]:
+                text = chunk["response"]
+                return GenericStreamingChunk(
+                    text=text,
+                    is_finished=is_finished,
+                    finish_reason="stop",
+                    usage=None,
+                )
+            else:
+                raise Exception(f"Unable to parse ollama chunk - {chunk}")
+        except Exception as e:
+            raise e

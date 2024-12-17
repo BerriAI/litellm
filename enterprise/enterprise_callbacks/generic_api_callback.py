@@ -3,7 +3,6 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import dotenv, os
-import requests
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
@@ -17,7 +16,6 @@ import traceback
 #    On success + failure, log events to Supabase
 
 import dotenv, os
-import requests
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
@@ -116,7 +114,9 @@ class GenericAPILogger:
             print_verbose(f"\nGeneric Logger - Logging payload = {data}")
 
             # make request to endpoint with payload
-            response = requests.post(self.endpoint, json=data, headers=self.headers)
+            response = litellm.module_level_client.post(
+                self.endpoint, json=data, headers=self.headers
+            )
 
             response_status = response.status_code
             response_text = response.text

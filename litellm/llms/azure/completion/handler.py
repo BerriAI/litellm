@@ -4,11 +4,14 @@ import uuid
 from typing import Any, Callable, Optional, Union
 
 import httpx
-import requests
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm import OpenAIConfig
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -22,7 +25,6 @@ from litellm.utils import (
 from ...base import BaseLLM
 from ...openai.completion.handler import OpenAITextCompletion
 from ...openai.completion.transformation import OpenAITextCompletionConfig
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 from ..common_utils import AzureOpenAIError
 
 openai_text_completion_config = OpenAITextCompletionConfig()
