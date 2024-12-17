@@ -4202,6 +4202,62 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
     return True
 
 
+from typing import TypedDict
+
+
+class PotentialModelNamesAndCustomLLMProvider(TypedDict):
+    split_model: str
+    combined_model_name: str
+    stripped_model_name: str
+    combined_stripped_model_name: str
+    custom_llm_provider: str
+
+
+def _get_potential_model_names(
+    model: str, custom_llm_provider: Optional[str]
+) -> PotentialModelNamesAndCustomLLMProvider:
+    if custom_llm_provider is None:
+        # Get custom_llm_provider
+        try:
+            split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        except Exception:
+            split_model = model
+        combined_model_name = model
+        stripped_model_name = _strip_model_name(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        combined_stripped_model_name = stripped_model_name
+    elif custom_llm_provider and model.startswith(
+        custom_llm_provider
+    ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
+        split_model = model.split("/")[1]
+        combined_model_name = model
+        stripped_model_name = _strip_model_name(
+            model=split_model, custom_llm_provider=custom_llm_provider
+        )
+        combined_stripped_model_name = "{}/{}".format(
+            custom_llm_provider, stripped_model_name
+        )
+    else:
+        split_model = model
+        combined_model_name = "{}/{}".format(custom_llm_provider, model)
+        stripped_model_name = _strip_model_name(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        combined_stripped_model_name = "{}/{}".format(
+            custom_llm_provider,
+            _strip_model_name(model=model, custom_llm_provider=custom_llm_provider),
+        )
+
+    return PotentialModelNamesAndCustomLLMProvider(
+        split_model=split_model,
+        combined_model_name=combined_model_name,
+        stripped_model_name=stripped_model_name,
+        combined_stripped_model_name=combined_stripped_model_name,
+        custom_llm_provider=cast(str, custom_llm_provider),
+    )
+
+
 def get_model_info(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfo:
@@ -4309,28 +4365,16 @@ def get_model_info(  # noqa: PLR0915
             elif model + "@latest" in litellm.vertex_ai_ai21_models:
                 model = model + "@latest"
         ##########################
-        if custom_llm_provider is None:
-            # Get custom_llm_provider
-            try:
-                split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-            except Exception:
-                split_model = model
-            combined_model_name = model
-            stripped_model_name = _strip_model_name(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
-            combined_stripped_model_name = stripped_model_name
-        else:
-            split_model = model
-            combined_model_name = "{}/{}".format(custom_llm_provider, model)
-            stripped_model_name = _strip_model_name(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
-            combined_stripped_model_name = "{}/{}".format(
-                custom_llm_provider,
-                _strip_model_name(model=model, custom_llm_provider=custom_llm_provider),
-            )
-
+        potential_model_names = _get_potential_model_names(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        combined_model_name = potential_model_names["combined_model_name"]
+        stripped_model_name = potential_model_names["stripped_model_name"]
+        combined_stripped_model_name = potential_model_names[
+            "combined_stripped_model_name"
+        ]
+        split_model = potential_model_names["split_model"]
+        custom_llm_provider = potential_model_names["custom_llm_provider"]
         #########################
         supported_openai_params = litellm.get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider

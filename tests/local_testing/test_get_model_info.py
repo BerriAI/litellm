@@ -37,7 +37,8 @@ def test_get_model_info_custom_llm_with_same_name_vllm():
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
     try:
-        litellm.get_model_info(model, custom_llm_provider=provider)
+        model_info = litellm.get_model_info(model, custom_llm_provider=provider)
+        print("model_info", model_info)
         pytest.fail("Expected get model info to fail for an unmapped model/provider")
     except Exception:
         pass
@@ -94,7 +95,7 @@ def test_get_model_info_ollama_chat():
         assert info["supports_function_calling"] is True
 
         info = get_model_info("ollama/mistral")
-
+        print("info", info)
         assert info["supports_function_calling"] is True
 
         mock_client.assert_called()
@@ -147,3 +148,13 @@ def test_get_model_info_bedrock_region():
 def test_get_model_info_completion_cost_unit_tests(model):
     info = litellm.get_model_info(model)
     print("info", info)
+
+
+def test_get_model_info_ft_model_with_provider_prefix():
+    args = {
+        "model": "openai/ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        "custom_llm_provider": "openai",
+    }
+    info = litellm.get_model_info(**args)
+    print("info", info)
+    assert info["key"] == "ft:gpt-3.5-turbo"
