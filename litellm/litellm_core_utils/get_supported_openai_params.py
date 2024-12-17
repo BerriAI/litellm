@@ -168,10 +168,15 @@ def get_supported_openai_params(  # noqa: PLR0915
         ]
     elif custom_llm_provider == "watsonx":
         return litellm.IBMWatsonXChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "custom_openai" or "text-completion-openai":
+    elif (
+        custom_llm_provider == "custom_openai"
+        or custom_llm_provider == "text-completion-openai"
+    ):
         return litellm.OpenAITextCompletionConfig().get_supported_openai_params(
             model=model
         )
     elif custom_llm_provider == "predibase":
         return litellm.PredibaseConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "voyage":
+        return litellm.VoyageEmbeddingConfig().get_supported_openai_params(model=model)
     return None
