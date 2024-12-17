@@ -795,7 +795,7 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 ```yaml
 model_list:
 - litellm_params:
-    api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
     api_key: my-fake-key
     model: openai/my-fake-model
   model_name: fake-openai-endpoint
@@ -937,11 +937,11 @@ Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azur
 1. Add `azure_storage` to LiteLLM Config.yaml
 ```yaml
 model_list:
-- litellm_params:
-    api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
-    api_key: my-fake-key
-    model: openai/my-fake-model
-  model_name: fake-openai-endpoint
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 litellm_settings:
   callbacks: ["azure_storage"] # 👈 KEY CHANGE # 👈 KEY CHANGE
