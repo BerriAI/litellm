@@ -21,8 +21,8 @@ import litellm.types
 import litellm.types.utils
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.llms.base_llm.transformation.embedding import BaseEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
