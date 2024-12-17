@@ -45,6 +45,7 @@ from .dual_cache import DualCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache
+from .redis_gpt_cache import RedisGPTCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
@@ -180,6 +181,16 @@ class Cache:
                 embedding_model=redis_semantic_cache_embedding_model,
                 **kwargs,
             )
+        elif type == LiteLLMCacheType.REDIS_GPT_CACHE:
+            self.cache = RedisGPTCache(
+                host=host,
+                port=port,
+                password=password,
+                similarity_threshold=similarity_threshold,
+                use_async=redis_semantic_cache_use_async,
+                embedding_model=redis_semantic_cache_embedding_model,
+                **kwargs,
+            )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
             self.cache = QdrantSemanticCache(
                 qdrant_api_base=qdrant_api_base,
@@ -227,6 +238,7 @@ class Cache:
         if (
             self.type == LiteLLMCacheType.REDIS
             or self.type == LiteLLMCacheType.REDIS_SEMANTIC
+            or self.type == LiteLLMCacheType.REDIS_GPT_CACHE
         ) and default_in_redis_ttl is not None:
             self.ttl = default_in_redis_ttl
 

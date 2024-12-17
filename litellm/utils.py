@@ -172,6 +172,7 @@ from .caching.caching import (
     Cache,
     QdrantSemanticCache,
     RedisCache,
+    RedisGPTCache,
     RedisSemanticCache,
     S3Cache,
 )

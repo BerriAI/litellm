@@ -40,6 +40,7 @@ from litellm.caching.caching import (
     QdrantSemanticCache,
     RedisCache,
     RedisSemanticCache,
+    RedisGPTCache,
     S3Cache,
 )
 from litellm.litellm_core_utils.logging_utils import (

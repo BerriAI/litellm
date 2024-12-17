@@ -9,6 +9,7 @@ class LiteLLMCacheType(str, Enum):
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
+    REDIS_GPT_CACHE = "gpt_cache_redis"
 
 
 CachingSupportedCallTypes = Literal[
