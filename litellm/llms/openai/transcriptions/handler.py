@@ -104,6 +104,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             timeout=timeout,
             max_retries=max_retries,
         )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=None,
+            api_key=openai_client.api_key,
+            additional_args={
+                "api_base": openai_client._base_url._uri_reference,
+                "atranscription": True,
+                "complete_input_dict": data,
+            },
+        )
         _, response = self.make_sync_openai_audio_transcriptions_request(
             openai_client=openai_client,
             data=data,
