@@ -950,11 +950,11 @@ litellm_settings:
 2. Set required env variables
 
 ```shell
-AZURE_STORAGE_ACCOUNT_NAME="litellm2"
-AZURE_STORAGE_FILE_SYSTEM="litellm-logs"
-AZURE_STORAGE_TENANT_ID="985efd7cxxxxxxxxxx"
-AZURE_STORAGE_CLIENT_ID="abe66585xxxxxxxxxx"
-AZURE_STORAGE_CLIENT_SECRET="uMS8Qxxxxxxxxxx"
+AZURE_STORAGE_ACCOUNT_NAME="litellm2" # The name of the Azure Storage Account to use for logging
+AZURE_STORAGE_FILE_SYSTEM="litellm-logs" # The name of the Azure Storage File System to use for logging.  (Typically the Container name)
+AZURE_STORAGE_TENANT_ID="985efd7cxxxxxxxxxx" # The Application Tenant ID to use for Authentication
+AZURE_STORAGE_CLIENT_ID="abe66585xxxxxxxxxx" # The Application Client ID to use for Authentication
+AZURE_STORAGE_CLIENT_SECRET="uMS8Qxxxxxxxxxx" # The Application Client Secret to use for Authentication
 ```
 
 3. Start Proxy
