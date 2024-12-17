@@ -609,15 +609,16 @@ def completion_cost(  # noqa: PLR0915
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
-        if custom_llm_provider is None:
-            try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-            except Exception as e:
-                verbose_logger.debug(
-                    "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
-                        str(e)
-                    )
+        try:
+            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model
+            )  # strip the llm provider from the model name -> for image gen cost calculation
+        except Exception as e:
+            verbose_logger.debug(
+                "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
+                    str(e)
                 )
+            )
         if (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
