@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -156,7 +157,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         try:
             verbose_logger.debug(f"Creating file resource at: {base_url}")
             headers = {
-                "x-ms-version": "2019-07-07",
+                "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Length": "0",
                 "Authorization": f"Bearer {self.azure_auth_token}",
             }
@@ -174,7 +175,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         try:
             verbose_logger.debug(f"Appending data to file: {base_url}")
             headers = {
-                "x-ms-version": "2019-07-07",
+                "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.azure_auth_token}",
             }
@@ -194,7 +195,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         try:
             verbose_logger.debug(f"Flushing data at position {position}")
             headers = {
-                "x-ms-version": "2019-07-07",
+                "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Length": "0",
                 "Authorization": f"Bearer {self.azure_auth_token}",
             }
