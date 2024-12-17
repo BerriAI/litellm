@@ -3612,53 +3612,21 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
-    else:  # assume passing in params for text-completion openai
+    else:  # assume passing in params for openai-like api
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="custom_openai"
         )
         _check_valid_arg(supported_params=supported_params)
-        if functions is not None:
-            optional_params["functions"] = functions
-        if function_call is not None:
-            optional_params["function_call"] = function_call
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if n is not None:
-            optional_params["n"] = n
-        if stream is not None:
-            optional_params["stream"] = stream
-        if stream_options is not None:
-            optional_params["stream_options"] = stream_options
-        if stop is not None:
-            optional_params["stop"] = stop
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if logit_bias is not None:
-            optional_params["logit_bias"] = logit_bias
-        if user is not None:
-            optional_params["user"] = user
-        if response_format is not None:
-            optional_params["response_format"] = response_format
-        if seed is not None:
-            optional_params["seed"] = seed
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if max_retries is not None:
-            optional_params["max_retries"] = max_retries
-        if logprobs is not None:
-            optional_params["logprobs"] = logprobs
-        if top_logprobs is not None:
-            optional_params["top_logprobs"] = top_logprobs
-        if extra_headers is not None:
-            optional_params["extra_headers"] = extra_headers
+        optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
