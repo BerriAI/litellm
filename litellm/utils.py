@@ -165,6 +165,7 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.transformation import BaseConfig
 
 from ._logging import verbose_logger
@@ -6365,7 +6366,7 @@ class ProviderConfigManager:
     def get_provider_embedding_config(
         model: str,
         provider: LlmProviders,
-    ) -> BaseConfig:
+    ) -> BaseEmbeddingConfig:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         return litellm.VoyageEmbeddingConfig()

@@ -6,7 +6,8 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse, ModelResponse, Usage
@@ -32,7 +33,7 @@ class VoyageError(BaseLLMException):
         )
 
 
-class VoyageEmbeddingConfig(BaseConfig):
+class VoyageEmbeddingConfig(BaseEmbeddingConfig):
     """
     Reference: https://docs.voyageai.com/reference/embeddings-api
     """
@@ -137,34 +138,4 @@ class VoyageEmbeddingConfig(BaseConfig):
     ) -> BaseLLMException:
         return VoyageError(
             message=error_message, status_code=status_code, headers=headers
-        )
-
-    def transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        raise NotImplementedError(
-            "VoyageEmbeddingConfig is OpenAI compatible - no request transformation is needed"
-        )
-
-    def transform_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        model_response: ModelResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
-        raise NotImplementedError(
-            "VoyageEmbeddingConfig is OpenAI compatible - no response transformation is needed"
         )
