@@ -109,6 +109,7 @@ from litellm import (
     CreateBatchRequest,
     ListBatchRequest,
     RetrieveBatchRequest,
+    Router,
 )
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
@@ -482,7 +483,7 @@ user_config_file_path: Optional[str] = None
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
-llm_router: Optional[litellm.Router] = None
+llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
 general_settings: dict = {}
 callback_settings: dict = {}
@@ -2833,7 +2834,7 @@ class ProxyStartupEvent:
     @classmethod
     def _initialize_startup_logging(
         cls,
-        llm_router: Optional[litellm.Router],
+        llm_router: Optional[Router],
         proxy_logging_obj: ProxyLogging,
         redis_usage_cache: Optional[RedisCache],
     ):

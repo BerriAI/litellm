@@ -20,8 +20,11 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.prompt_templates.factory import prompt_injection_detection_default_pt
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    prompt_injection_detection_default_pt,
+)
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
+from litellm.router import Router
 from litellm.utils import get_formatted_prompt
 
 
@@ -32,7 +35,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
     ):
         self.prompt_injection_params = prompt_injection_params
-        self.llm_router: Optional[litellm.Router] = None
+        self.llm_router: Optional[Router] = None
 
         self.verbs = [
             "Ignore",
@@ -74,7 +77,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa
 
-    def update_environment(self, router: Optional[litellm.Router] = None):
+    def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router
 
         if (

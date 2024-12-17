@@ -21,7 +21,7 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         api_key: Optional[str],
         api_base: Optional[str],
         optional_params: dict,
-        model_response: Optional[litellm.utils.EmbeddingResponse] = None,
+        model_response: Optional[EmbeddingResponse] = None,
         client=None,
         aembedding=None,
         custom_endpoint: Optional[bool] = None,

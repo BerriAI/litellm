@@ -36,6 +36,7 @@ from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
+from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
 
@@ -59,6 +60,7 @@ callback_class_str_to_classType = {
     "opik": OpikLogger,
     "argilla": ArgillaLogger,
     "opentelemetry": OpenTelemetry,
+    "azure_storage": AzureBlobStorageLogger,
     # OTEL compatible loggers
     "logfire": OpenTelemetry,
     "arize": OpenTelemetry,

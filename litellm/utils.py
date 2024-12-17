@@ -125,6 +125,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     Function,
     ImageResponse,
+    LlmProviders,
     Message,
     ModelInfo,
     ModelResponse,
@@ -146,6 +147,7 @@ claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -161,6 +163,8 @@ from typing import (
 )
 
 from openai import OpenAIError as OriginalError
+
+from litellm.llms.base_llm.transformation import BaseConfig
 
 from ._logging import verbose_logger
 from .caching.caching import (
@@ -233,7 +237,6 @@ local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
 ######## Model Response #########################
-
 
 # All liteLLM Model responses will be in this format, Follows the OpenAI Format
 # https://docs.litellm.ai/docs/completion/output
@@ -684,6 +687,19 @@ def client(original_function):  # noqa: PLR0915
 
         except Exception as e:
             raise e
+
+    def _get_num_retries(
+        kwargs: Dict[str, Any], exception: Exception
+    ) -> Tuple[Optional[int], Dict[str, Any]]:
+        num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
+        if kwargs.get("retry_policy", None):
+            num_retries = get_num_retries_from_retry_policy(
+                exception=exception,
+                retry_policy=kwargs.get("retry_policy"),
+            )
+            kwargs["retry_policy"] = reset_retry_policy()
+
+        return num_retries, kwargs
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -1155,20 +1171,8 @@ def client(original_function):  # noqa: PLR0915
                     raise e
 
             call_type = original_function.__name__
+            num_retries, kwargs = _get_num_retries(kwargs=kwargs, exception=e)
             if call_type == CallTypes.acompletion.value:
-                num_retries = (
-                    kwargs.get("num_retries", None) or litellm.num_retries or None
-                )
-                if kwargs.get("retry_policy", None):
-                    num_retries = get_num_retries_from_retry_policy(
-                        exception=e,
-                        retry_policy=kwargs.get("retry_policy"),
-                    )
-                    kwargs["retry_policy"] = reset_retry_policy()
-
-                litellm.num_retries = (
-                    None  # set retries to None to prevent infinite loops
-                )
                 context_window_fallback_dict = kwargs.get(
                     "context_window_fallback_dict", {}
                 )
@@ -1180,6 +1184,9 @@ def client(original_function):  # noqa: PLR0915
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
+                        litellm.num_retries = (
+                            None  # set retries to None to prevent infinite loops
+                        )
                         kwargs["num_retries"] = num_retries
                         kwargs["original_function"] = original_function
                         if isinstance(
@@ -1201,6 +1208,10 @@ def client(original_function):  # noqa: PLR0915
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
+
+            setattr(
+                e, "num_retries", num_retries
+            )  ## IMPORTANT: returns the deployment's num_retries to the router
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
@@ -3600,53 +3611,21 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
-    else:  # assume passing in params for text-completion openai
+    else:  # assume passing in params for openai-like api
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider="custom_openai"
         )
         _check_valid_arg(supported_params=supported_params)
-        if functions is not None:
-            optional_params["functions"] = functions
-        if function_call is not None:
-            optional_params["function_call"] = function_call
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if n is not None:
-            optional_params["n"] = n
-        if stream is not None:
-            optional_params["stream"] = stream
-        if stream_options is not None:
-            optional_params["stream_options"] = stream_options
-        if stop is not None:
-            optional_params["stop"] = stop
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if logit_bias is not None:
-            optional_params["logit_bias"] = logit_bias
-        if user is not None:
-            optional_params["user"] = user
-        if response_format is not None:
-            optional_params["response_format"] = response_format
-        if seed is not None:
-            optional_params["seed"] = seed
-        if tools is not None:
-            optional_params["tools"] = tools
-        if tool_choice is not None:
-            optional_params["tool_choice"] = tool_choice
-        if max_retries is not None:
-            optional_params["max_retries"] = max_retries
-        if logprobs is not None:
-            optional_params["logprobs"] = logprobs
-        if top_logprobs is not None:
-            optional_params["top_logprobs"] = top_logprobs
-        if extra_headers is not None:
-            optional_params["extra_headers"] = extra_headers
+        optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
@@ -6204,13 +6183,10 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     return messages
 
 
-from litellm.llms.base_llm.transformation import BaseConfig
-
-
 class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
-        model: str, provider: litellm.LlmProviders
+        model: str, provider: LlmProviders
     ) -> BaseConfig:
         """
         Returns the provider config for a given provider.

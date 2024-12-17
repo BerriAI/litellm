@@ -164,7 +164,7 @@ curl -X POST "http://0.0.0.0:4000/bedrock/knowledgebases/{knowledgeBaseId}/retri
 #### Direct Bedrock API Call 
 
 ```bash
-curl -X POST "https://bedrock-runtime.us-west-2.amazonaws.com/knowledgebases/{knowledgeBaseId}/retrieve" \
+curl -X POST "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/{knowledgeBaseId}/retrieve" \
 -H 'Authorization: AWS4-HMAC-SHA256..' \
 -H 'Content-Type: application/json' \
 -d '{

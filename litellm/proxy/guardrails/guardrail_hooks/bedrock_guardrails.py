@@ -45,6 +45,7 @@ from litellm.types.guardrails import (
     BedrockTextContent,
     GuardrailEventHooks,
 )
+from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -70,7 +71,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def convert_to_bedrock_format(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
-        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
         bedrock_request_content: List[BedrockContentItem] = []

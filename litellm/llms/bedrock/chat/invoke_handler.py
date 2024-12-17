@@ -60,7 +60,8 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
+from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
@@ -1313,7 +1314,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
 
     def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
         try:
-            chunk_usage: litellm.Usage = getattr(chunk_data, "usage")
+            chunk_usage: Usage = getattr(chunk_data, "usage")
             text = chunk_data.choices[0].message.content or ""  # type: ignore
             tool_use = None
             if self.json_mode is True:

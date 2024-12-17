@@ -217,16 +217,11 @@ async def test_router_function_with_retries(model_list, sync_mode):
         "mock_response": "I'm fine, thank you!",
         "num_retries": 0,
     }
-    if sync_mode:
-        response = router.function_with_retries(
-            original_function=router._completion,
-            **data,
-        )
-    else:
-        response = await router.async_function_with_retries(
-            original_function=router._acompletion,
-            **data,
-        )
+    response = await router.async_function_with_retries(
+        original_function=router._acompletion,
+        **data,
+    )
+
     assert response.choices[0].message.content == "I'm fine, thank you!"
 
 

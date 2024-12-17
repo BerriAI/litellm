@@ -20,7 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 
@@ -99,7 +99,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         api_key: Optional[str],
         api_base: Optional[str],
         optional_params: dict,
-        model_response: Optional[litellm.utils.EmbeddingResponse] = None,
+        model_response: Optional[EmbeddingResponse] = None,
         client=None,
         aembedding=None,
         custom_endpoint: Optional[bool] = None,

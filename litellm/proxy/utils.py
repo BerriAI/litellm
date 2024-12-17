@@ -289,7 +289,7 @@ class ProxyLogging:
 
     def startup_event(
         self,
-        llm_router: Optional[litellm.Router],
+        llm_router: Optional[Router],
         redis_usage_cache: Optional[RedisCache],
     ):
         """Initialize logging and alerting on proxy startup"""
@@ -359,7 +359,7 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
-    def _init_litellm_callbacks(self, llm_router: Optional[litellm.Router] = None):
+    def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
         litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
         litellm.callbacks.append(self.cache_control_check)  # type: ignore

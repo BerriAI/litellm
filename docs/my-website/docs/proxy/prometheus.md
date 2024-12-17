@@ -6,7 +6,7 @@ import Image from '@theme/IdealImage';
 
 :::info
 
-✨ Prometheus metrics is on LiteLLM Enterprise starting at $250/mo
+✨ Prometheus metrics is on LiteLLM Enterprise
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 

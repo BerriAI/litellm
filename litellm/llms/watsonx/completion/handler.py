@@ -24,6 +24,8 @@ import httpx  # type: ignore
 import requests  # type: ignore
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates import factory as ptf
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -34,7 +36,6 @@ from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
 from ...base import BaseLLM
-from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
 from .transformation import IBMWatsonXAIConfig
 
@@ -204,7 +205,7 @@ class IBMWatsonXAI(BaseLLM):
 
         def process_stream_response(
             stream_resp: Union[Iterator[str], AsyncIterator],
-        ) -> litellm.CustomStreamWrapper:
+        ) -> CustomStreamWrapper:
             streamwrapper = litellm.CustomStreamWrapper(
                 stream_resp,
                 model=model,
@@ -235,7 +236,7 @@ class IBMWatsonXAI(BaseLLM):
                 json_resp = resp.json()
             return self._process_text_gen_response(json_resp, model_response)
 
-        def handle_stream_request(request_params: dict) -> litellm.CustomStreamWrapper:
+        def handle_stream_request(request_params: dict) -> CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             with self.request_manager.request(
@@ -249,7 +250,7 @@ class IBMWatsonXAI(BaseLLM):
 
         async def handle_stream_request_async(
             request_params: dict,
-        ) -> litellm.CustomStreamWrapper:
+        ) -> CustomStreamWrapper:
             # stream the response - generated chunks will be handled
             # by litellm.utils.CustomStreamWrapper.handle_watsonx_stream
             async with self.request_manager.async_request(
@@ -321,14 +322,14 @@ class IBMWatsonXAI(BaseLLM):
         self,
         model: str,
         input: Union[list, str],
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         api_key: Optional[str],
         logging_obj: Any,
         optional_params: dict,
         encoding=None,
         print_verbose=None,
         aembedding=None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         """
         Send a text embedding request to the IBM Watsonx.ai API.
         """

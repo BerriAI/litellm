@@ -9,6 +9,7 @@ from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+from litellm.types.utils import ImageObject, BudgetConfig
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -32,7 +33,7 @@ from litellm.proxy._types import (
     KeyManagementSettings,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.utils import StandardKeyGenerationConfig
+from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 import httpx
 import dotenv
 from enum import Enum
@@ -44,7 +45,7 @@ if litellm_mode == "DEV":
 if set_verbose == True:
     _turn_on_debug()
 #############################################
-### Callbacks /Logging / Success / Failure Handlers ###
+### Callbacks /Logging / Success / Failure Handlers ####
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
@@ -64,6 +65,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
+    "azure_storage",
     "opik",
     "argilla",
     "mlflow",
@@ -291,6 +293,7 @@ max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 internal_user_budget_duration: Optional[str] = None
+tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -838,71 +841,6 @@ model_list = (
 )
 
 
-class LlmProviders(str, Enum):
-    OPENAI = "openai"
-    OPENAI_LIKE = "openai_like"  # embedding only
-    JINA_AI = "jina_ai"
-    XAI = "xai"
-    CUSTOM_OPENAI = "custom_openai"
-    TEXT_COMPLETION_OPENAI = "text-completion-openai"
-    COHERE = "cohere"
-    COHERE_CHAT = "cohere_chat"
-    CLARIFAI = "clarifai"
-    ANTHROPIC = "anthropic"
-    ANTHROPIC_TEXT = "anthropic_text"
-    REPLICATE = "replicate"
-    HUGGINGFACE = "huggingface"
-    TOGETHER_AI = "together_ai"
-    OPENROUTER = "openrouter"
-    VERTEX_AI = "vertex_ai"
-    VERTEX_AI_BETA = "vertex_ai_beta"
-    GEMINI = "gemini"
-    AI21 = "ai21"
-    BASETEN = "baseten"
-    AZURE = "azure"
-    AZURE_TEXT = "azure_text"
-    AZURE_AI = "azure_ai"
-    SAGEMAKER = "sagemaker"
-    SAGEMAKER_CHAT = "sagemaker_chat"
-    BEDROCK = "bedrock"
-    VLLM = "vllm"
-    NLP_CLOUD = "nlp_cloud"
-    PETALS = "petals"
-    OOBABOOGA = "oobabooga"
-    OLLAMA = "ollama"
-    OLLAMA_CHAT = "ollama_chat"
-    DEEPINFRA = "deepinfra"
-    PERPLEXITY = "perplexity"
-    MISTRAL = "mistral"
-    GROQ = "groq"
-    NVIDIA_NIM = "nvidia_nim"
-    CEREBRAS = "cerebras"
-    AI21_CHAT = "ai21_chat"
-    VOLCENGINE = "volcengine"
-    CODESTRAL = "codestral"
-    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
-    DEEPSEEK = "deepseek"
-    SAMBANOVA = "sambanova"
-    MARITALK = "maritalk"
-    VOYAGE = "voyage"
-    CLOUDFLARE = "cloudflare"
-    XINFERENCE = "xinference"
-    FIREWORKS_AI = "fireworks_ai"
-    FRIENDLIAI = "friendliai"
-    WATSONX = "watsonx"
-    WATSONX_TEXT = "watsonx_text"
-    TRITON = "triton"
-    PREDIBASE = "predibase"
-    DATABRICKS = "databricks"
-    EMPOWER = "empower"
-    GITHUB = "github"
-    CUSTOM = "custom"
-    LITELLM_PROXY = "litellm_proxy"
-    HOSTED_VLLM = "hosted_vllm"
-    LM_STUDIO = "lm_studio"
-    GALADRIEL = "galadriel"
-
-
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 
 
@@ -1054,7 +992,6 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
-from .types.utils import ImageObject
 from .llms.custom_llm import CustomLLM
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig

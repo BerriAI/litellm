@@ -17,10 +17,14 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    LlmProviders,
+    ModelResponse,
+)
 from litellm.utils import (
     CustomStreamWrapper,
-    ModelResponse,
     UnsupportedParamsError,
     convert_to_model_response_object,
     get_secret,
@@ -853,7 +857,7 @@ class AzureChatCompletion(BaseLLM):
         client=None,
         aembedding=None,
         headers: Optional[dict] = None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         if headers:
             optional_params["extra_headers"] = headers
         if self._client_session is None:
@@ -963,7 +967,7 @@ class AzureChatCompletion(BaseLLM):
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
             async_handler = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.AZURE,
+                llm_provider=LlmProviders.AZURE,
                 params=_params,
             )
         else:
@@ -1242,11 +1246,11 @@ class AzureChatCompletion(BaseLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         api_version: Optional[str] = None,
-        model_response: Optional[litellm.utils.ImageResponse] = None,
+        model_response: Optional[ImageResponse] = None,
         azure_ad_token: Optional[str] = None,
         client=None,
         aimg_generation=None,
-    ) -> litellm.ImageResponse:
+    ) -> ImageResponse:
         try:
             if model and len(model) > 0:
                 model = model
@@ -1510,7 +1514,7 @@ class AzureChatCompletion(BaseLLM):
     ) -> dict:
         client_session = (
             litellm.aclient_session
-            or get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE).client
+            or get_async_httpx_client(llm_provider=LlmProviders.AZURE).client
         )  # handle dall-e-2 calls
 
         if "gateway.ai.cloudflare.com" in api_base:

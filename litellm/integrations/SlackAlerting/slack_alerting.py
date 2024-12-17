@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.router import Router
 from litellm.types.integrations.slack_alerting import *
 from litellm.types.router import LiteLLM_Params
 
@@ -93,7 +94,7 @@ class SlackAlerting(CustomBatchLogger):
         alert_types: Optional[List[AlertType]] = None,
         alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
         alerting_args: Optional[Dict] = None,
-        llm_router: Optional[litellm.Router] = None,
+        llm_router: Optional[Router] = None,
     ):
         if alerting is not None:
             self.alerting = alerting

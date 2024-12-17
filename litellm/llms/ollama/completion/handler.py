@@ -22,7 +22,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelInfo,
+    ModelResponse,
+    ProviderField,
+    StreamingChoices,
+)
 
 from ..common_utils import OllamaError
 from .transformation import OllamaConfig
@@ -30,12 +36,11 @@ from .transformation import OllamaConfig
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
 
-
 async def ollama_aembeddings(
     api_base: str,
     model: str,
     prompts: List[str],
-    model_response: litellm.EmbeddingResponse,
+    model_response: EmbeddingResponse,
     optional_params: dict,
     logging_obj: Any,
     encoding: Any,
@@ -102,7 +107,7 @@ def ollama_embeddings(
     model: str,
     prompts: list,
     optional_params: dict,
-    model_response: litellm.EmbeddingResponse,
+    model_response: EmbeddingResponse,
     logging_obj: Any,
     encoding=None,
 ):

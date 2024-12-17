@@ -10,18 +10,17 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexLLM,
-)
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.types.utils import ImageResponse
 
 
 class VertexImageGeneration(VertexLLM):
     def process_image_generation_response(
         self,
         json_response: Dict[str, Any],
-        model_response: litellm.ImageResponse,
+        model_response: ImageResponse,
         model: Optional[str] = None,
-    ) -> litellm.ImageResponse:
+    ) -> ImageResponse:
         if "predictions" not in json_response:
             raise litellm.InternalServerError(
                 message=f"image generation response does not contain 'predictions', got {json_response}",
@@ -46,7 +45,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[str],
-        model_response: litellm.ImageResponse,
+        model_response: ImageResponse,
         logging_obj: Any,
         model: Optional[
             str
@@ -55,7 +54,7 @@ class VertexImageGeneration(VertexLLM):
         optional_params: Optional[dict] = None,
         timeout: Optional[int] = None,
         aimg_generation=False,
-    ) -> litellm.ImageResponse:
+    ) -> ImageResponse:
         if aimg_generation is True:
             return self.aimage_generation(  # type: ignore
                 prompt=prompt,
