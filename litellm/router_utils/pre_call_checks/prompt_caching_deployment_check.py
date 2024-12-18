@@ -28,7 +28,25 @@ class PromptCachingDeploymentCheck(CustomLogger):
         request_kwargs: Optional[dict] = None,
         parent_otel_span: Optional[Span] = None,
     ) -> List[dict]:
-        return []
+        if messages is not None and is_prompt_caching_valid_prompt(
+            messages=messages,
+            model=model,
+        ):  # prompt > 1024 tokens
+            prompt_cache = PromptCachingCache(
+                cache=self.cache,
+            )
+
+            model_id_dict = await prompt_cache.async_get_model_id(
+                messages=cast(List[AllMessageValues], messages),
+                tools=None,
+            )
+            if model_id_dict is not None:
+                model_id = model_id_dict["model_id"]
+                for deployment in healthy_deployments:
+                    if deployment["model_info"]["id"] == model_id:
+                        return [deployment]
+
+        return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(

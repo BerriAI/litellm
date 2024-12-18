@@ -713,13 +713,6 @@ async def test_router_with_prompt_caching(anthropic_messages):
         {"role": "user", "content": "What is the weather in SF?"}
     ]
 
-    pc_deployment = await cache.async_get_prompt_caching_deployment(
-        router=router,
-        messages=new_messages,
-        tools=None,
-    )
-    assert pc_deployment is not None
-
     for _ in range(20):
         response = await router.acompletion(
             messages=new_messages,
