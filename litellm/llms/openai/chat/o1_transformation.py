@@ -16,6 +16,7 @@ from typing import Any, List, Optional, Union
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.utils import supports_system_messages
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -95,16 +96,16 @@ class OpenAIO1Config(OpenAIGPTConfig):
         return False
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
-
+        _supports_system_messages = supports_system_messages(model, "openai")
         for i, message in enumerate(messages):
-            if message["role"] == "system":
+            if message["role"] == "system" and not _supports_system_messages:
                 new_message = ChatCompletionUserMessage(
                     content=message["content"], role="user"
                 )

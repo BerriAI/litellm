@@ -1645,17 +1645,11 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
     Raises:
     Exception: If the given model is not found in model_prices_and_context_window.json.
     """
-    try:
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        if model_info.get("supports_system_messages", False) is True:
-            return True
-        return False
-    except Exception:
-        raise Exception(
-            f"Model not supports system messages. You passed model={model}, custom_llm_provider={custom_llm_provider}."
-        )
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_system_messages",
+    )
 
 
 def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> bool:

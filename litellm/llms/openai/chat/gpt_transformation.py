@@ -164,7 +164,7 @@ class OpenAIGPTConfig(BaseConfig):
         )
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         return messages
 

@@ -198,7 +198,7 @@ class OpenAIConfig(BaseConfig):
         return optional_params
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         return messages
 
@@ -456,7 +456,9 @@ class OpenAIChatCompletion(BaseLLM):
                 if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
                     provider_config, OpenAIConfig
                 ):
-                    messages = provider_config._transform_messages(messages)
+                    messages = provider_config._transform_messages(
+                        messages=messages, model=model
+                    )
 
             for _ in range(
                 2
