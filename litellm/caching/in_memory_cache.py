@@ -16,7 +16,7 @@ import litellm
 
 from .base_cache import BaseCache
 
-IN_MEMORY_CACHE_DEFAULT_TTL = 600
+IN_MEMORY_CACHE_DEFAULT_TTL = 600.0
 IN_MEMORY_CACHE_MAX_SIZE = 200
 
 
