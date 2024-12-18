@@ -12,8 +12,6 @@ import json
 import time
 from typing import List, Optional
 
-import litellm
-
 from .base_cache import BaseCache
 
 IN_MEMORY_CACHE_DEFAULT_TTL = 600.0
