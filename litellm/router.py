@@ -92,6 +92,9 @@ from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
 )
+from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+    PromptCachingDeploymentCheck,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -128,6 +131,7 @@ from litellm.types.router import (
     LiteLLMParamsTypedDict,
     ModelGroupInfo,
     ModelInfo,
+    OptionalPreCallChecks,
     RetryPolicy,
     RouterCacheEnum,
     RouterErrors,
@@ -249,6 +253,7 @@ class Router:
             "cost-based-routing",
             "usage-based-routing-v2",
         ] = "simple-shuffle",
+        optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
@@ -578,6 +583,10 @@ class Router:
             )
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
+
+        if optional_pre_call_checks is not None:
+            self.add_optional_pre_call_checks(optional_pre_call_checks)
+
         if self.alerting_config is not None:
             self._initialize_alerting()
 
@@ -612,6 +621,17 @@ class Router:
                 raise ValueError(
                     f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
                 )
+
+    def add_optional_pre_call_checks(
+        self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
+    ):
+        if optional_pre_call_checks is not None:
+            for pre_call_check in optional_pre_call_checks:
+                _callback: Optional[CustomLogger] = None
+                if pre_call_check == "prompt_caching":
+                    _callback = PromptCachingDeploymentCheck(cache=self.cache)
+                if _callback is not None:
+                    litellm.callbacks.append(_callback)
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -3261,22 +3281,6 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=id,
                 )
-
-                ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
-                if is_prompt_caching_valid_prompt(
-                    model=deployment_name,
-                    messages=kwargs.get("messages", None),
-                    tools=kwargs.get("tools", None),
-                    custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                ):
-                    cache = PromptCachingCache(
-                        cache=self.cache,
-                    )
-                    await cache.async_add_model_id(
-                        model_id=id,
-                        messages=kwargs.get("messages", None),
-                        tools=kwargs.get("tools", None),
-                    )
 
                 return tpm_key
 
