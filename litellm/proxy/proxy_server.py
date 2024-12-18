@@ -3207,7 +3207,7 @@ async def model_list(
     """
     global llm_model_list, general_settings, llm_router
     all_models = []
-    model_access_groups = defaultdict(list)
+    model_access_groups: Dict[str, List[str]] = defaultdict(list)
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
     if llm_router is None:
         proxy_model_list = []
@@ -7370,7 +7370,7 @@ async def model_group_info(
             status_code=500, detail={"error": "LLM Router is not loaded in"}
         )
     ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    model_access_groups = defaultdict(list)
+    model_access_groups: Dict[str, List[str]] = defaultdict(list)
     if llm_router is None:
         proxy_model_list = []
     else:
