@@ -1,14 +1,6 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: openai/o1-preview
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/o1-preview
       api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  tag_budget_config:
-    product:chat-bot: # (Tag)
-      max_budget: 0.000000000001 # (USD)
-      budget_duration: 1d # (Duration)
-    product:chat-bot-2: # (Tag)
-      max_budget: 100 # (USD)
-      budget_duration: 1d # (Duration)
