@@ -1548,8 +1548,6 @@ jobs:
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
-            pip install "PyGithub==1.59.1"
-            pip install "openai==1.54.0 "
       - run:
           name: Install Playwright Browsers
           command: |
