@@ -284,7 +284,9 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
                 provider_config, OpenAIConfig
             ):
-                messages = provider_config._transform_messages(messages)
+                messages = provider_config._transform_messages(
+                    messages=messages, model=model
+                )
 
         data = {
             "model": model,
