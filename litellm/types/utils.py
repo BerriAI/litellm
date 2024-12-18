@@ -1662,6 +1662,11 @@ class StandardKeyGenerationConfig(TypedDict, total=False):
     personal_key_generation: PersonalUIKeyGenerationConfig
 
 
+class GenericBudgetInfo(BaseModel):
+    time_period: str  # e.g., '1d', '30d'
+    budget_limit: float
+
+
 class BudgetConfig(BaseModel):
     max_budget: float
     budget_duration: str

@@ -5292,14 +5292,6 @@ class Router:
                 healthy_deployments=healthy_deployments,
             )
 
-            # if self.router_budget_logger:
-            #     healthy_deployments = (
-            #         await self.router_budget_logger.async_filter_deployments(
-            #             healthy_deployments=healthy_deployments,
-            #             request_kwargs=request_kwargs,
-            #         )
-            #     )
-
             if len(healthy_deployments) == 0:
                 exception = await async_raise_no_deployment_exception(
                     litellm_router_instance=self,
