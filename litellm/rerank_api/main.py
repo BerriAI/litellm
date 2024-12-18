@@ -319,27 +319,6 @@ def rerank(  # noqa: PLR0915
                 raise Exception(
                     "Invalid api base. api_base=None. Set in call or via `INFINITY_API_BASE` env var."
                 )
-            
-            # api_key: Optional[str] = (
-            #     dynamic_api_key
-            #     or get_secret("ELLM_API_KEY")
-            # )
-            
-            # if api_key is None:
-            #     api_key = "DUMMY_KEY"
-            #     # raise ValueError(
-            #     #     "Cohere API key is required, please set 'COHERE_API_KEY' in your environment"
-            #     # )
-
-            # api_base: Optional[str] = (
-            #     dynamic_api_base
-            #     or get_secret("ELLM_API_BASE")  # type: ignore
-            # )
-
-            # if api_base is None:
-            #     raise Exception(
-            #         "Invalid api base. api_base=None. Set in call or via `COHERE_API_BASE` env var."
-            #     )
 
             headers = headers or litellm.headers or {}
 
