@@ -3096,6 +3096,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "supports_audio_output": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash"
     },
     "gemini/gemini-2.0-flash-exp": {
@@ -3128,6 +3129,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "supports_audio_output": true,
         "tpm": 4000000,
         "rpm": 10,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash"
