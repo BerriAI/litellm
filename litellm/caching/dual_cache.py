@@ -61,7 +61,9 @@ class DualCache(BaseCache):
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
-        self.in_memory_cache = in_memory_cache or InMemoryCache()
+        self.in_memory_cache = in_memory_cache or InMemoryCache(
+            default_ttl=default_in_memory_ttl
+        )
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
         self.last_redis_batch_access_time = LimitedSizeOrderedDict(
