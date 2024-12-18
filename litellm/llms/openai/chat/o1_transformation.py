@@ -44,14 +44,14 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "function_call",
             "functions",
             "top_p",
-            "n",
             "presence_penalty",
             "frequency_penalty",
             "top_logprobs",
-            "response_format",
-            "stop",
-            "stream_options",
         ]
+
+        if "o1-mini" not in model:
+            non_supported_params.append("stream")
+            non_supported_params.append("stream_options")
 
         return [
             param for param in all_openai_params if param not in non_supported_params
