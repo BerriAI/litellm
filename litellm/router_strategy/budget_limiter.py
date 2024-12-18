@@ -26,13 +26,14 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
     DeploymentTypedDict,
     GenericBudgetConfigType,
@@ -41,13 +42,6 @@ from litellm.types.router import (
     RouterErrors,
 )
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span
-else:
-    Span = Any
 
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
@@ -79,9 +73,12 @@ class RouterBudgetLimiting(CustomLogger):
 
     async def async_filter_deployments(
         self,
-        healthy_deployments: Union[List[Dict[str, Any]], Dict[str, Any]],
-        request_kwargs: Optional[Dict] = None,
-    ):
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,  # type: ignore
+    ) -> List[dict]:
         """
         Filter out deployments that have exceeded their provider budget limit.
 
@@ -101,11 +98,6 @@ class RouterBudgetLimiting(CustomLogger):
             return healthy_deployments
 
         potential_deployments: List[Dict] = []
-
-        # Extract the parent OpenTelemetry span for tracing
-        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
-            request_kwargs
-        )
 
         cache_keys, provider_configs, deployment_configs = (
             await self._async_get_cache_keys_for_router_budget_limiting(
