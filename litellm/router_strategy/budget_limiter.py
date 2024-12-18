@@ -43,13 +43,6 @@ from litellm.types.router import (
 )
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span
-else:
-    Span = Any
-
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
 
@@ -105,11 +98,6 @@ class RouterBudgetLimiting(CustomLogger):
             return healthy_deployments
 
         potential_deployments: List[Dict] = []
-
-        # Extract the parent OpenTelemetry span for tracing
-        parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
-            request_kwargs
-        )
 
         cache_keys, provider_configs, deployment_configs = (
             await self._async_get_cache_keys_for_router_budget_limiting(
