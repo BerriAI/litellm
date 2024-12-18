@@ -885,3 +885,52 @@ def test_enforced_params_check(
             user_api_key_dict=user_api_key_dict,
             premium_user=True,
         )
+
+
+def test_get_key_models():
+    from litellm.proxy.auth.model_checks import get_key_models
+    from collections import defaultdict
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        models=["default"],
+    )
+    proxy_model_list = ["gpt-4o", "gpt-3.5-turbo"]
+    model_access_groups = defaultdict(list)
+    model_access_groups["default"].extend(["gpt-4o", "gpt-3.5-turbo"])
+    model_access_groups["default"].extend(["gpt-4o-mini"])
+    model_access_groups["team2"].extend(["gpt-3.5-turbo"])
+
+    result = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    assert result == ["gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"]
+
+
+def test_get_team_models():
+    from litellm.proxy.auth.model_checks import get_team_models
+    from collections import defaultdict
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        models=[],
+        team_models=["default"],
+    )
+    proxy_model_list = ["gpt-4o", "gpt-3.5-turbo"]
+    model_access_groups = defaultdict(list)
+    model_access_groups["default"].extend(["gpt-4o", "gpt-3.5-turbo"])
+    model_access_groups["default"].extend(["gpt-4o-mini"])
+    model_access_groups["team2"].extend(["gpt-3.5-turbo"])
+
+    result = get_team_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    assert result == ["gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"]
