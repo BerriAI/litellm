@@ -493,7 +493,7 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    await user_api_key_cache.async_set_cache(key=key, value=value)
+    await user_api_key_cache.async_set_cache(key=key, value=value, keepttl=True)
 
 
 async def _cache_team_object(
@@ -720,7 +720,6 @@ async def get_key_object(
     cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
         key=key
     )
-
     if cached_key_obj is not None:
         if isinstance(cached_key_obj, dict):
             return UserAPIKeyAuth(**cached_key_obj)
