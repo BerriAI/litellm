@@ -3720,6 +3720,57 @@ class Router:
                         ).start()  # log response
                     raise e
 
+    async def async_callback_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List[dict],
+        messages: Optional[List[AllMessageValues]],
+        parent_otel_span: Optional[Span],
+        request_kwargs: Optional[dict] = None,
+        logging_obj: Optional[LiteLLMLogging] = None,
+    ):
+        """
+        For usage-based-routing-v2, enables running rpm checks before the call is made, inside the semaphore.
+
+        -> makes the calls concurrency-safe, when rpm limits are set for a deployment
+
+        Returns:
+        - None
+
+        Raises:
+        - Rate Limit Exception - If the deployment is over it's tpm/rpm limits
+        """
+        returned_healthy_deployments = healthy_deployments
+        for _callback in litellm.callbacks:
+            if isinstance(_callback, CustomLogger):
+                try:
+                    returned_healthy_deployments = (
+                        await _callback.async_filter_deployments(
+                            model=model,
+                            healthy_deployments=returned_healthy_deployments,
+                            messages=messages,
+                            request_kwargs=request_kwargs,
+                            parent_otel_span=parent_otel_span,
+                        )
+                    )
+                except Exception as e:
+                    ## LOG FAILURE EVENT
+                    if logging_obj is not None:
+                        asyncio.create_task(
+                            logging_obj.async_failure_handler(
+                                exception=e,
+                                traceback_exception=traceback.format_exc(),
+                                end_time=time.time(),
+                            )
+                        )
+                        ## LOGGING
+                        threading.Thread(
+                            target=logging_obj.failure_handler,
+                            args=(e, traceback.format_exc()),
+                        ).start()  # log response
+                    raise e
+        return returned_healthy_deployments
+
     def _generate_model_id(self, model_group: str, litellm_params: dict):
         """
         Helper function to consistently generate the same id for a deployment
@@ -5205,6 +5256,18 @@ class Router:
             healthy_deployments = self._filter_cooldown_deployments(
                 healthy_deployments=healthy_deployments,
                 cooldown_deployments=cooldown_deployments,
+            )
+
+            healthy_deployments = await self.async_callback_filter_deployments(
+                model=model,
+                healthy_deployments=healthy_deployments,
+                messages=(
+                    cast(List[AllMessageValues], messages)
+                    if messages is not None
+                    else None
+                ),
+                request_kwargs=request_kwargs,
+                parent_otel_span=parent_otel_span,
             )
 
             if self.enable_pre_call_checks and messages is not None:

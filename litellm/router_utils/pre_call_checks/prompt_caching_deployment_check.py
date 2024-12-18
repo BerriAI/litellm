@@ -6,8 +6,9 @@ Route to previously cached model id, if valid
 
 from typing import List, Optional, cast
 
+from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import is_prompt_caching_valid_prompt
@@ -19,6 +20,16 @@ class PromptCachingDeploymentCheck(CustomLogger):
     def __init__(self, cache: DualCache):
         self.cache = cache
 
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[dict]:
+        return []
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
@@ -28,10 +39,14 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return
 
         call_type = standard_logging_object["call_type"]
+
         if (
             call_type != CallTypes.completion.value
-            or call_type != CallTypes.acompletion.value
+            and call_type != CallTypes.acompletion.value
         ):  # only use prompt caching for completion calls
+            verbose_logger.debug(
+                "litellm.router_utils.pre_call_checks.prompt_caching_deployment_check: skipping adding model id to prompt caching cache, CALL TYPE IS NOT COMPLETION"
+            )
             return
 
         model = standard_logging_object["model"]
@@ -39,8 +54,14 @@ class PromptCachingDeploymentCheck(CustomLogger):
         model_id = standard_logging_object["model_id"]
 
         if messages is None or not isinstance(messages, list):
+            verbose_logger.debug(
+                "litellm.router_utils.pre_call_checks.prompt_caching_deployment_check: skipping adding model id to prompt caching cache, MESSAGES IS NOT A LIST"
+            )
             return
         if model_id is None:
+            verbose_logger.debug(
+                "litellm.router_utils.pre_call_checks.prompt_caching_deployment_check: skipping adding model id to prompt caching cache, MODEL ID IS NONE"
+            )
             return
 
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider

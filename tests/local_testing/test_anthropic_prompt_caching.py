@@ -682,7 +682,8 @@ async def test_router_with_prompt_caching(anthropic_messages):
                     "mock_response": "The sky is green.",
                 },
             },
-        ]
+        ],
+        optional_pre_call_checks=["prompt_caching"],
     )
 
     response = await router.acompletion(
