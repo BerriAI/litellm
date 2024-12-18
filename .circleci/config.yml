@@ -1093,7 +1093,7 @@ jobs:
           # the OTEL test - should get this as a trace
           command: |
             docker run -d \
-              -p 4000:4000 \
+              -p 4001:4001 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -1111,10 +1111,10 @@ jobs:
               -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
               -e GCS_FLUSH_INTERVAL="1" \
-              --name my-app \
+              --name my-app-2 \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
-              my-app:latest \
+              my-app-2:latest \
               --config /app/config.yaml \
               --port 4001 \
               --detailed_debug \
@@ -1133,6 +1133,8 @@ jobs:
           command: |
             docker stop my-app
             docker rm my-app
+            docker stop my-app-2
+            docker rm my-app-2
 
       # Second Docker Container Run with Different Config
       # NOTE: We intentionally pass a "bad" license here. We need to ensure proxy starts and serves request even with bad license
