@@ -31,7 +31,7 @@ model_list:
      api_key: fake-key
    model_info:
      supports_vision: True
-  - model_name: fake-openai-endpoint-all-users
+ - model_name: fake-openai-endpoint-all-users
    litellm_params:
      model: openai/fake
      api_key: fake-key
