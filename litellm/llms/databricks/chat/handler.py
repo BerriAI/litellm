@@ -2,11 +2,12 @@
 Handles the chat completion request for Databricks
 """
 
-from typing import Any, Callable, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union, cast
 
 from httpx._config import Timeout
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CustomStreamingDecoder
 from litellm.utils import ModelResponse
 
@@ -44,7 +45,9 @@ class DatabricksChatCompletion(OpenAILikeChatHandler, DatabricksBase):
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        messages = DatabricksConfig()._transform_messages(messages)  # type: ignore
+        messages = DatabricksConfig()._transform_messages(
+            messages=cast(List[AllMessageValues], messages), model=model
+        )
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
             api_key=api_key,

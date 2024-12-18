@@ -365,8 +365,3 @@ class CohereChatConfig(BaseConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError

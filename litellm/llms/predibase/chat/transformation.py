@@ -139,11 +139,6 @@ class PredibaseConfig(BaseConfig):
             "Predibase transformation currently done in handler.py. Need to migrate to this file."
         )
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
     def transform_request(
         self,
         model: str,

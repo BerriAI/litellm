@@ -260,12 +260,6 @@ class AnthropicTextConfig(BaseConfig):
 
         return str(prompt)
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        "Not required"
-        raise NotImplementedError
-
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],

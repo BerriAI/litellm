@@ -235,11 +235,6 @@ class OllamaConfig(BaseConfig):
             max_output_tokens=_max_tokens,
         )
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
     ) -> BaseLLMException:
