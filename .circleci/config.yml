@@ -1034,7 +1034,7 @@ jobs:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
-          name: Run Docker container
+          name: Run Docker container (Instance 1 port 4000)
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
           command: |
@@ -1065,7 +1065,7 @@ jobs:
               --port 4000 \
               --detailed_debug \
       - run:
-          name: Install curl and dockerize
+          name: Install curl and dockerize (Instance 1 port 4000)
           command: |
             sudo apt-get update
             sudo apt-get install -y curl
@@ -1073,14 +1073,14 @@ jobs:
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
-          name: Start outputting logs
+          name: Start outputting logs (Instance 1 port 4000)
           command: docker logs -f my-app
           background: true
       - run:
-          name: Wait for app to be ready
+          name: Wait for app to be ready (Instance 1 port 4000)
           command: dockerize -wait http://localhost:4000 -timeout 5m
       - run:
-          name: Run tests
+          name: Run tests (Instance 1 port 4000)
           command: |
             pwd
             ls
