@@ -1088,7 +1088,7 @@ jobs:
           no_output_timeout: 120m
            # Clean up first container
       - run:
-          name: Run Docker container
+          name: Run Docker container (Instance 2 Port 4001)
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
           command: |
@@ -1119,17 +1119,17 @@ jobs:
               --port 4001 \
               --detailed_debug \
       - run:
-          name: Wait for app to be ready
+          name: Wait for app to be ready (instance 2 port 4001)
           command: dockerize -wait http://localhost:4001 -timeout 5m
       - run:
-          name: Run tests
+          name: Run Multi Instance Tests
           command: |
             pwd
             ls
             python -m pytest -vv tests/multi_instance_tests -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
-          name: Stop and remove first container
+          name: Stop and remove first container (Cleanup)
           command: |
             docker stop my-app
             docker rm my-app
@@ -1139,7 +1139,7 @@ jobs:
       # Second Docker Container Run with Different Config
       # NOTE: We intentionally pass a "bad" license here. We need to ensure proxy starts and serves request even with bad license
       - run:
-          name: Run Second Docker container
+          name: Run 3rd Docker container (Restart docker container - ensure it starts)
           command: |
             docker run -d \
               -p 4000:4000 \
