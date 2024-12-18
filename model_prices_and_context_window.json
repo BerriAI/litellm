@@ -1341,6 +1341,18 @@
         "mode": "chat",
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.meta-llama-3-2-11b-vision-instruct-offer?tab=Overview"
     },
+    "azure_ai/Llama-3.3-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.00000071,
+        "output_cost_per_token": 0.00000071,
+        "litellm_provider": "azure_ai",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "mode": "chat",
+        "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/metagenai.llama-3-3-70b-instruct-offer?tab=Overview"
+    },
     "azure_ai/Llama-3.2-90B-Vision-Instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
