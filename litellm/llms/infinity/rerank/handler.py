@@ -17,12 +17,8 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.rerank import (
-    RerankRequest, 
-    RerankResponse, 
-    RerankResponseMeta, 
-    RerankTokens,
-)
+from litellm.llms.infinity.rerank.transformation import InfinityRerankConfig
+from litellm.types.rerank import RerankRequest, RerankResponse
 
 
 class InfinityRerank(BaseLLM):
@@ -113,25 +109,10 @@ class InfinityRerank(BaseLLM):
             headers=headers,
             json=request_data_dict,
         )
-        returned_response = RerankResponse(
-            id=response.json()["id"],
-            results=response.json()["results"],
-            meta=RerankResponseMeta(
-                tokens=RerankTokens(
-                    input_tokens=response.json()["usage"]["prompt_tokens"],
-                    output_tokens=(response.json()["usage"]["total_tokens"] - response.json()["usage"]["prompt_tokens"]),
-                )
-            ),
-        )
-
-        _response_headers = response.headers
-
-        llm_response_headers = {
-            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
-        }
-        returned_response._hidden_params["additional_headers"] = llm_response_headers
-
-        return returned_response
+        
+        _json_response = response.json()
+        
+        return InfinityRerankConfig()._transform_response(_json_response)
 
     async def async_rerank(
         self,
@@ -144,7 +125,7 @@ class InfinityRerank(BaseLLM):
         request_data_dict = request_data.dict(exclude_none=True)
 
         client = client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.COHERE
+            llm_provider=litellm.LlmProviders.INFINITY
         )
 
         response = await client.post(
@@ -153,14 +134,6 @@ class InfinityRerank(BaseLLM):
             json=request_data_dict,
         )
 
-        returned_response = RerankResponse(**response.json())
-
-        _response_headers = dict(response.headers)
-
-        llm_response_headers = {
-            "{}-{}".format("llm_provider", k): v for k, v in _response_headers.items()
-        }
-        returned_response._hidden_params["additional_headers"] = llm_response_headers
-        returned_response._hidden_params["model"] = request_data.model
-
-        return returned_response
+        _json_response = response.json()
+        
+        return InfinityRerankConfig()._transform_response(_json_response)

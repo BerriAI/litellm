@@ -1730,6 +1730,7 @@ class LlmProviders(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
+    INFINITY = "infinity"
 
 
 class LiteLLMLoggingBaseClass:
