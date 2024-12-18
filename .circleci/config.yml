@@ -975,7 +975,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  proxy_e2e_tests_advanced:
+  proxy_logging_guardrails_model_info_tests:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
