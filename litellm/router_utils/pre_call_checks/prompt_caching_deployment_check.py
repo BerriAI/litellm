@@ -6,7 +6,7 @@ Route to previously cached model id, if valid
 
 from typing import List, Optional, cast
 
-from litellm.cache.dual_cache import DualCache
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
