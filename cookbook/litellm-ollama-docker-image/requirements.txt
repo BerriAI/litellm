@@ -1,1 +1,1 @@
-litellm
+litellm==1.55.3
