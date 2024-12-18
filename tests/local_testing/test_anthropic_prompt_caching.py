@@ -653,9 +653,9 @@ async def test_router_prompt_caching_model_stored(
 
 
 @pytest.mark.asyncio()
-@pytest.mark.skip(
-    reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
-)
+# @pytest.mark.skip(
+#     reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
+# )
 async def test_router_with_prompt_caching(anthropic_messages):
     """
     if prompt caching supported model called with prompt caching valid prompt,
@@ -672,12 +672,14 @@ async def test_router_with_prompt_caching(anthropic_messages):
                 "litellm_params": {
                     "model": "anthropic/claude-3-5-sonnet-20240620",
                     "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+                    "mock_response": "The sky is blue.",
                 },
             },
             {
                 "model_name": "claude-model",
                 "litellm_params": {
                     "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    "mock_response": "The sky is green.",
                 },
             },
         ]
@@ -699,6 +701,7 @@ async def test_router_with_prompt_caching(anthropic_messages):
 
     cached_model_id = cache.get_model_id(messages=anthropic_messages, tools=None)
 
+    assert cached_model_id is not None
     prompt_caching_cache_key = PromptCachingCache.get_prompt_caching_cache_key(
         messages=anthropic_messages, tools=None
     )
@@ -716,11 +719,12 @@ async def test_router_with_prompt_caching(anthropic_messages):
     )
     assert pc_deployment is not None
 
-    response = await router.acompletion(
-        messages=new_messages,
-        model="claude-model",
-        mock_response="The sky is blue.",
-    )
-    print("response=", response)
+    for _ in range(20):
+        response = await router.acompletion(
+            messages=new_messages,
+            model="claude-model",
+            mock_response="The sky is blue.",
+        )
+        print("response=", response)
 
-    assert response._hidden_params["model_id"] == initial_model_id
+        assert response._hidden_params["model_id"] == initial_model_id

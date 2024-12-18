@@ -153,6 +153,7 @@ from litellm.utils import (
     get_llm_provider,
     get_secret,
     get_utc_datetime,
+    is_prompt_caching_valid_prompt,
     is_region_allowed,
 )
 
@@ -1810,7 +1811,6 @@ class Router:
 
             return await litellm._arealtime(**{**data, "caching": self.cache_responses, **kwargs})  # type: ignore
         except Exception as e:
-            traceback.print_exc()
             if self.num_retries > 0:
                 kwargs["model"] = model
                 kwargs["messages"] = messages
@@ -3261,6 +3261,23 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=id,
                 )
+
+                ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
+                if is_prompt_caching_valid_prompt(
+                    model=deployment_name,
+                    messages=kwargs.get("messages", None),
+                    tools=kwargs.get("tools", None),
+                    custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                ):
+                    cache = PromptCachingCache(
+                        cache=self.cache,
+                    )
+                    await cache.async_add_model_id(
+                        model_id=id,
+                        messages=kwargs.get("messages", None),
+                        tools=kwargs.get("tools", None),
+                    )
+
                 return tpm_key
 
         except Exception as e:
