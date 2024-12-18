@@ -270,7 +270,13 @@ Expected response on failure
 
 </Tabs>
 
-## Tag Budgets
+## ✨ Tag Budgets
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/#pricing)
+
+:::
 
 Use this to set budgets for tags - example $10/day for tag=`product:chat-bot`, $100/day for tag=`product:chat-bot-2`
 
