@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 import openai
 
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class OpenAIError(BaseLLMException):

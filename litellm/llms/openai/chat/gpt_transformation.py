@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponse
 

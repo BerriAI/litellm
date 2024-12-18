@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Union
 from httpx import Headers, Response
 
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
-from litellm.llms.base_llm.transformation import (
+from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,

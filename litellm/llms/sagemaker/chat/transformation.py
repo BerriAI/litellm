@@ -11,7 +11,7 @@ from typing import Union
 
 from httpx._models import Headers
 
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import SagemakerError

@@ -3058,6 +3058,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "openai_like"
             or custom_llm_provider == "jina_ai"
+            or custom_llm_provider == "voyage"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3632,10 +3633,10 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "voyage":
-            api_key = api_key or litellm.api_key or get_secret_str("VOYAGE_API_KEY")
-            response = openai_chat_completions.embedding(
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
+                custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,
