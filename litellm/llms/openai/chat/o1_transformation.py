@@ -16,7 +16,11 @@ from typing import Any, List, Optional, Union
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
-from litellm.utils import supports_system_messages
+from litellm.utils import (
+    supports_function_calling,
+    supports_response_schema,
+    supports_system_messages,
+)
 
 from .gpt_transformation import OpenAIGPTConfig
 
@@ -39,11 +43,6 @@ class OpenAIO1Config(OpenAIGPTConfig):
         all_openai_params = super().get_supported_openai_params(model=model)
         non_supported_params = [
             "logprobs",
-            "tools",
-            "tool_choice",
-            "parallel_tool_calls",
-            "function_call",
-            "functions",
             "top_p",
             "presence_penalty",
             "frequency_penalty",
@@ -51,14 +50,27 @@ class OpenAIO1Config(OpenAIGPTConfig):
         ]
 
         supported_streaming_models = ["o1-preview", "o1-mini"]
+        _supports_function_calling = supports_function_calling(model, "openai")
+        _supports_response_schema = supports_response_schema(model, "openai")
 
         if model not in supported_streaming_models:
             non_supported_params.append("stream")
             non_supported_params.append("stream_options")
 
-        return [
+        if not _supports_function_calling:
+            non_supported_params.append("tools")
+            non_supported_params.append("tool_choice")
+            non_supported_params.append("parallel_tool_calls")
+            non_supported_params.append("function_call")
+            non_supported_params.append("functions")
+
+        if not _supports_response_schema:
+            non_supported_params.append("response_format")
+
+        returned_params = [
             param for param in all_openai_params if param not in non_supported_params
         ]
+        return returned_params
 
     def map_openai_params(
         self,

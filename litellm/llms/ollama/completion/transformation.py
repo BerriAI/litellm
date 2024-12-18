@@ -23,6 +23,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     GenericStreamingChunk,
     ModelInfo,
+    ModelInfoBase,
     ModelResponse,
     ProviderField,
     StreamingChoices,
@@ -198,7 +199,7 @@ class OllamaConfig(BaseConfig):
                 return v
         return None
 
-    def get_model_info(self, model: str) -> ModelInfo:
+    def get_model_info(self, model: str) -> ModelInfoBase:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
@@ -222,11 +223,10 @@ class OllamaConfig(BaseConfig):
 
         _max_tokens: Optional[int] = self._get_max_tokens(model_info)
 
-        return ModelInfo(
+        return ModelInfoBase(
             key=model,
             litellm_provider="ollama",
             mode="chat",
-            supported_openai_params=self.get_supported_openai_params(model=model),
             supports_function_calling=self._supports_function_calling(model_info),
             input_cost_per_token=0.0,
             output_cost_per_token=0.0,

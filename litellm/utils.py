@@ -132,6 +132,7 @@ from litellm.types.utils import (
     LlmProviders,
     Message,
     ModelInfo,
+    ModelInfoBase,
     ModelResponse,
     ModelResponseStream,
     ProviderField,
@@ -1678,25 +1679,11 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
         return True
-    try:
-        ## GET MODEL INFO
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if model_info.get("supports_response_schema", False) is True:
-            return True
-    except Exception:
-        ## check if provider supports response schema globally
-        supported_params = get_supported_openai_params(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            request_type="chat_completion",
-        )
-        if supported_params is not None and "response_schema" in supported_params:
-            return True
-
-    return False
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_response_schema",
+    )
 
 
 def supports_function_calling(
@@ -1715,23 +1702,11 @@ def supports_function_calling(
     Raises:
     Exception: If the given model is not found or there's an error in retrieval.
     """
-    try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        ## CHECK IF MODEL SUPPORTS FUNCTION CALLING ##
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if model_info.get("supports_function_calling", False) is True:
-            return True
-        return False
-    except Exception as e:
-        raise Exception(
-            f"Model not found or error in checking function calling support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
-        )
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_function_calling",
+    )
 
 
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
@@ -1753,7 +1728,7 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        model_info = litellm.get_model_info(
+        model_info = _get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
@@ -4190,9 +4165,239 @@ def _get_potential_model_names(
     )
 
 
-def get_model_info(  # noqa: PLR0915
+def _get_max_position_embeddings(model_name: str) -> Optional[int]:
+    # Construct the URL for the config.json file
+    config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
+
+    try:
+        # Make the HTTP request to get the raw JSON file
+        response = litellm.module_level_client.get(config_url)
+        response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
+
+        # Parse the JSON response
+        config_json = response.json()
+
+        # Extract and return the max_position_embeddings
+        max_position_embeddings = config_json.get("max_position_embeddings")
+
+        if max_position_embeddings is not None:
+            return max_position_embeddings
+        else:
+            return None
+    except Exception:
+        return None
+
+
+def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
-) -> ModelInfo:
+) -> ModelInfoBase:
+    """
+    Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
+    """
+    try:
+        azure_llms = {**litellm.azure_llms, **litellm.azure_embedding_models}
+        if model in azure_llms:
+            model = azure_llms[model]
+        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai_beta":
+            custom_llm_provider = "vertex_ai"
+        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
+            if "meta/" + model in litellm.vertex_llama3_models:
+                model = "meta/" + model
+            elif model + "@latest" in litellm.vertex_mistral_models:
+                model = model + "@latest"
+            elif model + "@latest" in litellm.vertex_ai_ai21_models:
+                model = model + "@latest"
+        ##########################
+        potential_model_names = _get_potential_model_names(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        combined_model_name = potential_model_names["combined_model_name"]
+        stripped_model_name = potential_model_names["stripped_model_name"]
+        combined_stripped_model_name = potential_model_names[
+            "combined_stripped_model_name"
+        ]
+        split_model = potential_model_names["split_model"]
+        custom_llm_provider = potential_model_names["custom_llm_provider"]
+        #########################
+        if custom_llm_provider == "huggingface":
+            max_tokens = _get_max_position_embeddings(model_name=model)
+            return ModelInfoBase(
+                key=model,
+                max_tokens=max_tokens,  # type: ignore
+                max_input_tokens=None,
+                max_output_tokens=None,
+                input_cost_per_token=0,
+                output_cost_per_token=0,
+                litellm_provider="huggingface",
+                mode="chat",
+                supports_system_messages=None,
+                supports_response_schema=None,
+                supports_function_calling=None,
+                supports_assistant_prefill=None,
+                supports_prompt_caching=None,
+                supports_pdf_input=None,
+            )
+        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+            return litellm.OllamaConfig().get_model_info(model)
+        else:
+            """
+            Check if: (in order of specificity)
+            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
+            2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
+            3. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+            4. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
+            5. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
+            """
+
+            _model_info: Optional[Dict[str, Any]] = None
+            key: Optional[str] = None
+            if combined_model_name in litellm.model_cost:
+                key = combined_model_name
+                _model_info = _get_model_info_from_model_cost(key=key)
+                if not _check_provider_match(
+                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                ):
+                    _model_info = None
+            if _model_info is None and model in litellm.model_cost:
+                key = model
+                _model_info = _get_model_info_from_model_cost(key=key)
+                if not _check_provider_match(
+                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                ):
+                    _model_info = None
+            if (
+                _model_info is None
+                and combined_stripped_model_name in litellm.model_cost
+            ):
+                key = combined_stripped_model_name
+                _model_info = _get_model_info_from_model_cost(key=key)
+                if not _check_provider_match(
+                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                ):
+                    _model_info = None
+            if _model_info is None and stripped_model_name in litellm.model_cost:
+                key = stripped_model_name
+                _model_info = _get_model_info_from_model_cost(key=key)
+                if not _check_provider_match(
+                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                ):
+                    _model_info = None
+            if _model_info is None and split_model in litellm.model_cost:
+                key = split_model
+                _model_info = _get_model_info_from_model_cost(key=key)
+                if not _check_provider_match(
+                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                ):
+                    _model_info = None
+            if _model_info is None or key is None:
+                raise ValueError(
+                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                )
+
+            ## PROVIDER-SPECIFIC INFORMATION
+            if custom_llm_provider == "predibase":
+                _model_info["supports_response_schema"] = True
+
+            _input_cost_per_token: Optional[float] = _model_info.get(
+                "input_cost_per_token"
+            )
+            if _input_cost_per_token is None:
+                # default value to 0, be noisy about this
+                verbose_logger.debug(
+                    "model={}, custom_llm_provider={} has no input_cost_per_token in model_cost_map. Defaulting to 0.".format(
+                        model, custom_llm_provider
+                    )
+                )
+                _input_cost_per_token = 0
+
+            _output_cost_per_token: Optional[float] = _model_info.get(
+                "output_cost_per_token"
+            )
+            if _output_cost_per_token is None:
+                # default value to 0, be noisy about this
+                verbose_logger.debug(
+                    "model={}, custom_llm_provider={} has no output_cost_per_token in model_cost_map. Defaulting to 0.".format(
+                        model, custom_llm_provider
+                    )
+                )
+                _output_cost_per_token = 0
+
+            return ModelInfoBase(
+                key=key,
+                max_tokens=_model_info.get("max_tokens", None),
+                max_input_tokens=_model_info.get("max_input_tokens", None),
+                max_output_tokens=_model_info.get("max_output_tokens", None),
+                input_cost_per_token=_input_cost_per_token,
+                cache_creation_input_token_cost=_model_info.get(
+                    "cache_creation_input_token_cost", None
+                ),
+                cache_read_input_token_cost=_model_info.get(
+                    "cache_read_input_token_cost", None
+                ),
+                input_cost_per_character=_model_info.get(
+                    "input_cost_per_character", None
+                ),
+                input_cost_per_token_above_128k_tokens=_model_info.get(
+                    "input_cost_per_token_above_128k_tokens", None
+                ),
+                input_cost_per_query=_model_info.get("input_cost_per_query", None),
+                input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_audio_token=_model_info.get(
+                    "input_cost_per_audio_token", None
+                ),
+                output_cost_per_token=_output_cost_per_token,
+                output_cost_per_audio_token=_model_info.get(
+                    "output_cost_per_audio_token", None
+                ),
+                output_cost_per_character=_model_info.get(
+                    "output_cost_per_character", None
+                ),
+                output_cost_per_token_above_128k_tokens=_model_info.get(
+                    "output_cost_per_token_above_128k_tokens", None
+                ),
+                output_cost_per_character_above_128k_tokens=_model_info.get(
+                    "output_cost_per_character_above_128k_tokens", None
+                ),
+                output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_vector_size=_model_info.get("output_vector_size", None),
+                litellm_provider=_model_info.get(
+                    "litellm_provider", custom_llm_provider
+                ),
+                mode=_model_info.get("mode"),  # type: ignore
+                supports_system_messages=_model_info.get(
+                    "supports_system_messages", None
+                ),
+                supports_response_schema=_model_info.get(
+                    "supports_response_schema", None
+                ),
+                supports_vision=_model_info.get("supports_vision", False),
+                supports_function_calling=_model_info.get(
+                    "supports_function_calling", False
+                ),
+                supports_assistant_prefill=_model_info.get(
+                    "supports_assistant_prefill", False
+                ),
+                supports_prompt_caching=_model_info.get(
+                    "supports_prompt_caching", False
+                ),
+                supports_audio_input=_model_info.get("supports_audio_input", False),
+                supports_audio_output=_model_info.get("supports_audio_output", False),
+                supports_pdf_input=_model_info.get("supports_pdf_input", False),
+                tpm=_model_info.get("tpm", None),
+                rpm=_model_info.get("rpm", None),
+            )
+    except Exception as e:
+        if "OllamaError" in str(e):
+            raise e
+        raise Exception(
+            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
+                model, custom_llm_provider
+            )
+        )
+
+
+def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
@@ -4259,241 +4464,20 @@ def get_model_info(  # noqa: PLR0915
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    supported_openai_params: Union[List[str], None] = []
+    supported_openai_params = litellm.get_supported_openai_params(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
 
-    def _get_max_position_embeddings(model_name):
-        # Construct the URL for the config.json file
-        config_url = f"https://huggingface.co/{model_name}/raw/main/config.json"
+    _model_info = _get_model_info_helper(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
 
-        try:
-            # Make the HTTP request to get the raw JSON file
-            response = litellm.module_level_client.get(config_url)
-            response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
+    returned_model_info = ModelInfo(
+        **_model_info, supported_openai_params=supported_openai_params
+    )
 
-            # Parse the JSON response
-            config_json = response.json()
-
-            # Extract and return the max_position_embeddings
-            max_position_embeddings = config_json.get("max_position_embeddings")
-
-            if max_position_embeddings is not None:
-                return max_position_embeddings
-            else:
-                return None
-        except Exception:
-            return None
-
-    try:
-        azure_llms = {**litellm.azure_llms, **litellm.azure_embedding_models}
-        if model in azure_llms:
-            model = azure_llms[model]
-        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai_beta":
-            custom_llm_provider = "vertex_ai"
-        if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
-            if "meta/" + model in litellm.vertex_llama3_models:
-                model = "meta/" + model
-            elif model + "@latest" in litellm.vertex_mistral_models:
-                model = model + "@latest"
-            elif model + "@latest" in litellm.vertex_ai_ai21_models:
-                model = model + "@latest"
-        ##########################
-        potential_model_names = _get_potential_model_names(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        combined_model_name = potential_model_names["combined_model_name"]
-        stripped_model_name = potential_model_names["stripped_model_name"]
-        combined_stripped_model_name = potential_model_names[
-            "combined_stripped_model_name"
-        ]
-        split_model = potential_model_names["split_model"]
-        custom_llm_provider = potential_model_names["custom_llm_provider"]
-        #########################
-        supported_openai_params = litellm.get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        if custom_llm_provider == "huggingface":
-            max_tokens = _get_max_position_embeddings(model_name=model)
-            return ModelInfo(
-                key=model,
-                max_tokens=max_tokens,  # type: ignore
-                max_input_tokens=None,
-                max_output_tokens=None,
-                input_cost_per_token=0,
-                output_cost_per_token=0,
-                litellm_provider="huggingface",
-                mode="chat",
-                supported_openai_params=supported_openai_params,
-                supports_system_messages=None,
-                supports_response_schema=None,
-                supports_function_calling=None,
-                supports_assistant_prefill=None,
-                supports_prompt_caching=None,
-                supports_pdf_input=None,
-            )
-        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
-            return litellm.OllamaConfig().get_model_info(model)
-        else:
-            """
-            Check if: (in order of specificity)
-            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
-            2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
-            3. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            4. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            5. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
-            """
-
-            _model_info: Optional[Dict[str, Any]] = None
-            key: Optional[str] = None
-            if combined_model_name in litellm.model_cost:
-                key = combined_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
-                _model_info["supported_openai_params"] = supported_openai_params
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and model in litellm.model_cost:
-                key = model
-                _model_info = _get_model_info_from_model_cost(key=key)
-                _model_info["supported_openai_params"] = supported_openai_params
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if (
-                _model_info is None
-                and combined_stripped_model_name in litellm.model_cost
-            ):
-                key = combined_stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
-                _model_info["supported_openai_params"] = supported_openai_params
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and stripped_model_name in litellm.model_cost:
-                key = stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=key)
-                _model_info["supported_openai_params"] = supported_openai_params
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and split_model in litellm.model_cost:
-                key = split_model
-                _model_info = _get_model_info_from_model_cost(key=key)
-                _model_info["supported_openai_params"] = supported_openai_params
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None or key is None:
-                raise ValueError(
-                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                )
-
-            ## PROVIDER-SPECIFIC INFORMATION
-            if custom_llm_provider == "predibase":
-                _model_info["supports_response_schema"] = True
-
-            _input_cost_per_token: Optional[float] = _model_info.get(
-                "input_cost_per_token"
-            )
-            if _input_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model={}, custom_llm_provider={} has no input_cost_per_token in model_cost_map. Defaulting to 0.".format(
-                        model, custom_llm_provider
-                    )
-                )
-                _input_cost_per_token = 0
-
-            _output_cost_per_token: Optional[float] = _model_info.get(
-                "output_cost_per_token"
-            )
-            if _output_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model={}, custom_llm_provider={} has no output_cost_per_token in model_cost_map. Defaulting to 0.".format(
-                        model, custom_llm_provider
-                    )
-                )
-                _output_cost_per_token = 0
-
-            return ModelInfo(
-                key=key,
-                max_tokens=_model_info.get("max_tokens", None),
-                max_input_tokens=_model_info.get("max_input_tokens", None),
-                max_output_tokens=_model_info.get("max_output_tokens", None),
-                input_cost_per_token=_input_cost_per_token,
-                cache_creation_input_token_cost=_model_info.get(
-                    "cache_creation_input_token_cost", None
-                ),
-                cache_read_input_token_cost=_model_info.get(
-                    "cache_read_input_token_cost", None
-                ),
-                input_cost_per_character=_model_info.get(
-                    "input_cost_per_character", None
-                ),
-                input_cost_per_token_above_128k_tokens=_model_info.get(
-                    "input_cost_per_token_above_128k_tokens", None
-                ),
-                input_cost_per_query=_model_info.get("input_cost_per_query", None),
-                input_cost_per_second=_model_info.get("input_cost_per_second", None),
-                input_cost_per_audio_token=_model_info.get(
-                    "input_cost_per_audio_token", None
-                ),
-                output_cost_per_token=_output_cost_per_token,
-                output_cost_per_audio_token=_model_info.get(
-                    "output_cost_per_audio_token", None
-                ),
-                output_cost_per_character=_model_info.get(
-                    "output_cost_per_character", None
-                ),
-                output_cost_per_token_above_128k_tokens=_model_info.get(
-                    "output_cost_per_token_above_128k_tokens", None
-                ),
-                output_cost_per_character_above_128k_tokens=_model_info.get(
-                    "output_cost_per_character_above_128k_tokens", None
-                ),
-                output_cost_per_second=_model_info.get("output_cost_per_second", None),
-                output_cost_per_image=_model_info.get("output_cost_per_image", None),
-                output_vector_size=_model_info.get("output_vector_size", None),
-                litellm_provider=_model_info.get(
-                    "litellm_provider", custom_llm_provider
-                ),
-                mode=_model_info.get("mode"),  # type: ignore
-                supported_openai_params=supported_openai_params,
-                supports_system_messages=_model_info.get(
-                    "supports_system_messages", None
-                ),
-                supports_response_schema=_model_info.get(
-                    "supports_response_schema", None
-                ),
-                supports_vision=_model_info.get("supports_vision", False),
-                supports_function_calling=_model_info.get(
-                    "supports_function_calling", False
-                ),
-                supports_assistant_prefill=_model_info.get(
-                    "supports_assistant_prefill", False
-                ),
-                supports_prompt_caching=_model_info.get(
-                    "supports_prompt_caching", False
-                ),
-                supports_audio_input=_model_info.get("supports_audio_input", False),
-                supports_audio_output=_model_info.get("supports_audio_output", False),
-                supports_pdf_input=_model_info.get("supports_pdf_input", False),
-                tpm=_model_info.get("tpm", None),
-                rpm=_model_info.get("rpm", None),
-            )
-    except Exception as e:
-        if "OllamaError" in str(e):
-            raise e
-        raise Exception(
-            "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
-                model, custom_llm_provider
-            )
-        )
+    return returned_model_info
 
 
 def json_schema_type(python_type_name: str):
