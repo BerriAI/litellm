@@ -1058,3 +1058,10 @@ def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_resul
         ),
     )
     assert router._has_default_fallbacks() is expected_result
+
+
+def test_add_optional_pre_call_checks(model_list):
+    router = Router(model_list=model_list)
+
+    router.add_optional_pre_call_checks(["prompt_caching"])
+    assert len(litellm.callbacks) > 0
