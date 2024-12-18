@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
 )
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,

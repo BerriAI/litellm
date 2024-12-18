@@ -2,7 +2,7 @@ from typing import Union
 
 from httpx import Headers
 
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
 class PetalsError(BaseLLMException):

@@ -5,7 +5,7 @@ import httpx
 import litellm
 from litellm import verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import WatsonXAPIParams
 

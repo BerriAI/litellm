@@ -168,7 +168,8 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
-from litellm.llms.base_llm.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 
 from ._logging import verbose_logger
 from .caching.caching import (
@@ -2374,6 +2375,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.JinaAIEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+    elif custom_llm_provider == "voyage":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="voyage",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.VoyageEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
         )
         final_params = {**optional_params, **kwargs}
         return final_params
@@ -6199,6 +6215,15 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
         return litellm.OpenAIGPTConfig()
+
+    @staticmethod
+    def get_provider_embedding_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseEmbeddingConfig:
+        if litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageEmbeddingConfig()
+        raise ValueError(f"Provider {provider} does not support embedding config")
 
 
 def get_end_user_id_for_cost_tracking(
