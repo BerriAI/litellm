@@ -2382,8 +2382,12 @@ async def test_redis_caching_ttl_pipeline():
         # Verify that the set method was called on the mock Redis instance
         mock_set.assert_has_calls(
             [
-                call.set("test_key1", '"test_value1"', ex=expected_timedelta),
-                call.set("test_key2", '"test_value2"', ex=expected_timedelta),
+                call.set(
+                    "test_key1", '"test_value1"', ex=expected_timedelta, keepttl=False
+                ),
+                call.set(
+                    "test_key2", '"test_value2"', ex=expected_timedelta, keepttl=False
+                ),
             ]
         )
 
