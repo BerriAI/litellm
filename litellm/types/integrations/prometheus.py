@@ -1,6 +1,7 @@
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
+STATUS_CODE = "status_code"
 EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 LATENCY_BUCKETS = (
     0.005,
