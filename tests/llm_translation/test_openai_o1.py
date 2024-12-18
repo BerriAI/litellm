@@ -65,6 +65,61 @@ async def test_o1_handle_system_role(model):
             ]
 
 
+@pytest.mark.parametrize(
+    "model, expected_streaming_support",
+    [("o1-preview", True), ("o1-mini", True), ("o1", False)],
+)
+@pytest.mark.asyncio
+async def test_o1_handle_streaming_optional_params(model, expected_streaming_support):
+    """
+    Tests that:
+    - max_tokens is translated to 'max_completion_tokens'
+    - role 'system' is translated to 'user'
+    """
+    from openai import AsyncOpenAI
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
+
+    supported_params = config.get_supported_openai_params(model=model)
+
+    assert expected_streaming_support == ("stream" in supported_params)
+
+
+# @pytest.mark.parametrize(
+#     "model",
+#     ["o1"],  # "o1-preview", "o1-mini",
+# )
+# @pytest.mark.asyncio
+# async def test_o1_handle_streaming_e2e(model):
+#     """
+#     Tests that:
+#     - max_tokens is translated to 'max_completion_tokens'
+#     - role 'system' is translated to 'user'
+#     """
+#     from openai import AsyncOpenAI
+#     from litellm.utils import ProviderConfigManager
+#     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+#     from litellm.types.utils import LlmProviders
+
+#     resp = litellm.completion(
+#         model=model,
+#         messages=[{"role": "user", "content": "Hello!"}],
+#         stream=True,
+#     )
+#     assert isinstance(resp, CustomStreamWrapper)
+#     for chunk in resp:
+#         print("chunk: ", chunk)
+
+#     assert True
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0314", "gpt-4-32k", "o1-preview"])
 async def test_o1_max_completion_tokens(model: str):

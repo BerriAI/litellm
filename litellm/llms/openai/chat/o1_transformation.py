@@ -50,7 +50,9 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "top_logprobs",
         ]
 
-        if "o1-mini" not in model:
+        supported_streaming_models = ["o1-preview", "o1-mini"]
+
+        if model not in supported_streaming_models:
             non_supported_params.append("stream")
             non_supported_params.append("stream_options")
 
