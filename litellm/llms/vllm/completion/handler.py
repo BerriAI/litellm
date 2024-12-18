@@ -2,7 +2,7 @@ import json
 import os
 import time  # type: ignore
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 import httpx
 
@@ -27,14 +27,31 @@ class VLLMError(Exception):
 
 
 # check if vllm is installed
-def validate_environment(model: str):
+def validate_environment(model: str, optional_params: Union[dict, None]):
     global llm
     try:
         from vllm import LLM, SamplingParams # type: ignore
+        
+        default_params = {
+            "tokenizer": None,
+            "tokenizer_mode": "auto",
+            "skip_tokenizer_init": False,
+            "trust_remote_code": False,
+            "dtype": "auto",
+            "quantization": None,
+            "gpu_memory_utilization": 0.9,
+            "load_format": "auto",
+        }
+        
+        if optional_params is None:
+            optional_params = {}
+        
+        params = {**default_params, **{k: v for k, v in optional_params.items() if k in default_params}}            
+        optional_params = {k: v for k, v in optional_params.items() if k not in default_params}
 
         if llm is None:
-            llm = LLM(model=model)
-        return llm, SamplingParams
+            llm = LLM(model=model, **params)
+        return llm, SamplingParams, optional_params
     except Exception as e:
         raise VLLMError(status_code=0, message=str(e))
 
@@ -53,7 +70,7 @@ def completion(
 ):
     global llm
     try:
-        llm, SamplingParams = validate_environment(model=model)
+        llm, SamplingParams, optional_params = validate_environment(model=model, optional_params=optional_params)
     except Exception as e:
         raise VLLMError(status_code=0, message=str(e))
     sampling_params = SamplingParams(**optional_params)
@@ -142,7 +159,7 @@ def batch_completions(
     )
     """
     try:
-        llm, SamplingParams = validate_environment(model=model)
+        llm, SamplingParams, optional_params = validate_environment(model=model, optional_params=optional_params)
     except Exception as e:
         error_str = str(e)
         raise VLLMError(status_code=0, message=error_str)
