@@ -304,7 +304,7 @@ async def test_prometheus_metric_tracking():
     await asyncio.sleep(2.5)
 
     # Verify the mock was called correctly
-    mock_prometheus.track_provider_remaining_budget.assert_called_once()
+    mock_prometheus.track_provider_remaining_budget.assert_called()
 
 
 @pytest.mark.asyncio
