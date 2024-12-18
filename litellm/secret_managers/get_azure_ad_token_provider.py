@@ -15,23 +15,20 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     Returns:
         Callable that returns a temporary authentication token.
     """
-    from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
-
-    try:
-        credential = ClientSecretCredential(
+    from azure.identity import get_bearer_token_provider
+    import azure.identity as identity
+    azure_scope = os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default")
+    cred = os.environ.get("AZURE_CREDENTIAL", "ClientSecretCredential")
+    
+    cred_cls = getattr(identity, cred)
+    # ClientSecretCredential, DefaultAzureCredential, AzureCliCredential
+    if cred == "ClientSecretCredential":
+        credential = cred_cls(
             client_id=os.environ["AZURE_CLIENT_ID"],
             client_secret=os.environ["AZURE_CLIENT_SECRET"],
             tenant_id=os.environ["AZURE_TENANT_ID"],
         )
-    except KeyError as e:
-        verbose_logger.exception("Missing environment variable required by Azure AD workflow. "
-                                 "DefaultAzureCredential will be used"
-                                 " {}".format(str(e)))
-        credential = DefaultAzureCredential()
-    except Exception as e:
-        raise
+    else:
+        credential = cred_cls()
 
-    return get_bearer_token_provider(
-        credential,
-        "https://cognitiveservices.azure.com/.default",
-    )
+    return get_bearer_token_provider(credential, azure_scope)
