@@ -10,12 +10,12 @@ Has 4 methods:
 
 import json
 import time
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from .base_cache import BaseCache
 
-IN_MEMORY_CACHE_DEFAULT_TTL = 600.0
-IN_MEMORY_CACHE_MAX_SIZE = 200
+IN_MEMORY_CACHE_DEFAULT_TTL: int = 600
+IN_MEMORY_CACHE_MAX_SIZE: int = 200
 
 
 class InMemoryCache(BaseCache):
@@ -23,7 +23,7 @@ class InMemoryCache(BaseCache):
         self,
         max_size_in_memory: Optional[int] = 200,
         default_ttl: Optional[
-            float
+            Union[int, float]
         ] = None,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
     ):
         """
@@ -32,7 +32,7 @@ class InMemoryCache(BaseCache):
         self.max_size_in_memory = (
             max_size_in_memory or IN_MEMORY_CACHE_MAX_SIZE
         )  # set an upper bound of 200 items in-memory
-        self.default_ttl: float = default_ttl or IN_MEMORY_CACHE_DEFAULT_TTL
+        self.default_ttl: float = float(default_ttl or IN_MEMORY_CACHE_DEFAULT_TTL)
 
         # in-memory cache
         self.cache_dict: dict = {}
