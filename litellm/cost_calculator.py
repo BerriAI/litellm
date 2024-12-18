@@ -373,8 +373,7 @@ def _select_model_name_for_cost_calc(
     1. If custom pricing is true, return received model name
     2. If base_model is set (e.g. for azure models), return that
     3. If completion response has model set return that
-    4. Check if compl
-    4. If model is passed in return that
+    4. Check if model is passed in return that
     """
     return_model: Optional[str] = None
     region_name: Optional[str] = None

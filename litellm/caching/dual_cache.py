@@ -61,7 +61,9 @@ class DualCache(BaseCache):
     ) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
-        self.in_memory_cache = in_memory_cache or InMemoryCache()
+        self.in_memory_cache = in_memory_cache or InMemoryCache(
+            default_ttl=default_in_memory_ttl
+        )
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
         self.last_redis_batch_access_time = LimitedSizeOrderedDict(
@@ -299,16 +301,22 @@ class DualCache(BaseCache):
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+    async def async_set_cache(
+        self, key, value, local_only: bool = False, keepttl: bool = False, **kwargs
+    ):
         print_verbose(
             f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}"
         )
         try:
             if self.in_memory_cache is not None:
-                await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+                await self.in_memory_cache.async_set_cache(
+                    key, value, keepttl=keepttl, **kwargs
+                )
 
             if self.redis_cache is not None and local_only is False:
-                await self.redis_cache.async_set_cache(key, value, **kwargs)
+                await self.redis_cache.async_set_cache(
+                    key, value, keepttl=keepttl, **kwargs
+                )
         except Exception as e:
             verbose_logger.exception(
                 f"LiteLLM Cache: Excepton async add_cache: {str(e)}"
@@ -316,10 +324,20 @@ class DualCache(BaseCache):
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(
-        self, cache_list: list, local_only: bool = False, **kwargs
+        self,
+        cache_list: list,
+        local_only: bool = False,
+        keepttl: bool = False,
+        **kwargs,
     ):
         """
         Batch write values to the cache
+
+        Args:
+            cache_list: list
+            local_only: bool = False
+            keepttl: bool. if True, retain the time to live associated with the key. (keepttl is a Redis parameter. we use the same parameter name as Redis)
+            **kwargs:
         """
         print_verbose(
             f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}"
@@ -327,12 +345,15 @@ class DualCache(BaseCache):
         try:
             if self.in_memory_cache is not None:
                 await self.in_memory_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, **kwargs
+                    cache_list=cache_list, keepttl=keepttl, **kwargs
                 )
 
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
+                    cache_list=cache_list,
+                    ttl=kwargs.pop("ttl", None),
+                    keepttl=keepttl,
+                    **kwargs,
                 )
         except Exception as e:
             verbose_logger.exception(

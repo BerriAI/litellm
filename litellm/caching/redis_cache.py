@@ -348,7 +348,11 @@ class RedisCache(BaseCache):
                 )
 
     async def _pipeline_helper(
-        self, pipe: pipeline, cache_list: List[Tuple[Any, Any]], ttl: Optional[float]
+        self,
+        pipe: pipeline,
+        cache_list: List[Tuple[Any, Any]],
+        ttl: Optional[float],
+        keepttl: bool = False,
     ) -> List:
         ttl = self.get_ttl(ttl=ttl)
         # Iterate through each key-value pair in the cache_list and set them in the pipeline.
@@ -362,16 +366,26 @@ class RedisCache(BaseCache):
             _td: Optional[timedelta] = None
             if ttl is not None:
                 _td = timedelta(seconds=ttl)
-            pipe.set(cache_key, json_cache_value, ex=_td)
+            pipe.set(cache_key, json_cache_value, ex=_td, keepttl=keepttl)
         # Execute the pipeline and return the results.
         results = await pipe.execute()
         return results
 
     async def async_set_cache_pipeline(
-        self, cache_list: List[Tuple[Any, Any]], ttl: Optional[float] = None, **kwargs
+        self,
+        cache_list: List[Tuple[Any, Any]],
+        ttl: Optional[float] = None,
+        keepttl: bool = False,
+        **kwargs,
     ):
         """
         Use Redis Pipelines for bulk write operations
+
+        Args:
+            cache_list: List[Tuple[Any, Any]]
+            ttl: Optional[float] = None
+            keepttl: bool. Redis parameter. If True, retain the time to live associated with the key.
+            **kwargs:
         """
         # don't waste a network request if there's nothing to set
         if len(cache_list) == 0:
@@ -388,7 +402,9 @@ class RedisCache(BaseCache):
         try:
             async with _redis_client as redis_client:
                 async with redis_client.pipeline(transaction=True) as pipe:
-                    results = await self._pipeline_helper(pipe, cache_list, ttl)
+                    results = await self._pipeline_helper(
+                        pipe=pipe, cache_list=cache_list, ttl=ttl, keepttl=keepttl
+                    )
 
             print_verbose(f"pipeline results: {results}")
             # Optionally, you could process 'results' to make sure that all set operations were successful.
