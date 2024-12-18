@@ -1730,6 +1730,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - multi_instance_proxy_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - upload-coverage:
           requires:
             - llm_translation_testing
@@ -1771,6 +1777,7 @@ workflows:
           requires:
             - local_testing
             - build_and_test
+            - multi_instance_proxy_tests
             - load_testing
             - test_bad_database_url
             - llm_translation_testing
