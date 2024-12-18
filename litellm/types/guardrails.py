@@ -105,6 +105,10 @@ class LitellmParams(TypedDict):
     # guardrails ai params
     guard_name: Optional[str]
 
+    # Acuvity AI analyzers
+    analyzer_names: Optional[List[str]]  # New field for multiple analyzer names
+
+
 
 class Guardrail(TypedDict):
     guardrail_name: str

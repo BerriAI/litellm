@@ -95,6 +95,7 @@ def init_guardrails_v2(  # noqa: PLR0915
 
     # Parse each guardrail and replace environment variables
     for guardrail in all_guardrails:
+        print("\n GUARDRAILS INIT LIST: ", guardrail_list)
 
         # Init litellm params for guardrail
         litellm_params_data = guardrail["litellm_params"]
@@ -134,6 +135,7 @@ def init_guardrails_v2(  # noqa: PLR0915
                 api_base=litellm_params["api_base"],
                 api_key=litellm_params["api_key"],
                 guardrail_name=guardrail["guardrail_name"],
+                analyzer_names=litellm_params.get("analyzer_names", []),
                 event_hook=litellm_params["mode"],
             )
             litellm.callbacks.append(_acuvity_callback)  # type: ignore

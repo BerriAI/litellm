@@ -6,7 +6,13 @@ from acuvity import Acuvity, Security
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.logging_utils import (
+    convert_litellm_response_object_to_str,
+)
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,
+)
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -15,11 +21,14 @@ GUARDRAIL_NAME = "acuvity"
 class AcuvityGuardrail(CustomGuardrail):
     def __init__(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None,
+        analyzer_names: Optional[List[str]] = None,
         **kwargs,
     ):
         # store kwargs as optional_params
         self.optional_params = kwargs
         self.acuvity_client = Acuvity(Security(token=(api_key or os.environ["ACUVITY_TOKEN"])))
+        # Extract 'analyzer_name' and store it
+        self.analyzer_names = analyzer_names
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
@@ -48,7 +57,9 @@ class AcuvityGuardrail(CustomGuardrail):
         _messages = data.get("messages")
         if _messages:
             msgs = [message.get("content") for message in _messages if message.get("content") is not None]
-            resp = self.acuvity_client.scan(*msgs, redactions=["person"])
+
+            verbose_proxy_logger.debug("**** ACUVITY ANALYZER: %s", self.analyzer_names)
+            resp = await self.acuvity_client.apex.scan_async(*msgs, analyzers=self.analyzer_names)
             if resp.extractions is not None:
                 resp_msgs = [extr.data for extr in resp.extractions if extr.data is not None]
                 for (message, resp_message) in zip(_messages, resp_msgs):
@@ -99,17 +110,21 @@ class AcuvityGuardrail(CustomGuardrail):
         Runs on response from LLM API call
 
         It can be used to reject a response
-
-        If a response contains the word "coffee" -> we will raise an exception
         """
-        verbose_proxy_logger.debug("async_pre_call_hook response: %s", response)
-        if isinstance(response, litellm.ModelResponse):
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    verbose_proxy_logger.debug("async_pre_call_hook choice: %s", choice)
-                    if (
-                        choice.message.content
-                        and isinstance(choice.message.content, str)
-                        and "coffee" in choice.message.content
-                    ):
-                        raise ValueError("Guardrail failed Coffee Detected")
+        verbose_proxy_logger.debug("********************  ACUVITY: async_post_call_hook response: %s", response)
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return
+
+        response_str: Optional[str] = convert_litellm_response_object_to_str(response)
+        if response_str is not None:
+            await self.acuvity_client.apex.scan_async(response_str, analyzers=self.analyzer_names)
+
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
+
+
+        verbose_proxy_logger.debug(
+                "********************  ACUVITY: async_post_call_hook: Response",
+            )
