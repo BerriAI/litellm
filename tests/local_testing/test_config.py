@@ -348,7 +348,7 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
 
 from litellm import LITELLM_CHAT_PROVIDERS, LlmProviders
 from litellm.utils import ProviderConfigManager
-from litellm.llms.base_llm.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 
 def _check_provider_config(config: BaseConfig, provider: LlmProviders):

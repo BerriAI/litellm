@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
 )
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import (
