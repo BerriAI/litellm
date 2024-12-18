@@ -1,14 +1,7 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: fake-openai-endpoint-all-users
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-litellm_settings:
-  tag_budget_config:
-    product:chat-bot: # (Tag)
-      max_budget: 0.000000000001 # (USD)
-      budget_duration: 1d # (Duration)
-    product:chat-bot-2: # (Tag)
-      max_budget: 100 # (USD)
-      budget_duration: 1d # (Duration)
