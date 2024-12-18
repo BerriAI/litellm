@@ -382,7 +382,7 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-
+        team_list.sort(key=lambda x: (getattr(x, "team_alias", "")))
         _user_info = (
             user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
         )
@@ -436,6 +436,7 @@ async def _get_user_info_for_proxy_admin():
     # cast all teams to LiteLLM_TeamTable
     _teams_in_db: List = results[0]["teams"] or []
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
+    _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "")))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
     return UserInfoResponse(
         user_id=None,
