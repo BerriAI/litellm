@@ -182,7 +182,7 @@ def test_get_llm_provider_hosted_vllm():
     )
     assert custom_llm_provider == "hosted_vllm"
     assert model == "llama-3.1-70b-instruct"
-    assert dynamic_api_key == ""
+    assert dynamic_api_key == "fake-api-key"
 
 
 def test_get_llm_provider_watson_text():
