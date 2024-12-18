@@ -32,7 +32,7 @@ class InMemoryCache(BaseCache):
         self.max_size_in_memory = (
             max_size_in_memory or IN_MEMORY_CACHE_MAX_SIZE
         )  # set an upper bound of 200 items in-memory
-        self.default_ttl: float = float(default_ttl or IN_MEMORY_CACHE_DEFAULT_TTL)
+        self.default_ttl: int = int(default_ttl or IN_MEMORY_CACHE_DEFAULT_TTL)
 
         # in-memory cache
         self.cache_dict: dict = {}
