@@ -57,13 +57,25 @@ class InMemoryCache(BaseCache):
                 # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
                 # This can occur when an object is referenced by another object, but the reference is never removed.
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key, value, keepttl: bool = False, **kwargs):
+        """
+        Set cache value
+
+        Args:
+            key: str
+            value: Any
+            keepttl: bool. if True, retain the time to live associated with the key. (keepttl is a Redis parameter. we use the same parameter name as Redis)
+            **kwargs:
+        """
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()
 
         self.cache_dict[key] = value
-        if "ttl" in kwargs and kwargs["ttl"] is not None:
+
+        if keepttl and key in self.ttl_dict:
+            pass
+        elif "ttl" in kwargs and kwargs["ttl"] is not None:
             self.ttl_dict[key] = time.time() + kwargs["ttl"]
         else:
             self.ttl_dict[key] = time.time() + self.default_ttl
@@ -71,12 +83,25 @@ class InMemoryCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list, ttl: Optional[float] = None, keepttl: bool = False, **kwargs
+    ):
+        """
+        Use in-memory cache for bulk write operations
+
+        Args:
+            cache_list: List[Tuple[Any, Any]]
+            ttl: Optional[float] = None
+            keepttl: bool = False. if True, retain the time to live associated with the key. (keepttl is a Redis parameter. we use the same parameter name as Redis)
+            **kwargs:
+        """
         for cache_key, cache_value in cache_list:
             if ttl is not None:
-                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+                self.set_cache(
+                    key=cache_key, value=cache_value, ttl=ttl, keepttl=keepttl
+                )
             else:
-                self.set_cache(key=cache_key, value=cache_value)
+                self.set_cache(key=cache_key, value=cache_value, keepttl=keepttl)
 
     async def async_set_cache_sadd(self, key, value: List, ttl: Optional[float]):
         """
