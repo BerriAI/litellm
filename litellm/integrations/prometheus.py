@@ -763,7 +763,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 user=user_api_key_dict.user_id,
-                status_code=200,
+                status_code="200",
             ).inc()
         except Exception as e:
             verbose_logger.exception(

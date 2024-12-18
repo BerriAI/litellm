@@ -492,7 +492,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         user="test_user",
-        status_code=429,
+        status_code="429",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -535,7 +535,7 @@ async def test_async_post_call_success_hook(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         user="test_user",
-        status_code=200,
+        status_code="200",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
