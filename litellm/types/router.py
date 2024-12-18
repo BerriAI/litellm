@@ -669,4 +669,4 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[Literal["prompt_caching"]]
+OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]

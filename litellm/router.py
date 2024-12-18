@@ -548,11 +548,10 @@ class Router:
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
         ):
-            self.router_budget_logger = RouterBudgetLimiting(
-                router_cache=self.cache,
-                provider_budget_config=self.provider_budget_config,
-                model_list=self.model_list,
-            )
+            if optional_pre_call_checks is not None:
+                optional_pre_call_checks.append("router_budget_limiting")
+            else:
+                optional_pre_call_checks = ["router_budget_limiting"]
         self.retry_policy: Optional[RetryPolicy] = None
         if retry_policy is not None:
             if isinstance(retry_policy, dict):
@@ -630,6 +629,12 @@ class Router:
                 _callback: Optional[CustomLogger] = None
                 if pre_call_check == "prompt_caching":
                     _callback = PromptCachingDeploymentCheck(cache=self.cache)
+                elif pre_call_check == "router_budget_limiting":
+                    _callback = RouterBudgetLimiting(
+                        router_cache=self.cache,
+                        provider_budget_config=self.provider_budget_config,
+                        model_list=self.model_list,
+                    )
                 if _callback is not None:
                     litellm.callbacks.append(_callback)
 
@@ -5273,7 +5278,7 @@ class Router:
             if self.enable_pre_call_checks and messages is not None:
                 healthy_deployments = self._pre_call_checks(
                     model=model,
-                    healthy_deployments=healthy_deployments,
+                    healthy_deployments=cast(List[Dict], healthy_deployments),
                     messages=messages,
                     request_kwargs=request_kwargs,
                 )
@@ -5285,13 +5290,13 @@ class Router:
                 healthy_deployments=healthy_deployments,
             )
 
-            if self.router_budget_logger:
-                healthy_deployments = (
-                    await self.router_budget_logger.async_filter_deployments(
-                        healthy_deployments=healthy_deployments,
-                        request_kwargs=request_kwargs,
-                    )
-                )
+            # if self.router_budget_logger:
+            #     healthy_deployments = (
+            #         await self.router_budget_logger.async_filter_deployments(
+            #             healthy_deployments=healthy_deployments,
+            #             request_kwargs=request_kwargs,
+            #         )
+            #     )
 
             if len(healthy_deployments) == 0:
                 exception = await async_raise_no_deployment_exception(
