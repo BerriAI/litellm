@@ -8,42 +8,13 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
-import json
 import secrets
-import time
-import traceback
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
-from uuid import uuid4
+from datetime import datetime, timezone
+from typing import Optional
 
 import fastapi
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
-from fastapi.responses import (
-    FileResponse,
-    JSONResponse,
-    ORJSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
+from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -61,11 +32,9 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
-    log_db_metrics,
 )
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,

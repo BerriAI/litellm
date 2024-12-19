@@ -1,8 +1,4 @@
-import json
-import os
 import time
-import types
-from enum import Enum
 from typing import Callable, Optional, Union
 
 import litellm
@@ -92,7 +88,6 @@ def completion(
 
     else:
         try:
-            import torch
             from petals import AutoDistributedModelForCausalLM  # type: ignore
             from transformers import AutoTokenizer
         except Exception:

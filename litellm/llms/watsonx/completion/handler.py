@@ -1,18 +1,13 @@
 import asyncio
 import json  # noqa: E401
 import time
-import types
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
-from enum import Enum
 from typing import (
     Any,
-    AsyncContextManager,
     AsyncGenerator,
     AsyncIterator,
     Callable,
-    ContextManager,
-    Dict,
     Generator,
     Iterator,
     List,
@@ -26,17 +21,13 @@ import requests  # type: ignore
 import litellm
 from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    get_async_httpx_client,
-)
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
 
 from ...base import BaseLLM
-from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
+from ..common_utils import WatsonXAIError, _get_api_params
 from .transformation import IBMWatsonXAIConfig
 
 

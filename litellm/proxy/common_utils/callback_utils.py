@@ -1,8 +1,7 @@
-import sys
-from typing import Any, Dict, List, Optional, get_args
+from typing import Any, Dict, List, Optional
 
 import litellm
-from litellm import get_secret, get_secret_str
+from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.utils import get_instance_fn

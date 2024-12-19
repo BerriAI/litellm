@@ -11,7 +11,6 @@ from typing import List, Optional, Tuple
 
 from litellm import LlmProviders
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 
 class JinaAIEmbeddingConfig:

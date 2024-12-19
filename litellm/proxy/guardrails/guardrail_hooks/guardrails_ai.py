@@ -6,25 +6,21 @@
 #  Thank you for using Litellm! - Krrish & Ishaan
 
 import json
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Optional, TypedDict
 
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_openai_message_to_only_content_messages,
     get_content_from_model_response,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
 
 
 class GuardrailsAIResponse(TypedDict):

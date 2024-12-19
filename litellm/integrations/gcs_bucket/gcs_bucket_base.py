@@ -1,13 +1,7 @@
 import json
 import os
-import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
-import httpx
-from pydantic import BaseModel, Field
-
-import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -15,11 +9,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.gcs_bucket import *
-from litellm.types.utils import (
-    StandardCallbackDynamicParams,
-    StandardLoggingMetadata,
-    StandardLoggingPayload,
-)
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -190,9 +180,7 @@ class GCSBucketBase(CustomBatchLogger):
         This function is used to get the Vertex instance for the GCS Bucket Logger.
         It checks if the Vertex instance is already created and cached, if not it creates a new instance and caches it.
         """
-        from litellm.llms.vertex_ai.vertex_llm_base import (
-            VertexBase,
-        )
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
         _in_memory_key = self._get_in_memory_key_for_vertex_instance(credentials)
         if _in_memory_key not in self.vertex_instances:

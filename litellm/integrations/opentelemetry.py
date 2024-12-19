@@ -1,7 +1,6 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from functools import wraps
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
@@ -10,10 +9,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
-    EmbeddingResponse,
     Function,
-    ImageResponse,
-    ModelResponse,
     StandardLoggingPayload,
 )
 
@@ -139,7 +135,6 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -201,7 +196,6 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -666,7 +660,6 @@ class OpenTelemetry(CustomLogger):
         span.set_attribute(key, primitive_value)
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-        from litellm.proxy._types import SpanAttributes
 
         kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -834,7 +827,6 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -889,7 +881,6 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode

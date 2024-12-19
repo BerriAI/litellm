@@ -1,6 +1,5 @@
 import traceback
 
-import litellm
 from litellm._logging import verbose_logger
 
 
@@ -12,9 +11,7 @@ class TraceloopLogger:
 
     def __init__(self):
         try:
-            from opentelemetry.sdk.trace.export import ConsoleSpanExporter
             from traceloop.sdk import Traceloop
-            from traceloop.sdk.instruments import Instruments
             from traceloop.sdk.tracing.tracing import TracerWrapper
         except ModuleNotFoundError as e:
             verbose_logger.error(
@@ -39,7 +36,6 @@ class TraceloopLogger:
         level="DEFAULT",
         status_message=None,
     ):
-        from opentelemetry import trace
         from opentelemetry.semconv.ai import SpanAttributes
         from opentelemetry.trace import SpanKind, Status, StatusCode
 
@@ -78,7 +74,7 @@ class TraceloopLogger:
                     )
                 if "top_p" in optional_params:
                     span.set_attribute(
-                        SpanAttributes.LLM_TOP_P, optional_params.get("top_p")
+                        SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
                     )
                 if "tools" in optional_params or "functions" in optional_params:
                     span.set_attribute(

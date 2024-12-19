@@ -1,5 +1,5 @@
 import json
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Union
 
 import httpx
 
@@ -18,7 +18,6 @@ from litellm.types.llms.vertex_ai import (
     Instance,
     InstanceImage,
     InstanceVideo,
-    MultimodalPrediction,
     MultimodalPredictions,
     VertexMultimodalEmbeddingRequest,
 )

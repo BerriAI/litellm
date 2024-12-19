@@ -4,9 +4,7 @@ import os
 import random
 import subprocess
 import sys
-import traceback
 import urllib.parse as urlparse
-from datetime import datetime
 
 import click
 from dotenv import load_dotenv
@@ -18,9 +16,7 @@ config_filename = "litellm.secrets"
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
-import shutil
 from enum import Enum
-from importlib import resources
 
 telemetry = None
 
@@ -512,7 +508,6 @@ def run_server(  # noqa: PLR0915
             try:
                 import asyncio
 
-                import yaml  # type: ignore
             except Exception:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
