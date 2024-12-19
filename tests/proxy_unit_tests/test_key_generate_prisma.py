@@ -1785,6 +1785,8 @@ async def test_call_with_key_over_model_budget(
         assert isinstance(e, ProxyException)
         assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
+    finally:
+        litellm.callbacks.remove(model_budget_limiter)
 
 
 @pytest.mark.asyncio()
