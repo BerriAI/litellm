@@ -1,5 +1,4 @@
-import types
-from typing import Callable, List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import httpx
 
@@ -14,10 +13,8 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
-    RequestBody,
     VertexAICachedContentResponseObject,
 )
-from litellm.utils import ModelResponse
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase

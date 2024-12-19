@@ -11,10 +11,8 @@ Run checks for:
 
 import time
 import traceback
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-import httpx
 from pydantic import BaseModel
 
 import litellm
@@ -36,7 +34,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.types.services import ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 

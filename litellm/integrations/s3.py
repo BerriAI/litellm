@@ -1,12 +1,6 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import datetime
-import os
-import subprocess
-import sys
-import traceback
-import uuid
 from typing import Optional
 
 import litellm

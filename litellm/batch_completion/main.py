@@ -144,7 +144,6 @@ def batch_completion_models(*args, **kwargs):
         This function utilizes a ThreadPoolExecutor to parallelize requests to multiple models.
         It sends requests concurrently and returns the response from the first model that responds.
     """
-    import concurrent
 
     if "model" in kwargs:
         kwargs.pop("model")

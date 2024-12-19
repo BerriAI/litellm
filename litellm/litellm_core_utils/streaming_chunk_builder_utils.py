@@ -2,12 +2,9 @@ import base64
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from litellm.exceptions import APIError
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.utils import (
     ChatCompletionAudioResponse,

@@ -26,7 +26,7 @@ import pytest
 
 import litellm
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.utils import SpendLogsMetadata, SpendLogsPayload  # noqa: E402
+from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 
 
 @pytest.mark.parametrize(

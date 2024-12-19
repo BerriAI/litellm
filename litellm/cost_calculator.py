@@ -1,7 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
-import traceback
 from typing import Any, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
@@ -44,14 +43,12 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
-from litellm.llms.openai.cost_calculation import cost_router as openai_cost_router
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
-from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import CallTypesLiteral, PassthroughCallTypes, Usage
 from litellm.utils import (
     CallTypes,

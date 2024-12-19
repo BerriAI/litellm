@@ -23,7 +23,6 @@ from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
-    is_video_file_type,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -41,7 +40,6 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 from ..common_utils import (
     _check_text_in_content,

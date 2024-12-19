@@ -66,11 +66,7 @@ def get_azure_ad_token_from_entrata_id(
     Returns:
         callable that returns a bearer token.
     """
-    from azure.identity import (
-        ClientSecretCredential,
-        DefaultAzureCredential,
-        get_bearer_token_provider,
-    )
+    from azure.identity import ClientSecretCredential, get_bearer_token_provider
 
     verbose_logger.debug("Getting Azure AD Token from Entrata ID")
 

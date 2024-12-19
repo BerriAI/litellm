@@ -1,10 +1,8 @@
 import json
-import types
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )

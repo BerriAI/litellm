@@ -1,15 +1,10 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
-import os
-import subprocess
 import sys
-import traceback
-import uuid
-from datetime import date, datetime, timedelta
-from typing import Optional, TypedDict, Union
+from datetime import datetime, timedelta
+from typing import Optional
 
-import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth

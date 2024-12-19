@@ -1,4 +1,3 @@
-import types
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from httpx import Headers, Response

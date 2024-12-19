@@ -2,12 +2,8 @@
 # sys.path.insert(
 #     0, os.path.abspath("../")
 # )  # Adds the parent directory to the system path
-from fastapi import FastAPI, Request, status, HTTPException, Depends
-from fastapi.responses import StreamingResponse
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-import uuid
-import openai
 from openai import AsyncOpenAI
 
 app = FastAPI()

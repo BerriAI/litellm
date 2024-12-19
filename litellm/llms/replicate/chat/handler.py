@@ -1,11 +1,7 @@
 import asyncio
 import json
-import os
 import time
-import types
-from typing import Any, Callable, List, Optional, Tuple, Union
-
-import httpx  # type: ignore
+from typing import Callable, List, Union
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -15,7 +11,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ..common_utils import ReplicateError
 from .transformation import ReplicateConfig

@@ -2,12 +2,10 @@ import asyncio
 import json
 import os
 import time
-import types
-from typing import Any, Callable, Coroutine, Iterable, List, Literal, Optional, Union
+from typing import Any, Callable, Coroutine, List, Literal, Optional, Union
 
 import httpx  # type: ignore
 from openai import AsyncAzureOpenAI, AzureOpenAI
-from typing_extensions import overload
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -25,7 +23,6 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     CustomStreamWrapper,
-    UnsupportedParamsError,
     convert_to_model_response_object,
     get_secret,
     modify_url,
