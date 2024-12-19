@@ -86,7 +86,7 @@ def get_llm_provider(  # noqa: PLR0915
             if _is_non_openai_azure_model(model):
                 custom_llm_provider = "openai"
                 return model, custom_llm_provider, dynamic_api_key, api_base
-        elif model.split("/", 1)[0] == "nvidia" or model in litellm.nvidia_models:
+        elif model.split("/", 1)[0] in ["nvidia", "nvidia_nim"] or model in litellm.nvidia_models:
             api_base = (
                 api_base 
                 or get_secret("NVIDIA_API_BASE") 

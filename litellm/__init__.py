@@ -561,6 +561,7 @@ openai_compatible_providers: List = [
     "mistral",
     "groq",
     "nvidia",
+    "nvidia_nim",
     "cerebras",
     "sambanova",
     "ai21_chat",
@@ -836,6 +837,7 @@ class LlmProviders(str, Enum):
     MISTRAL = "mistral"
     GROQ = "groq"
     NVIDIA = "nvidia"
+    NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
