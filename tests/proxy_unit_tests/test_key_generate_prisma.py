@@ -1727,7 +1727,7 @@ async def test_call_with_key_over_model_budget(
         }
 
         request = GenerateKeyRequest(
-            max_budget=100000,  # key itself has a very high budget
+            max_budget=100000,  # the key itself has a very high budget
             model_max_budget=model_max_budget,
         )
         key = await generate_key_fn(request)
