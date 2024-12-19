@@ -11,7 +11,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.utils import GenericBudgetInfo
+from litellm.types.utils import GenericBudgetConfigType, GenericBudgetInfo
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
@@ -647,9 +647,6 @@ class RoutingStrategy(enum.Enum):
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
-
-
-GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
 
 
 class RouterCacheEnum(enum.Enum):

@@ -1667,6 +1667,9 @@ class GenericBudgetInfo(BaseModel):
     budget_limit: float
 
 
+GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
+
+
 class BudgetConfig(BaseModel):
     max_budget: float
     budget_duration: str
