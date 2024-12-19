@@ -35,7 +35,8 @@ This covers:
     - **Controlling Guardrails by Virtual Keys**
     - **Spend Tracking & Data Exports**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
-        - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+        - ✅ [Set USD Budgets Spend for Custom Tags](./proxy/provider_budget_routing#-tag-budgets)
+        - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
         - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](./proxy/cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
     - **Prometheus Metrics**
         - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](./proxy/prometheus)

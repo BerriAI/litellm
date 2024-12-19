@@ -3,7 +3,7 @@
 import os
 import traceback
 from datetime import datetime as datetimeObj
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 import dotenv
 from pydantic import BaseModel
@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
-from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
@@ -68,6 +68,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     """
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
+
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[dict]:
+        return healthy_deployments
 
     async def async_pre_call_check(
         self, deployment: dict, parent_otel_span: Optional[Span]

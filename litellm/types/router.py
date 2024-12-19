@@ -667,3 +667,6 @@ class GenericBudgetWindowDetails(BaseModel):
     spend_key: str
     start_time_key: str
     ttl_seconds: int
+
+
+OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]

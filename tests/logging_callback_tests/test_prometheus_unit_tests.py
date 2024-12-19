@@ -485,13 +485,14 @@ async def test_async_post_call_failure_hook(prometheus_logger):
 
     # Assert total requests metric was incremented with correct labels
     prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
-        "test_end_user",
-        "test_key",
-        "test_alias",
-        "gpt-3.5-turbo",
-        "test_team",
-        "test_team_alias",
-        "test_user",
+        end_user="test_end_user",
+        hashed_api_key="test_key",
+        api_key_alias="test_alias",
+        requested_model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        status_code="429",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -527,13 +528,14 @@ async def test_async_post_call_success_hook(prometheus_logger):
 
     # Assert total requests metric was incremented with correct labels
     prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
-        "test_end_user",
-        "test_key",
-        "test_alias",
-        "gpt-3.5-turbo",
-        "test_team",
-        "test_team_alias",
-        "test_user",
+        end_user="test_end_user",
+        hashed_api_key="test_key",
+        api_key_alias="test_alias",
+        requested_model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        status_code="200",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 

@@ -40,6 +40,6 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
         dynamic_api_key = (
-            api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""
+            api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         )  # vllm does not require an api key
         return api_base, dynamic_api_key
