@@ -132,7 +132,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             or len(user_api_key_model_max_budget) == 0
         ):
             verbose_proxy_logger.debug(
-                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget is None"
+                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget is None or empty. `user_api_key_model_max_budget`=%s",
+                user_api_key_model_max_budget,
             )
             return
         response_cost: float = standard_logging_payload.get("response_cost", 0)
