@@ -934,3 +934,45 @@ def test_get_team_models():
         model_access_groups=model_access_groups,
     )
     assert result == ["gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"]
+
+
+def test_update_config_fields():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    args = {
+        "current_config": {
+            "litellm_settings": {
+                "default_team_settings": [
+                    {
+                        "team_id": "c91e32bb-0f2a-4aa1-86c4-307ca2e03ea3",
+                        "success_callback": ["langfuse"],
+                        "failure_callback": ["langfuse"],
+                        "langfuse_public_key": "my-fake-key",
+                        "langfuse_secret": "my-fake-secret",
+                    }
+                ]
+            },
+        },
+        "param_name": "litellm_settings",
+        "db_param_value": {
+            "telemetry": False,
+            "drop_params": True,
+            "num_retries": 5,
+            "request_timeout": 600,
+            "success_callback": ["langfuse"],
+            "default_team_settings": [],
+            "context_window_fallbacks": [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}],
+        },
+    }
+    updated_config = proxy_config._update_config_fields(**args)
+
+    all_team_config = updated_config["litellm_settings"]["default_team_settings"]
+
+    # check if team id config returned
+    team_config = proxy_config._get_team_config(
+        team_id="c91e32bb-0f2a-4aa1-86c4-307ca2e03ea3", all_teams_config=all_team_config
+    )
+    assert team_config["langfuse_public_key"] == "my-fake-key"
+    assert team_config["langfuse_secret"] == "my-fake-secret"
