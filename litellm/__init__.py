@@ -470,6 +470,7 @@ azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
+sambanova_models: List = []
 
 
 def add_known_models():
@@ -578,6 +579,8 @@ def add_known_models():
             cerebras_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
+        elif value.get("litellm_provider") == "sambanova_models":
+            sambanova_models.append(key)
 
 
 add_known_models()
@@ -841,6 +844,7 @@ model_list = (
     + anyscale_models
     + cerebras_models
     + galadriel_models
+    + sambanova_models
 )
 
 
@@ -891,6 +895,7 @@ models_by_provider: dict = {
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
+    "sambanova": sambanova_models,
 }
 
 # mapping for those models which have larger equivalents
