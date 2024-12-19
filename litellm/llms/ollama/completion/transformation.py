@@ -1,6 +1,5 @@
 import json
 import time
-import types
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
@@ -15,18 +14,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
     GenericStreamingChunk,
-    ModelInfo,
     ModelInfoBase,
     ModelResponse,
     ProviderField,
-    StreamingChoices,
 )
 
 from ..common_utils import OllamaError, _convert_image

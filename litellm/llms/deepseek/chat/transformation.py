@@ -2,19 +2,14 @@
 Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completions`
 """
 
-import types
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
-from pydantic import BaseModel
-
-import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import AllMessageValues
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 

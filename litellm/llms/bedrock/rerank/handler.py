@@ -1,20 +1,15 @@
-import copy
 import json
-import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
-from openai.types.image import Image
-from pydantic import BaseModel
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.llms.bedrock import BedrockPreparedRequest, BedrockRerankRequest
+from litellm.types.llms.bedrock import BedrockPreparedRequest
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
 

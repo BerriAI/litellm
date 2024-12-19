@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger

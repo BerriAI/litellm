@@ -8,16 +8,12 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import ast
-import asyncio
 import hashlib
-import inspect
-import io
 import json
-import logging
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from openai.types.audio.transcription_create_params import TranscriptionCreateParams
 from openai.types.chat.completion_create_params import (
@@ -41,7 +37,7 @@ from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache
+from .dual_cache import DualCache  # noqa
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache

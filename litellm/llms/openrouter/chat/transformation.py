@@ -6,10 +6,6 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Optional
-
-from litellm import get_model_info, verbose_logger
-
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 

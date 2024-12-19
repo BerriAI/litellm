@@ -2,15 +2,11 @@
 Common utility functions used for translating messages across providers
 """
 
-import json
-from copy import deepcopy
 from typing import Dict, List, Literal, Optional, Union, cast
 
-import litellm
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
-    ChatCompletionResponseMessage,
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices

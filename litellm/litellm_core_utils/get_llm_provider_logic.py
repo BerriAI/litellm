@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params

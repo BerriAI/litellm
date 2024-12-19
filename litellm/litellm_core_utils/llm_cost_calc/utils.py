@@ -1,8 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-import traceback
-from typing import List, Literal, Optional, Tuple
+from typing import Optional, Tuple
 
 import litellm
 from litellm import verbose_logger

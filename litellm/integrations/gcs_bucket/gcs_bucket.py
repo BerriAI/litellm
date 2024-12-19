@@ -1,27 +1,14 @@
 import asyncio
-import json
 import os
 import uuid
 from datetime import datetime
-from re import S
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import httpx
-from pydantic import BaseModel, Field
-
-import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import CommonProxyErrors, SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.gcs_bucket import *
-from litellm.types.utils import (
-    StandardCallbackDynamicParams,
-    StandardLoggingMetadata,
-    StandardLoggingPayload,
-)
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase

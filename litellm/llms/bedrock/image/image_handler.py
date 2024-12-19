@@ -1,10 +1,9 @@
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
-from openai.types.image import Image
 from pydantic import BaseModel
 
 import litellm

@@ -11,27 +11,19 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import asyncio
 import json
 import sys
-import traceback
-import uuid
-from datetime import datetime
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional
 
-import aiohttp
-import httpx
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )

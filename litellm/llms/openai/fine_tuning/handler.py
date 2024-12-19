@@ -2,11 +2,9 @@ from typing import Any, Coroutine, Optional, Union
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
-from openai.pagination import AsyncCursorPage
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import FineTuningJobCreate
 
 
 class OpenAIFineTuningAPI:

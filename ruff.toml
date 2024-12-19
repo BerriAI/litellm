@@ -1,4 +1,10 @@
-ignore = ["F405", "E402", "F401", "E501", "F403"]
+ignore = ["F405", "E402", "E501", "F403"]
 extend-select = ["E501", "PLR0915", "T20"]
 line-length = 120
-exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*"]
+exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+
+
+[per-file-ignores]
+"litellm/main.py" = ["F401"]
+"litellm/utils.py" = ["F401"]
+"litellm/proxy/proxy_server.py" = ["F401"]

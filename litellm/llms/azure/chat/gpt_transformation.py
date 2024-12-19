@@ -1,5 +1,4 @@
-import types
-from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from httpx._models import Headers, Response
 

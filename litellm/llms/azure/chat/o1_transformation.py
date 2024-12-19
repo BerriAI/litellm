@@ -12,12 +12,6 @@ Translations handled by LiteLLM:
 - Temperature => drop param (if user opts in to dropping param)
 """
 
-import types
-from typing import Any, List, Optional, Union
-
-import litellm
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
-
 from ...openai.chat.o1_transformation import OpenAIO1Config
 
 

@@ -4,9 +4,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 
 import copy
 import json
-import os
-from copy import deepcopy
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx
 
@@ -20,7 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError

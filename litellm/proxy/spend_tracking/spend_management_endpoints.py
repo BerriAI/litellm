@@ -1,9 +1,10 @@
 #### SPEND MANAGEMENT #####
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -252,7 +253,6 @@ async def get_global_activity(
         "sum_total_tokens": 2012
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -263,7 +263,7 @@ async def get_global_activity(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -420,7 +420,6 @@ async def get_global_activity_model(
         },
     ]
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -431,7 +430,7 @@ async def get_global_activity_model(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -574,7 +573,6 @@ async def get_global_activity_exceptions_per_deployment(
         },
     ]
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -585,7 +583,7 @@ async def get_global_activity_exceptions_per_deployment(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -708,7 +706,6 @@ async def get_global_activity_exceptions(
         "sum_api_exceptions": 20,
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -719,7 +716,7 @@ async def get_global_activity_exceptions(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:

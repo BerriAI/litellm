@@ -7,7 +7,7 @@ import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache, InMemoryCache
+from litellm.caching.caching import DualCache
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:

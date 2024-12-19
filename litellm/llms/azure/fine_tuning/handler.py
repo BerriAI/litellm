@@ -2,13 +2,11 @@ from typing import Any, Coroutine, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
-from openai.pagination import AsyncCursorPage
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
-from litellm.llms.base import BaseLLM
 from litellm.llms.azure.files.handler import get_azure_openai_client
-from litellm.types.llms.openai import FineTuningJobCreate
+from litellm.llms.base import BaseLLM
 
 
 class AzureOpenAIFineTuningAPI(BaseLLM):

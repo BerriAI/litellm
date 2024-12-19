@@ -11,7 +11,7 @@ import json
 import os
 import threading
 import time
-from typing import Literal, Optional, Union
+from typing import Literal, Optional
 
 import litellm
 from litellm.utils import ModelResponse

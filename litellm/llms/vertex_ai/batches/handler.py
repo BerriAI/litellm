@@ -5,26 +5,11 @@ import httpx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexAIError,
-    VertexLLM,
-)
-from litellm.types.llms.openai import (
-    Batch,
-    CancelBatchRequest,
-    CreateBatchRequest,
-    CreateFileRequest,
-    FileContentRequest,
-    FileObject,
-    FileTypes,
-    HttpxBinaryResponseContent,
-    RetrieveBatchRequest,
-)
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.types.llms.openai import Batch, CreateBatchRequest
 from litellm.types.llms.vertex_ai import VertexAIBatchPredictionJob
 
 from .transformation import VertexAIBatchTransformation
