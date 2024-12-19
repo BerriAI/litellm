@@ -18,6 +18,8 @@ import httpx
 
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 
+from ..chat.transformation import BaseLLMException
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
@@ -88,4 +90,10 @@ class BaseRerankConfig(ABC):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
     ) -> OptionalRerankParams:
+        pass
+
+    @abstractmethod
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
         pass
