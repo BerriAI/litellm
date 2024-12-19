@@ -37,8 +37,13 @@ class OpenAIO1Config(OpenAIGPTConfig):
         return super().get_config()
 
     def should_fake_stream(
-        self, model: str, custom_llm_provider: Optional[str] = None
+        self,
+        model: str,
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
+        if stream is not True:
+            return False
         supported_stream_models = ["o1-mini", "o1-preview"]
         for supported_model in supported_stream_models:
             if supported_model in model:
@@ -141,18 +146,5 @@ class OpenAIO1Config(OpenAIGPTConfig):
                     content=message["content"], role="user"
                 )
                 messages[i] = new_message  # Replace the old message with the new one
-
-            if "content" in message and isinstance(message["content"], list):
-                new_content = []
-                for content_item in message["content"]:
-                    if content_item.get("type") == "image_url":
-                        if litellm.drop_params is not True:
-                            raise ValueError(
-                                "Image content is not supported for O-1 models. Set litellm.drop_param to True to drop image content."
-                            )
-                        # If drop_param is True, we simply don't add the image content to new_content
-                    else:
-                        new_content.append(content_item)
-                message["content"] = new_content
 
         return messages

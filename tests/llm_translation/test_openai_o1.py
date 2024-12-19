@@ -15,6 +15,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
+from base_llm_unit_tests import BaseLLMChatTest
 
 
 @pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1"])
@@ -94,34 +95,6 @@ async def test_o1_handle_tool_calling_optional_params(
     assert expected_tool_calling_support == ("tools" in supported_params)
 
 
-# @pytest.mark.parametrize(
-#     "model",
-#     ["o1"],  # "o1-preview", "o1-mini",
-# )
-# @pytest.mark.asyncio
-# async def test_o1_handle_streaming_e2e(model):
-#     """
-#     Tests that:
-#     - max_tokens is translated to 'max_completion_tokens'
-#     - role 'system' is translated to 'user'
-#     """
-#     from openai import AsyncOpenAI
-#     from litellm.utils import ProviderConfigManager
-#     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-#     from litellm.types.utils import LlmProviders
-
-#     resp = litellm.completion(
-#         model=model,
-#         messages=[{"role": "user", "content": "Hello!"}],
-#         stream=True,
-#     )
-#     assert isinstance(resp, CustomStreamWrapper)
-#     for chunk in resp:
-#         print("chunk: ", chunk)
-
-#     assert True
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0314", "gpt-4-32k", "o1-preview"])
 async def test_o1_max_completion_tokens(model: str):
@@ -177,3 +150,23 @@ def test_litellm_responses():
     print("response: ", response)
 
     assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
+
+
+class TestOpenAIO1(BaseLLMChatTest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "o1",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+
+def test_o1_supports_vision():
+    """Test that o1 supports vision"""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    for k, v in litellm.model_cost.items():
+        if k.startswith("o1") and v.get("litellm_provider") == "openai":
+            assert v.get("supports_vision") is True, f"{k} does not support vision"

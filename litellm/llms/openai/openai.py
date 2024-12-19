@@ -453,18 +453,18 @@ class OpenAIChatCompletion(BaseLLM):
         super().completion()
         try:
             fake_stream: bool = False
-            if custom_llm_provider is not None and model is not None:
-                provider_config = ProviderConfigManager.get_provider_chat_config(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
-                fake_stream = provider_config.should_fake_stream(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
             inference_params = optional_params.copy()
             stream_options: Optional[dict] = inference_params.pop(
                 "stream_options", None
             )
             stream: Optional[bool] = inference_params.pop("stream", False)
+            if custom_llm_provider is not None and model is not None:
+                provider_config = ProviderConfigManager.get_provider_chat_config(
+                    model=model, provider=LlmProviders(custom_llm_provider)
+                )
+                fake_stream = provider_config.should_fake_stream(
+                    model=model, custom_llm_provider=custom_llm_provider, stream=stream
+                )
             if headers:
                 inference_params["extra_headers"] = headers
             if model is None or messages is None:
@@ -502,7 +502,6 @@ class OpenAIChatCompletion(BaseLLM):
                     litellm_params=litellm_params,
                     headers=headers or {},
                 )
-
                 try:
                     max_retries = data.pop("max_retries", 2)
                     if acompletion is True:
