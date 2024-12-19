@@ -1694,14 +1694,15 @@ def test_call_with_key_over_model_budget(prisma_client):
             await litellm.proxy.proxy_server.prisma_client.connect()
 
             # set budget for chatgpt-v-2 to 0.000001, expect the next request to fail
+            model_max_budget = {
+                "chatgpt-v-2": {
+                    "budget_limit": "0.000001",
+                    "time_period": "1d",
+                },
+            }
             request = GenerateKeyRequest(
                 max_budget=1000,
-                model_max_budget={
-                    "chatgpt-v-2": {
-                        "budget_limit": "0.000001",
-                        "time_period": "1d",
-                    },
-                },
+                model_max_budget=model_max_budget,
                 metadata={"user_api_key": 0.0001},
             )
             key = await generate_key_fn(request)
@@ -1759,6 +1760,7 @@ def test_call_with_key_over_model_budget(prisma_client):
                         "metadata": {
                             "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
+                            "user_api_key_model_max_budget": model_max_budget,
                         }
                     },
                     "response_cost": 0.00002,
