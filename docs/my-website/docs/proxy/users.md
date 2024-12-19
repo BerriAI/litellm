@@ -10,7 +10,7 @@ Requirements:
 
 ## Set Budgets
 
-You can set budgets at 3 levels: 
+You can set budgets at 5 levels: 
 - For the proxy 
 - For an internal user 
 - For a customer (end-user)
