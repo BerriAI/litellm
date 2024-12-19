@@ -5,36 +5,14 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 """
 
 import asyncio
-import json
-import time
-import traceback
-import types
-import uuid
-from copy import deepcopy
-from itertools import chain
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import litellm
-from litellm import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
-    prompt_factory,
-)
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import (
-    EmbeddingResponse,
-    ModelInfo,
-    ModelResponse,
-    ProviderField,
-    StreamingChoices,
-)
-
-from ..common_utils import OllamaError
-from .transformation import OllamaConfig
+from litellm.types.utils import EmbeddingResponse
 
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
+
 
 async def ollama_aembeddings(
     api_base: str,

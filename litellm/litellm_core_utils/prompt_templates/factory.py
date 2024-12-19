@@ -5,19 +5,8 @@ import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import (
-    Any,
-    List,
-    Mapping,
-    MutableMapping,
-    Optional,
-    Sequence,
-    Tuple,
-    cast,
-    overload,
-)
+from typing import Any, List, Optional, Tuple, cast, overload
 
-from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 import litellm
@@ -25,14 +14,6 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.types.completion import (
-    ChatCompletionFunctionMessageParam,
-    ChatCompletionMessageParam,
-    ChatCompletionMessageToolCallParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionToolMessageParam,
-    ChatCompletionUserMessageParam,
-)
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.ollama import OllamaVisionModelObject
@@ -42,7 +23,6 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
-    ChatCompletionImageUrlObject,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -55,7 +35,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import convert_content_list_to_str, is_non_content_values_set
-from .image_handling import async_convert_url_to_base64, convert_url_to_base64
+from .image_handling import convert_url_to_base64
 
 
 def default_pt(messages):
@@ -2109,7 +2089,7 @@ def gemini_text_image_pt(messages: list):
     }
     """
     try:
-        import google.generativeai as genai  # type: ignore
+        pass  # type: ignore
     except Exception:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
@@ -2176,10 +2156,6 @@ from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
-    ToolChoiceValuesBlock as BedrockToolChoiceValuesBlock,
-)
-from litellm.types.llms.bedrock import ToolConfigBlock as BedrockToolConfigBlock
-from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
 )
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
@@ -2225,7 +2201,6 @@ def _process_bedrock_converse_image_block(
 ) -> BedrockContentBlock:
     if "base64" in image_url:
         # Case 1: Images with base64 encoding
-        import base64
         import re
 
         # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>

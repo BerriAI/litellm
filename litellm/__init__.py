@@ -1063,9 +1063,9 @@ from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
-    AmazonConverseConfig,
     bedrock_tool_name_mappings,
 )
+from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
     AmazonAI21Config,

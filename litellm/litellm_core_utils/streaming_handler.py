@@ -12,10 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
+from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -27,7 +24,6 @@ from litellm.types.utils import (
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
-from .default_encoding import encoding
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules

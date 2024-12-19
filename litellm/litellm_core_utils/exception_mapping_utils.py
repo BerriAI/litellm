@@ -1,6 +1,4 @@
 import json
-import os
-import threading
 import traceback
 from typing import Optional
 
@@ -14,17 +12,14 @@ from ..exceptions import (
     APIError,
     AuthenticationError,
     BadRequestError,
-    BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     NotFoundError,
-    OpenAIError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
-    UnsupportedParamsError,
 )
 
 

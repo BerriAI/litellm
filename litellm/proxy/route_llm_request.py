@@ -1,21 +1,8 @@
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import HTTPException, status
 
 import litellm
-from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router

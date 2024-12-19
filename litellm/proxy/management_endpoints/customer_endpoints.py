@@ -10,25 +10,16 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
-import asyncio
-import copy
-import json
-import re
-import secrets
-import time
 import traceback
-import uuid
-from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -597,7 +588,7 @@ async def list_end_user(
     ```
 
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN

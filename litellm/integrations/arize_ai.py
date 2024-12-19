@@ -5,7 +5,7 @@ this file has Arize ai specific helper functions
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_logger
 
@@ -30,7 +30,6 @@ class ArizeLogger:
     def set_arize_ai_attributes(span: Span, kwargs, response_obj):
         from litellm.integrations._types.open_inference import (
             MessageAttributes,
-            MessageContentAttributes,
             OpenInferenceSpanKindValues,
             SpanAttributes,
         )

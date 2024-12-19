@@ -1,8 +1,5 @@
-import json
-import os
 import time  # type: ignore
-from enum import Enum
-from typing import Any, Callable
+from typing import Callable
 
 import httpx
 
@@ -30,7 +27,7 @@ class VLLMError(Exception):
 def validate_environment(model: str):
     global llm
     try:
-        from vllm import LLM, SamplingParams # type: ignore
+        from vllm import LLM, SamplingParams  # type: ignore
 
         if llm is None:
             llm = LLM(model=model)

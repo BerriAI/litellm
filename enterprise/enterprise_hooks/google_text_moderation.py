@@ -7,21 +7,12 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 
-from typing import Optional, Literal, Union
-import litellm, traceback, sys, uuid
-from litellm.caching.caching import DualCache
+from typing import Literal
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
-import aiohttp, asyncio
 
 
 class _ENTERPRISE_GoogleTextModeration(CustomLogger):

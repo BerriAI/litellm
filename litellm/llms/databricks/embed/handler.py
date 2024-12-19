@@ -4,7 +4,6 @@ Calling logic for Databricks embeddings
 
 from typing import Optional
 
-import litellm
 from litellm.utils import EmbeddingResponse
 
 from ...openai_like.embedding.handler import OpenAILikeEmbeddingHandler

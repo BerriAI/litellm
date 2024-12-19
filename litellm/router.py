@@ -8,33 +8,26 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
-import concurrent
 import copy
-import datetime as datetime_og
 import enum
 import hashlib
 import inspect
 import json
 import logging
-import random
-import re
 import threading
 import time
 import traceback
 import uuid
 from collections import defaultdict
-from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Dict,
-    Iterable,
     List,
     Literal,
     Optional,
     Tuple,
-    TypedDict,
     Union,
     cast,
 )
@@ -50,12 +43,10 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
-from litellm.assistants.main import AssistantDeleted
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -70,7 +61,6 @@ from litellm.router_utils.batch_utils import (
 )
 from litellm.router_utils.client_initalization_utils import InitalizeOpenAISDKClient
 from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
@@ -80,10 +70,7 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
-    log_failure_fallback_event,
-    log_success_fallback_event,
     run_async_fallback,
-    run_sync_fallback,
 )
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
@@ -100,25 +87,9 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.scheduler import FlowItem, Scheduler
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    Assistant,
-    AssistantToolParam,
-    AsyncCursorPage,
-    Attachment,
-    Batch,
-    CreateFileRequest,
-    FileContentRequest,
-    FileObject,
-    FileTypes,
-    HttpxBinaryResponseContent,
-    OpenAIMessage,
-    Run,
-    Thread,
-)
+from litellm.types.llms.openai import AllMessageValues, Batch, FileObject, FileTypes
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
-    SPECIAL_MODEL_INFO_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
     AlertingConfig,
     AllowedFailsPolicy,
@@ -128,41 +99,30 @@ from litellm.types.router import (
     DeploymentTypedDict,
     GenericBudgetConfigType,
     LiteLLM_Params,
-    LiteLLMParamsTypedDict,
     ModelGroupInfo,
-    ModelInfo,
     OptionalPreCallChecks,
     RetryPolicy,
     RouterCacheEnum,
-    RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
     RouterRateLimitError,
     RouterRateLimitErrorBasic,
     RoutingStrategy,
-    updateDeployment,
-    updateLiteLLMParams,
 )
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from litellm.types.utils import OPENAI_RESPONSE_HEADERS
+from litellm.types.services import ServiceTypes
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
-    _is_region_eu,
-    calculate_max_parallel_requests,
-    create_proxy_transport_and_mounts,
     get_llm_provider,
     get_secret,
     get_utc_datetime,
-    is_prompt_caching_valid_prompt,
     is_region_allowed,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
-from .router_utils.prompt_caching_cache import PromptCachingCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -3111,7 +3071,6 @@ class Router:
 
         Wrapped to reduce code duplication and prevent bugs.
         """
-        import threading
         from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop():
@@ -3897,7 +3856,6 @@ class Router:
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
-        import os
 
         for model in original_model_list:
             _model_name = model.pop("model_name")

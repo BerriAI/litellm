@@ -1,13 +1,11 @@
 import asyncio
 import os
-import traceback
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
-from litellm.caching import InMemoryCache
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -27,8 +25,6 @@ headers = {
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
-
-import re
 
 
 def mask_sensitive_info(error_message):

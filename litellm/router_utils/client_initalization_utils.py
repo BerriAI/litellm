@@ -1,6 +1,5 @@
 import asyncio
 import os
-import traceback
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx
