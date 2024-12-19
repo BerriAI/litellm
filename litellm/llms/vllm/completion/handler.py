@@ -1,8 +1,8 @@
 import json
 import os
 import time  # type: ignore
-from enum import Enum
-from typing import Any, Callable, Union
+from typing import Callable, Optional
+import litellm
 
 import httpx
 
@@ -27,33 +27,30 @@ class VLLMError(Exception):
 
 
 # check if vllm is installed
-def validate_environment(model: str, optional_params: Union[dict, None]):
+def validate_environment(model: str, vllm_params: dict):
     global llm
     try:
         from vllm import LLM, SamplingParams # type: ignore
-        
-        default_params = {
-            "tokenizer": None,
-            "tokenizer_mode": "auto",
-            "skip_tokenizer_init": False,
-            "trust_remote_code": False,
-            "dtype": "auto",
-            "quantization": None,
-            "gpu_memory_utilization": 0.9,
-            "load_format": "auto",
-        }
-        
-        if optional_params is None:
-            optional_params = {}
-        
-        params = {**default_params, **{k: v for k, v in optional_params.items() if k in default_params}}            
-        optional_params = {k: v for k, v in optional_params.items() if k not in default_params}
 
         if llm is None:
-            llm = LLM(model=model, **params)
-        return llm, SamplingParams, optional_params
+            llm = LLM(model=model, **vllm_params)
+        return llm, SamplingParams
     except Exception as e:
         raise VLLMError(status_code=0, message=str(e))
+
+# extract vllm params from optional params
+def handle_vllm_params(optional_params: Optional[dict]):
+    vllm_params = litellm.VLLMConfig.get_config()
+    if optional_params is None:
+        optional_params = {}
+    
+    for k, v in optional_params.items():
+        if k in vllm_params:
+            vllm_params[k] = v
+            
+    optional_params = {k: v for k, v in optional_params.items() if k not in vllm_params}
+    
+    return vllm_params, optional_params
 
 
 def completion(
@@ -69,8 +66,9 @@ def completion(
     logger_fn=None,
 ):
     global llm
+    vllm_params, optional_params = handle_vllm_params(optional_params)
     try:
-        llm, SamplingParams, optional_params = validate_environment(model=model, optional_params=optional_params)
+        llm, SamplingParams = validate_environment(model=model, vllm_params=vllm_params)
     except Exception as e:
         raise VLLMError(status_code=0, message=str(e))
     sampling_params = SamplingParams(**optional_params)
@@ -158,8 +156,9 @@ def batch_completions(
         ]
     )
     """
+    vllm_params, optional_params = handle_vllm_params(optional_params)
     try:
-        llm, SamplingParams, optional_params = validate_environment(model=model, optional_params=optional_params)
+        llm, SamplingParams = validate_environment(model=model, vllm_params=vllm_params)
     except Exception as e:
         error_str = str(e)
         raise VLLMError(status_code=0, message=error_str)
