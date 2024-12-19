@@ -1736,9 +1736,10 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             return True
         return False
     except Exception as e:
-        raise Exception(
+        verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+        return False
 
 
 def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
