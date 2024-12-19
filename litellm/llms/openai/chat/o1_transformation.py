@@ -15,6 +15,8 @@ import types
 from typing import Any, List, Optional, Union
 
 import litellm
+from litellm import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (
     supports_function_calling,
@@ -50,8 +52,20 @@ class OpenAIO1Config(OpenAIGPTConfig):
         ]
 
         supported_streaming_models = ["o1-preview", "o1-mini"]
-        _supports_function_calling = supports_function_calling(model, "openai")
-        _supports_response_schema = supports_response_schema(model, "openai")
+        try:
+            model, custom_llm_provider, api_base, api_key = get_llm_provider(
+                model=model
+            )
+        except Exception:
+            verbose_logger.debug(
+                f"Unable to infer model provider for model={model}, defaulting to openai for o1 supported param check"
+            )
+            custom_llm_provider = "openai"
+
+        _supports_function_calling = supports_function_calling(
+            model, custom_llm_provider
+        )
+        _supports_response_schema = supports_response_schema(model, custom_llm_provider)
 
         if model not in supported_streaming_models:
             non_supported_params.append("stream")
