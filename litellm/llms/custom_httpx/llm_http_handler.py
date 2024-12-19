@@ -587,20 +587,20 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        # if aembedding is True:
-        #     return self.aembedding(  # type: ignore
-        #         request_data=data,
-        #         api_base=api_base,
-        #         headers=headers,
-        #         model=model,
-        #         custom_llm_provider=custom_llm_provider,
-        #         provider_config=provider_config,
-        #         model_response=model_response,
-        #         logging_obj=logging_obj,
-        #         api_key=api_key,
-        #         timeout=timeout,
-        #         client=client,
-        #     )
+        if _is_async is True:
+            return self.arerank(  # type: ignore
+                model=model,
+                request_data=data,
+                custom_llm_provider=custom_llm_provider,
+                provider_config=provider_config,
+                logging_obj=logging_obj,
+                model_response=model_response,
+                api_base=api_base,
+                headers=headers,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
@@ -627,6 +627,46 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=data,
+        )
+
+    async def arerank(
+        self,
+        model: str,
+        request_data: dict,
+        custom_llm_provider: str,
+        provider_config: BaseRerankConfig,
+        logging_obj: LiteLLMLoggingObj,
+        model_response: RerankResponse,
+        api_base: str,
+        headers: dict,
+        api_key: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> RerankResponse:
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider)
+            )
+        else:
+            async_httpx_client = client
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(request_data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_rerank_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=request_data,
         )
 
     def _handle_error(
