@@ -83,7 +83,10 @@ class BaseConfig(ABC):
         }
 
     def should_fake_stream(
-        self, model: str, custom_llm_provider: Optional[str] = None
+        self,
+        model: str,
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """
         Returns True if the model/provider should fake stream
