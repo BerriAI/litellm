@@ -80,9 +80,7 @@ async def test_is_key_within_model_budget(budget_limiter):
     user_api_key = UserAPIKeyAuth(
         token="test-key",
         key_alias="test-alias",
-        model_max_budget={
-            "gpt-4": GenericBudgetInfo(budget_limit=100.0, time_period="1d")
-        },
+        model_max_budget={"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
     )
 
     # Test when model is within budget
