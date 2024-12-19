@@ -172,22 +172,3 @@ class PromptCachingCache:
 
         cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         return self.cache.get_cache(cache_key)
-
-    async def async_get_prompt_caching_deployment(
-        self,
-        router: litellm_router,
-        messages: Optional[List[AllMessageValues]],
-        tools: Optional[List[ChatCompletionToolParam]],
-    ) -> Optional[dict]:
-        model_id_dict = await self.async_get_model_id(
-            messages=messages,
-            tools=tools,
-        )
-
-        if model_id_dict is not None:
-            healthy_deployment_pydantic_obj = router.get_deployment(
-                model_id=model_id_dict["model_id"]
-            )
-            if healthy_deployment_pydantic_obj is not None:
-                return healthy_deployment_pydantic_obj.model_dump(exclude_none=True)
-        return None

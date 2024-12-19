@@ -34,6 +34,7 @@ from litellm.proxy._types import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.integrations.custom_logger import CustomLogger
 import httpx
 import dotenv
 from enum import Enum
@@ -75,7 +76,9 @@ logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
-callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
+callbacks: List[
+    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 argilla_batch_size: Optional[int] = None
@@ -467,6 +470,7 @@ azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
+sambanova_models: List = []
 
 
 def add_known_models():
@@ -575,6 +579,8 @@ def add_known_models():
             cerebras_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
+        elif value.get("litellm_provider") == "sambanova_models":
+            sambanova_models.append(key)
 
 
 add_known_models()
@@ -838,6 +844,7 @@ model_list = (
     + anyscale_models
     + cerebras_models
     + galadriel_models
+    + sambanova_models
 )
 
 
@@ -888,6 +895,7 @@ models_by_provider: dict = {
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
+    "sambanova": sambanova_models,
 }
 
 # mapping for those models which have larger equivalents
