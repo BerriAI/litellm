@@ -1,5 +1,6 @@
+import json
 import traceback
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import HTTPException
 
@@ -7,10 +8,15 @@ import litellm
 from litellm import verbose_logger
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-from litellm.types.utils import GenericBudgetInfo, StandardLoggingPayload
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import (
+    GenericBudgetConfigType,
+    GenericBudgetInfo,
+    StandardLoggingPayload,
+)
 
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
@@ -20,9 +26,88 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
     """
 
-    def __init__(self):
-        # Override parent's __init__ to do nothing
-        pass
+    def __init__(self, dual_cache: DualCache):
+        super().__init__(
+            router_cache=dual_cache, provider_budget_config=None, model_list=None
+        )
+
+    async def is_key_within_model_budget(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+    ) -> bool:
+        """
+        Check if the user_api_key_dict is within the model budget
+
+        Raises:
+            BudgetExceededError: If the user_api_key_dict has exceeded the model budget
+        """
+        _model_max_budget = user_api_key_dict.model_max_budget
+        internal_model_max_budget: GenericBudgetConfigType = {}
+
+        # case each element in _model_max_budget to GenericBudgetInfo
+        for _model, _budget_info in _model_max_budget.items():
+            internal_model_max_budget[_model] = GenericBudgetInfo(
+                time_period=_budget_info.get("time_period"),
+                budget_limit=float(_budget_info.get("budget_limit")),
+            )
+
+        verbose_proxy_logger.debug(
+            "internal_model_max_budget %s",
+            json.dumps(internal_model_max_budget, indent=4, default=str),
+        )
+
+        # check if current model is in internal_model_max_budget
+        _current_model_budget_info = internal_model_max_budget.get(model, None)
+        if _current_model_budget_info is None:
+            verbose_proxy_logger.debug(
+                f"Model {model} not found in internal_model_max_budget"
+            )
+            return True
+
+        # check if current model is within budget
+        if _current_model_budget_info.budget_limit > 0:
+            _current_spend = await self._get_virtual_key_spend_for_model(
+                user_api_key_hash=user_api_key_dict.token,
+                model=model,
+                key_budget_config=_current_model_budget_info,
+            )
+            if (
+                _current_spend is not None
+                and _current_spend > _current_model_budget_info.budget_limit
+            ):
+                raise litellm.BudgetExceededError(
+                    message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
+                    current_cost=_current_spend,
+                    max_budget=_current_model_budget_info.budget_limit,
+                )
+
+        return True
+
+    async def _get_virtual_key_spend_for_model(
+        self,
+        user_api_key_hash: Optional[str],
+        model: str,
+        key_budget_config: GenericBudgetInfo,
+    ) -> Optional[float]:
+        """
+        Get the current spend for a virtual key for a model
+        """
+        virtual_key_model_spend_cache_key = f"virtual_key_spend:{user_api_key_hash}:{model}:{key_budget_config.time_period}"
+        _current_spend = await self.router_cache.async_get_cache(
+            key=virtual_key_model_spend_cache_key,
+        )
+        return _current_spend
+
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,  # type: ignore
+    ) -> List[dict]:
+        return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -37,6 +122,19 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
+        _litellm_params = kwargs.get("litellm_params", {})
+        _metadata = _litellm_params.get("metadata", {})
+        user_api_key_model_max_budget: Optional[dict] = _metadata.get(
+            "user_api_key_model_max_budget", None
+        )
+        if (
+            user_api_key_model_max_budget is None
+            or len(user_api_key_model_max_budget) == 0
+        ):
+            verbose_proxy_logger.debug(
+                "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event because user_api_key_model_max_budget is None"
+            )
+            return
         response_cost: float = standard_logging_payload.get("response_cost", 0)
         model = standard_logging_payload.get("model")
 
@@ -54,11 +152,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 start_time_key=virtual_start_time_key,
                 response_cost=response_cost,
             )
-        # import json
-
-        # print(
-        #     "current state of in memory cache",
-        #     json.dumps(
-        #         self.router_cache.in_memory_cache.cache_dict, indent=4, default=str
-        #     ),
-        # )
+        verbose_proxy_logger.debug(
+            "current state of in memory cache %s",
+            json.dumps(
+                self.router_cache.in_memory_cache.cache_dict, indent=4, default=str
+            ),
+        )
