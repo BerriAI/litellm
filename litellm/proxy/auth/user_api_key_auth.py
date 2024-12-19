@@ -262,6 +262,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         llm_model_list,
         llm_router,
         master_key,
+        model_max_budget_limiter,
         open_telemetry_logger,
         prisma_client,
         proxy_logging_obj,
@@ -1053,37 +1054,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 and valid_token.token is not None
             ):
                 ## GET THE SPEND FOR THIS MODEL
-                twenty_eight_days_ago = datetime.now() - timedelta(days=28)
-                model_spend = await prisma_client.db.litellm_spendlogs.group_by(
-                    by=["model"],
-                    sum={"spend": True},
-                    where={
-                        "AND": [
-                            {"api_key": valid_token.token},
-                            {"startTime": {"gt": twenty_eight_days_ago}},
-                            {"model": current_model},
-                        ]
-                    },  # type: ignore
+                await model_max_budget_limiter.is_key_within_model_budget(
+                    user_api_key_dict=valid_token,
+                    model=current_model,
                 )
-                if (
-                    len(model_spend) > 0
-                    and max_budget_per_model.get(current_model, None) is not None
-                ):
-                    if (
-                        "model" in model_spend[0]
-                        and model_spend[0].get("model") == current_model
-                        and "_sum" in model_spend[0]
-                        and "spend" in model_spend[0]["_sum"]
-                        and model_spend[0]["_sum"]["spend"]
-                        >= max_budget_per_model[current_model]
-                    ):
-                        current_model_spend = model_spend[0]["_sum"]["spend"]
-                        current_model_budget = max_budget_per_model[current_model]
-                        raise litellm.BudgetExceededError(
-                            current_cost=current_model_spend,
-                            max_budget=current_model_budget,
-                        )
-
             # Check 6. Team spend is under Team budget
             if (
                 hasattr(valid_token, "team_spend")

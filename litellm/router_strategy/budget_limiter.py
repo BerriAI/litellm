@@ -49,13 +49,13 @@ DEFAULT_REDIS_SYNC_INTERVAL = 1
 class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
-        router_cache: DualCache,
+        dual_cache: DualCache,
         provider_budget_config: Optional[dict],
         model_list: Optional[
             Union[List[DeploymentTypedDict], List[Dict[str, Any]]]
         ] = None,
     ):
-        self.router_cache = router_cache
+        self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: Optional[GenericBudgetConfigType] = (
@@ -108,7 +108,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         # Single cache read for all spend values
         if len(cache_keys) > 0:
-            _current_spends = await self.router_cache.async_batch_get_cache(
+            _current_spends = await self.dual_cache.async_batch_get_cache(
                 keys=cache_keys,
                 parent_otel_span=parent_otel_span,
             )
@@ -286,9 +286,9 @@ class RouterBudgetLimiting(CustomLogger):
         If it does, return the value.
         If it does not, set the key to `current_time` and return the value.
         """
-        budget_start = await self.router_cache.async_get_cache(start_time_key)
+        budget_start = await self.dual_cache.async_get_cache(start_time_key)
         if budget_start is None:
-            await self.router_cache.async_set_cache(
+            await self.dual_cache.async_set_cache(
                 key=start_time_key, value=current_time, ttl=ttl_seconds
             )
             return current_time
@@ -314,10 +314,10 @@ class RouterBudgetLimiting(CustomLogger):
         - stores key: `provider_budget_start_time:{provider}`, value: current_time.
             This stores the start time of the new budget window
         """
-        await self.router_cache.async_set_cache(
+        await self.dual_cache.async_set_cache(
             key=spend_key, value=response_cost, ttl=ttl_seconds
         )
-        await self.router_cache.async_set_cache(
+        await self.dual_cache.async_set_cache(
             key=start_time_key, value=current_time, ttl=ttl_seconds
         )
         return current_time
@@ -333,7 +333,7 @@ class RouterBudgetLimiting(CustomLogger):
         - Increments the spend in memory cache (so spend instantly updated in memory)
         - Queues the increment operation to Redis Pipeline (using batched pipeline to optimize performance. Using Redis for multi instance environment of LiteLLM)
         """
-        await self.router_cache.in_memory_cache.async_increment(
+        await self.dual_cache.in_memory_cache.async_increment(
             key=spend_key,
             value=response_cost,
             ttl=ttl,
@@ -481,7 +481,7 @@ class RouterBudgetLimiting(CustomLogger):
         Only runs if Redis is initialized
         """
         try:
-            if not self.router_cache.redis_cache:
+            if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
             verbose_router_logger.debug(
@@ -490,7 +490,7 @@ class RouterBudgetLimiting(CustomLogger):
             )
             if len(self.redis_increment_operation_queue) > 0:
                 asyncio.create_task(
-                    self.router_cache.redis_cache.async_increment_pipeline(
+                    self.dual_cache.redis_cache.async_increment_pipeline(
                         increment_list=self.redis_increment_operation_queue,
                     )
                 )
@@ -517,7 +517,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         try:
             # No need to sync if Redis cache is not initialized
-            if self.router_cache.redis_cache is None:
+            if self.dual_cache.redis_cache is None:
                 return
 
             # 1. Push all provider spend increments to Redis
@@ -547,7 +547,7 @@ class RouterBudgetLimiting(CustomLogger):
                     cache_keys.append(f"tag_spend:{tag}:{config.time_period}")
 
             # Batch fetch current spend values from Redis
-            redis_values = await self.router_cache.redis_cache.async_batch_get_cache(
+            redis_values = await self.dual_cache.redis_cache.async_batch_get_cache(
                 key_list=cache_keys
             )
 
@@ -555,7 +555,7 @@ class RouterBudgetLimiting(CustomLogger):
             if isinstance(redis_values, dict):  # Check if redis_values is a dictionary
                 for key, value in redis_values.items():
                     if value is not None:
-                        await self.router_cache.in_memory_cache.async_set_cache(
+                        await self.dual_cache.in_memory_cache.async_set_cache(
                             key=key, value=float(value)
                         )
                         verbose_router_logger.debug(
@@ -639,14 +639,12 @@ class RouterBudgetLimiting(CustomLogger):
 
         spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
 
-        if self.router_cache.redis_cache:
+        if self.dual_cache.redis_cache:
             # use Redis as source of truth since that has spend across all instances
-            current_spend = await self.router_cache.redis_cache.async_get_cache(
-                spend_key
-            )
+            current_spend = await self.dual_cache.redis_cache.async_get_cache(spend_key)
         else:
             # use in-memory cache if Redis is not initialized
-            current_spend = await self.router_cache.async_get_cache(spend_key)
+            current_spend = await self.dual_cache.async_get_cache(spend_key)
         return float(current_spend) if current_spend is not None else 0.0
 
     async def _get_current_provider_budget_reset_at(
@@ -657,10 +655,10 @@ class RouterBudgetLimiting(CustomLogger):
             return None
 
         spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
-        if self.router_cache.redis_cache:
-            ttl_seconds = await self.router_cache.redis_cache.async_get_ttl(spend_key)
+        if self.dual_cache.redis_cache:
+            ttl_seconds = await self.dual_cache.redis_cache.async_get_ttl(spend_key)
         else:
-            ttl_seconds = await self.router_cache.async_get_ttl(spend_key)
+            ttl_seconds = await self.dual_cache.async_get_ttl(spend_key)
 
         if ttl_seconds is None:
             return None
@@ -679,16 +677,16 @@ class RouterBudgetLimiting(CustomLogger):
         spend_key = f"provider_spend:{provider}:{budget_config.time_period}"
         start_time_key = f"provider_budget_start_time:{provider}"
         ttl_seconds = duration_in_seconds(budget_config.time_period)
-        budget_start = await self.router_cache.async_get_cache(start_time_key)
+        budget_start = await self.dual_cache.async_get_cache(start_time_key)
         if budget_start is None:
             budget_start = datetime.now(timezone.utc).timestamp()
-            await self.router_cache.async_set_cache(
+            await self.dual_cache.async_set_cache(
                 key=start_time_key, value=budget_start, ttl=ttl_seconds
             )
 
-        _spend_key = await self.router_cache.async_get_cache(spend_key)
+        _spend_key = await self.dual_cache.async_get_cache(spend_key)
         if _spend_key is None:
-            await self.router_cache.async_set_cache(
+            await self.dual_cache.async_set_cache(
                 key=spend_key, value=0.0, ttl=ttl_seconds
             )
 

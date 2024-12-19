@@ -631,7 +631,7 @@ class Router:
                     _callback = PromptCachingDeploymentCheck(cache=self.cache)
                 elif pre_call_check == "router_budget_limiting":
                     _callback = RouterBudgetLimiting(
-                        router_cache=self.cache,
+                        dual_cache=self.cache,
                         provider_budget_config=self.provider_budget_config,
                         model_list=self.model_list,
                     )
@@ -5291,14 +5291,6 @@ class Router:
                 request_kwargs=request_kwargs,
                 healthy_deployments=healthy_deployments,
             )
-
-            # if self.router_budget_logger:
-            #     healthy_deployments = (
-            #         await self.router_budget_logger.async_filter_deployments(
-            #             healthy_deployments=healthy_deployments,
-            #             request_kwargs=request_kwargs,
-            #         )
-            #     )
 
             if len(healthy_deployments) == 0:
                 exception = await async_raise_no_deployment_exception(

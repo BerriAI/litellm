@@ -121,12 +121,6 @@ class CohereTextConfig(BaseConfig):
             api_key=api_key,
         )
 
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError
-
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:

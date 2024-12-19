@@ -82,6 +82,14 @@ class BaseConfig(ABC):
             and v is not None
         }
 
+    def should_fake_stream(
+        self, model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """
+        Returns True if the model/provider should fake stream
+        """
+        return False
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
