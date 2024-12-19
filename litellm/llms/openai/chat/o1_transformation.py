@@ -36,6 +36,15 @@ class OpenAIO1Config(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def should_fake_stream(
+        self, model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        supported_stream_models = ["o1-mini", "o1-preview"]
+        for supported_model in supported_stream_models:
+            if supported_model in model:
+                return False
+        return True
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for the given model

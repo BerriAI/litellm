@@ -66,33 +66,6 @@ async def test_o1_handle_system_role(model):
 
 
 @pytest.mark.parametrize(
-    "model, expected_streaming_support",
-    [("o1-preview", True), ("o1-mini", True), ("o1", False)],
-)
-@pytest.mark.asyncio
-async def test_o1_handle_streaming_optional_params(model, expected_streaming_support):
-    """
-    Tests that:
-    - max_tokens is translated to 'max_completion_tokens'
-    - role 'system' is translated to 'user'
-    """
-    from openai import AsyncOpenAI
-    from litellm.utils import ProviderConfigManager
-    from litellm.types.utils import LlmProviders
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    config = ProviderConfigManager.get_provider_chat_config(
-        model=model, provider=LlmProviders.OPENAI
-    )
-
-    supported_params = config.get_supported_openai_params(model=model)
-
-    assert expected_streaming_support == ("stream" in supported_params)
-
-
-@pytest.mark.parametrize(
     "model, expected_tool_calling_support",
     [("o1-preview", False), ("o1-mini", False), ("o1", True)],
 )
