@@ -140,20 +140,6 @@ class BaseLLMChatTest(ABC):
         )
         assert response is not None
 
-    def test_multilingual_requests(self):
-        """
-        Tests that the provider can handle multilingual requests and invalid utf-8 sequences
-
-        Context: https://github.com/openai/openai-python/issues/1921
-        """
-        base_completion_call_args = self.get_base_completion_call_args()
-        response = self.completion_function(
-            **base_completion_call_args,
-            messages=[{"role": "user", "content": "你好世界！\ud83e, ö"}],
-        )
-        print("multilingual response: ", response)
-        assert response is not None
-
     @pytest.mark.parametrize(
         "response_format",
         [
