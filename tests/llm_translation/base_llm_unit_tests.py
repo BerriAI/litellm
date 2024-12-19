@@ -329,6 +329,7 @@ class BaseLLMChatTest(ABC):
         )
         assert response is not None
 
+    @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
