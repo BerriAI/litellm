@@ -70,7 +70,7 @@ class OpenMeterLogger(CustomLogger):
                 "total_tokens": response_obj["usage"].get("total_tokens"),
             }
 
-        subject = (kwargs.get("user", None),)  # end-user passed in via 'user' param
+        subject = kwargs.get("user", None)  # end-user passed in via 'user' param
         if not subject:
             raise Exception("OpenMeter: user is required")
 
