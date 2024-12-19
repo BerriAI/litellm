@@ -1697,7 +1697,10 @@ def test_call_with_key_over_model_budget(prisma_client):
             request = GenerateKeyRequest(
                 max_budget=1000,
                 model_max_budget={
-                    "chatgpt-v-2": 0.000001,
+                    "chatgpt-v-2": {
+                        "budget_limit": "0.000001",
+                        "time_period": "1d",
+                    },
                 },
                 metadata={"user_api_key": 0.0001},
             )
