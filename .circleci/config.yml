@@ -789,7 +789,7 @@ jobs:
   
   installing_litellm_on_python_3_13:
     docker:
-      - image: cimg/python:3.13
+      - image: cimg/python:3.13.1
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
