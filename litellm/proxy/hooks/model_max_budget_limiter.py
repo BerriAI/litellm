@@ -18,6 +18,8 @@ from litellm.types.utils import (
     StandardLoggingPayload,
 )
 
+VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX = "virtual_key_spend"
+
 
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
@@ -28,6 +30,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
+        self.redis_increment_operation_queue = []
 
     async def is_key_within_model_budget(
         self,
@@ -56,7 +59,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
 
         # check if current model is in internal_model_max_budget
-        _current_model_budget_info = internal_model_max_budget.get(model, None)
+        _current_model_budget_info = self._get_request_model_budget_config(
+            model=model, internal_model_max_budget=internal_model_max_budget
+        )
         if _current_model_budget_info is None:
             verbose_proxy_logger.debug(
                 f"Model {model} not found in internal_model_max_budget"
@@ -90,12 +95,46 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> Optional[float]:
         """
         Get the current spend for a virtual key for a model
+
+        Lookup model in this order:
+            1. model: directly look up `model`
+            2. If 1, does not exist, check if passed as {custom_llm_provider}/model
         """
-        virtual_key_model_spend_cache_key = f"virtual_key_spend:{user_api_key_hash}:{model}:{key_budget_config.time_period}"
+
+        # 1. model: directly look up `model`
+        virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.time_period}"
         _current_spend = await self.dual_cache.async_get_cache(
             key=virtual_key_model_spend_cache_key,
         )
+
+        if _current_spend is None:
+            # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
+            # if "/" in model, remove first part before "/" - eg. openai/o1-preview -> o1-preview
+            virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.time_period}"
+            _current_spend = await self.dual_cache.async_get_cache(
+                key=virtual_key_model_spend_cache_key,
+            )
         return _current_spend
+
+    def _get_request_model_budget_config(
+        self, model: str, internal_model_max_budget: GenericBudgetConfigType
+    ) -> Optional[GenericBudgetInfo]:
+        """
+        Get the budget config for the request model
+
+        1. Check if `model` is in `internal_model_max_budget`
+        2. If not, check if `model` without custom llm provider is in `internal_model_max_budget`
+        """
+        return internal_model_max_budget.get(
+            model, None
+        ) or internal_model_max_budget.get(
+            self._get_model_without_custom_llm_provider(model), None
+        )
+
+    def _get_model_without_custom_llm_provider(self, model: str) -> str:
+        if "/" in model:
+            return model.split("/")[-1]
+        return model
 
     async def async_filter_deployments(
         self,
@@ -141,9 +180,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model = standard_logging_payload.get("model")
         if virtual_key is not None:
             budget_config = GenericBudgetInfo(time_period="1d", budget_limit=0.1)
-            virtual_spend_key = (
-                f"virtual_key_spend:{virtual_key}:{model}:{budget_config.time_period}"
-            )
+            virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_config.time_period}"
             virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
             await self._increment_spend_for_key(
                 budget_config=budget_config,
