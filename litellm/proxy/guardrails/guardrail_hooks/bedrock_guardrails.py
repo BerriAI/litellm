@@ -155,10 +155,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         extra_headers: Optional[dict] = None,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 

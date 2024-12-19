@@ -219,7 +219,6 @@ async def bedrock_proxy_route(
     create_request_copy(request)
 
     try:
-        import boto3
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
         from botocore.credentials import Credentials

@@ -575,7 +575,6 @@ class BedrockLLM(BaseAWSLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials

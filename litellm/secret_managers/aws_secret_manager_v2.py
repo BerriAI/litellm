@@ -248,10 +248,8 @@ class AWSSecretsManagerV2(BaseAWSLLM):
     ) -> tuple[str, Any, bytes]:
         """Prepare the AWS Secrets Manager request"""
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}

@@ -11,9 +11,7 @@ class TraceloopLogger:
 
     def __init__(self):
         try:
-            from opentelemetry.sdk.trace.export import ConsoleSpanExporter
             from traceloop.sdk import Traceloop
-            from traceloop.sdk.instruments import Instruments
             from traceloop.sdk.tracing.tracing import TracerWrapper
         except ModuleNotFoundError as e:
             verbose_logger.error(

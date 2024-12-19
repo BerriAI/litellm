@@ -158,10 +158,8 @@ class BedrockImageGeneration(BaseAWSLLM):
             body (bytes): The request body
         """
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(

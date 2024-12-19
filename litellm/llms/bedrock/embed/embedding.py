@@ -158,10 +158,8 @@ class BedrockEmbedding(BaseAWSLLM):
         logging_obj: Any,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
@@ -249,10 +247,8 @@ class BedrockEmbedding(BaseAWSLLM):
         logging_obj: Any,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
@@ -344,10 +340,8 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
