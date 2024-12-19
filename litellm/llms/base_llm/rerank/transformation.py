@@ -79,7 +79,7 @@ class BaseRerankConfig(ABC):
     @abstractmethod
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: Optional[dict],
         model: str,
         drop_params: bool,
         query: str,
