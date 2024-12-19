@@ -499,6 +499,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_max_budget"
     ] = user_api_key_dict.max_budget
+    data[_metadata_variable_name][
+        "user_api_key_model_max_budget"
+    ] = user_api_key_dict.model_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
