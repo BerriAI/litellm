@@ -27,9 +27,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
 
     def __init__(self, dual_cache: DualCache):
-        super().__init__(
-            router_cache=dual_cache, provider_budget_config=None, model_list=None
-        )
+        self.dual_cache = dual_cache
 
     async def is_key_within_model_budget(
         self,
@@ -94,7 +92,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Get the current spend for a virtual key for a model
         """
         virtual_key_model_spend_cache_key = f"virtual_key_spend:{user_api_key_hash}:{model}:{key_budget_config.time_period}"
-        _current_spend = await self.router_cache.async_get_cache(
+        _current_spend = await self.dual_cache.async_get_cache(
             key=virtual_key_model_spend_cache_key,
         )
         return _current_spend
@@ -156,6 +154,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",
             json.dumps(
-                self.router_cache.in_memory_cache.cache_dict, indent=4, default=str
+                self.dual_cache.in_memory_cache.cache_dict, indent=4, default=str
             ),
         )

@@ -631,7 +631,7 @@ class Router:
                     _callback = PromptCachingDeploymentCheck(cache=self.cache)
                 elif pre_call_check == "router_budget_limiting":
                     _callback = RouterBudgetLimiting(
-                        router_cache=self.cache,
+                        dual_cache=self.cache,
                         provider_budget_config=self.provider_budget_config,
                         model_list=self.model_list,
                     )
