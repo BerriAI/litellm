@@ -51,7 +51,6 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "top_logprobs",
         ]
 
-        supported_streaming_models = ["o1-preview", "o1-mini"]
         try:
             model, custom_llm_provider, api_base, api_key = get_llm_provider(
                 model=model
@@ -67,10 +66,6 @@ class OpenAIO1Config(OpenAIGPTConfig):
         )
         _supports_response_schema = supports_response_schema(model, custom_llm_provider)
 
-        if model not in supported_streaming_models:
-            non_supported_params.append("stream")
-            non_supported_params.append("stream_options")
-
         if not _supports_function_calling:
             non_supported_params.append("tools")
             non_supported_params.append("tool_choice")
@@ -81,10 +76,9 @@ class OpenAIO1Config(OpenAIGPTConfig):
         if not _supports_response_schema:
             non_supported_params.append("response_format")
 
-        returned_params = [
+        return [
             param for param in all_openai_params if param not in non_supported_params
         ]
-        return returned_params
 
     def map_openai_params(
         self,
