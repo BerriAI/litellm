@@ -502,28 +502,18 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
-@pytest.mark.parametrize("drop_params", [True, False, None])
-def test_dynamic_drop_additional_params_stream_options(drop_params):
+def test_dynamic_drop_additional_params_stream_options():
     """
-    Make a call to cohere, dropping 'response_format' specifically
+    Make a call to vertex ai, dropping 'stream_options' specifically
     """
-    if drop_params is True:
-        optional_params = litellm.utils.get_optional_params(
-            model="command-r",
-            custom_llm_provider="cohere",
-            response_format={"type": "json"},
-            additional_drop_params=["response_format"],
-        )
-    else:
-        try:
-            optional_params = litellm.utils.get_optional_params(
-                model="command-r",
-                custom_llm_provider="cohere",
-                response_format={"type": "json"},
-            )
-            pytest.fail("Expected to fail")
-        except Exception as e:
-            pass
+    optional_params = litellm.utils.get_optional_params(
+        model="mistral-large-2411@001",
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+        additional_drop_params=["stream_options"],
+    )
+
+    assert "stream_options" not in optional_params
 
 
 def test_dynamic_drop_additional_params_e2e():
