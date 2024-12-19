@@ -22,11 +22,9 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from litellm.caching.caching import DualCache
 from litellm.router import (
     Deployment,
-    updateDeployment,
     LiteLLM_Params,
-    ModelInfo,
-    updateLiteLLMParams,
 )
+from litellm.types.router import ModelInfo, updateDeployment, updateLiteLLMParams
 
 from litellm.proxy._types import (
     UserAPIKeyAuth,
