@@ -595,12 +595,12 @@ class OpenAIChatCompletion(BaseLLM):
                             original_response=stringified_response,
                             additional_args={"complete_input_dict": data},
                         )
+
                         final_response_obj = convert_to_model_response_object(
                             response_object=stringified_response,
                             model_response_object=model_response,
                             _response_headers=headers,
                         )
-
                         if fake_stream is True:
                             return self.mock_streaming(
                                 response=cast(ModelResponse, final_response_obj),
@@ -613,8 +613,8 @@ class OpenAIChatCompletion(BaseLLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
-                        optional_params = drop_params_from_unprocessable_entity_error(
-                            e, optional_params
+                        inference_params = drop_params_from_unprocessable_entity_error(
+                            e, inference_params
                         )
                     else:
                         raise e
@@ -718,6 +718,7 @@ class OpenAIChatCompletion(BaseLLM):
                     openai_aclient=openai_aclient, data=data, timeout=timeout
                 )
                 stringified_response = response.model_dump()
+
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
