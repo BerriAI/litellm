@@ -171,6 +171,7 @@ from openai import OpenAIError as OriginalError
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
 from ._logging import verbose_logger
 from .caching.caching import (
@@ -6203,6 +6204,15 @@ class ProviderConfigManager:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         raise ValueError(f"Provider {provider} does not support embedding config")
+
+    @staticmethod
+    def get_provider_rerank_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseRerankConfig:
+        if litellm.LlmProviders.COHERE == provider:
+            return litellm.CohereRerankConfig()
+        raise ValueError(f"Provider {provider} does not support rerank config")
 
 
 def get_end_user_id_for_cost_tracking(
