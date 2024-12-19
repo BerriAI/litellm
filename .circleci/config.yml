@@ -801,16 +801,11 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
-            pip install python-dotenv
-            pip install pytest
-            pip install tiktoken
-            pip install aiohttp
-            pip install openai
-            pip install click
-            pip install "boto3==1.34.34"
-            pip install jinja2
-            pip install tokenizers=="0.20.0"
-            pip install jsonschema
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
       - run:
           name: Run tests
           command: |
