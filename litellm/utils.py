@@ -4216,7 +4216,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
         )
     # nvidia
     elif llm_provider == "nvidia":
-        api_key = api_key or get_secret("NVIDIA_API_KEY")
+        api_key = api_key or get_secret("NVIDIA_API_KEY") or get_secret("NVIDIA_NIM_API_KEY")
     return api_key
 
 
@@ -5023,7 +5023,7 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("GROQ_API_KEY")
         elif custom_llm_provider == "nvidia":
-            if "NVIDIA_API_KEY" in os.environ:
+            if "NVIDIA_API_KEY" in os.environ or "NVIDIA_NIM_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
                 missing_keys.append("NVIDIA_API_KEY")

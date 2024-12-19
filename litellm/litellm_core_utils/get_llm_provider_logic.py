@@ -90,9 +90,11 @@ def get_llm_provider(  # noqa: PLR0915
             api_base = (
                 api_base 
                 or get_secret("NVIDIA_API_BASE") 
+                or get_secret("NVIDIA_BASE_URL") 
+                or get_secret("NVIDIA_NIM_API_BASE") 
                 or "https://integrate.api.nvidia.com/v1"
             ) # type: ignore
-            dynamic_api_key = api_key or get_secret_str("NVIDIA_API_KEY")
+            dynamic_api_key = api_key or get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
             custom_llm_provider = "nvidia"
             if model.split("/", 1)[0] == "nvidia":
                 model = model.split("/", 1)[1]
@@ -167,7 +169,7 @@ def get_llm_provider(  # noqa: PLR0915
                         dynamic_api_key = get_secret_str("GROQ_API_KEY")
                     elif endpoint == "https://integrate.api.nvidia.com/v1":
                         custom_llm_provider = "nvidia"
-                        dynamic_api_key = get_secret_str("NVIDIA_API_KEY")
+                        dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")

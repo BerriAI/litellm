@@ -44,7 +44,7 @@ class NvidiaConfig:
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
         
-        dynamic_api_key = get_secret_str("NVIDIA_API_KEY")
+        dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
 
         if dynamic_api_key:
             ## fetch available models
@@ -72,7 +72,12 @@ class NvidiaConfig:
     
     def available_models(self) -> list:
         '''Get Available NVIDIA models.'''
-        api_base = get_secret("NVIDIA_API_BASE") or "https://integrate.api.nvidia.com/v1" # type: ignore
+        api_base = (
+                    get_secret("NVIDIA_API_BASE")  
+                    or get_secret("NVIDIA_BASE_URL") 
+                    or get_secret("NVIDIA_NIM_API_BASE") 
+                    or "https://integrate.api.nvidia.com/v1" # type: ignore
+                )
 
         headers = {
         'Content-Type': 'application/json',
