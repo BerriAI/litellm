@@ -4513,3 +4513,13 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
     else:
         assert len(response) == 1
         assert response[0].function.name == function_name
+
+
+def test_langfuse_completion():
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="langfuse/test-chat-prompt",
+        langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        langfuse_private_key=os.getenv("LANGFUSE_PRIVATE_KEY"),
+        messages=[{"role": "user", "content": "this is ignored"}],
+    )
