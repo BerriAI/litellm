@@ -502,6 +502,30 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
+@pytest.mark.parametrize("drop_params", [True, False, None])
+def test_dynamic_drop_additional_params_stream_options(drop_params):
+    """
+    Make a call to cohere, dropping 'response_format' specifically
+    """
+    if drop_params is True:
+        optional_params = litellm.utils.get_optional_params(
+            model="command-r",
+            custom_llm_provider="cohere",
+            response_format={"type": "json"},
+            additional_drop_params=["response_format"],
+        )
+    else:
+        try:
+            optional_params = litellm.utils.get_optional_params(
+                model="command-r",
+                custom_llm_provider="cohere",
+                response_format={"type": "json"},
+            )
+            pytest.fail("Expected to fail")
+        except Exception as e:
+            pass
+
+
 def test_dynamic_drop_additional_params_e2e():
     with patch(
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
