@@ -2,11 +2,11 @@ from typing import List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.openai.openai import OpenAIConfig
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
+from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderField
@@ -33,6 +33,7 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _transform_messages(
         self,
         messages: List[AllMessageValues],
+        model: str,
     ) -> List:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
