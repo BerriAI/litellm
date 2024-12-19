@@ -102,7 +102,7 @@ def get_llm_provider(  # noqa: PLR0915
             if model not in litellm.nvidia_models:
                 raise Exception(
                     f"Model not found. You passed model={model}, custom_llm_provider={custom_llm_provider}.",
-                    "Check available models using `` "
+                    "Check available models using `NvidiaConfig().available_models()` "
                 )
             return model, custom_llm_provider, dynamic_api_key, api_base
 

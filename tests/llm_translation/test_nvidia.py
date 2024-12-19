@@ -22,17 +22,16 @@ from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 
 @contextmanager
-def no_env_var(var: str) -> Generator[None, None, None]:
+def no_env_var(*vars: str) -> Generator[None, None, None]:
+    original_values = {}
     try:
-        if val := os.environ.get(var, None):
-            del os.environ[var]
+        for var in vars:
+            if var in os.environ:
+                original_values[var] = os.environ.pop(var)
         yield
     finally:
-        if val:
+        for var, val in original_values.items():
             os.environ[var] = val
-        else:
-            if var in os.environ:
-                del os.environ[var]
 
 
 ## mock /models endpoint
@@ -61,7 +60,7 @@ def mock_models_endpoint():
 
 
 def test_completion_missing_key():
-    with no_env_var("NVIDIA_API_KEY"):
+    with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
             completion(
                 model="nvidia/databricks/dbrx-instruct",
@@ -90,7 +89,7 @@ def test_completion_bogus_key():
             frequency_penalty=0.1,
         )
 
-@pytest.mark.skipif("NVIDIA_API_KEY" not in os.environ, reason="NVIDIA_API_KEY environment variable is not set.")
+@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
 def test_completion_invalid_model():
     with pytest.raises(litellm.exceptions.BadRequestError) as err_msg:
         completion(
@@ -204,7 +203,7 @@ async def test_async_completion_missing_key():
     """
     Test async completion with missing API key raises AuthenticationError
     """
-    with no_env_var("NVIDIA_API_KEY"):
+    with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
             await litellm.acompletion(
                 model="nvidia/databricks/dbrx-instruct",
@@ -220,7 +219,7 @@ async def test_async_completion_missing_key():
 
 @pytest.mark.asyncio
 @pytest.mark.respx
-@pytest.mark.skipif("NVIDIA_API_KEY" not in os.environ, reason="NVIDIA_API_KEY environment variable is not set.")
+@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
 async def test_async_completion_nvidia(respx_mock):
     """
     Test successful async completion with NVIDIA API
