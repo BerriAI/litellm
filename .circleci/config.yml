@@ -785,7 +785,38 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  
+  installing_litellm_on_python_3_13:
+    docker:
+      - image: cimg/python:3.13
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install python-dotenv
+            pip install pytest
+            pip install tiktoken
+            pip install aiohttp
+            pip install openai
+            pip install click
+            pip install "boto3==1.34.34"
+            pip install jinja2
+            pip install tokenizers=="0.20.0"
+            pip install jsonschema
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
 
   check_code_and_doc_quality:
     docker:
@@ -1607,6 +1638,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - load_testing:
           filters:
             branches:
@@ -1638,6 +1675,7 @@ workflows:
             - e2e_ui_testing
             - litellm_proxy_unit_testing
             - installing_litellm_on_python
+            - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
