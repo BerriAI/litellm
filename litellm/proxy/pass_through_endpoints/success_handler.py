@@ -1,22 +1,11 @@
 import json
-import re
-import threading
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional
 
 import httpx
 
-import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
-)
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexLLM,
-)
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import StandardPassThroughResponseObject
 from litellm.utils import executor as thread_pool_executor
 

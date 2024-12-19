@@ -1,6 +1,4 @@
 import json
-import os
-import threading
 import traceback
 from typing import Optional
 
@@ -14,17 +12,14 @@ from ..exceptions import (
     APIError,
     AuthenticationError,
     BadRequestError,
-    BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     NotFoundError,
-    OpenAIError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
-    UnsupportedParamsError,
 )
 
 
@@ -290,7 +285,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "Web server is returning an unknown error" in error_str:
+                elif (
+                    "Web server is returning an unknown error" in error_str
+                    or "The server had an error processing your request." in error_str
+                ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{exception_provider} - {message}",

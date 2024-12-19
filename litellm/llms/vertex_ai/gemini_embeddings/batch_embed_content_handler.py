@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import httpx
 

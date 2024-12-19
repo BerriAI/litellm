@@ -4,7 +4,6 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-import asyncio
 from typing import Any, Optional
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging

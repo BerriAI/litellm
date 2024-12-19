@@ -1,25 +1,17 @@
-import asyncio
-import copy
-import json
-import os
-from copy import deepcopy
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import List, Optional, Union
 
-import httpx
 from openai import OpenAI
 
 import litellm
-from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.types.llms.azure_ai import ImageEmbeddingRequest
-from litellm.types.utils import Embedding, EmbeddingResponse
-from litellm.utils import convert_to_model_response_object, is_base64_encoded
+from litellm.types.utils import EmbeddingResponse
+from litellm.utils import convert_to_model_response_object
 
 from .cohere_transformation import AzureAICohereConfig
 

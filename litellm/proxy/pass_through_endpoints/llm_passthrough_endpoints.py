@@ -6,34 +6,13 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
-import ast
-import asyncio
-import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-from urllib.parse import urlencode
+from typing import Optional
 
-import fastapi
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
-from starlette.datastructures import QueryParams
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import litellm
-from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
 from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
-from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -240,7 +219,6 @@ async def bedrock_proxy_route(
     create_request_copy(request)
 
     try:
-        import boto3
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
         from botocore.credentials import Credentials

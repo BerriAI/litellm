@@ -2,12 +2,10 @@
 
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
+import os
 
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching.caching import DualCache
 
-from typing import Literal, Union, Optional
+from typing import Optional
 
 import traceback
 
@@ -15,10 +13,8 @@ import traceback
 #### What this does ####
 #    On success + failure, log events to Supabase
 
-import dotenv, os
-import traceback
-import datetime, subprocess, sys
-import litellm, uuid
+import litellm
+import uuid
 from litellm._logging import print_verbose, verbose_logger
 
 

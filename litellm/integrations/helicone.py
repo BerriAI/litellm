@@ -3,10 +3,7 @@
 import os
 import traceback
 
-import dotenv
-
 import litellm
-from litellm._logging import verbose_logger
 
 
 class HeliconeLogger:

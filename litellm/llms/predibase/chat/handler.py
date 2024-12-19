@@ -1,22 +1,17 @@
 # What is this?
 ## Controller file for Predibase Integration - https://predibase.com/
 
-import copy
 import json
 import os
 import time
-import traceback
-import types
-from enum import Enum
 from functools import partial
-from typing import Callable, List, Literal, Optional, Union
+from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
@@ -29,7 +24,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import LiteLLMLoggingBaseClass
 from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
 
-from ...base import BaseLLM
 from ..common_utils import PredibaseError
 
 

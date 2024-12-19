@@ -1,28 +1,14 @@
-import io
 import json
-import os
-import sys
-import time
-import traceback
-import types
 from copy import deepcopy
-from enum import Enum
-from functools import partial
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
-    prompt_factory,
-)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
@@ -116,10 +102,8 @@ class SagemakerLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 

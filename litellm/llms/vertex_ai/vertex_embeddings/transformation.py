@@ -3,7 +3,6 @@ from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
-import litellm
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import *

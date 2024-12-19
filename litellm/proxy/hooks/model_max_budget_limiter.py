@@ -1,14 +1,10 @@
 import json
-import traceback
 from typing import List, Optional
 
-from fastapi import HTTPException
-
 import litellm
-from litellm import verbose_logger
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.integrations.custom_logger import Span
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.llms.openai import AllMessageValues

@@ -6,7 +6,6 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-import types
 from typing import List, Literal, Optional, Tuple, Union
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (

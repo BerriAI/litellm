@@ -20,14 +20,13 @@ anthropic:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
@@ -611,7 +610,6 @@ class RouterBudgetLimiting(CustomLogger):
 
         This is helpful for debugging and monitoring provider budget limits.
         """
-        from litellm.integrations.prometheus import PrometheusLogger
 
         prometheus_logger = _get_prometheus_logger_from_callbacks()
         if prometheus_logger:
