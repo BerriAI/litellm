@@ -3285,7 +3285,6 @@ async def chat_completion(  # noqa: PLR0915
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
 
     data = {}
-    from litellm.proxy.raga.raga_utils import modify_user_request, RagaHTTPException
     try:
         body = await request.body()
         body_str = body.decode()
@@ -3306,11 +3305,8 @@ async def chat_completion(  # noqa: PLR0915
             return await call_workday_gateway(data)
 
         # add api keys to request based on model and user_id
-        data, err = modify_user_request(data)
-        if err is not None:
-            if isinstance(err, RagaHTTPException):
-                raise err
-            return err
+        from litellm.proxy.raga.raga_utils import modify_user_request
+        data = modify_user_request(data)
         data = await add_litellm_data_to_request(
             data=data,
             request=request,
@@ -3497,8 +3493,6 @@ async def chat_completion(  # noqa: PLR0915
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
         return _chat_response
-    except RagaHTTPException as e:
-        raise e.ex
     except Exception as e:
         verbose_proxy_logger.exception(
             f"litellm.proxy.proxy_server.chat_completion(): Exception occured - {str(e)}"
