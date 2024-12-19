@@ -20,5 +20,4 @@ class TestInfinity(BaseLLMRerankTest):
     def get_base_rerank_call_args(self) -> dict:
         return {
             "model": "infinity/BAAI/bge-reranker-v2-m3",
-            "custom_llm_provider": "infinity",
         }
