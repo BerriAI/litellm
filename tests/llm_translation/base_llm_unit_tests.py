@@ -219,6 +219,7 @@ class BaseLLMChatTest(ABC):
                     },
                 ],
                 response_format=TestModel,
+                timeout=5,
             )
             assert res is not None
 
@@ -226,6 +227,8 @@ class BaseLLMChatTest(ABC):
 
             assert res.choices[0].message.content is not None
             assert res.choices[0].message.tool_calls is None
+        except litellm.Timeout:
+            pytest.skip("Model took too long to respond")
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
 

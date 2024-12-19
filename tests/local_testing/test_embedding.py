@@ -1004,6 +1004,28 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
         assert json_data["parameters"]["top_k"] == 10
 
 
+def test_hosted_vllm_embedding(monkeypatch):
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://localhost:8000")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            embedding(
+                model="hosted_vllm/jina-embeddings-v3",
+                input=["Hello world"],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
+
+
 @pytest.mark.parametrize(
     "model",
     [
