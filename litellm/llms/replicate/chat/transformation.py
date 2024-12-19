@@ -130,11 +130,6 @@ class ReplicateConfig(BaseConfig):
             return split_model[1]
         return model
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:

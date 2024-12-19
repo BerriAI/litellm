@@ -17,14 +17,19 @@ import litellm
 from litellm import Choices, Message, ModelResponse
 
 
+@pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1"])
 @pytest.mark.asyncio
-async def test_o1_handle_system_role():
+async def test_o1_handle_system_role(model):
     """
     Tests that:
     - max_tokens is translated to 'max_completion_tokens'
     - role 'system' is translated to 'user'
     """
     from openai import AsyncOpenAI
+    from litellm.utils import supports_system_messages
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     litellm.set_verbose = True
 
@@ -35,9 +40,9 @@ async def test_o1_handle_system_role():
     ) as mock_client:
         try:
             await litellm.acompletion(
-                model="o1-preview",
+                model=model,
                 max_tokens=10,
-                messages=[{"role": "system", "content": "Hello!"}],
+                messages=[{"role": "system", "content": "Be a good bot!"}],
                 client=client,
             )
         except Exception as e:
@@ -48,9 +53,73 @@ async def test_o1_handle_system_role():
 
         print("request_body: ", request_body)
 
-        assert request_body["model"] == "o1-preview"
+        assert request_body["model"] == model
         assert request_body["max_completion_tokens"] == 10
-        assert request_body["messages"] == [{"role": "user", "content": "Hello!"}]
+        if supports_system_messages(model, "openai"):
+            assert request_body["messages"] == [
+                {"role": "system", "content": "Be a good bot!"}
+            ]
+        else:
+            assert request_body["messages"] == [
+                {"role": "user", "content": "Be a good bot!"}
+            ]
+
+
+@pytest.mark.parametrize(
+    "model, expected_tool_calling_support",
+    [("o1-preview", False), ("o1-mini", False), ("o1", True)],
+)
+@pytest.mark.asyncio
+async def test_o1_handle_tool_calling_optional_params(
+    model, expected_tool_calling_support
+):
+    """
+    Tests that:
+    - max_tokens is translated to 'max_completion_tokens'
+    - role 'system' is translated to 'user'
+    """
+    from openai import AsyncOpenAI
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
+
+    supported_params = config.get_supported_openai_params(model=model)
+
+    assert expected_tool_calling_support == ("tools" in supported_params)
+
+
+# @pytest.mark.parametrize(
+#     "model",
+#     ["o1"],  # "o1-preview", "o1-mini",
+# )
+# @pytest.mark.asyncio
+# async def test_o1_handle_streaming_e2e(model):
+#     """
+#     Tests that:
+#     - max_tokens is translated to 'max_completion_tokens'
+#     - role 'system' is translated to 'user'
+#     """
+#     from openai import AsyncOpenAI
+#     from litellm.utils import ProviderConfigManager
+#     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+#     from litellm.types.utils import LlmProviders
+
+#     resp = litellm.completion(
+#         model=model,
+#         messages=[{"role": "user", "content": "Hello!"}],
+#         stream=True,
+#     )
+#     assert isinstance(resp, CustomStreamWrapper)
+#     for chunk in resp:
+#         print("chunk: ", chunk)
+
+#     assert True
 
 
 @pytest.mark.asyncio
