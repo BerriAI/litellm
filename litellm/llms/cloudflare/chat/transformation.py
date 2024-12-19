@@ -158,11 +158,6 @@ class CloudflareChatConfig(BaseConfig):
             message=error_message,
         )
 
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError
-
     def get_model_response_iterator(
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],

@@ -57,6 +57,7 @@ class AzureOpenAIO1ChatCompletion(AzureChatCompletion):
         client=None,
     ):
         stream: Optional[bool] = optional_params.pop("stream", False)
+        stream_options: Optional[dict] = optional_params.pop("stream_options", None)
         response = super().completion(
             model,
             messages,
@@ -90,6 +91,7 @@ class AzureOpenAIO1ChatCompletion(AzureChatCompletion):
                 model=model,
                 custom_llm_provider="openai",
                 logging_obj=logging_obj,
+                stream_options=stream_options,
             )
 
             return streaming_response
