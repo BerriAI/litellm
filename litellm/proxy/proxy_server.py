@@ -1354,6 +1354,19 @@ class ProxyConfig:
                 config[key] = get_secret(value)
         return config
 
+    def _get_team_config(self, team_id: str, all_teams_config: List[Dict]) -> Dict:
+        team_config: dict = {}
+        for team in all_teams_config:
+            if "team_id" not in team:
+                raise Exception(f"team_id missing from team: {team}")
+            if team_id == team["team_id"]:
+                team_config = team
+                break
+        for k, v in team_config.items():
+            if isinstance(v, str) and v.startswith("os.environ/"):
+                team_config[k] = get_secret(v)
+        return team_config
+
     async def load_team_config(self, team_id: str):
         """
         - for a given team id
@@ -1366,18 +1379,11 @@ class ProxyConfig:
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", {})
         all_teams_config = litellm_settings.get("default_team_settings", None)
-        team_config: dict = {}
         if all_teams_config is None:
-            return team_config
-        for team in all_teams_config:
-            if "team_id" not in team:
-                raise Exception(f"team_id missing from team: {team}")
-            if team_id == team["team_id"]:
-                team_config = team
-                break
-        for k, v in team_config.items():
-            if isinstance(v, str) and v.startswith("os.environ/"):
-                team_config[k] = get_secret(v)
+            return {}
+        team_config = self._get_team_config(
+            team_id=team_id, all_teams_config=all_teams_config
+        )
         return team_config
 
     def _init_cache(
@@ -1452,8 +1458,11 @@ class ProxyConfig:
 
         config = self._check_for_os_environ_vars(config=config)
 
-        self.config = config
+        self.update_config_state(config=config)
         return config
+
+    def update_config_state(self, config: dict):
+        self.config = config
 
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
@@ -2272,6 +2281,24 @@ class ProxyConfig:
                 pass_through_endpoints=general_settings["pass_through_endpoints"]
             )
 
+    def _update_config_fields(
+        self,
+        current_config: dict,
+        param_name: str,
+        db_param_value: Any,
+    ) -> dict:
+        if isinstance(current_config[param_name], dict):
+            # if dict exists (e.g. litellm_settings),
+            # go through each key and value,
+            # and update if new value is not None/empty dict
+            for key, value in db_param_value.items():
+                if value:
+                    current_config[param_name][key] = value
+        else:
+            current_config[param_name] = db_param_value
+
+        return current_config
+
     async def _update_config_from_db(
         self,
         prisma_client: PrismaClient,
@@ -2311,10 +2338,11 @@ class ProxyConfig:
                 if param_name is not None and param_value is not None:
                     # check if param_name is already in the config
                     if param_name in config:
-                        if isinstance(config[param_name], dict):
-                            config[param_name].update(param_value)
-                        else:
-                            config[param_name] = param_value
+                        config = self._update_config_fields(
+                            current_config=config,
+                            param_name=param_name,
+                            db_param_value=param_value,
+                        )
                     else:
                         # if it's not in the config - then add it
                         config[param_name] = param_value
