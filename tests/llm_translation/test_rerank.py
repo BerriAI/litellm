@@ -66,6 +66,7 @@ def assert_response_shape(response, custom_llm_provider):
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_basic_rerank(sync_mode):
+    litellm.set_verbose = True
     if sync_mode is True:
         response = litellm.rerank(
             model="cohere/rerank-english-v3.0",
@@ -94,6 +95,8 @@ async def test_basic_rerank(sync_mode):
         assert response.results is not None
 
         assert_response_shape(response, custom_llm_provider="cohere")
+
+    print("response", response.model_dump_json(indent=4))
 
 
 @pytest.mark.asyncio()
@@ -191,8 +194,8 @@ async def test_rerank_custom_api_base():
     expected_payload = {
         "model": "Salesforce/Llama-Rank-V1",
         "query": "hello",
-        "documents": ["hello", "world"],
         "top_n": 3,
+        "documents": ["hello", "world"],
     }
 
     with patch(
@@ -211,15 +214,21 @@ async def test_rerank_custom_api_base():
 
         # Assert
         mock_post.assert_called_once()
-        _url, kwargs = mock_post.call_args
-        args_to_api = kwargs["json"]
+        print("call args", mock_post.call_args)
+        args_to_api = mock_post.call_args.kwargs["data"]
+        _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
         assert (
-            _url[0]
-            == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
+            _url == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
         )
-        assert args_to_api == expected_payload
+
+        request_data = json.loads(args_to_api)
+        assert request_data["query"] == expected_payload["query"]
+        assert request_data["documents"] == expected_payload["documents"]
+        assert request_data["top_n"] == expected_payload["top_n"]
+        assert request_data["model"] == expected_payload["model"]
+
         assert response.id is not None
         assert response.results is not None
 
@@ -290,3 +299,58 @@ def test_complete_base_url_cohere():
         print("mock_post.call_args", mock_post.call_args)
         mock_post.assert_called_once()
         assert "http://localhost:4000/v1/rerank" in mock_post.call_args.kwargs["url"]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "top_n_1, top_n_2, expect_cache_hit",
+    [
+        (3, 3, True),
+        (3, None, False),
+    ],
+)
+async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hit):
+    from litellm.caching.caching import Cache
+
+    litellm.set_verbose = True
+    litellm.cache = Cache(type="local")
+
+    if sync_mode is True:
+        for idx in range(2):
+            if idx == 0:
+                top_n = top_n_1
+            else:
+                top_n = top_n_2
+            response = litellm.rerank(
+                model="cohere/rerank-english-v3.0",
+                query="hello",
+                documents=["hello", "world"],
+                top_n=top_n,
+            )
+    else:
+        for idx in range(2):
+            if idx == 0:
+                top_n = top_n_1
+            else:
+                top_n = top_n_2
+            response = await litellm.arerank(
+                model="cohere/rerank-english-v3.0",
+                query="hello",
+                documents=["hello", "world"],
+                top_n=top_n,
+            )
+
+            await asyncio.sleep(1)
+
+    if expect_cache_hit is True:
+        assert "cache_key" in response._hidden_params
+    else:
+        assert "cache_key" not in response._hidden_params
+
+    print("re rank response: ", response)
+
+    assert response.id is not None
+    assert response.results is not None
+
+    assert_response_shape(response, custom_llm_provider="cohere")

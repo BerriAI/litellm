@@ -5,8 +5,6 @@ import traceback
 import uuid
 
 from dotenv import load_dotenv
-from test_rerank import assert_response_shape
-
 
 load_dotenv()
 sys.path.insert(

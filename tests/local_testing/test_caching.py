@@ -5,7 +5,6 @@ import traceback
 import uuid
 
 from dotenv import load_dotenv
-from test_rerank import assert_response_shape
 
 load_dotenv()
 import os
@@ -2130,59 +2129,6 @@ def test_logging_turn_off_message_logging_streaming():
         mock_client.assert_called_once()
 
         assert mock_client.call_args.args[0].choices[0].message.content == "hello"
-
-
-@pytest.mark.asyncio()
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize(
-    "top_n_1, top_n_2, expect_cache_hit",
-    [
-        (3, 3, True),
-        (3, None, False),
-    ],
-)
-async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hit):
-    litellm.set_verbose = True
-    litellm.cache = Cache(type="local")
-
-    if sync_mode is True:
-        for idx in range(2):
-            if idx == 0:
-                top_n = top_n_1
-            else:
-                top_n = top_n_2
-            response = litellm.rerank(
-                model="cohere/rerank-english-v3.0",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=top_n,
-            )
-    else:
-        for idx in range(2):
-            if idx == 0:
-                top_n = top_n_1
-            else:
-                top_n = top_n_2
-            response = await litellm.arerank(
-                model="cohere/rerank-english-v3.0",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=top_n,
-            )
-
-            await asyncio.sleep(1)
-
-    if expect_cache_hit is True:
-        assert "cache_key" in response._hidden_params
-    else:
-        assert "cache_key" not in response._hidden_params
-
-    print("re rank response: ", response)
-
-    assert response.id is not None
-    assert response.results is not None
-
-    assert_response_shape(response, custom_llm_provider="cohere")
 
 
 def test_basic_caching_import():
