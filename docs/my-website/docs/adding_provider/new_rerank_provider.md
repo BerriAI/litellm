@@ -79,3 +79,6 @@ def test_basic_rerank_cohere():
     assert response.results is not None
 ```
 
+
+## Reference PRs
+- [Add Infinity Rerank](https://github.com/BerriAI/litellm/pull/7321)
