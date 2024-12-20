@@ -9,6 +9,11 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 from typing import Optional, Union
+import litellm
+from litellm.secret_managers.main import get_secret, get_secret_str
+import json
+import requests
+import os
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -17,7 +22,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-    The class `NvidiaNimConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
+    The class `NvidiaConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
     """
 
     temperature: Optional[int] = None
@@ -40,10 +45,44 @@ class NvidiaNimConfig(OpenAIGPTConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+        
+        dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
+
+        if dynamic_api_key:
+            ## fetch available models
+            self.dynamic_api_key = dynamic_api_key
+            litellm.nvidia_models = self.available_models()
+            litellm.model_list += litellm.nvidia_models
+        else:
+            self.dynamic_api_key = dynamic_api_key
 
     @classmethod
     def get_config(cls):
         return super().get_config()
+    
+    def available_models(self) -> list:
+        '''Get Available NVIDIA models.'''
+        api_base = (
+                    get_secret("NVIDIA_API_BASE")  
+                    or get_secret("NVIDIA_BASE_URL") 
+                    or get_secret("NVIDIA_NIM_API_BASE") 
+                    or "https://integrate.api.nvidia.com/v1" # type: ignore
+                )
+
+        headers = {
+        'Content-Type': 'application/json',
+        'Authorization': self.dynamic_api_key
+        }
+        try:
+            response = requests.request("GET", os.path.join(api_base, "models"), headers=headers)
+            response.raise_for_status()
+
+            return [item["id"] for item in json.loads(response.text)["data"]]
+        except Exception as e:
+            raise e
+        
+
+
 
     def get_supported_openai_params(self, model: str) -> list:
         """
