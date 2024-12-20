@@ -194,6 +194,10 @@ If the Langfuse prompt is a string, it will be sent as a user message (not all p
 
 If the Langfuse prompt is a list, it will be sent as is (Langfuse chat prompts are OpenAI compatible).
 
+## Architectural Overview
+
+<Image img={require('../../img/prompt_management_architecture_doc.png')} />
+
 ## API Reference
 
 These are the params you can pass to the `litellm.completion` function in SDK and `litellm_params` in config.yaml
