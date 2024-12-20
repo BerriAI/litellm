@@ -4,6 +4,7 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 import traceback
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
@@ -17,11 +18,79 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
+    from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
+
+    LANGFUSE = Langfuse
 
     PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
 else:
     PROMPT_CLIENT = Any
+    LANGFUSE = Any
+
+
+@lru_cache(maxsize=10)
+def langfuse_client_init(
+    langfuse_public_key=None,
+    langfuse_secret=None,
+    langfuse_host=None,
+    flush_interval=1,
+) -> LANGFUSE:
+    """
+    Initialize Langfuse client with caching to prevent multiple initializations.
+
+    Args:
+        langfuse_public_key (str, optional): Public key for Langfuse. Defaults to None.
+        langfuse_secret (str, optional): Secret key for Langfuse. Defaults to None.
+        langfuse_host (str, optional): Host URL for Langfuse. Defaults to None.
+        flush_interval (int, optional): Flush interval in seconds. Defaults to 1.
+
+    Returns:
+        Langfuse: Initialized Langfuse client instance
+
+    Raises:
+        Exception: If langfuse package is not installed
+    """
+    try:
+        import langfuse
+        from langfuse import Langfuse
+    except Exception as e:
+        raise Exception(
+            f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n\033[0m"
+        )
+
+    # Instance variables
+    secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
+    public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
+    langfuse_host = langfuse_host or os.getenv(
+        "LANGFUSE_HOST", "https://cloud.langfuse.com"
+    )
+
+    if not (
+        langfuse_host.startswith("http://") or langfuse_host.startswith("https://")
+    ):
+        # add http:// if unset, assume communicating over private network - e.g. render
+        langfuse_host = "http://" + langfuse_host
+
+    langfuse_release = os.getenv("LANGFUSE_RELEASE")
+    langfuse_debug = os.getenv("LANGFUSE_DEBUG")
+    langfuse_flush_interval = os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
+
+    parameters = {
+        "public_key": public_key,
+        "secret_key": secret_key,
+        "host": langfuse_host,
+        "release": langfuse_release,
+        "debug": langfuse_debug,
+        "flush_interval": langfuse_flush_interval,  # flush interval in seconds
+    }
+
+    if Version(langfuse.version.__version__) >= Version("2.6.0"):
+        parameters["sdk_integration"] = "litellm"
+
+    client = Langfuse(**parameters)
+
+    return client
 
 
 class LangfusePromptManagement(CustomLogger):
@@ -32,47 +101,17 @@ class LangfusePromptManagement(CustomLogger):
         langfuse_host=None,
         flush_interval=1,
     ):
-        try:
-            import langfuse
-            from langfuse import Langfuse
-        except Exception as e:
-            raise Exception(
-                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
-            )
-        # Instance variables
-        self.secret_key = langfuse_secret or os.getenv("LANGFUSE_SECRET_KEY")
-        self.public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-        self.langfuse_host = langfuse_host or os.getenv(
-            "LANGFUSE_HOST", "https://cloud.langfuse.com"
-        )
-        if not (
-            self.langfuse_host.startswith("http://")
-            or self.langfuse_host.startswith("https://")
-        ):
-            # add http:// if unset, assume communicating over private network - e.g. render
-            self.langfuse_host = "http://" + self.langfuse_host
-        self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
-        self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.langfuse_flush_interval = (
-            os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
+        self.Langfuse = langfuse_client_init(
+            langfuse_public_key=langfuse_public_key,
+            langfuse_secret=langfuse_secret,
+            langfuse_host=langfuse_host,
+            flush_interval=flush_interval,
         )
 
-        parameters = {
-            "public_key": self.public_key,
-            "secret_key": self.secret_key,
-            "host": self.langfuse_host,
-            "release": self.langfuse_release,
-            "debug": self.langfuse_debug,
-            "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
-        }
-
-        if Version(langfuse.version.__version__) >= Version("2.6.0"):
-            parameters["sdk_integration"] = "litellm"
-
-        self.Langfuse = Langfuse(**parameters)
-
-    def _get_prompt_from_id(self, langfuse_prompt_id: str) -> PROMPT_CLIENT:
-        return self.Langfuse.get_prompt(langfuse_prompt_id)
+    def _get_prompt_from_id(
+        self, langfuse_prompt_id: str, langfuse_client: LANGFUSE
+    ) -> PROMPT_CLIENT:
+        return langfuse_client.get_prompt(langfuse_prompt_id)
 
     def _compile_prompt(
         self,
@@ -129,7 +168,9 @@ class LangfusePromptManagement(CustomLogger):
         if langfuse_prompt_id is None:
             return
 
-        prompt_client = self._get_prompt_from_id(langfuse_prompt_id=langfuse_prompt_id)
+        prompt_client = self._get_prompt_from_id(
+            langfuse_prompt_id=langfuse_prompt_id, langfuse_client=self.Langfuse
+        )
         compiled_prompt: Optional[Union[str, list]] = None
         if call_type == "completion" or call_type == "text_completion":
             compiled_prompt = self._compile_prompt(
@@ -177,7 +218,14 @@ class LangfusePromptManagement(CustomLogger):
             raise ValueError(
                 "Langfuse prompt id is required. Pass in as parameter 'langfuse_prompt_id'"
             )
-        langfuse_prompt_client = self._get_prompt_from_id(prompt_id)
+        langfuse_client = langfuse_client_init(
+            langfuse_public_key=dynamic_callback_params.get("langfuse_public_key"),
+            langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
+            langfuse_host=dynamic_callback_params.get("langfuse_host"),
+        )
+        langfuse_prompt_client = self._get_prompt_from_id(
+            langfuse_prompt_id=prompt_id, langfuse_client=langfuse_client
+        )
 
         ## SET PROMPT
         compiled_prompt = self._compile_prompt(
