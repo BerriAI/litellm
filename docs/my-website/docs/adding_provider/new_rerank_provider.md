@@ -71,8 +71,6 @@ def test_basic_rerank_cohere():
         query="hello",
         documents=["hello", "world"],
         top_n=3,
-        api_key=os.getenv("AZURE_AI_COHERE_API_KEY"),
-        api_base=os.getenv("AZURE_AI_COHERE_API_BASE"),
     )
 
     print("re rank response: ", response)
