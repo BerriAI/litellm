@@ -10,7 +10,7 @@ import Image from '@theme/IdealImage';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Get free 7-day trial key](https://www.litellm.ai/#trial)
 
 :::
 

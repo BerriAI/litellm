@@ -85,6 +85,7 @@ const sidebars = {
           label: "Admin UI",
           items: [
             "proxy/ui", 
+            "proxy/admin_ui_sso",
             "proxy/self_serve", 
             "proxy/custom_sso"
           ],

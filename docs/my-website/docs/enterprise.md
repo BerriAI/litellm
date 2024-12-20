@@ -2,9 +2,7 @@
 For companies that need SSO, user management and professional support for LiteLLM Proxy
 
 :::info
-Interested in Enterprise? Schedule a meeting with us here 👉
-[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
+Get free 7-day trial key [here](https://www.litellm.ai/#trial)
 :::
 
 Deploy managed LiteLLM Proxy within your VPC.
