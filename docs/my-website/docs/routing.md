@@ -1762,48 +1762,6 @@ response = router.completion(
 If you want a server to load balance across different LLM APIs, use our [LiteLLM Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
 
 
-## Init Params for the litellm.Router
-
-```python
-def __init__(
-	model_list: Optional[list] = None,
-	
-	## CACHING ##
-	redis_url: Optional[str] = None,
-	redis_host: Optional[str] = None,
-	redis_port: Optional[int] = None,
-	redis_password: Optional[str] = None,
-	cache_responses: Optional[bool] = False,
-	cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
-	caching_groups: Optional[
-		List[tuple]
-	] = None,  # if you want to cache across model groups
-	client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
-
-	## RELIABILITY ##
-	num_retries: int = 0,
-	timeout: Optional[float] = None,
-	default_litellm_params={},  # default params for Router.chat.completion.create
-	fallbacks: Optional[List] = None,
-	default_fallbacks: Optional[List] = None
-	allowed_fails: Optional[int] = None, # Number of times a deployment can failbefore being added to cooldown
-	cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
-	context_window_fallbacks: Optional[List] = None,
-	model_group_alias: Optional[dict] = {},
-	retry_after: int = 0,  # (min) time to wait before retrying a failed request
-	routing_strategy: Literal[
-		"simple-shuffle",
-		"least-busy",
-		"usage-based-routing",
-		"latency-based-routing",
-		"cost-based-routing",
-	] = "simple-shuffle",
-
-	## DEBUGGING ##
-	set_verbose: bool = False,	# set this to True for seeing logs
-    debug_level: Literal["DEBUG", "INFO"] = "INFO", # set this to "DEBUG" for detailed debugging
-):
-```
 
 ## Debugging Router
 ### Basic Debugging
