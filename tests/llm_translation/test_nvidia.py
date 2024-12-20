@@ -33,31 +33,6 @@ def no_env_var(*vars: str) -> Generator[None, None, None]:
         for var, val in original_values.items():
             os.environ[var] = val
 
-
-## mock /models endpoint
-@pytest.fixture
-def mock_models_endpoint():
-    response_data = {
-        "object": "list",
-        "data": [
-            {
-                "id": "nv-mistralai/mistral-nemo-12b-instruct",
-                "object": "model",
-                "created": 735790403,
-                "owned_by": "01-ai"
-            },
-            {
-                "id": "nvidia/vila",
-                "object": "model",
-                "created": 735790403,
-                "owned_by": "abacusai"
-            },
-    ]
-    }
-    with respx.mock(base_url="https://integrate.api.nvidia.com/v1") as mock:
-        mock.get("/models").respond(200, json=response_data)
-        yield mock
-
 location_tool = {
             "type": "function",
             "function": {
@@ -81,7 +56,7 @@ def test_completion_missing_key():
     with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
             completion(
-                model="nvidia/databricks/dbrx-instruct",
+                model="nvidia/meta/llama-3.1-70b-instruct",
                 messages=[
                     {
                         "role": "user",
@@ -96,7 +71,7 @@ def test_completion_bogus_key():
     with pytest.raises(litellm.exceptions.AuthenticationError):
         completion(
             api_key="bogus-key",
-            model="nvidia/databricks/dbrx-instruct",
+            model="nvidia/meta/llama-3.1-70b-instruct",
             messages=[
                 {
                     "role": "user",
@@ -131,9 +106,9 @@ def test_completion_nvidia(respx_mock: MockRouter):
         id="cmpl-mock",
         choices=[Choices(message=Message(content="Mocked response", role="assistant"))],
         created=int(datetime.now().timestamp()),
-        model="databricks/dbrx-instruct",
+        model="nvidia/meta/llama-3.1-70b-instruct"
     )
-    model_name = "nvidia/databricks/dbrx-instruct"
+    model_name="nvidia/meta/llama-3.1-70b-instruct"
 
     mock_request = respx_mock.post(
         "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -168,7 +143,7 @@ def test_completion_nvidia(respx_mock: MockRouter):
                     "content": "What's the weather like in Boston today in Fahrenheit?",
                 }
             ],
-            "model": "databricks/dbrx-instruct",
+            "model": "meta/llama-3.1-70b-instruct",
             "frequency_penalty": 0.1,
             "presence_penalty": 0.5,
         }
@@ -182,7 +157,7 @@ def test_completion_nvidia(respx_mock: MockRouter):
 def test_embedding_nvidia(respx_mock: MockRouter):
     litellm.set_verbose = True
     mock_response = EmbeddingResponse(
-        model="nvidia/databricks/dbrx-instruct",
+        model="nvidia/meta/llama-3.1-70b-instruct",
         data=[
             {
                 "embedding": [0.1, 0.2, 0.3],
@@ -224,7 +199,7 @@ async def test_async_completion_missing_key():
     with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
         with pytest.raises(litellm.exceptions.AuthenticationError):
             await litellm.acompletion(
-                model="nvidia/databricks/dbrx-instruct",
+                model="nvidia/meta/llama-3.1-70b-instruct",
                 messages=[
                     {
                         "role": "user",
@@ -254,10 +229,10 @@ async def test_async_completion_nvidia(respx_mock):
             }
         }],
         "created": int(datetime.now().timestamp()),
-        "model": "databricks/dbrx-instruct"
+        "model": "meta/llama-3.1-70b-instruct"
     }
     
-    model_name = "nvidia/databricks/dbrx-instruct"
+    model_name = "nvidia/meta/llama-3.1-70b-instruct"
     
     # Mock the async POST request
     mock_request = respx_mock.post(
@@ -292,7 +267,7 @@ async def test_async_completion_nvidia(respx_mock):
                     "content": "What's the weather like in Boston today in Fahrenheit?",
                 }
             ],
-            "model": "databricks/dbrx-instruct",
+            "model": "meta/llama-3.1-70b-instruct",
             "frequency_penalty": 0.1,
             "presence_penalty": 0.5,
         }
@@ -307,7 +282,7 @@ async def test_async_completion_timeout():
     # Mock the acompletion method to raise a timeout
     with pytest.raises(litellm.exceptions.Timeout):
         await litellm.acompletion(
-            model="nvidia/databricks/dbrx-instruct",
+            model="nvidia/meta/llama-3.1-70b-instruct",
             messages=[
                 {
                     "role": "user",
@@ -329,7 +304,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
             "id": "cmpl-stream-1",
             "object": "chat.completion.chunk",
             "created": int(datetime.now().timestamp()),
-            "model": "databricks/dbrx-instruct",
+            "model": "meta/llama-3.1-70b-instruct",
             "choices": [{
                 "index": 0,
                 "delta": {"role": "assistant", "content": "Streaming"},
@@ -340,7 +315,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
             "id": "cmpl-stream-2",
             "object": "chat.completion.chunk",
             "created": int(datetime.now().timestamp()),
-            "model": "databricks/dbrx-instruct",
+            "model": "meta/llama-3.1-70b-instruct",
             "choices": [{
                 "index": 0,
                 "delta": {"content": " response"},
@@ -351,7 +326,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
             "id": "cmpl-stream-3",
             "object": "chat.completion.chunk",
             "created": int(datetime.now().timestamp()),
-            "model": "databricks/dbrx-instruct",
+            "model": "meta/llama-3.1-70b-instruct",
             "choices": [{
                 "index": 0,
                 "delta": {},
@@ -373,7 +348,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
     try:
         response = await litellm.acompletion(
             api_key="test-async-stream-key",
-            model="nvidia/databricks/dbrx-instruct",
+            model="nvidia/meta/llama-3.1-70b-instruct",
             messages=[
                 {
                     "role": "user",

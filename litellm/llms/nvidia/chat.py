@@ -16,7 +16,7 @@ import requests
 import os
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-from litellm.llms.nvidia.statics import determine_model, Model
+from litellm.llms.nvidia.statics import determine_model, MODEL_TABLE
 
 class NvidiaConfig(OpenAIGPTConfig):
     """
@@ -47,14 +47,10 @@ class NvidiaConfig(OpenAIGPTConfig):
                 setattr(self.__class__, key, value)
         
         dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
+        self.dynamic_api_key = dynamic_api_key
 
-        if dynamic_api_key:
-            ## fetch available models
-            self.dynamic_api_key = dynamic_api_key
-            litellm.nvidia_models = self.available_models()
-            litellm.model_list += litellm.nvidia_models
-        else:
-            self.dynamic_api_key = dynamic_api_key
+        litellm.nvidia_models = self.available_models()
+        litellm.model_list += litellm.nvidia_models
 
     @classmethod
     def get_config(cls):
@@ -62,24 +58,7 @@ class NvidiaConfig(OpenAIGPTConfig):
     
     def available_models(self) -> list:
         '''Get Available NVIDIA models.'''
-        api_base = (
-                    "https://integrate.api.nvidia.com/v1" # type: ignore
-                    or get_secret("NVIDIA_API_BASE")  
-                    or get_secret("NVIDIA_BASE_URL") 
-                    or get_secret("NVIDIA_NIM_API_BASE") 
-                )
-
-        headers = {
-        'Content-Type': 'application/json',
-        'Authorization': self.dynamic_api_key
-        }
-        try:
-            response = requests.request("GET", os.path.join(api_base, "models"), headers=headers)
-            response.raise_for_status()
-
-            return [item["id"] for item in json.loads(response.text)["data"]]
-        except Exception as e:
-            raise e
+        return list(MODEL_TABLE.keys())
         
 
 
