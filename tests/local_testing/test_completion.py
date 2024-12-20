@@ -4513,3 +4513,23 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
     else:
         assert len(response) == 1
         assert response[0].function.name == function_name
+
+
+def test_langfuse_completion(monkeypatch):
+    monkeypatch.setenv(
+        "LANGFUSE_PUBLIC_KEY", "pk-lf-b3db7e8e-c2f6-4fc7-825c-a541a8fbe003"
+    )
+    monkeypatch.setenv(
+        "LANGFUSE_SECRET_KEY", "sk-lf-b11ef3a8-361c-4445-9652-12318b8596e4"
+    )
+    monkeypatch.setenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="langfuse/gpt-3.5-turbo",
+        langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        langfuse_host="https://us.cloud.langfuse.com",
+        prompt_id="test-chat-prompt",
+        prompt_variables={"user_message": "this is used"},
+        messages=[{"role": "user", "content": "this is ignored"}],
+    )
