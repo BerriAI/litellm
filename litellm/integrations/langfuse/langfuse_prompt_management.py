@@ -3,7 +3,6 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
 import os
-import traceback
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
@@ -13,7 +12,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.secret_managers.main import str_to_bool
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
