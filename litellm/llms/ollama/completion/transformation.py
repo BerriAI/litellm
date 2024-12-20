@@ -1,6 +1,5 @@
 import json
 import time
-import types
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
@@ -15,17 +14,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
     GenericStreamingChunk,
-    ModelInfo,
+    ModelInfoBase,
     ModelResponse,
     ProviderField,
-    StreamingChoices,
 )
 
 from ..common_utils import OllamaError, _convert_image
@@ -198,7 +192,7 @@ class OllamaConfig(BaseConfig):
                 return v
         return None
 
-    def get_model_info(self, model: str) -> ModelInfo:
+    def get_model_info(self, model: str) -> ModelInfoBase:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
@@ -222,11 +216,10 @@ class OllamaConfig(BaseConfig):
 
         _max_tokens: Optional[int] = self._get_max_tokens(model_info)
 
-        return ModelInfo(
+        return ModelInfoBase(
             key=model,
             litellm_provider="ollama",
             mode="chat",
-            supported_openai_params=self.get_supported_openai_params(model=model),
             supports_function_calling=self._supports_function_calling(model_info),
             input_cost_per_token=0.0,
             output_cost_per_token=0.0,
@@ -234,11 +227,6 @@ class OllamaConfig(BaseConfig):
             max_input_tokens=_max_tokens,
             max_output_tokens=_max_tokens,
         )
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]

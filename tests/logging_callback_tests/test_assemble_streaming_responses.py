@@ -14,8 +14,6 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from pydantic.main import Model
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path

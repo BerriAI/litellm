@@ -1,31 +1,18 @@
 import ast
 import asyncio
 import json
-import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import AsyncIterable, List, Optional, Union
+from typing import List, Optional
 
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Request,
-    Response,
-    status,
-)
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    ModelResponseIterator,
-)
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -326,7 +313,6 @@ async def pass_through_request(  # noqa: PLR0915
     stream: Optional[bool] = None,
 ):
     try:
-        import time
         import uuid
 
         from litellm.litellm_core_utils.litellm_logging import Logging

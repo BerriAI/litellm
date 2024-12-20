@@ -35,13 +35,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.caching import (
-    Cache,
-    QdrantSemanticCache,
-    RedisCache,
-    RedisSemanticCache,
-    S3Cache,
-)
+from litellm.caching.caching import S3Cache
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
@@ -550,12 +544,7 @@ class LLMCachingHandler:
         Returns:
             Optional[Any]:
         """
-        from litellm.utils import (
-            CustomStreamWrapper,
-            convert_to_model_response_object,
-            convert_to_streaming_response,
-            convert_to_streaming_response_async,
-        )
+        from litellm.utils import convert_to_model_response_object
 
         if (
             call_type == CallTypes.acompletion.value

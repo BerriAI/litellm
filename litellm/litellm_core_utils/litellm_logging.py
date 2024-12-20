@@ -24,7 +24,7 @@ from litellm import (
     turn_off_message_logging,
     verbose_logger,
 )
-from litellm.caching.caching import DualCache, InMemoryCache, S3Cache
+from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -34,7 +34,6 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
-from litellm.proxy._types import CommonProxyErrors
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -53,16 +52,11 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
-    StandardPassThroughResponseObject,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import (
-    _get_base_model_from_metadata,
-    print_verbose,
-    prompt_token_calculator,
-)
+from litellm.utils import _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
@@ -87,14 +81,12 @@ from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.prometheus import PrometheusLogger
-from ..integrations.prometheus_services import PrometheusServicesLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
-from .llm_response_utils.get_formatted_prompt import get_formatted_prompt
 from .logging_utils import _assemble_complete_response_from_streaming_chunks
 
 try:

@@ -1,7 +1,6 @@
 # What is this?
 ## Cost calculation for Google AI Studio / Vertex AI models
-import traceback
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger

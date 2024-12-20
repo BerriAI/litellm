@@ -1,5 +1,3 @@
-import json
-import os
 import time  # type: ignore
 from typing import Callable, Optional
 import litellm
@@ -30,7 +28,7 @@ class VLLMError(Exception):
 def validate_environment(model: str, vllm_params: dict):
     global llm
     try:
-        from vllm import LLM, SamplingParams # type: ignore
+        from vllm import LLM, SamplingParams  # type: ignore
 
         if llm is None:
             llm = LLM(model=model, **vllm_params)

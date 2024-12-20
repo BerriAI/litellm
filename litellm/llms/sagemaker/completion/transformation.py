@@ -6,7 +6,6 @@ In the Huggingface TGI format.
 
 import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from httpx._models import Headers, Response
@@ -56,12 +55,6 @@ class SagemakerConfig(BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]

@@ -74,11 +74,7 @@ class ProviderField(TypedDict):
     field_value: str
 
 
-class ModelInfo(TypedDict, total=False):
-    """
-    Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
-    """
-
+class ModelInfoBase(TypedDict, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
@@ -119,7 +115,6 @@ class ModelInfo(TypedDict, total=False):
             "completion", "embedding", "image_generation", "chat", "audio_transcription"
         ]
     ]
-    supported_openai_params: Required[Optional[List[str]]]
     supports_system_messages: Optional[bool]
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
@@ -131,6 +126,14 @@ class ModelInfo(TypedDict, total=False):
     supports_pdf_input: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
+
+
+class ModelInfo(ModelInfoBase, total=False):
+    """
+    Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
+    """
+
+    supported_openai_params: Required[Optional[List[str]]]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -1662,6 +1665,14 @@ class StandardKeyGenerationConfig(TypedDict, total=False):
     personal_key_generation: PersonalUIKeyGenerationConfig
 
 
+class GenericBudgetInfo(BaseModel):
+    time_period: str  # e.g., '1d', '30d'
+    budget_limit: float
+
+
+GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
+
+
 class BudgetConfig(BaseModel):
     max_budget: float
     budget_duration: str
@@ -1730,6 +1741,7 @@ class LlmProviders(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
+    INFINITY = "infinity"
 
 
 class LiteLLMLoggingBaseClass:

@@ -15,7 +15,6 @@ async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
     ValueError: If the token is invalid, the request fails, or the token info endpoint is not set.
     """
     import os
-    from typing import Literal
 
     import httpx
 

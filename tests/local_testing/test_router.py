@@ -27,7 +27,8 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
     _get_cooldown_deployments,
@@ -2210,22 +2211,6 @@ def test_router_cooldown_api_connection_error():
             }
         ]
     )
-
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
-
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
 
     try:
         router.completion(

@@ -4,33 +4,16 @@ import hashlib
 import importlib
 import json
 import os
-import re
 import smtplib
-import subprocess
 import threading
 import time
 import traceback
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import wraps
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    get_args,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, overload
 
-from litellm.litellm_core_utils.duration_parser import (
-    _extract_from_regex,
-    duration_in_seconds,
-    get_last_day_of_month,
-)
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     ProxyErrorTypes,
@@ -44,20 +27,12 @@ except ImportError:
         "backoff is not installed. Please install it via 'pip install backoff'"
     )
 
-import httpx
-from fastapi import HTTPException, Request, status
-from pydantic import BaseModel
+from fastapi import HTTPException, status
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import (
-    EmbeddingResponse,
-    ImageResponse,
-    ModelResponse,
-    Router,
-    get_litellm_params,
-)
+from litellm import EmbeddingResponse, ImageResponse, ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -71,13 +46,9 @@ from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
-    DynamoDBArgs,
     LiteLLM_VerificationTokenView,
-    LitellmUserRoles,
     Member,
     ResetTeamBudgetRequest,
-    SpendLogsMetadata,
-    SpendLogsPayload,
     UserAPIKeyAuth,
 )
 from litellm.proxy.db.create_views import (
@@ -2291,7 +2262,6 @@ async def send_email(receiver_email, subject, html):
     sender_email,
     """
     ## SERVER SETUP ##
-    from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
     smtp_host = os.getenv("SMTP_HOST")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))  # default to port 587

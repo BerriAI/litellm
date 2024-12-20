@@ -471,8 +471,6 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         data: dict,
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
     ):
-        from detect_secrets import SecretsCollection
-        from detect_secrets.settings import default_settings
 
         if await self.should_run_check(user_api_key_dict) is False:
             return

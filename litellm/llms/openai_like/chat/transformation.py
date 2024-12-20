@@ -2,18 +2,14 @@
 OpenAI-like chat completion transformation
 """
 
-import types
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
-from pydantic import BaseModel
 
-import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:

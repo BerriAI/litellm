@@ -2,13 +2,10 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
-import json
-import types
 from typing import List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
-import litellm
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -61,7 +58,7 @@ class GroqChatConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def _transform_messages(self, messages: List[AllMessageValues]) -> List:
+    def _transform_messages(self, messages: List[AllMessageValues], model: str) -> List:
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839

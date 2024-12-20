@@ -6,14 +6,13 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-import types
 from typing import List, Literal, Optional, Tuple, Union
 
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_none_values_from_message,
 )
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -148,7 +147,7 @@ class MistralConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         """
         - handles scenario where content is list and not string

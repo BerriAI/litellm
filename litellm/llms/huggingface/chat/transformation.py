@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import types
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -368,12 +367,6 @@ class HuggingfaceChatConfig(BaseConfig):
 
         headers = {**headers, **default_headers}
         return headers
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

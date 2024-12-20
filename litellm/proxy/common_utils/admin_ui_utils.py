@@ -1,5 +1,4 @@
 import os
-import subprocess
 
 
 def show_missing_vars_in_env():

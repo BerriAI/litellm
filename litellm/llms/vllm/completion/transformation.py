@@ -4,10 +4,8 @@ Translates from OpenAI's `/v1/chat/completions` to the VLLM sdk `llm.generate`.
 NOT RECOMMENDED FOR PRODUCTION USE. Use `hosted_vllm/` instead.
 """
 
-from typing import List, Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union
 import types
-
-from litellm.types.llms.openai import AllMessageValues
 
 from ...hosted_vllm.chat.transformation import HostedVLLMChatConfig
 

@@ -3362,7 +3362,11 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "openai_like" or custom_llm_provider == "jina_ai":
+        elif (
+            custom_llm_provider == "openai_like"
+            or custom_llm_provider == "jina_ai"
+            or custom_llm_provider == "hosted_vllm"
+        ):
             api_base = (
                 api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
             )

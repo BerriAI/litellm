@@ -19,24 +19,11 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union
 import httpx
 
 import litellm
-from litellm import client
 from litellm.llms.azure.azure import AzureBatchesAPI
 from litellm.llms.openai.openai import OpenAIBatchesAPI
-from litellm.llms.vertex_ai.batches.handler import (
-    VertexAIBatchPrediction,
-)
-from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.llms.openai import (
-    Batch,
-    CancelBatchRequest,
-    CreateBatchRequest,
-    CreateFileRequest,
-    FileContentRequest,
-    FileObject,
-    FileTypes,
-    HttpxBinaryResponseContent,
-    RetrieveBatchRequest,
-)
+from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import Batch, CreateBatchRequest, RetrieveBatchRequest
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import supports_httpx_timeout
 

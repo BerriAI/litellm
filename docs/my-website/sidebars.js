@@ -186,6 +186,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai", 
         "providers/vllm", 
+        "providers/infinity",
         "providers/xinference", 
         "providers/cloudflare_workers", 
         "providers/deepinfra",
@@ -319,6 +320,13 @@ const sidebars = {
         "load_test_sdk",
         "load_test_rpm",
       ]
+    },
+    {
+      type: "category",
+      label: "Adding Providers",
+      items: [
+        "adding_provider/directory_structure", 
+        "adding_provider/new_rerank_provider"],
     },
     {
       type: "category",

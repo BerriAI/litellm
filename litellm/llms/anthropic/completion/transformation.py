@@ -6,7 +6,7 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
+from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import httpx
 
@@ -259,12 +259,6 @@ class AnthropicTextConfig(BaseConfig):
             )
 
         return str(prompt)
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        "Not required"
-        raise NotImplementedError
 
     def get_model_response_iterator(
         self,

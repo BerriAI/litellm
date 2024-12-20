@@ -1,8 +1,7 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-import types
 from enum import Enum
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
@@ -88,13 +87,11 @@ class VertexAIPartnerModels(VertexBase):
     ):
         try:
             import vertexai
-            from google.cloud import aiplatform
 
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.codestral.completion.handler import (
                 CodestralTextCompletion,
             )
-            from litellm.llms.openai.openai import OpenAIChatCompletion
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
             from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,

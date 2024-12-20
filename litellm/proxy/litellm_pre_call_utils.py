@@ -12,12 +12,10 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
-    LiteLLMRoutes,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
@@ -214,9 +212,6 @@ class LiteLLMProxyRequestSetup:
         - Checks request headers for forwardable headers
         - Checks if user information should be added to the headers
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            get_standard_logging_metadata,
-        )
 
         returned_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(headers)
 
@@ -499,6 +494,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_max_budget"
     ] = user_api_key_dict.max_budget
+    data[_metadata_variable_name][
+        "user_api_key_model_max_budget"
+    ] = user_api_key_dict.model_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)

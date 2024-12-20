@@ -1,11 +1,16 @@
 """
 Admin sets proxy url + allowed email subdomain 
 """
+
 from dotenv import load_dotenv
 
 load_dotenv()
 import streamlit as st
-import base64, os, json, uuid, requests
+import base64
+import os
+import json
+import uuid
+import requests
 import pandas as pd
 import plotly.express as px
 import click
@@ -26,13 +31,13 @@ def update_config_values(proxy_url, allowed_email_subdomain, admin_emails):
     st.session_state["allowed_email_subdomain"] = allowed_email_subdomain
     st.session_state["admin_emails"] = admin_emails
     if your_base_url.endswith("/"):
-        st.session_state[
-            "user_auth_url"
-        ] = f"{your_base_url}user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+        st.session_state["user_auth_url"] = (
+            f"{your_base_url}user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+        )
     else:
-        st.session_state[
-            "user_auth_url"
-        ] = f"{your_base_url}/user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+        st.session_state["user_auth_url"] = (
+            f"{your_base_url}/user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+        )
     st.session_state["is_admin"] = True
 
 
@@ -71,7 +76,7 @@ def proxy_setup():
 
 def add_new_model():
     import streamlit as st
-    import json, requests, uuid
+    import requests
 
     if (
         st.session_state.get("api_url", None) is None
@@ -295,7 +300,7 @@ def spend_per_user():
 
 def create_key():
     import streamlit as st
-    import json, requests, uuid
+    import requests
 
     if (
         st.session_state.get("api_url", None) is None

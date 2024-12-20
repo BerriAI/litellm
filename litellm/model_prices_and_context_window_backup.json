@@ -13,7 +13,78 @@
         "supports_audio_input": true, 
         "supports_audio_output": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_system_messages": true
+    },
+    "sambanova/Meta-Llama-3.1-8B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.1-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.1-405B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.2-1B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000008,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.2-3B-Instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "max_output_tokens": 4000, 
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000016,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Qwen2.5-Coder-32B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Qwen2.5-72B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
     },
     "gpt-4": {
         "max_tokens": 4096, 
@@ -24,7 +95,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o": {
         "max_tokens": 16384,
@@ -39,7 +111,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o-audio-preview": {
         "max_tokens": 16384,
@@ -54,7 +127,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-audio-preview-2024-10-01": {
         "max_tokens": 16384,
@@ -69,7 +143,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-mini-audio-preview-2024-12-17": {
         "max_tokens": 16384,
@@ -84,7 +159,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-mini": {
         "max_tokens": 16384,
@@ -99,7 +175,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o-mini-2024-07-18": {
         "max_tokens": 16384,
@@ -114,7 +191,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "o1": {
         "max_tokens": 100000,
@@ -127,8 +205,10 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false,
-        "supports_prompt_caching": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "o1-mini": {
         "max_tokens": 65536,
@@ -139,9 +219,7 @@
         "cache_read_input_token_cost": 0.0000015,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_prompt_caching": true
     },
     "o1-mini-2024-09-12": {
@@ -153,9 +231,7 @@
         "cache_read_input_token_cost": 0.0000015,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_prompt_caching": true
     },
     "o1-preview": {
@@ -167,9 +243,7 @@
         "cache_read_input_token_cost": 0.0000075,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_prompt_caching": true
     },
     "o1-preview-2024-09-12": {
@@ -181,9 +255,7 @@
         "cache_read_input_token_cost": 0.0000075,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_prompt_caching": true
     },
     "o1-2024-12-17": {
@@ -197,8 +269,10 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false,
-        "supports_prompt_caching": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "chatgpt-4o-latest": {
         "max_tokens": 4096,
@@ -211,7 +285,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o-2024-05-13": {
         "max_tokens": 4096,
@@ -224,7 +299,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o-2024-08-06": {
         "max_tokens": 16384,
@@ -239,7 +315,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o-2024-11-20": {
         "max_tokens": 16384,
@@ -254,7 +331,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4o-realtime-preview-2024-10-01": {
         "max_tokens": 4096,
@@ -271,7 +349,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-realtime-preview": {
         "max_tokens": 4096,
@@ -287,7 +366,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-realtime-preview-2024-12-17": {
         "max_tokens": 4096,
@@ -303,7 +383,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-mini-realtime-preview": {
         "max_tokens": 4096,
@@ -320,7 +401,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4o-mini-realtime-preview-2024-12-17": {
         "max_tokens": 4096,
@@ -337,7 +419,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "supports_system_messages": true
     },
     "gpt-4-turbo-preview": {
         "max_tokens": 4096,
@@ -349,7 +432,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-0314": {
         "max_tokens": 4096,
@@ -359,7 +443,8 @@
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-0613": {
         "max_tokens": 4096,
@@ -370,7 +455,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-32k": {
         "max_tokens": 4096,
@@ -380,7 +466,8 @@
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-32k-0314": {
         "max_tokens": 4096,
@@ -390,7 +477,8 @@
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-32k-0613": {
         "max_tokens": 4096,
@@ -400,7 +488,8 @@
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-turbo": {
         "max_tokens": 4096,
@@ -413,7 +502,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-turbo-2024-04-09": {
         "max_tokens": 4096,
@@ -426,7 +516,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-1106-preview": {
         "max_tokens": 4096,
@@ -438,7 +529,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-0125-preview": {
         "max_tokens": 4096,
@@ -450,7 +542,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-vision-preview": {
         "max_tokens": 4096,
@@ -461,7 +554,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-4-1106-vision-preview": {
         "max_tokens": 4096,
@@ -472,7 +566,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo": {
         "max_tokens": 4097,
@@ -483,7 +578,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo-0301": {
         "max_tokens": 4097,
@@ -493,7 +589,8 @@
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo-0613": {
         "max_tokens": 4097,
@@ -504,7 +601,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo-1106": {
         "max_tokens": 16385,
@@ -516,7 +614,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo-0125": {
         "max_tokens": 16385,
@@ -528,7 +627,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo-16k": {
         "max_tokens": 16385,
@@ -538,7 +638,8 @@
         "output_cost_per_token": 0.000004,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "gpt-3.5-turbo-16k-0613": {
         "max_tokens": 16385,
@@ -548,7 +649,8 @@
         "output_cost_per_token": 0.000004,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "ft:gpt-3.5-turbo": {
         "max_tokens": 4096,
@@ -557,7 +659,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_system_messages": true
     },
     "ft:gpt-3.5-turbo-0125": {
         "max_tokens": 4096,
@@ -566,7 +669,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_system_messages": true
     },
     "ft:gpt-3.5-turbo-1106": {
         "max_tokens": 4096,
@@ -575,7 +679,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_system_messages": true
     },
     "ft:gpt-3.5-turbo-0613": {
         "max_tokens": 4096,
@@ -584,7 +689,8 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000006,
         "litellm_provider": "openai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_system_messages": true
     },
     "ft:gpt-4-0613": {
         "max_tokens": 4096,
@@ -595,7 +701,8 @@
         "litellm_provider": "openai",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "OpenAI needs to add pricing for this ft model, will be updated when added by OpenAI. Defaulting to base model pricing"
+        "source": "OpenAI needs to add pricing for this ft model, will be updated when added by OpenAI. Defaulting to base model pricing",
+        "supports_system_messages": true
     },
     "ft:gpt-4o-2024-08-06": {
         "max_tokens": 16384,
@@ -608,7 +715,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_system_messages": true
     },
     "ft:gpt-4o-2024-11-20": {
         "max_tokens": 16384,
@@ -623,7 +731,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "ft:gpt-4o-mini-2024-07-18": {
         "max_tokens": 16384,
@@ -638,7 +747,8 @@
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_system_messages": true
     },
     "ft:davinci-002": {
         "max_tokens": 16384,
@@ -3096,6 +3206,42 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_response_schema": true,
+        "supports_audio_output": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash"
+    },
+    "gemini/gemini-2.0-flash-exp": {
+        "max_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 8192,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_image": 0,
+        "input_cost_per_video_per_second": 0,
+        "input_cost_per_audio_per_second": 0,
+        "input_cost_per_token": 0,
+        "input_cost_per_character": 0, 
+        "input_cost_per_token_above_128k_tokens": 0, 
+        "input_cost_per_character_above_128k_tokens": 0, 
+        "input_cost_per_image_above_128k_tokens": 0,
+        "input_cost_per_video_per_second_above_128k_tokens": 0,
+        "input_cost_per_audio_per_second_above_128k_tokens": 0,
+        "output_cost_per_token": 0,
+        "output_cost_per_character": 0,
+        "output_cost_per_token_above_128k_tokens": 0,
+        "output_cost_per_character_above_128k_tokens": 0,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_audio_output": true,
+        "tpm": 4000000,
+        "rpm": 10,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash"
     },
     "vertex_ai/claude-3-sonnet": {

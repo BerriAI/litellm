@@ -1,40 +1,24 @@
 import json
-import types
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
-import litellm
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    anthropic_messages_pt,
-    custom_prompt,
-    prompt_factory,
-)
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
-    AnthropicChatCompletionUsageBlock,
-    AnthropicComputerTool,
     AnthropicFinishReason,
-    AnthropicHostedTools,
     AnthropicMessagesRequest,
-    AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
     AnthropicResponse,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     AnthropicResponseUsageBlock,
-    AnthropicSystemMessageContent,
     ContentBlockDelta,
-    ContentBlockStart,
-    ContentBlockStop,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     MessageBlockDelta,
     MessageDelta,
-    MessageStartBlock,
     UsageDelta,
 )
 from litellm.types.llms.openai import (
@@ -44,10 +28,8 @@ from litellm.types.llms.openai import (
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRequest,
-    ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
-    ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -55,13 +37,9 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
     ChatCompletionUserMessage,
-    OpenAIMessageContent,
 )
-from litellm.types.utils import Choices, GenericStreamingChunk, ModelResponse, Usage
-
-from ...base import BaseLLM
+from litellm.types.utils import Choices, ModelResponse, Usage
 
 
 class AnthropicExperimentalPassThroughConfig:
