@@ -9,9 +9,18 @@ If a call fails after num_retries, fallback to another model group.
 - Quick Start [load balancing](./load_balancing.md)
 - Quick Start [client side fallbacks](#client-side-fallbacks)
 
+
+Fallbacks are typically done from one `model_name` to another `model_name`. 
+
 ## Quick Start 
 
 ### 1. Setup fallbacks
+
+Key change: 
+
+```python
+fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}]
+```
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -20,31 +29,28 @@ If a call fails after num_retries, fallback to another model group.
 from litellm import Router 
 router = Router(
 	model_list=[
-		{ # bad model
-			"model_name": "bad-model",
-			"litellm_params": {
-				"model": "openai/my-bad-model",
-				"api_key": "my-bad-api-key",
-				"mock_response": "Bad call"
-			},
-		},
-		{ # good model
-			"model_name": "my-good-model",
-			"litellm_params": {
-				"model": "gpt-4o",
-				"api_key": os.getenv("OPENAI_API_KEY"),
-				"mock_response": "Good call"
-			},
-		},
+    {
+      "model_name": "gpt-3.5-turbo",
+      "litellm_params": {
+        "model": "azure/<your-deployment-name>",
+        "api_base": "<your-azure-endpoint>",
+        "api_key": "<your-azure-api-key>",
+        "rpm": 6
+      }
+    },
+    {
+      "model_name": "gpt-4",
+      "litellm_params": {
+        "model": "azure/gpt-4-ca",
+        "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/",
+        "api_key": "<your-azure-api-key>",
+        "rpm": 6
+      }
+    }
 	],
-	fallbacks=[{"bad-model": ["my-good-model"]}] # 👈 KEY CHANGE
+	fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}] # 👈 KEY CHANGE
 )
 
-response = router.completion(
-	model="bad-model",
-	messages=[{"role": "user", "content": "Hey, how's it going?"}],
-	mock_testing_fallbacks=True,
-)
 ```
 
 </TabItem>
@@ -65,89 +71,14 @@ model_list:
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
-```
 
-
-</TabItem>
-</Tabs>
-
-If the error is a context window exceeded error, fall back to a larger model group (if given). 
-
-Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
-
-You can also set `default_fallbacks`, in case a specific model group is misconfigured / bad.
-
-There are 3 types of fallbacks: 
-- `content_policy_fallbacks`: For litellm.ContentPolicyViolationError - LiteLLM maps content policy violation errors across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8495C27-L8495C54)
-- `context_window_fallbacks`: For litellm.ContextWindowExceededErrors - LiteLLM maps context window error messages across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8469)
-- `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
-
-
-
-**Regular Fallbacks**
-
-Key change: 
-
-```python
-fallbacks=[{"claude-2": ["my-fallback-model"]}]
-```
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import Router 
-
-router = Router(
-	model_list=[
-		{
-			"model_name": "claude-2",
-			"litellm_params": {
-				"model": "claude-2",
-				"api_key": "",
-				"mock_response": Exception("this is a rate limit error"),
-			},
-		},
-		{
-			"model_name": "my-fallback-model",
-			"litellm_params": {
-				"model": "claude-2",
-				"api_key": "",
-				"mock_response": "This works!",
-			},
-		},
-	],
-	fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
-	# context_window_fallbacks=[..], # [OPTIONAL]
-	# content_policy_fallbacks=[..], # [OPTIONAL]
-)
-
-response = router.completion(
-	model="claude-2",
-	messages=[{"role": "user", "content": "Hey, how's it going?"}],
-)
-```
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-In your proxy config.yaml just add this line 👇
-
-```yaml
 router_settings:
-	fallbacks=[{"claude-2": ["my-fallback-model"]}]
+  fallbacks: [{"gpt-3.5-turbo": ["gpt-4"]}]
 ```
 
-Start proxy 
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
 
 </TabItem>
 </Tabs>
-
 
 
 ### 2. Start Proxy
@@ -159,6 +90,28 @@ litellm --config /path/to/config.yaml
 ### 3. Test Fallbacks
 
 Pass `mock_testing_fallbacks=true` in request body, to trigger fallbacks.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+
+```python
+
+from litellm import Router
+
+model_list = [{..}, {..}] # defined in Step 1.
+
+router = Router(model_list=model_list, fallbacks=[{"bad-model": ["my-good-model"]}])
+
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -177,10 +130,26 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
+</TabItem>
+</Tabs>
 
+
+
+
+### Explanation
+
+Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
+
+You can also set [`default_fallbacks`](#default-fallbacks), in case a specific model group is misconfigured / bad.
+
+There are 3 types of fallbacks: 
+- `content_policy_fallbacks`: For litellm.ContentPolicyViolationError - LiteLLM maps content policy violation errors across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8495C27-L8495C54)
+- `context_window_fallbacks`: For litellm.ContextWindowExceededErrors - LiteLLM maps context window error messages across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8469)
+- `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
 
 
 ## Client Side Fallbacks
+
 In this request the following will occur:
 1. The request to `model="zephyr-beta"` will fail
 2. litellm proxy will loop through all the model_groups specified in `fallbacks=["gpt-3.5-turbo"]`
