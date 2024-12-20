@@ -130,15 +130,7 @@ const config = {
             href: 'https://discord.com/invite/wuPM9dRgDw',
             label: 'Discord',
             position: 'right',
-          },
-          {
-            type: 'html',
-            position: 'right',
-            value:
-              `<a href=# class=navbar__link data-fr-widget>
-                I'm Confused
-              </a>`
-          },
+          }
         ],
       },
       footer: {

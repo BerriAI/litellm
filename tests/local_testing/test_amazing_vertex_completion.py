@@ -60,7 +60,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-flash-exp-0827",
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
-    "gemini-2.0-flash-exp"
+    "gemini-2.0-flash-exp",
 ]
 
 
@@ -308,7 +308,7 @@ async def test_vertex_ai_anthropic_async():
 # )
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_vertex_ai_anthropic_async_streaming():
+async def test_aaavertex_ai_anthropic_async_streaming():
     # load_vertex_ai_credentials()
     try:
         litellm.set_verbose = True

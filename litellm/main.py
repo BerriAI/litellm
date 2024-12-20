@@ -846,6 +846,9 @@ def completion(  # type: ignore # noqa: PLR0915
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ### PROMPT MANAGEMENT ###
+    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
         messages=messages,
@@ -894,10 +897,25 @@ def completion(  # type: ignore # noqa: PLR0915
     ]
 
     default_params = openai_params + all_litellm_params
+
     litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+
+    ## PROMPT MANAGEMENT HOOKS ##
+
+    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
+        model, messages, optional_params = (
+            litellm_logging_obj.get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params,
+                headers=headers,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+            )
+        )
 
     try:
         if base_url is not None:
@@ -1002,9 +1020,6 @@ def completion(  # type: ignore # noqa: PLR0915
             and supports_system_message is False
         ):
             messages = map_system_message_pt(messages=messages)
-        model_api_key = get_api_key(
-            llm_provider=custom_llm_provider, dynamic_api_key=api_key
-        )  # get the api key from the environment if required for the model
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
