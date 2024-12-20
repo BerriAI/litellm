@@ -14,6 +14,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from langfuse.client import ChatPromptClient, TextPromptClient
@@ -166,6 +167,7 @@ class LangfusePromptManagement(CustomLogger):
         headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[
         str,
         List[AllMessageValues],

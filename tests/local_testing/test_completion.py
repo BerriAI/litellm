@@ -4520,8 +4520,8 @@ def test_langfuse_completion():
     litellm.callbacks = ["langfuse"]
     resp = litellm.completion(
         model="langfuse/gpt-3.5-turbo",
-        # langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        # langfuse_private_key=os.getenv("LANGFUSE_PRIVATE_KEY"),
+        langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
         prompt_id="test-chat-prompt",
         prompt_variables={"user_message": "this is used"},
         messages=[{"role": "user", "content": "this is ignored"}],

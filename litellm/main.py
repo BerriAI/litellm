@@ -897,6 +897,7 @@ def completion(  # type: ignore # noqa: PLR0915
     ]
 
     default_params = openai_params + all_litellm_params
+
     litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
