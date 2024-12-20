@@ -205,11 +205,9 @@ def rerank(  # noqa: PLR0915
             )
         elif _custom_llm_provider == "infinity":
             # Implement Infinity rerank logic
-            api_key: Optional[str] = (
-                dynamic_api_key or optional_params.api_key or litellm.api_key
-            )
+            api_key = dynamic_api_key or optional_params.api_key or litellm.api_key
 
-            api_base: Optional[str] = (
+            api_base = (
                 dynamic_api_base
                 or optional_params.api_base
                 or litellm.api_base
