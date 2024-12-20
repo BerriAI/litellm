@@ -502,6 +502,20 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
+def test_dynamic_drop_additional_params_stream_options():
+    """
+    Make a call to vertex ai, dropping 'stream_options' specifically
+    """
+    optional_params = litellm.utils.get_optional_params(
+        model="mistral-large-2411@001",
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+        additional_drop_params=["stream_options"],
+    )
+
+    assert "stream_options" not in optional_params
+
+
 def test_dynamic_drop_additional_params_e2e():
     with patch(
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
