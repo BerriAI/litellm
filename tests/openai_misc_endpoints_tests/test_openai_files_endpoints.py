@@ -29,6 +29,8 @@ async def test_file_operations():
     print("get_file_content=", get_file_content.content)
 
     assert get_file_content.content == file_content
+    # try get_file_content.write_to_file
+    get_file_content.write_to_file("get_file_content.jsonl")
 
     delete_file = await openai_client.files.delete(file_id=uploaded_file.id)
     print("delete_file=", delete_file)
