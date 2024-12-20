@@ -18,19 +18,22 @@ Supported Integrations:
 
 ```python
 import os 
+import litellm
 
 os.environ["LANGFUSE_PUBLIC_KEY"] = "public_key" # [OPTIONAL] set here or in `.completion`
 os.environ["LANGFUSE_SECRET_KEY"] = "secret_key" # [OPTIONAL] set here or in `.completion`
 
+litellm.set_verbose = True # see raw request to provider
+
 resp = litellm.completion(
     model="langfuse/gpt-3.5-turbo",
-    # langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"), 
-    # langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
     prompt_id="test-chat-prompt",
     prompt_variables={"user_message": "this is used"}, # [OPTIONAL]
     messages=[{"role": "user", "content": "<IGNORED>"}],
 )
 ```
+
+
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
@@ -49,10 +52,13 @@ model_list:
 2. Start the proxy
 
 ```bash
-litellm-proxy --config config.yaml
+litellm --config config.yaml --detailed_debug
 ```
 
 3. Test it! 
+
+<Tabs>
+<TabItem value="curl" label="CURL">
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
@@ -66,12 +72,55 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
             "content": "THIS WILL BE IGNORED"
         }
     ],
+    "prompt_variables": {
+        "key": "this is used"
+    }
 }'
 ```
+</TabItem>
+<TabItem value="OpenAI Python SDK" label="OpenAI Python SDK">
 
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "prompt_variables": { # [OPTIONAL]
+            "key": "this is used"
+        }
+    }
+)
+
+print(response)
+```
 
 </TabItem>
 </Tabs>
+
+</TabItem>
+</Tabs>
+
+
+**Expected Logs:**
+
+```
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.openai.com/v1/ \
+-d '{'model': 'gpt-3.5-turbo', 'messages': <YOUR LANGFUSE PROMPT TEMPLATE>}'
+```
 
 ## How to set model 
 
@@ -118,6 +167,12 @@ model_list:
       api_key: os.environ/AZURE_API_KEY
       api_base: os.environ/AZURE_API_BASE
 ```
+
+## What is 'prompt_variables'?
+
+- `prompt_variables`: A dictionary of variables that will be used to replace parts of the prompt.
+
+
 
 ## What is 'prompt_id'?
 
