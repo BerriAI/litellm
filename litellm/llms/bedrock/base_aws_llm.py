@@ -7,10 +7,8 @@ import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache, InMemoryCache
+from litellm.caching.caching import DualCache
 from litellm.secret_managers.main import get_secret, get_secret_str
-
-from litellm.llms.base import BaseLLM
 
 if TYPE_CHECKING:
     from botocore.credentials import Credentials
@@ -37,7 +35,7 @@ class AwsAuthError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class BaseAWSLLM(BaseLLM):
+class BaseAWSLLM:
     def __init__(self) -> None:
         self.iam_cache = DualCache()
         super().__init__()
@@ -337,9 +335,6 @@ class BaseAWSLLM(BaseLLM):
             Credentials: Boto3 credentials object
         """
         try:
-            import boto3
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")

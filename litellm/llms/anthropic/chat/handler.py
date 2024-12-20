@@ -4,32 +4,22 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-import os
-import time
-import traceback
-import types
-from enum import Enum
-from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
-from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import LlmProviders, verbose_logger
+from litellm import LlmProviders
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AllAnthropicToolsValues,
     AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
@@ -39,9 +29,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
-    AllMessageValues,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk

@@ -125,6 +125,7 @@ def test_build_vertex_schema():
 @pytest.mark.parametrize(
     "tools, key",
     [
+        ([{"googleSearch": {}}], "googleSearch"),
         ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
         ([{"code_execution": {}}], "code_execution"),
     ],

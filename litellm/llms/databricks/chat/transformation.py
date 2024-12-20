@@ -2,19 +2,18 @@
 Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completions`
 """
 
-import types
 from typing import List, Optional, Union
 
 from pydantic import BaseModel
 
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ProviderField
-
-from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,
 )
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ProviderField
+
+from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
 class DatabricksConfig(OpenAILikeChatConfig):
@@ -86,7 +85,7 @@ class DatabricksConfig(OpenAILikeChatConfig):
         return False
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         """
         Databricks does not support:
@@ -102,4 +101,4 @@ class DatabricksConfig(OpenAILikeChatConfig):
             new_messages.append(_message)
         new_messages = handle_messages_with_content_list_to_str_conversion(new_messages)
         new_messages = strip_name_from_messages(new_messages)
-        return super()._transform_messages(new_messages)
+        return super()._transform_messages(messages=new_messages, model=model)

@@ -71,9 +71,24 @@ LITELLM_CHAT_PROVIDERS = [
 
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
+########################### Logging Callback Constants ###########################
+AZURE_STORAGE_MSFT_VERSION = "2019-07-07"
+
 ########################### LiteLLM Proxy Specific Constants ###########################
+########################################################################################
 MAX_SPENDLOG_ROWS_TO_QUERY = (
     1_000_000  # if spendLogs has more than 1M rows, do not query the DB
 )
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
+
+# pass through route constansts
+BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
+    "agents/",
+    "knowledgebases/",
+    "flows/",
+    "retrieveAndGenerate/",
+    "rerank/",
+    "generateQuery/",
+    "optimize-prompt/",
+]

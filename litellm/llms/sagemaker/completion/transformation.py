@@ -6,7 +6,6 @@ In the Huggingface TGI format.
 
 import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from httpx._models import Headers, Response
@@ -17,7 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
     prompt_factory,
 )
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 
@@ -56,12 +55,6 @@ class SagemakerConfig(BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]

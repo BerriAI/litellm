@@ -1,33 +1,23 @@
-import copy
 import json
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
 import httpx  # type: ignore
-from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import verbose_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.utils import EmbeddingResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -403,7 +393,271 @@ class BaseLLMHTTPHandler:
 
         return completion_stream, response.headers
 
-    def _handle_error(self, e: Exception, provider_config: BaseConfig):
+    def embedding(
+        self,
+        model: str,
+        input: list,
+        timeout: float,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: Optional[str],
+        optional_params: dict,
+        model_response: EmbeddingResponse,
+        api_key: Optional[str] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        aembedding: bool = False,
+        headers={},
+    ) -> EmbeddingResponse:
+
+        provider_config = ProviderConfigManager.get_provider_embedding_config(
+            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        )
+        # get config from model, custom llm provider
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
+            messages=[],
+            optional_params=optional_params,
+        )
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+        )
+
+        data = provider_config.transform_embedding_request(
+            model=model,
+            input=input,
+            optional_params=optional_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        if aembedding is True:
+            return self.aembedding(  # type: ignore
+                request_data=data,
+                api_base=api_base,
+                headers=headers,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                provider_config=provider_config,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_embedding_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=data,
+        )
+
+    async def aembedding(
+        self,
+        request_data: dict,
+        api_base: str,
+        headers: dict,
+        model: str,
+        custom_llm_provider: str,
+        provider_config: BaseEmbeddingConfig,
+        model_response: EmbeddingResponse,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> EmbeddingResponse:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider)
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(request_data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_embedding_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=request_data,
+        )
+
+    def rerank(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        optional_rerank_params: OptionalRerankParams,
+        timeout: Optional[Union[float, httpx.Timeout]],
+        model_response: RerankResponse,
+        _is_async: bool = False,
+        headers: dict = {},
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> RerankResponse:
+
+        provider_config = ProviderConfigManager.get_provider_rerank_config(
+            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        )
+        # get config from model, custom llm provider
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
+        )
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+        )
+
+        data = provider_config.transform_rerank_request(
+            model=model,
+            optional_rerank_params=optional_rerank_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=optional_rerank_params.get("query", ""),
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        if _is_async is True:
+            return self.arerank(  # type: ignore
+                model=model,
+                request_data=data,
+                custom_llm_provider=custom_llm_provider,
+                provider_config=provider_config,
+                logging_obj=logging_obj,
+                model_response=model_response,
+                api_base=api_base,
+                headers=headers,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_rerank_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=data,
+        )
+
+    async def arerank(
+        self,
+        model: str,
+        request_data: dict,
+        custom_llm_provider: str,
+        provider_config: BaseRerankConfig,
+        logging_obj: LiteLLMLoggingObj,
+        model_response: RerankResponse,
+        api_base: str,
+        headers: dict,
+        api_key: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> RerankResponse:
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider)
+            )
+        else:
+            async_httpx_client = client
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(request_data),
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_rerank_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=request_data,
+        )
+
+    def _handle_error(
+        self, e: Exception, provider_config: Union[BaseConfig, BaseRerankConfig]
+    ):
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
         error_text = getattr(e, "text", str(e))
@@ -421,6 +675,3 @@ class BaseLLMHTTPHandler:
             status_code=status_code,
             headers=error_headers,
         )
-
-    def embedding(self):
-        pass

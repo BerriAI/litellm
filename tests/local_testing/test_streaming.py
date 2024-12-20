@@ -606,14 +606,14 @@ def test_completion_azure_function_calling_stream():
 @pytest.mark.skip("Flaky ollama test - needs to be fixed")
 def test_completion_ollama_hosted_stream():
     try:
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         response = completion(
             model="ollama/phi",
             messages=messages,
-            max_tokens=10,
+            max_tokens=100,
             num_retries=3,
             timeout=20,
-            api_base="https://test-ollama-endpoint.onrender.com",
+            # api_base="https://test-ollama-endpoint.onrender.com",
             stream=True,
         )
         # Add any assertions here to check the response
@@ -2072,6 +2072,7 @@ def test_openai_chat_completion_complete_response_call():
         "azure/chatgpt-v-2",
         "claude-3-haiku-20240307",
         "o1-preview",
+        "o1",
         "azure/fake-o1-mini",
     ],
 )
@@ -3978,3 +3979,13 @@ def test_streaming_tool_calls_valid_json_str(model):
     for k, v in tool_call_id_arg_map.items():
         print("k={}, v={}".format(k, v))
         json.loads(v)  # valid json str
+
+
+def test_streaming_api_base():
+    litellm.set_verbose = False
+    stream = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+    )
+    assert "https://api.openai.com" in stream._hidden_params["api_base"]

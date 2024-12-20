@@ -1,14 +1,10 @@
 # What is this?
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
-import inspect
 import json
-import os
-import time
 import types
 import uuid
 from copy import deepcopy
-from enum import Enum
 from functools import partial
 from typing import (
     TYPE_CHECKING,
@@ -24,22 +20,21 @@ from typing import (
 )
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_generic_image_chunk_to_openai_image_obj,
+    convert_to_anthropic_image_obj,
+)
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
-)
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_generic_image_chunk_to_openai_image_obj,
-    convert_to_anthropic_image_obj,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -55,13 +50,9 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GenerateContentResponseBody,
-    GenerationConfig,
     HttpxPartType,
     LogprobsResult,
     PartType,
-    RequestBody,
-    SafetSettingsConfig,
-    SystemInstructions,
     ToolConfig,
     Tools,
 )
@@ -71,22 +62,13 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     TopLogprob,
 )
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...base import BaseLLM
-from ..common_utils import (
-    VertexAIError,
-    _build_vertex_schema,
-    _get_gemini_url,
-    _get_vertex_url,
-    all_gemini_url_modes,
-    get_supports_system_message,
-)
+from ..common_utils import VertexAIError, _build_vertex_schema
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     _gemini_convert_messages_with_history,
-    _process_gemini_image,
     async_transform_request_body,
     sync_transform_request_body,
 )
@@ -395,6 +377,7 @@ class VertexGeminiConfig(BaseConfig):
 
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
+        googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
         code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
@@ -425,7 +408,9 @@ class VertexGeminiConfig(BaseConfig):
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
             # check if grounding
-            if tool.get("googleSearchRetrieval", None) is not None:
+            if tool.get("googleSearch", None) is not None:
+                googleSearch = tool["googleSearch"]
+            elif tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
             elif tool.get("code_execution", None) is not None:
                 code_execution = tool["code_execution"]
@@ -449,6 +434,8 @@ class VertexGeminiConfig(BaseConfig):
         _tools = Tools(
             function_declarations=gtool_func_declarations,
         )
+        if googleSearch is not None:
+            _tools["googleSearch"] = googleSearch
         if googleSearchRetrieval is not None:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
         if code_execution is not None:

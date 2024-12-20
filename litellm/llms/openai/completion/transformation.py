@@ -2,11 +2,11 @@
 Support for gpt model family 
 """
 
-import types
 from typing import List, Optional, Union, cast
 
-import litellm
-from litellm.llms.base_llm.transformation import BaseConfig
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -14,9 +14,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import convert_content_list_to_str
 from ..chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import OpenAIError
 from .utils import is_tokens_or_list_of_tokens
 
 

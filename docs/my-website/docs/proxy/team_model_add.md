@@ -1,4 +1,13 @@
-# Allow Teams to Add Models
+# ✨ Allow Teams to Add Models
+
+:::info
+
+This is an Enterprise feature.
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
 
 Allow team to add a their own models/key for that project - so any OpenAI call they make uses their OpenAI key.
 

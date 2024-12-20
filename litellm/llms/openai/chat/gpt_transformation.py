@@ -2,14 +2,13 @@
 Support for gpt model family 
 """
 
-import types
 from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ..common_utils import OpenAIError
@@ -164,7 +163,7 @@ class OpenAIGPTConfig(BaseConfig):
         )
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: str
     ) -> List[AllMessageValues]:
         return messages
 

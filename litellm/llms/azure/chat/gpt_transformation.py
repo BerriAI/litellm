@@ -1,5 +1,4 @@
-import types
-from typing import TYPE_CHECKING, Any, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from httpx._models import Headers, Response
 
@@ -7,7 +6,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
-from litellm.llms.base_llm.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ModelResponse
 
 from ....exceptions import UnsupportedParamsError
@@ -18,7 +17,7 @@ from ....types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from ...base_llm.transformation import BaseConfig
+from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:

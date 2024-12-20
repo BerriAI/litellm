@@ -1,41 +1,15 @@
-import inspect
 import json
 import os
 import time
-import types
-import uuid
-from enum import Enum
-from typing import Any, Callable, List, Literal, Optional, Union, cast
+from typing import Any, Callable, Optional, cast
 
-import httpx  # type: ignore
-import requests  # type: ignore
-from pydantic import BaseModel
+import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_to_anthropic_image_obj,
-    convert_to_gemini_tool_call_invoke,
-    convert_to_gemini_tool_call_result,
-)
-from litellm.types.files import (
-    get_file_mime_type_for_file_type,
-    get_file_type_from_extension,
-    is_gemini_1_5_accepted_file_type,
-    is_video_file_type,
-)
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionAssistantMessage,
-    ChatCompletionImageObject,
-    ChatCompletionTextObject,
-)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
-
-from .common_utils import _check_text_in_content
 
 
 class VertexAIError(Exception):
@@ -49,9 +23,6 @@ class VertexAIError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
-
-
-import asyncio
 
 
 class TextStreamer:
@@ -145,7 +116,6 @@ def completion(  # noqa: PLR0915
         )
     try:
         import google.auth  # type: ignore
-        import proto  # type: ignore
         from google.cloud import aiplatform  # type: ignore
         from google.cloud.aiplatform_v1beta1.types import (
             content as gapic_content_types,  # type: ignore
@@ -153,16 +123,8 @@ def completion(  # noqa: PLR0915
         from google.protobuf import json_format  # type: ignore
         from google.protobuf.struct_pb2 import Value  # type: ignore
         from vertexai.language_models import CodeGenerationModel, TextGenerationModel
-        from vertexai.preview.generative_models import (
-            GenerationConfig,
-            GenerativeModel,
-            Part,
-        )
-        from vertexai.preview.language_models import (
-            ChatModel,
-            CodeChatModel,
-            InputOutputTextPair,
-        )
+        from vertexai.preview.generative_models import GenerativeModel
+        from vertexai.preview.language_models import ChatModel, CodeChatModel
 
         ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
         print_verbose(
@@ -534,7 +496,6 @@ async def async_completion(  # noqa: PLR0915
     Add support for acompletion calls for gemini-pro
     """
     try:
-        import proto  # type: ignore
 
         response_obj = None
         completion_response = None

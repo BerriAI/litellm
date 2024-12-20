@@ -2,19 +2,12 @@
 ## Handler file for OpenAI-like endpoints.
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
-import copy
 import json
-import os
-import time
-import types
-from enum import Enum
-from functools import partial
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Optional
 
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,

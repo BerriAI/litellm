@@ -12,10 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
+from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -27,8 +24,8 @@ from litellm.types.utils import (
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
-from .default_encoding import encoding
 from .exception_mapping_utils import exception_type
+from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
 MAX_THREADS = 100
@@ -86,8 +83,17 @@ class CustomStreamWrapper:
             )
             or {}
         )
+
+        _api_base = get_api_base(
+            model=model or "",
+            optional_params=self.logging_obj.model_call_details.get(
+                "litellm_params", {}
+            ),
+        )
+
         self._hidden_params = {
             "model_id": (_model_info.get("id", None)),
+            "api_base": _api_base,
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
@@ -569,40 +575,6 @@ class CustomStreamWrapper:
                 )
             )
             return ""
-
-    def handle_ollama_stream(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                json_chunk = chunk
-            else:
-                json_chunk = json.loads(chunk)
-            if "error" in json_chunk:
-                raise Exception(f"Ollama Error - {json_chunk}")
-
-            text = ""
-            is_finished = False
-            finish_reason = None
-            if json_chunk["done"] is True:
-                text = ""
-                is_finished = True
-                finish_reason = "stop"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            elif json_chunk["response"]:
-                print_verbose(f"delta content: {json_chunk}")
-                text = json_chunk["response"]
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            else:
-                raise Exception(f"Ollama Error - {json_chunk}")
-        except Exception as e:
-            raise e
 
     def handle_ollama_chat_stream(self, chunk):
         # for ollama_chat/ provider
@@ -1111,12 +1083,6 @@ class CustomStreamWrapper:
                 new_chunk = self.completion_stream[:chunk_size]
                 completion_obj["content"] = new_chunk
                 self.completion_stream = self.completion_stream[chunk_size:]
-            elif self.custom_llm_provider == "ollama":
-                response_obj = self.handle_ollama_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "ollama_chat":
                 response_obj = self.handle_ollama_chat_stream(chunk)
                 completion_obj["content"] = response_obj["text"]

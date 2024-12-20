@@ -22,7 +22,8 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 
 load_dotenv()
 

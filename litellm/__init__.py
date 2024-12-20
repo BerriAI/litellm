@@ -34,6 +34,7 @@ from litellm.proxy._types import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.integrations.custom_logger import CustomLogger
 import httpx
 import dotenv
 from enum import Enum
@@ -45,7 +46,7 @@ if litellm_mode == "DEV":
 if set_verbose == True:
     _turn_on_debug()
 #############################################
-### Callbacks /Logging / Success / Failure Handlers ###
+### Callbacks /Logging / Success / Failure Handlers ####
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
@@ -65,6 +66,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "arize",
     "langtrace",
     "gcs_bucket",
+    "azure_storage",
     "opik",
     "argilla",
     "mlflow",
@@ -74,7 +76,9 @@ logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
-callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
+callbacks: List[
+    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 argilla_batch_size: Optional[int] = None
@@ -467,6 +471,7 @@ azure_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
+sambanova_models: List = []
 
 
 def add_known_models():
@@ -575,6 +580,8 @@ def add_known_models():
             cerebras_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
+        elif value.get("litellm_provider") == "sambanova_models":
+            sambanova_models.append(key)
 
 
 add_known_models()
@@ -838,6 +845,7 @@ model_list = (
     + anyscale_models
     + cerebras_models
     + galadriel_models
+    + sambanova_models
 )
 
 
@@ -888,6 +896,7 @@ models_by_provider: dict = {
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
+    "sambanova": sambanova_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1015,6 +1024,8 @@ from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
+from .llms.cohere.rerank.transformation import CohereRerankConfig
+from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.together_ai.chat import TogetherAIConfig
@@ -1055,9 +1066,9 @@ from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.ollama_chat import OllamaChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
-    AmazonConverseConfig,
     bedrock_tool_name_mappings,
 )
+from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.bedrock.common_utils import (
     AmazonTitanConfig,
     AmazonAI21Config,
@@ -1083,6 +1094,7 @@ from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
 from .llms.openai.chat.o1_transformation import (

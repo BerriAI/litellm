@@ -8,42 +8,13 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
-import json
 import secrets
-import time
-import traceback
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
-from uuid import uuid4
+from datetime import datetime, timezone
+from typing import Optional
 
 import fastapi
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
-from fastapi.responses import (
-    FileResponse,
-    JSONResponse,
-    ORJSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
+from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -61,11 +32,9 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
-    log_db_metrics,
 )
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,
@@ -262,6 +231,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         llm_model_list,
         llm_router,
         master_key,
+        model_max_budget_limiter,
         open_telemetry_logger,
         prisma_client,
         proxy_logging_obj,
@@ -1053,37 +1023,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 and valid_token.token is not None
             ):
                 ## GET THE SPEND FOR THIS MODEL
-                twenty_eight_days_ago = datetime.now() - timedelta(days=28)
-                model_spend = await prisma_client.db.litellm_spendlogs.group_by(
-                    by=["model"],
-                    sum={"spend": True},
-                    where={
-                        "AND": [
-                            {"api_key": valid_token.token},
-                            {"startTime": {"gt": twenty_eight_days_ago}},
-                            {"model": current_model},
-                        ]
-                    },  # type: ignore
+                await model_max_budget_limiter.is_key_within_model_budget(
+                    user_api_key_dict=valid_token,
+                    model=current_model,
                 )
-                if (
-                    len(model_spend) > 0
-                    and max_budget_per_model.get(current_model, None) is not None
-                ):
-                    if (
-                        "model" in model_spend[0]
-                        and model_spend[0].get("model") == current_model
-                        and "_sum" in model_spend[0]
-                        and "spend" in model_spend[0]["_sum"]
-                        and model_spend[0]["_sum"]["spend"]
-                        >= max_budget_per_model[current_model]
-                    ):
-                        current_model_spend = model_spend[0]["_sum"]["spend"]
-                        current_model_budget = max_budget_per_model[current_model]
-                        raise litellm.BudgetExceededError(
-                            current_cost=current_model_spend,
-                            max_budget=current_model_budget,
-                        )
-
             # Check 6. Team spend is under Team budget
             if (
                 hasattr(valid_token, "team_spend")

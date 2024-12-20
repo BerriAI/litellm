@@ -1,11 +1,6 @@
 ## Uses the huggingface text generation inference API
-import copy
-import enum
 import json
 import os
-import time
-import types
-from enum import Enum
 from typing import (
     Any,
     Callable,
@@ -20,7 +15,6 @@ from typing import (
 )
 
 import httpx
-import requests
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -34,15 +28,13 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.huggingface.chat.transformation import (
     HuggingfaceChatConfig as HuggingfaceConfig,
 )
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.completion import ChatCompletionMessageToolCallParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse
 
 from ...base import BaseLLM
-from ..common_utils import HuggingfaceError, hf_task_list, hf_tasks
+from ..common_utils import HuggingfaceError
 
 hf_chat_config = HuggingfaceConfig()
 

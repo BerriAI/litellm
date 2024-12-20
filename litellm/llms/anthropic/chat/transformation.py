@@ -1,35 +1,19 @@
 import json
 import time
-import types
-from re import A
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
-import requests
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
-    AnthropicMessageRequestBase,
-    AnthropicMessagesRequest,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
@@ -41,18 +25,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    add_dummy_tool,
-    has_tool_call_blocks,
-)
+from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
@@ -133,7 +109,6 @@ class AnthropicConfig(BaseConfig):
         pdf_used: bool = False,
         is_vertex_request: bool = False,
     ) -> dict:
-        import json
 
         betas = []
         if prompt_caching_set:

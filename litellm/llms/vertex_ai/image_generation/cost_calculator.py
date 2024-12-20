@@ -2,8 +2,6 @@
 Vertex AI Image Generation Cost Calculator
 """
 
-from typing import Optional
-
 import litellm
 from litellm.types.utils import ImageResponse
 

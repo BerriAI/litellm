@@ -2215,7 +2215,39 @@ def test_bedrock_nova_topk(top_k_param):
         "messages": [{"role": "user", "content": "Hello, world!"}],
         top_k_param: 10,
     }
-    litellm.completion(**data)
+    original_transform = litellm.AmazonConverseConfig()._transform_request
+    captured_data = None
+
+    def mock_transform(*args, **kwargs):
+        nonlocal captured_data
+        result = original_transform(*args, **kwargs)
+        captured_data = result
+        return result
+
+    with patch('litellm.AmazonConverseConfig._transform_request', side_effect=mock_transform):
+        litellm.completion(**data)
+
+        # Assert that additionalRequestParameters exists and contains topK
+        assert 'additionalModelRequestFields' in captured_data
+        assert 'inferenceConfig' in captured_data['additionalModelRequestFields']
+        assert captured_data['additionalModelRequestFields']['inferenceConfig']['topK'] == 10
+
+def test_bedrock_empty_content_real_call():
+    completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "",
+                    },
+                    {"type": "text", "text": "Hey, how's it going?"},
+                ],
+            }
+        ],
+    )
 
 
 def test_bedrock_process_empty_text_blocks():

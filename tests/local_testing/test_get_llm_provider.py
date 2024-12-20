@@ -153,6 +153,20 @@ def test_default_api_base():
                     assert other_provider.value not in api_base.replace("/openai", "")
 
 
+def test_hosted_vllm_default_api_key():
+    from litellm.litellm_core_utils.get_llm_provider_logic import (
+        _get_openai_compatible_provider_info,
+    )
+
+    _, _, dynamic_api_key, _ = _get_openai_compatible_provider_info(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        api_base=None,
+        api_key=None,
+        dynamic_api_key=None,
+    )
+    assert dynamic_api_key == "fake-api-key"
+
+
 def test_get_llm_provider_jina_ai():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="jina_ai/jina-embeddings-v3",
@@ -168,7 +182,7 @@ def test_get_llm_provider_hosted_vllm():
     )
     assert custom_llm_provider == "hosted_vllm"
     assert model == "llama-3.1-70b-instruct"
-    assert dynamic_api_key == ""
+    assert dynamic_api_key == "fake-api-key"
 
 
 def test_get_llm_provider_watson_text():

@@ -1,43 +1,13 @@
-import asyncio
-import json  # noqa: E401
-import time
-import types
-from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime
-from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncContextManager,
-    AsyncGenerator,
-    AsyncIterator,
-    Callable,
-    ContextManager,
-    Dict,
-    Generator,
-    Iterator,
-    List,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
-import litellm
-from litellm.llms.base_llm.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    get_async_httpx_client,
-)
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.watsonx import WatsonXAIEndpoint
-from litellm.utils import EmbeddingResponse, ModelResponse, Usage, map_finish_reason
+from litellm.utils import ModelResponse
 
-from ...base import BaseLLM
-from ...base_llm.transformation import BaseConfig
-from litellm.litellm_core_utils.prompt_templates import factory as ptf
-from ..common_utils import WatsonXAIError, _get_api_params, generate_iam_token
+from ...base_llm.chat.transformation import BaseConfig
+from ..common_utils import WatsonXAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -239,12 +209,6 @@ class IBMWatsonXAIConfig(BaseConfig):
         return [
             "us-south",
         ]
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]

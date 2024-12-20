@@ -5,9 +5,8 @@ import traceback
 import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple, cast
+from typing import Any, List, Optional, Tuple, cast, overload
 
-from jinja2 import BaseLoader, Template, exceptions, meta
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 import litellm
@@ -15,14 +14,6 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.types.completion import (
-    ChatCompletionFunctionMessageParam,
-    ChatCompletionMessageParam,
-    ChatCompletionMessageToolCallParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionToolMessageParam,
-    ChatCompletionUserMessageParam,
-)
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.ollama import OllamaVisionModelObject
@@ -32,7 +23,6 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantToolCall,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
-    ChatCompletionImageUrlObject,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -45,7 +35,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import convert_content_list_to_str, is_non_content_values_set
-from .image_handling import async_convert_url_to_base64, convert_url_to_base64
+from .image_handling import convert_url_to_base64
 
 
 def default_pt(messages):
@@ -2099,7 +2089,7 @@ def gemini_text_image_pt(messages: list):
     }
     """
     try:
-        import google.generativeai as genai  # type: ignore
+        pass  # type: ignore
     except Exception:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
@@ -2166,10 +2156,6 @@ from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import (
-    ToolChoiceValuesBlock as BedrockToolChoiceValuesBlock,
-)
-from litellm.types.llms.bedrock import ToolConfigBlock as BedrockToolConfigBlock
-from litellm.types.llms.bedrock import (
     ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
 )
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
@@ -2215,7 +2201,6 @@ def _process_bedrock_converse_image_block(
 ) -> BedrockContentBlock:
     if "base64" in image_url:
         # Case 1: Images with base64 encoding
-        import base64
         import re
 
         # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
@@ -2459,7 +2444,7 @@ def get_user_message_block_or_continue_message(
     if content_block is None or (
         user_continue_message is None and litellm.modify_params is False
     ):
-        return message
+        return skip_empty_text_blocks(message=message)
 
     # Handle string case
     if isinstance(content_block, str):
@@ -2525,9 +2510,40 @@ def return_assistant_continue_message(
         return DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
 
+def _skip_empty_dict_blocks(blocks: List[dict]) -> List[dict]:
+    """
+    Filter out empty text blocks from a list of dictionaries.
+
+    Args:
+        blocks: List of dictionaries representing message content blocks
+
+    Returns:
+        Filtered list of non-empty text blocks
+    """
+    return [
+        item
+        for item in blocks
+        if not (item.get("type") == "text" and not item.get("text", "").strip())
+    ]
+
+
+@overload
 def skip_empty_text_blocks(
     message: ChatCompletionAssistantMessage,
 ) -> ChatCompletionAssistantMessage:
+    pass
+
+
+@overload
+def skip_empty_text_blocks(
+    message: ChatCompletionUserMessage,
+) -> ChatCompletionUserMessage:
+    pass
+
+
+def skip_empty_text_blocks(
+    message: Union[ChatCompletionAssistantMessage, ChatCompletionUserMessage],
+) -> Union[ChatCompletionAssistantMessage, ChatCompletionUserMessage]:
     """
     Skips empty text blocks in message content text blocks.
 
@@ -2540,19 +2556,36 @@ def skip_empty_text_blocks(
         isinstance(content_block, str)
         and not content_block.strip()
         and is_non_content_values_set(message)
+        and message["role"] == "assistant"
     ):
         modified_message = message.copy()
-        modified_message["content"] = None
+        modified_message["content"] = None  # user message content cannot be None
         return modified_message
     elif isinstance(content_block, list):
-        modified_content_block = [
-            item
-            for item in content_block
-            if not (item["type"] == "text" and not item["text"].strip())
-        ]
-        modified_message = message.copy()
-        modified_message["content"] = modified_content_block
-        return modified_message
+        modified_content_block = _skip_empty_dict_blocks(
+            cast(List[dict], content_block)
+        )
+
+        # If no content remains and it's an assistant message, set content to None
+        if not modified_content_block and message["role"] == "assistant":
+            modified_message = message.copy()
+            modified_message["content"] = None
+            return modified_message
+
+        modified_message_alt = message.copy()
+
+        # Type-specific casting based on message role
+        if message["role"] == "assistant":
+            modified_message_alt["content"] = cast(  # type: ignore
+                Optional[List[OpenAIMessageContentListBlock]],
+                modified_content_block or None,
+            )
+        elif message["role"] == "user" and modified_content_block is not None:
+            modified_message_alt["content"] = cast(  # type: ignore
+                Optional[List[ChatCompletionTextObject]], modified_content_block
+            )
+
+        return modified_message_alt
 
     return message
 
@@ -3086,7 +3119,9 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     elif custom_llm_provider == "mistral":
-        return litellm.MistralConfig()._transform_messages(messages=messages)
+        return litellm.MistralConfig()._transform_messages(
+            messages=messages, model=model
+        )
     elif custom_llm_provider == "bedrock":
         if "amazon.titan-text" in model:
             return amazon_titan_pt(messages=messages)

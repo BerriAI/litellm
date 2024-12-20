@@ -1,15 +1,13 @@
-import json
-import os
 import time  # type: ignore
-from enum import Enum
-from typing import Any, Callable
+from typing import Callable
 
 import httpx
-import requests  # type: ignore
 
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    custom_prompt,
+    prompt_factory,
+)
 from litellm.utils import ModelResponse, Usage
-
-from litellm.litellm_core_utils.prompt_templates.factory import custom_prompt, prompt_factory
 
 llm = None
 
@@ -29,7 +27,7 @@ class VLLMError(Exception):
 def validate_environment(model: str):
     global llm
     try:
-        from vllm import LLM, SamplingParams # type: ignore
+        from vllm import LLM, SamplingParams  # type: ignore
 
         if llm is None:
             llm = LLM(model=model)

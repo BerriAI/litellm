@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import types
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -16,7 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -368,12 +367,6 @@ class HuggingfaceChatConfig(BaseConfig):
 
         headers = {**headers, **default_headers}
         return headers
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        return messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

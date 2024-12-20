@@ -6,7 +6,7 @@ import httpx
 
 import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.transformation import (
+from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,
@@ -157,11 +157,6 @@ class CloudflareChatConfig(BaseConfig):
             status_code=status_code,
             message=error_message,
         )
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError
 
     def get_model_response_iterator(
         self,

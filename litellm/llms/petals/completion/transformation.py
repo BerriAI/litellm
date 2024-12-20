@@ -1,10 +1,9 @@
-import types
 from typing import Any, List, Optional, Union
 
 from httpx import Headers, Response
 
 import litellm
-from litellm.llms.base_llm.transformation import (
+from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,

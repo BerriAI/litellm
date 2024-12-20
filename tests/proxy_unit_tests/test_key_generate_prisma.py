@@ -1684,124 +1684,109 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         print(vars(e))
 
 
-def test_call_with_key_over_model_budget(prisma_client):
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "request_model,should_pass",
+    [
+        ("openai/gpt-4o-mini", False),
+        ("gpt-4o-mini", False),
+        ("gpt-4o", True),
+    ],
+)
+async def test_call_with_key_over_model_budget(
+    prisma_client, request_model, should_pass
+):
     # 12. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+
+    # init model max budget limiter
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    model_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache()
+    )
+    litellm.callbacks.append(model_budget_limiter)
+
     try:
 
-        async def test():
-            await litellm.proxy.proxy_server.prisma_client.connect()
+        # set budget for chatgpt-v-2 to 0.000001, expect the next request to fail
+        model_max_budget = {
+            "gpt-4o-mini": {
+                "budget_limit": "0.000001",
+                "time_period": "1d",
+            },
+            "gpt-4o": {
+                "budget_limit": "200",
+                "time_period": "30d",
+            },
+        }
 
-            # set budget for chatgpt-v-2 to 0.000001, expect the next request to fail
-            request = GenerateKeyRequest(
-                max_budget=1000,
-                model_max_budget={
-                    "chatgpt-v-2": 0.000001,
-                },
-                metadata={"user_api_key": 0.0001},
+        request = GenerateKeyRequest(
+            max_budget=100000,  # the key itself has a very high budget
+            model_max_budget=model_max_budget,
+        )
+        key = await generate_key_fn(request)
+        print(key)
+
+        generated_key = key.key
+        user_id = key.user_id
+        bearer_token = "Bearer " + generated_key
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        async def return_body():
+            request_str = f'{{"model": "{request_model}"}}'  # Added extra curly braces to escape JSON
+            return request_str.encode()
+
+        request.body = return_body
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+        print("result from user auth with new key", result)
+
+        # update spend using track_cost callback, make 2nd request, it should fail
+        await litellm.acompletion(
+            model=request_model,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            metadata={
+                "user_api_key": hash_token(generated_key),
+                "user_api_key_model_max_budget": model_max_budget,
+            },
+        )
+
+        await asyncio.sleep(2)
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+        if should_pass is True:
+            print(
+                f"Passed request for model={request_model}, model_max_budget={model_max_budget}"
             )
-            key = await generate_key_fn(request)
-            print(key)
-
-            generated_key = key.key
-            user_id = key.user_id
-            bearer_token = "Bearer " + generated_key
-
-            request = Request(scope={"type": "http"})
-            request._url = URL(url="/chat/completions")
-
-            async def return_body():
-                return b'{"model": "chatgpt-v-2"}'
-
-            request.body = return_body
-
-            # use generated key to auth in
-            result = await user_api_key_auth(request=request, api_key=bearer_token)
-            print("result from user auth with new key", result)
-
-            # update spend using track_cost callback, make 2nd request, it should fail
-            from litellm import Choices, Message, ModelResponse, Usage
-            from litellm.caching.caching import Cache
-            from litellm.proxy.proxy_server import (
-                _PROXY_track_cost_callback as track_cost_callback,
-            )
-
-            litellm.cache = Cache()
-            import time
-            import uuid
-
-            request_id = f"chatcmpl-{uuid.uuid4()}"
-
-            resp = ModelResponse(
-                id=request_id,
-                choices=[
-                    Choices(
-                        finish_reason=None,
-                        index=0,
-                        message=Message(
-                            content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
-                            role="assistant",
-                        ),
-                    )
-                ],
-                model="gpt-35-turbo",  # azure always has model written like this
-                usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
-            )
-            await track_cost_callback(
-                kwargs={
-                    "model": "chatgpt-v-2",
-                    "stream": False,
-                    "litellm_params": {
-                        "metadata": {
-                            "user_api_key": hash_token(generated_key),
-                            "user_api_key_user_id": user_id,
-                        }
-                    },
-                    "response_cost": 0.00002,
-                },
-                completion_response=resp,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-            )
-            await update_spend(
-                prisma_client=prisma_client,
-                db_writer_client=None,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            # test spend_log was written and we can read it
-            spend_logs = await view_spend_logs(
-                request_id=request_id,
-                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
-            )
-
-            print("read spend logs", spend_logs)
-            assert len(spend_logs) == 1
-
-            spend_log = spend_logs[0]
-
-            assert spend_log.request_id == request_id
-            assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
-            assert (
-                spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
-            )
-
-            # use generated key to auth in
-            result = await user_api_key_auth(request=request, api_key=bearer_token)
-            print("result from user auth with new key", result)
-            pytest.fail("This should have failed!. They key crossed it's budget")
-
-        asyncio.run(test())
+            return
+        print("result from user auth with new key", result)
+        pytest.fail("This should have failed!. They key crossed it's budget")
     except Exception as e:
         # print(f"Error - {str(e)}")
+        print(
+            f"Failed request for model={request_model}, model_max_budget={model_max_budget}"
+        )
+        assert (
+            should_pass is False
+        ), f"This should have failed!. They key crossed it's budget for model={request_model}. {e}"
         traceback.print_exc()
         error_detail = e.message
-        assert "Budget has been exceeded!" in error_detail
+        assert f"exceeded budget for model={request_model}" in error_detail
         assert isinstance(e, ProxyException)
         assert e.type == ProxyErrorTypes.budget_exceeded
         print(vars(e))
+    finally:
+        litellm.callbacks.remove(model_budget_limiter)
 
 
 @pytest.mark.asyncio()

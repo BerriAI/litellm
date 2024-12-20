@@ -1,9 +1,8 @@
-import types
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -138,11 +137,6 @@ class PredibaseConfig(BaseConfig):
         raise NotImplementedError(
             "Predibase transformation currently done in handler.py. Need to migrate to this file."
         )
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
 
     def transform_request(
         self,

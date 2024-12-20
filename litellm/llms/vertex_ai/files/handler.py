@@ -1,35 +1,12 @@
-import json
-import uuid
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Optional, Union
 
 import httpx
 
-import litellm
 from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSBucketBase,
     GCSLoggingConfig,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    _get_httpx_client,
-    get_async_httpx_client,
-)
-from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
-)
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexAIError,
-    VertexLLM,
-)
-from litellm.types.llms.openai import (
-    Batch,
-    CreateFileRequest,
-    FileContentRequest,
-    FileObject,
-    FileTypes,
-    HttpxBinaryResponseContent,
-)
+from litellm.types.llms.openai import CreateFileRequest, FileObject
 
 from .transformation import VertexAIFilesTransformation
 

@@ -1,13 +1,7 @@
 import json
-import os
-import time
-import traceback
-import types
-from enum import Enum
 from typing import Any, Callable, Optional, Union
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -18,7 +12,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import CohereEmbeddingRequest
 from litellm.types.utils import EmbeddingResponse
-from litellm.utils import Choices, Message, ModelResponse, Usage
 
 from .transformation import CohereEmbeddingConfig
 

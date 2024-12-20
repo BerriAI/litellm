@@ -20,8 +20,10 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.proxy.utils import (
     duration_in_seconds,
-    _extract_from_regex,
+)
+from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
+    _extract_from_regex,
 )
 from litellm.utils import (
     check_valid_key,

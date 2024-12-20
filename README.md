@@ -64,16 +64,52 @@ import os
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
-os.environ["COHERE_API_KEY"] = "your-cohere-key"
+os.environ["ANTHROPIC_API_KEY"] = "your-cohere-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="openai/gpt-4o", messages=messages)
 
-# cohere call
-response = completion(model="command-nightly", messages=messages)
+# anthropic call
+response = completion(model="anthropic/claude-3-sonnet-20240229", messages=messages)
 print(response)
+```
+
+### Response (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
+    "created": 1734366691,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 43,
+        "prompt_tokens": 13,
+        "total_tokens": 56,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+            "audio_tokens": null,
+            "cached_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+    }
+}
 ```
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
@@ -87,7 +123,7 @@ import asyncio
 async def test_get_response():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
-    response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+    response = await acompletion(model="openai/gpt-4o", messages=messages)
     return response
 
 response = asyncio.run(test_get_response())
@@ -101,14 +137,40 @@ Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, 
 
 ```python
 from litellm import completion
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
 
 # claude 2
-response = completion('claude-2', messages, stream=True)
+response = completion('anthropic/claude-3-sonnet-20240229', messages, stream=True)
 for part in response:
-    print(part.choices[0].delta.content or "")
+    print(part)
+```
+
+### Response chunk (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
+    "created": 1734366925,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion.chunk",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": null,
+            "index": 0,
+            "delta": {
+                "content": "Hello",
+                "role": "assistant",
+                "function_call": null,
+                "tool_calls": null,
+                "audio": null
+            },
+            "logprobs": null
+        }
+    ]
+}
 ```
 
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
@@ -131,7 +193,7 @@ os.environ["OPENAI_API_KEY"]
 litellm.success_callback = ["lunary", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="anthropic/claude-3-sonnet-20240229", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
 # LiteLLM Proxy Server (LLM Gateway) - ([Docs](https://docs.litellm.ai/docs/simple_proxy))

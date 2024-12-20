@@ -1,6 +1,5 @@
 # Enterprise Proxy Util Endpoints
 from typing import Optional, List
-from litellm._logging import verbose_logger
 from litellm.proxy.proxy_server import PrismaClient, HTTPException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 import collections
@@ -116,7 +115,7 @@ async def ui_get_spend_by_tags(
 
 
 def _forecast_daily_cost(data: list):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     if len(data) == 0:
         return {

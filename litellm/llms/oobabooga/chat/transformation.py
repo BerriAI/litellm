@@ -1,16 +1,12 @@
-import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
-from litellm.utils import token_counter
+from litellm.types.utils import ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
 
@@ -23,11 +19,6 @@ else:
 
 
 class OobaboogaConfig(OpenAIGPTConfig):
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[AllMessageValues]:
-        return messages
-
     def get_error_class(
         self,
         error_message: str,

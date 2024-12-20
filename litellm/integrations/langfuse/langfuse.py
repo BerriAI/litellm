@@ -3,7 +3,6 @@
 import copy
 import os
 import traceback
-import types
 from collections.abc import MutableMapping, MutableSequence, MutableSet
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
 from litellm.types.utils import StandardLoggingPayload
@@ -56,6 +56,8 @@ class LangFuseLogger:
         self.langfuse_flush_interval = (
             os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
         )
+        http_client = _get_httpx_client()
+        self.langfuse_client = http_client.client
 
         parameters = {
             "public_key": self.public_key,
@@ -64,6 +66,7 @@ class LangFuseLogger:
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
+            "httpx_client": self.langfuse_client,
         }
 
         if Version(langfuse.version.__version__) >= Version("2.6.0"):

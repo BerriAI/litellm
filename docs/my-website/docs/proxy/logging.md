@@ -4,7 +4,7 @@ Log Proxy input, output, and exceptions using:
 
 - Langfuse
 - OpenTelemetry
-- GCS and s3 Buckets
+- GCS, s3, Azure (Blob) Buckets
 - Custom Callbacks
 - Langsmith
 - DataDog
@@ -795,7 +795,7 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 ```yaml
 model_list:
 - litellm_params:
-    api_base: https://openai-function-calling-workers.tasslexyz.workers.dev/
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
     api_key: my-fake-key
     model: openai/my-fake-model
   model_name: fake-openai-endpoint
@@ -841,7 +841,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 #### Fields Logged on GCS Buckets
 
-[**The standard logging object is logged on GCS Bucket**](../proxy/logging)
+[**The standard logging object is logged on GCS Bucket**](../proxy/logging_spec)
 
 
 #### Getting `service_account.json` from Google Cloud Console
@@ -913,6 +913,90 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 
 Your logs should be available on the specified s3 Bucket
+
+## Azure Blob Storage
+
+Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction)
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LLM Input/Output to Azure Blob Storag (Bucket) |
+| Azure Docs on Data Lake Storage | [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction) |
+
+
+
+#### Usage
+
+1. Add `azure_storage` to LiteLLM Config.yaml
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  callbacks: ["azure_storage"] # 👈 KEY CHANGE # 👈 KEY CHANGE
+```
+
+2. Set required env variables
+
+```shell
+# Required Environment Variables for Azure Storage
+AZURE_STORAGE_ACCOUNT_NAME="litellm2" # The name of the Azure Storage Account to use for logging
+AZURE_STORAGE_FILE_SYSTEM="litellm-logs" # The name of the Azure Storage File System to use for logging.  (Typically the Container name)
+
+# Authentication Variables
+# Option 1: Use Storage Account Key
+AZURE_STORAGE_ACCOUNT_KEY="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" # The Azure Storage Account Key to use for Authentication
+
+# Option 2: Use Tenant ID + Client ID + Client Secret
+AZURE_STORAGE_TENANT_ID="985efd7cxxxxxxxxxx" # The Application Tenant ID to use for Authentication
+AZURE_STORAGE_CLIENT_ID="abe66585xxxxxxxxxx" # The Application Client ID to use for Authentication
+AZURE_STORAGE_CLIENT_SECRET="uMS8Qxxxxxxxxxx" # The Application Client Secret to use for Authentication
+```
+
+3. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+4. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+#### Expected Logs on Azure Data Lake Storage
+
+<Image img={require('../../img/azure_blob.png')} />
+
+#### Fields Logged on Azure Data Lake Storage
+
+[**The standard logging object is logged on Azure Data Lake Storage**](../proxy/logging_spec)
+
+
 
 ## DataDog
 

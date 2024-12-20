@@ -4,9 +4,7 @@ import os
 import random
 import subprocess
 import sys
-import traceback
 import urllib.parse as urlparse
-from datetime import datetime
 
 import click
 from dotenv import load_dotenv
@@ -18,9 +16,7 @@ config_filename = "litellm.secrets"
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     load_dotenv()
-import shutil
 from enum import Enum
-from importlib import resources
 
 telemetry = None
 
@@ -125,7 +121,7 @@ def is_port_in_use(port):
 )
 @click.option(
     "--request_timeout",
-    default=6000,
+    default=None,
     type=int,
     help="Set timeout in seconds for completion calls",
 )
@@ -303,7 +299,7 @@ def run_server(  # noqa: PLR0915
         return
     if model and "ollama" in model and api_base is None:
         run_ollama_serve()
-    import requests
+    import httpx
 
     if test_async is True:
         import concurrent
@@ -319,7 +315,7 @@ def run_server(  # noqa: PLR0915
                 ],
             }
 
-            response = requests.post("http://0.0.0.0:4000/queue/request", json=data)
+            response = httpx.post("http://0.0.0.0:4000/queue/request", json=data)
 
             response = response.json()
 
@@ -327,7 +323,7 @@ def run_server(  # noqa: PLR0915
                 try:
                     url = response["url"]
                     polling_url = f"{api_base}{url}"
-                    polling_response = requests.get(polling_url)
+                    polling_response = httpx.get(polling_url)
                     polling_response = polling_response.json()
                     print("\n RESPONSE FROM POLLING JOB", polling_response)  # noqa
                     status = polling_response["status"]
@@ -378,7 +374,7 @@ def run_server(  # noqa: PLR0915
     if health is not False:
 
         print("\nLiteLLM: Health Testing models in config")  # noqa
-        response = requests.get(url=f"http://{host}:{port}/health")
+        response = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))  # noqa
         return
     if test is not False:
@@ -512,7 +508,6 @@ def run_server(  # noqa: PLR0915
             try:
                 import asyncio
 
-                import yaml  # type: ignore
             except Exception:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"

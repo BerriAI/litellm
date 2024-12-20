@@ -1,14 +1,10 @@
 import json
 import time
-import traceback
-import types
 import uuid
-from itertools import chain
 from typing import Any, List, Optional
 
 import aiohttp
 import httpx
-import requests
 from pydantic import BaseModel
 
 import litellm
@@ -297,13 +293,14 @@ def get_ollama_response(  # noqa: PLR0915
             url=url, api_key=api_key, data=data, logging_obj=logging_obj
         )
 
-    _request = {
-        "url": f"{url}",
-        "json": data,
-    }
+    headers: Optional[dict] = None
     if api_key is not None:
-        _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
-    response = requests.post(**_request)  # type: ignore
+        headers = {"Authorization": "Bearer {}".format(api_key)}
+    response = litellm.module_level_client.post(
+        url=url,
+        json=data,
+        headers=headers,
+    )
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 

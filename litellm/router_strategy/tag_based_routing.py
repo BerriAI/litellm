@@ -6,10 +6,10 @@ Use this to route requests between Teams
 - If no default_deployments are set, return all deployments
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
-from litellm.types.router import DeploymentTypedDict, RouterErrors
+from litellm.types.router import RouterErrors
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router

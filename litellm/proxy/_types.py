@@ -1,16 +1,12 @@
 import enum
 import json
-import os
-import sys
-import traceback
 import uuid
-from dataclasses import fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
-from typing_extensions import Annotated, TypedDict
+from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
+from typing_extensions import TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
@@ -1431,6 +1427,8 @@ class UserAPIKeyAuth(
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values):
@@ -1441,9 +1439,6 @@ class UserAPIKeyAuth(
             ).startswith("sk-"):
                 values.update({"api_key": hash_token(values.get("api_key"))})
         return values
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):

@@ -59,6 +59,10 @@ class BaseLLMEmbeddingTest(ABC):
 
             print("async embedding response: ", response)
 
+        from openai.types.create_embedding_response import CreateEmbeddingResponse
+
+        CreateEmbeddingResponse.model_validate(response.model_dump())
+
     def test_embedding_optional_params_max_retries(self):
         embedding_call_args = self.get_base_embedding_call_args()
         optional_params = get_optional_params_embeddings(

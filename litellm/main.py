@@ -2645,45 +2645,24 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            if model in custom_prompt_dict:
-                # check if the model has a registered custom prompt
-                model_prompt_details = custom_prompt_dict[model]
-                ollama_prompt = custom_prompt(
-                    role_dict=model_prompt_details["roles"],
-                    initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                    final_prompt_value=model_prompt_details["final_prompt_value"],
-                    messages=messages,
-                )
-            else:
-                modified_prompt = ollama_pt(model=model, messages=messages)
-                if isinstance(modified_prompt, dict):
-                    # for multimode models - ollama/llava prompt_factory returns a dict {
-                    #     "prompt": prompt,
-                    #     "images": images
-                    # }
-                    ollama_prompt, images = (
-                        modified_prompt["prompt"],
-                        modified_prompt["images"],
-                    )
-                    optional_params["images"] = images
-                else:
-                    ollama_prompt = modified_prompt
-            ## LOGGING
-            generator = ollama.get_ollama_response(
-                api_base=api_base,
+            response = base_llm_http_handler.completion(
                 model=model,
-                prompt=ollama_prompt,
-                optional_params=optional_params,
-                logging_obj=logging,
+                stream=stream,
+                messages=messages,
                 acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="ollama",
+                timeout=timeout,
+                headers=headers,
                 encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
             )
-            if acompletion is True or optional_params.get("stream", False) is True:
-                return generator
 
-            response = generator
         elif custom_llm_provider == "ollama_chat":
             api_base = (
                 litellm.api_base
@@ -2833,8 +2812,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 return response
             response = model_response
         elif custom_llm_provider == "custom":
-            import requests
-
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
                 raise ValueError(
@@ -2843,7 +2820,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             """
             assume input to custom LLM api bases follow this format:
-            resp = requests.post(
+            resp = litellm.module_level_client.post(
                 api_base,
                 json={
                     'model': 'meta-llama/Llama-2-13b-hf', # model name
@@ -2859,7 +2836,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             """
             prompt = " ".join([message["content"] for message in messages])  # type: ignore
-            resp = requests.post(
+            resp = litellm.module_level_client.post(
                 url,
                 json={
                     "model": model,
@@ -2871,7 +2848,6 @@ def completion(  # type: ignore # noqa: PLR0915
                         "top_k": kwargs.get("top_k", 40),
                     },
                 },
-                verify=litellm.ssl_verify,
             )
             response_json = resp.json()
             """
@@ -3082,6 +3058,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "openai_like"
             or custom_llm_provider == "jina_ai"
+            or custom_llm_provider == "voyage"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
@@ -3385,7 +3362,11 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "openai_like" or custom_llm_provider == "jina_ai":
+        elif (
+            custom_llm_provider == "openai_like"
+            or custom_llm_provider == "jina_ai"
+            or custom_llm_provider == "hosted_vllm"
+        ):
             api_base = (
                 api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
             )
@@ -3656,10 +3637,10 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "voyage":
-            api_key = api_key or litellm.api_key or get_secret_str("VOYAGE_API_KEY")
-            response = openai_chat_completions.embedding(
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
+                custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,
@@ -4656,6 +4637,11 @@ def transcription(
 
     Allows router to load balance between them
     """
+    litellm_call_id = kwargs.get("litellm_call_id", None)
+    proxy_server_request = kwargs.get("proxy_server_request", None)
+    model_info = kwargs.get("model_info", None)
+    metadata = kwargs.get("metadata", None)
+    atranscription = kwargs.get("atranscription", False)
     atranscription = kwargs.get("atranscription", False)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
@@ -4695,6 +4681,22 @@ def transcription(
         temperature=temperature,
         custom_llm_provider=custom_llm_provider,
         drop_params=drop_params,
+    )
+
+    litellm_logging_obj.update_environment_variables(
+        model=model,
+        user=user,
+        optional_params={},
+        litellm_params={
+            "litellm_call_id": litellm_call_id,
+            "proxy_server_request": proxy_server_request,
+            "model_info": model_info,
+            "metadata": metadata,
+            "preset_cache_key": None,
+            "stream_response": {},
+            **kwargs,
+        },
+        custom_llm_provider=custom_llm_provider,
     )
 
     response: Optional[TranscriptionResponse] = None
