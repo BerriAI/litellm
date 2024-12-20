@@ -1253,13 +1253,13 @@ class OpenAIChatCompletion(BaseLLM):
             client=client,
         )
 
-        response = openai_client.audio.speech.create(
+        response = cast(OpenAI, openai_client).audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
             **optional_params,
         )
-        return response  # type: ignore
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def async_audio_speech(
         self,
