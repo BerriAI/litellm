@@ -4517,7 +4517,7 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
 
 def test_langfuse_completion():
     litellm.set_verbose = True
-    litellm.callbacks = ["langfuse"]
+    # litellm.callbacks = ["langfuse"]
     resp = litellm.completion(
         model="langfuse/gpt-3.5-turbo",
         langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
