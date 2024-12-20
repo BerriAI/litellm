@@ -6214,6 +6214,8 @@ class ProviderConfigManager:
             return litellm.CohereRerankConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
+        elif litellm.LlmProviders.INFINITY == provider:
+            return litellm.InfinityRerankConfig()
         return litellm.CohereRerankConfig()
 
 
