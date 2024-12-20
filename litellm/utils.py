@@ -6175,7 +6175,9 @@ class ProviderConfigManager:
         ):
             return litellm.MistralConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
-            return litellm.NvidiaNimConfig()
+            return litellm.NvidiaConfig()
+        elif litellm.LlmProviders.NVIDIA == provider:
+            return litellm.NvidiaConfig()
         elif litellm.LlmProviders.CEREBRAS == provider:
             return litellm.CerebrasConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:

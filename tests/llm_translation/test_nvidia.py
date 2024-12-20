@@ -58,6 +58,24 @@ def mock_models_endpoint():
         mock.get("/models").respond(200, json=response_data)
         yield mock
 
+location_tool = {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
 
 def test_completion_missing_key():
     with no_env_var("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"):
@@ -376,3 +394,102 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
         assert len(mock_request.calls) > 0
     except Exception as e:
         pytest.fail(f"Async streaming completion test failed: {e}")
+
+@pytest.mark.respx
+@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
+def test_nvidia_tool_use():
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [location_tool]
+    model="nvidia/meta/llama-3.1-70b-instruct"
+
+    try:
+        response = completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+        )
+        assert response.choices[0].message.tool_calls
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert response.choices[0].finish_reason == "tool_calls"
+    except litellm.InternalServerError:
+        pass
+
+@pytest.mark.respx
+@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
+def test_nvidia_tool_use_stream():
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [location_tool]
+    model="nvidia/meta/llama-3.1-70b-instruct"
+
+    try:
+        response = completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=True,
+            stop=["\n\n"]
+        )
+        for chunk in response:
+            assert chunk.choices[0].delta.tool_calls
+            assert (
+                chunk.choices[0].delta.tool_calls[0].function.name
+                == "get_current_weather"
+            )
+            assert chunk.choices[0].finish_reason == "tool_calls"
+            break
+    except litellm.InternalServerError:
+        pass
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
+async def test_async_nvidia_tool_use():
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [location_tool]
+    model="nvidia/meta/llama-3.1-70b-instruct"
+
+    try:
+        response = await litellm.acompletion(
+            model=model,
+            messages=messages,
+            tools=tools,
+        )
+        assert response.choices[0].message.tool_calls
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+        assert response.choices[0].finish_reason == "tool_calls"
+    except litellm.InternalServerError:
+        pass
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+@pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
+async def test_async_nvidia_tool_use_stream():
+    messages = [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+    tools = [location_tool]
+    model="nvidia/meta/llama-3.1-70b-instruct"
+
+    try:
+        response = await litellm.acompletion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=True,
+            stop=["\n\n"]
+        )
+        async for chunk in response:
+            assert chunk.choices[0].delta.tool_calls
+            assert (
+                chunk.choices[0].delta.tool_calls[0].function.name
+                == "get_current_weather"
+            )
+            assert chunk.choices[0].finish_reason == "tool_calls"
+            break
+        
+    except litellm.InternalServerError:
+        pass

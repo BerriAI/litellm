@@ -16,9 +16,9 @@ import requests
 import os
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.nvidia.statics import determine_model, Model
 
-
-class NvidiaNimConfig(OpenAIGPTConfig):
+class NvidiaConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
@@ -63,10 +63,10 @@ class NvidiaNimConfig(OpenAIGPTConfig):
     def available_models(self) -> list:
         '''Get Available NVIDIA models.'''
         api_base = (
-                    get_secret("NVIDIA_API_BASE")  
+                    "https://integrate.api.nvidia.com/v1" # type: ignore
+                    or get_secret("NVIDIA_API_BASE")  
                     or get_secret("NVIDIA_BASE_URL") 
                     or get_secret("NVIDIA_NIM_API_BASE") 
-                    or "https://integrate.api.nvidia.com/v1" # type: ignore
                 )
 
         headers = {
@@ -91,15 +91,19 @@ class NvidiaNimConfig(OpenAIGPTConfig):
 
         Updated on July 5th, 2024 - based on https://docs.api.nvidia.com/nim/reference
         """
+        parms = []
+        if model_cls := determine_model(model):
+            if model_cls.supports_tools:
+                parms += ["tools", "tool_choice"]
         if model in [
             "google/recurrentgemma-2b",
             "google/gemma-2-27b-it",
             "google/gemma-2-9b-it",
             "gemma-2-9b-it",
         ]:
-            return ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
+            parms += ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
         elif model == "nvidia/nemotron-4-340b-instruct":
-            return [
+            parms += [
                 "stream",
                 "temperature",
                 "top_p",
@@ -107,12 +111,12 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "max_completion_tokens",
             ]
         elif model == "nvidia/nemotron-4-340b-reward":
-            return [
+            parms += [
                 "stream",
             ]
         elif model in ["google/codegemma-1.1-7b"]:
             # most params - but no 'seed' :(
-            return [
+            parms += [
                 "stream",
                 "temperature",
                 "top_p",
@@ -145,7 +149,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
             # "meta/llama3-8b-instruct",
             # "meta/llama2-70b",
             # "meta/codellama-70b",
-            return [
+            parms += [
                 "stream",
                 "temperature",
                 "top_p",
@@ -156,6 +160,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "stop",
                 "seed",
             ]
+        return parms
 
     def map_openai_params(
         self,

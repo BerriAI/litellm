@@ -128,7 +128,7 @@ def get_llm_provider(  # noqa: PLR0915
             ) # type: ignore
             dynamic_api_key = api_key or get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
             custom_llm_provider = "nvidia"
-            if model.split("/", 1)[0] == "nvidia":
+            if model.split("/", 1)[0] in ["nvidia", "nvidia_nim"]:
                 model = model.split("/", 1)[1]
             
             if model not in litellm.nvidia_models:
