@@ -35,7 +35,7 @@ resp = litellm.completion(
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-1. Add Langfuse as a 'callback' in your config.yaml
+1. Setup config.yaml
 
 ```yaml
 model_list:
