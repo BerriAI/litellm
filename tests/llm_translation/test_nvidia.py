@@ -395,6 +395,7 @@ async def test_async_completion_with_stream(respx_mock: respx.MockRouter):
     except Exception as e:
         pytest.fail(f"Async streaming completion test failed: {e}")
 
+## ---------------------------------------- Tool Calling test cases ----------------------------------------
 @pytest.mark.respx
 @pytest.mark.skipif(not any(key in os.environ for key in ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"]), reason="Either NVIDIA_API_KEY or NVIDIA_NIM_API_KEY environment variable is not set.")
 def test_nvidia_tool_use():

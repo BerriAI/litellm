@@ -95,6 +95,8 @@ class NvidiaConfig(OpenAIGPTConfig):
         if model_cls := determine_model(model):
             if model_cls.supports_tools:
                 parms += ["tools", "tool_choice"]
+            if model_cls.supports_structured_output:
+                parms += ["response_format"]
         if model in [
             "google/recurrentgemma-2b",
             "google/gemma-2-27b-it",
