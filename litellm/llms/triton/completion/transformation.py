@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate` endpoint.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
@@ -18,39 +18,23 @@ from litellm.types.utils import Choices, Message, ModelResponse
 from ..common_utils import TritonError
 
 
-class TritonGenerateConfig(BaseConfig):
-    """
-    Transformations for triton /generate endpoint (This is a trtllm model)
-    """
-
-    def transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        inference_params = optional_params.copy()
-        stream = inference_params.pop("stream", False)
-        data_for_triton: Dict[str, Any] = {
-            "text_input": prompt_factory(model=model, messages=messages),
-            "parameters": {
-                "max_tokens": int(optional_params.get("max_tokens", 2000)),
-                "bad_words": [""],
-                "stop_words": [""],
-            },
-            "stream": bool(stream),
-        }
-        data_for_triton["parameters"].update(inference_params)
-        return data_for_triton
-
+class TritonConfig(BaseConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, Headers]
     ) -> BaseLLMException:
         return TritonError(
             status_code=status_code, message=error_message, headers=headers
         )
+
+    def validate_environment(
+        self,
+        headers: Dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        api_key: Optional[str] = None,
+    ) -> Dict:
+        return {"Content-Type": "application/json"}
 
     def get_supported_openai_params(self, model: str) -> List:
         return ["max_tokens", "max_completion_tokens"]
@@ -81,6 +65,116 @@ class TritonGenerateConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
+        api_base = litellm_params.get("api_base", "")
+        llm_type = self._get_triton_llm_type(api_base)
+        if llm_type == "generate":
+            return TritonGenerateConfig().transform_response(
+                model=model,
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data=request_data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                api_key=api_key,
+                json_mode=json_mode,
+            )
+        elif llm_type == "infer":
+            return TritonInferConfig().transform_response(
+                model=model,
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data=request_data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                api_key=api_key,
+                json_mode=json_mode,
+            )
+        return model_response
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        api_base = litellm_params.get("api_base", "")
+        llm_type = self._get_triton_llm_type(api_base)
+        if llm_type == "generate":
+            return TritonGenerateConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        elif llm_type == "infer":
+            return TritonInferConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        return {}
+
+    def _get_triton_llm_type(self, api_base: str) -> Literal["generate", "infer"]:
+        if api_base.endswith("/generate"):
+            return "generate"
+        elif api_base.endswith("/infer"):
+            return "infer"
+        else:
+            raise ValueError(f"Invalid Triton API base: {api_base}")
+
+
+class TritonGenerateConfig(TritonConfig):
+    """
+    Transformations for triton /generate endpoint (This is a trtllm model)
+    """
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        inference_params = optional_params.copy()
+        stream = inference_params.pop("stream", False)
+        data_for_triton: Dict[str, Any] = {
+            "text_input": prompt_factory(model=model, messages=messages),
+            "parameters": {
+                "max_tokens": int(optional_params.get("max_tokens", 2000)),
+                "bad_words": [""],
+                "stop_words": [""],
+            },
+            "stream": bool(stream),
+        }
+        data_for_triton["parameters"].update(inference_params)
+        return data_for_triton
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
         _json_response = raw_response.json()
         try:
             raw_response_json = raw_response.json()
@@ -93,16 +187,6 @@ class TritonGenerateConfig(BaseConfig):
         ]
 
         return model_response
-
-    def validate_environment(
-        self,
-        headers: Dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        api_key: Optional[str] = None,
-    ) -> Dict:
-        return {"Content-Type": "application/json"}
 
 
 class TritonInferConfig(TritonGenerateConfig):
