@@ -855,52 +855,6 @@ router = Router(model_list=model_list, default_max_parallel_requests=20) # 👈 
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/a978f2d8813c04dad34802cb95e0a0e35a3324bc/litellm/utils.py#L5605)
 
-### Timeouts 
-
-The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well. 
-
-**Global Timeouts**
-```python
-from litellm import Router 
-
-model_list = [{...}]
-
-router = Router(model_list=model_list, 
-                timeout=30) # raise timeout error if call takes > 30s 
-
-print(response)
-```
-
-**Timeouts per model**
-
-```python
-from litellm import Router 
-import asyncio
-
-model_list = [{
-	"model_name": "gpt-3.5-turbo",
-	"litellm_params": {
-		"model": "azure/chatgpt-v-2",
-		"api_key": os.getenv("AZURE_API_KEY"),
-		"api_version": os.getenv("AZURE_API_VERSION"),
-		"api_base": os.getenv("AZURE_API_BASE"),
-		"timeout": 300 # sets a 5 minute timeout
-		"stream_timeout": 30 # sets a 30s timeout for streaming calls
-	}
-}]
-
-# init router
-router = Router(model_list=model_list, routing_strategy="least-busy")
-async def router_acompletion():
-	response = await router.acompletion(
-		model="gpt-3.5-turbo", 
-		messages=[{"role": "user", "content": "Hey, how's it going?"}]
-	)
-	print(response)
-	return response
-
-asyncio.run(router_acompletion())
-```
 ### Cooldowns
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
