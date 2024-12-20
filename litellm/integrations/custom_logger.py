@@ -60,6 +60,23 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    #### PROMPT MANAGEMENT HOOKS ####
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        headers: dict,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
     #### PRE-CALL CHECKS - router/proxy only ####
     """
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).

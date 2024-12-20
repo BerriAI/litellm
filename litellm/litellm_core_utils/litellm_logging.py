@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
@@ -424,6 +424,25 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        headers: dict,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        for callback in litellm.callbacks:
+            if isinstance(callback, CustomLogger):
+                model, messages, non_default_params = (
+                    callback.get_chat_completion_prompt(
+                        model=model,
+                        messages=messages,
+                        non_default_params=non_default_params,
+                        headers=headers,
+                    )
+                )
+        return model, messages, non_default_params
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
