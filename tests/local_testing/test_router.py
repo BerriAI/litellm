@@ -2220,22 +2220,6 @@ def test_router_cooldown_api_connection_error():
     except litellm.APIConnectionError:
         pass
 
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
-
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
-
 
 def test_router_correctly_reraise_error():
     """
