@@ -126,6 +126,7 @@ azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
+infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
 maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
