@@ -163,10 +163,10 @@ class LangfusePromptManagement(CustomLogger):
                 Optional[dict], metadata.get("langfuse_prompt_variables") or {}
             )
         else:
-            return
+            return None
 
         if langfuse_prompt_id is None:
-            return
+            return None
 
         prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=langfuse_prompt_id, langfuse_client=self.Langfuse
