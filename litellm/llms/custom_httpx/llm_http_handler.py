@@ -546,7 +546,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_rerank_params: OptionalRerankParams,
-        timeout: Union[float, httpx.Timeout],
+        timeout: Optional[Union[float, httpx.Timeout]],
         model_response: RerankResponse,
         _is_async: bool = False,
         headers: dict = {},

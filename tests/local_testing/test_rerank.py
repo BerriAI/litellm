@@ -66,6 +66,7 @@ def assert_response_shape(response, custom_llm_provider):
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
 async def test_basic_rerank(sync_mode):
+    litellm.set_verbose = True
     if sync_mode is True:
         response = litellm.rerank(
             model="cohere/rerank-english-v3.0",
@@ -94,6 +95,8 @@ async def test_basic_rerank(sync_mode):
         assert response.results is not None
 
         assert_response_shape(response, custom_llm_provider="cohere")
+
+    print("response", response.model_dump_json(indent=4))
 
 
 @pytest.mark.asyncio()
