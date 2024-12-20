@@ -14,6 +14,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
 
@@ -70,6 +71,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:

@@ -433,6 +433,7 @@ class Logging(LiteLLMLoggingBaseClass):
         headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         for (
             custom_logger_compatible_callback
@@ -453,6 +454,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         headers=headers,
                         prompt_id=prompt_id,
                         prompt_variables=prompt_variables,
+                        dynamic_callback_params=dynamic_callback_params,
                     )
                 )
 

@@ -4523,5 +4523,6 @@ def test_langfuse_completion():
         # langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
         # langfuse_private_key=os.getenv("LANGFUSE_PRIVATE_KEY"),
         prompt_id="test-chat-prompt",
+        prompt_variables={"user_message": "this is used"},
         messages=[{"role": "user", "content": "this is ignored"}],
     )

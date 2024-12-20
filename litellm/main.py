@@ -905,6 +905,11 @@ def completion(  # type: ignore # noqa: PLR0915
     ## PROMPT MANAGEMENT HOOKS ##
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
+        dynamic_callback_params = (
+            litellm_logging_obj.initialize_standard_callback_dynamic_params(
+                kwargs=kwargs
+            )
+        )
         model, messages, optional_params = (
             litellm_logging_obj.get_chat_completion_prompt(
                 model=model,
@@ -913,6 +918,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 headers=headers,
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
+                dynamic_callback_params=dynamic_callback_params,
             )
         )
 
