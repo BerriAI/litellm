@@ -1018,7 +1018,8 @@ from .llms.anthropic.experimental_pass_through.transformation import (
 )
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
-from .llms.triton.completion.transformation import TritonConfig
+from .llms.triton.completion.transformation import TritonGenerateConfig
+from .llms.triton.completion.transformation import TritonInferConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig

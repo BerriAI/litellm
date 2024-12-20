@@ -13,12 +13,16 @@ from litellm.llms.base_llm.chat.transformation import (
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse
 
 from ..common_utils import TritonError
 
 
-class TritonConfig(BaseConfig):
+class TritonGenerateConfig(BaseConfig):
+    """
+    Transformations for triton /generate endpoint (This is a trtllm model)
+    """
+
     def transform_request(
         self,
         model: str,
@@ -77,9 +81,18 @@ class TritonConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError(
-            "response transformation done in handler.py. [TODO] Migrate here."
-        )
+        _json_response = raw_response.json()
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise TritonError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        model_response.choices = [
+            Choices(index=0, message=Message(content=raw_response_json["text_output"]))
+        ]
+
+        return model_response
 
     def validate_environment(
         self,
@@ -90,3 +103,73 @@ class TritonConfig(BaseConfig):
         api_key: Optional[str] = None,
     ) -> Dict:
         return {"Content-Type": "application/json"}
+
+
+class TritonInferConfig(TritonGenerateConfig):
+    """
+    Transformations for triton /infer endpoint (his is an infer model with a custom model on triton)
+    """
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+
+        text_input = messages[0].get("content", "")
+        data_for_triton = {
+            "inputs": [
+                {
+                    "name": "text_input",
+                    "shape": [1],
+                    "datatype": "BYTES",
+                    "data": [text_input],
+                }
+            ]
+        }
+
+        for k, v in optional_params.items():
+            if not (k == "stream" or k == "max_retries"):
+                datatype = "INT32" if isinstance(v, int) else "BYTES"
+                datatype = "FP32" if isinstance(v, float) else datatype
+                data_for_triton["inputs"].append(
+                    {"name": k, "shape": [1], "datatype": datatype, "data": [v]}
+                )
+
+        if "max_tokens" not in optional_params:
+            data_for_triton["inputs"].append(
+                {
+                    "name": "max_tokens",
+                    "shape": [1],
+                    "datatype": "INT32",
+                    "data": [20],
+                }
+            )
+        return data_for_triton
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: Dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        _json_response = raw_response.json()
+        model_response.choices = [
+            Choices(
+                index=0,
+                message=Message(content=_json_response["outputs"][0]["data"]),
+            )
+        ]
+
+        return model_response
