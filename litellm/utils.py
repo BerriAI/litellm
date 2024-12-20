@@ -2442,6 +2442,23 @@ def _remove_strict_from_schema(schema):
     return schema
 
 
+def _remove_unsupported_params(
+    non_default_params: dict, supported_openai_params: Optional[List[str]]
+) -> dict:
+    """
+    Remove unsupported params from non_default_params
+    """
+    remove_keys = []
+    if supported_openai_params is None:
+        return {}  # no supported params, so no optional openai params to send
+    for param in non_default_params.keys():
+        if param not in supported_openai_params:
+            remove_keys.append(param)
+    for key in remove_keys:
+        non_default_params.pop(key, None)
+    return non_default_params
+
+
 def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -2688,11 +2705,13 @@ def get_optional_params(  # noqa: PLR0915
                 # Always keeps this in elif code blocks
                 else:
                     unsupported_params[k] = non_default_params[k]
+
         if unsupported_params:
             if litellm.drop_params is True or (
                 drop_params is not None and drop_params is True
             ):
-                pass
+                for k in unsupported_params.keys():
+                    non_default_params.pop(k, None)
             else:
                 raise UnsupportedParamsError(
                     status_code=500,

@@ -135,7 +135,6 @@ const sidebars = {
             "oidc"
           ]
         },
-        "proxy/prompt_management",
         "proxy/caching",
         "proxy/call_hooks",
         "proxy/rules", 
@@ -228,6 +227,7 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
+        'tutorials/litellm_proxy_aporia',
         
       ]
     },
@@ -309,7 +309,28 @@ const sidebars = {
           label: "LangChain, LlamaIndex, Instructor Integration",
           items: ["langchain/langchain", "tutorials/instructor"],
         },
+        {
+          type: "category",
+          label: "Tutorials",
+          items: [
+            
+            'tutorials/azure_openai',
+            'tutorials/instructor',
+            "tutorials/gradio_integration",
+            "tutorials/huggingface_codellama",
+            "tutorials/huggingface_tutorial",
+            "tutorials/TogetherAI_liteLLM",
+            "tutorials/finetuned_chat_gpt",
+            "tutorials/text_completion",
+            "tutorials/first_playground",
+            "tutorials/model_fallbacks",
+          ],
+        },
       ],
+    },
+    {
+      type: "doc",
+      id: "proxy/prompt_management"
     },
     {
       type: "category",
@@ -362,23 +383,7 @@ const sidebars = {
         "observability/opik_integration",
       ],
     },
-    {
-      type: "category",
-      label: "Tutorials",
-      items: [
-        'tutorials/litellm_proxy_aporia',
-        'tutorials/azure_openai',
-        'tutorials/instructor',
-        "tutorials/gradio_integration",
-        "tutorials/huggingface_codellama",
-        "tutorials/huggingface_tutorial",
-        "tutorials/TogetherAI_liteLLM",
-        "tutorials/finetuned_chat_gpt",
-        "tutorials/text_completion",
-        "tutorials/first_playground",
-        "tutorials/model_fallbacks",
-      ],
-    },
+    
     {
       type: "category",
       label: "Extras",
