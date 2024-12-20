@@ -6214,7 +6214,7 @@ class ProviderConfigManager:
             return litellm.CohereRerankConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
-        raise ValueError(f"Provider {provider} does not support rerank config")
+        return litellm.CohereRerankConfig()
 
 
 def get_end_user_id_for_cost_tracking(
