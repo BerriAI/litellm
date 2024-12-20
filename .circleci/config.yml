@@ -1088,7 +1088,7 @@ jobs:
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
               --name my-app \
-              -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
