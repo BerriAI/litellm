@@ -2249,10 +2249,19 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
             )
     elif custom_llm_provider == "triton":
-        keys = list(non_default_params.keys())
-        for k in keys:
-            non_default_params.pop(k, None)
-        final_params = {**non_default_params, **kwargs}
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.TritonEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
         return final_params
     elif custom_llm_provider == "databricks":
         supported_params = get_supported_openai_params(
@@ -2811,6 +2820,17 @@ def get_optional_params(  # noqa: PLR0915
                 if drop_params is not None and isinstance(drop_params, bool)
                 else False
             ),
+        )
+    elif custom_llm_provider == "triton":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.TritonConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
         )
 
     elif custom_llm_provider == "maritalk":
