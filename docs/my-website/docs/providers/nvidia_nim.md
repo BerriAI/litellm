@@ -67,6 +67,103 @@ for chunk in response:
     print(chunk)
 ```
 
+## **Function/Tool Calling**
+
+```python
+from litellm import completion
+
+# set env
+os.environ['NVIDIA_API_KEY'] = ""
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+response = completion(
+    model="nvidia/meta/llama-3.1-70b-instruct",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",
+)
+# Add any assertions, here to check response args
+print(response)
+assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
+assert isinstance(
+    response.choices[0].message.tool_calls[0].function.arguments, str
+)
+
+```
+
+### Forcing Tool Use
+
+If you want LLM to use a specific tool to answer the user’s question
+
+You can do this by specifying the tool in the `tool_choice` field like so:
+
+```python
+response = completion(
+    os.environ['NVIDIA_API_KEY'] = ""
+    messages=messages,
+    tools=tools,
+    tool_choice={"type": "tool", "name": "get_weather"},
+)
+```
+
+## Usage - Vision 
+
+```python
+from litellm import completion
+
+# set env
+os.environ['NVIDIA_API_KEY'] = ""
+
+def encode_image(image_path):
+    import base64
+
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
+
+
+image_path = "nvidia-picasso.jpg"
+# Getting the base64 string
+base64_image = encode_image(image_path)
+response = litellm.completion(
+    model="nvidia/microsoft/phi-3-vision-128k-instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Whats in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64," + base64_image
+                    },
+                },
+            ],
+        }
+    ],
+)
+print(f"\nResponse: {response}")
+```
 
 ## Usage - embedding
 
