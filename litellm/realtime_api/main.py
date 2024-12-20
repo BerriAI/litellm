@@ -1,6 +1,5 @@
 """Abstraction function for OpenAI's realtime API"""
 
-import os
 from typing import Any, Optional
 
 import litellm

@@ -6,20 +6,14 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-from .common_utils import (
-    VertexAIError,
-    _get_gemini_url,
-    _get_vertex_url,
-    all_gemini_url_modes,
-    get_supports_system_message,
-)
+from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
@@ -44,7 +38,6 @@ class VertexBase(BaseLLM):
     ) -> Tuple[Any, str]:
         import google.auth as google_auth
         from google.auth import identity_pool
-        from google.auth.credentials import Credentials  # type: ignore[import-untyped]
         from google.auth.transport.requests import (
             Request,  # type: ignore[import-untyped]
         )

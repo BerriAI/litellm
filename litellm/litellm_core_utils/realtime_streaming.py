@@ -27,8 +27,6 @@ async with websockets.connect(  # type: ignore
 import asyncio
 import concurrent.futures
 import json
-import traceback
-from asyncio import Task
 from typing import Any, Dict, List, Optional, Union
 
 import litellm

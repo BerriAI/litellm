@@ -1,11 +1,9 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import litellm
-from litellm import LlmProviders
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.main import verbose_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router

@@ -1,18 +1,14 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
-import os
 import traceback
-from datetime import datetime as datetimeObj
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
-import dotenv
 from pydantic import BaseModel
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
-from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     EmbeddingResponse,

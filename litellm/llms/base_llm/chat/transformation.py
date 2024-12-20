@@ -4,18 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    TypedDict,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
@@ -83,7 +72,10 @@ class BaseConfig(ABC):
         }
 
     def should_fake_stream(
-        self, model: str, custom_llm_provider: Optional[str] = None
+        self,
+        model: str,
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """
         Returns True if the model/provider should fake stream

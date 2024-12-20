@@ -1,15 +1,8 @@
 import json
-import os
-import time
-from enum import Enum
 from typing import Any, Callable, Optional
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
-    prompt_factory,
-)
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError

@@ -13,14 +13,9 @@ from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret
-from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
+from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.router import *
-from litellm.utils import (
-    ProviderConfigManager,
-    client,
-    exception_type,
-    supports_httpx_timeout,
-)
+from litellm.utils import ProviderConfigManager, client, exception_type
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here

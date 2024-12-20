@@ -1,6 +1,4 @@
-import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
@@ -11,15 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-    Choices,
-    GenericStreamingChunk,
-    Message,
-    ModelResponse,
-    Usage,
-)
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import CohereError
 from ..common_utils import ModelResponseIterator as CohereModelResponseIterator

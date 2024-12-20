@@ -6,7 +6,6 @@ In the Huggingface TGI format.
 
 import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from httpx._models import Headers, Response

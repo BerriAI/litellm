@@ -4,7 +4,6 @@ Class to handle llm wildcard routing and regex pattern matching
 
 import copy
 import re
-from functools import cached_property
 from re import Match
 from typing import Dict, List, Optional, Tuple
 

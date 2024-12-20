@@ -10,12 +10,10 @@
 
 import asyncio
 import json
-import traceback
 import uuid
 from typing import Any, List, Optional, Tuple, Union
 
 import aiohttp
-from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm  # noqa: E401
@@ -30,7 +28,6 @@ from litellm.utils import (
     ImageResponse,
     ModelResponse,
     StreamingChoices,
-    get_formatted_prompt,
 )
 
 
@@ -257,7 +254,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     def logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
-        import threading
         from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop():

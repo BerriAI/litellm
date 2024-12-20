@@ -2,7 +2,6 @@
 Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completions`
 """
 
-import types
 from typing import List, Optional, Union
 
 from pydantic import BaseModel

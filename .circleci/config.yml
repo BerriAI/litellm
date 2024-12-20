@@ -785,7 +785,33 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  
+  installing_litellm_on_python_3_13:
+    docker:
+      - image: cimg/python:3.13.1
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
 
   check_code_and_doc_quality:
     docker:
@@ -1607,6 +1633,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - load_testing:
           filters:
             branches:
@@ -1638,6 +1670,7 @@ workflows:
             - e2e_ui_testing
             - litellm_proxy_unit_testing
             - installing_litellm_on_python
+            - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
