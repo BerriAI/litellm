@@ -1373,6 +1373,8 @@ all_litellm_params = [
     "mock_response",
     "api_key",
     "api_version",
+    "prompt_id",
+    "prompt_variables",
     "api_base",
     "force_timeout",
     "logger_fn",

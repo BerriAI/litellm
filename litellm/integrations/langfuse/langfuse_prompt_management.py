@@ -4,7 +4,7 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 import traceback
-from typing import Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
 
@@ -13,6 +13,14 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.openai import AllMessageValues
+
+if TYPE_CHECKING:
+    from langfuse.client import ChatPromptClient, TextPromptClient
+
+    PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
+else:
+    PROMPT_CLIENT = Any
 
 
 class LangfusePromptManagement(CustomLogger):
@@ -62,62 +70,32 @@ class LangfusePromptManagement(CustomLogger):
 
         self.Langfuse = Langfuse(**parameters)
 
-        # set the current langfuse project id in the environ
-        # this is used by Alerting to link to the correct project
-        try:
-            project_id = self.Langfuse.client.projects.get().data[0].id
-            os.environ["LANGFUSE_PROJECT_ID"] = project_id
-        except Exception:
-            project_id = None
-
-        if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
-            upstream_langfuse_debug = (
-                str_to_bool(self.upstream_langfuse_debug)
-                if self.upstream_langfuse_debug is not None
-                else None
-            )
-            self.upstream_langfuse_secret_key = os.getenv(
-                "UPSTREAM_LANGFUSE_SECRET_KEY"
-            )
-            self.upstream_langfuse_public_key = os.getenv(
-                "UPSTREAM_LANGFUSE_PUBLIC_KEY"
-            )
-            self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
-            self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
-            self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
-            self.upstream_langfuse = Langfuse(
-                public_key=self.upstream_langfuse_public_key,
-                secret_key=self.upstream_langfuse_secret_key,
-                host=self.upstream_langfuse_host,
-                release=self.upstream_langfuse_release,
-                debug=(
-                    upstream_langfuse_debug
-                    if upstream_langfuse_debug is not None
-                    else False
-                ),
-            )
-        else:
-            self.upstream_langfuse = None
+    def _get_prompt_from_id(self, langfuse_prompt_id: str) -> PROMPT_CLIENT:
+        return self.Langfuse.get_prompt(langfuse_prompt_id)
 
     def _compile_prompt(
         self,
-        metadata: dict,
+        langfuse_prompt_client: PROMPT_CLIENT,
+        langfuse_prompt_variables: Optional[dict],
         call_type: Union[Literal["completion"], Literal["text_completion"]],
     ) -> Optional[Union[str, list]]:
         compiled_prompt: Optional[Union[str, list]] = None
-        if isinstance(metadata, dict):
-            langfuse_prompt_id = metadata.get("langfuse_prompt_id")
 
-            langfuse_prompt_variables = metadata.get("langfuse_prompt_variables") or {}
-            if (
-                langfuse_prompt_id
-                and isinstance(langfuse_prompt_id, str)
-                and isinstance(langfuse_prompt_variables, dict)
-            ):
-                langfuse_prompt = self.Langfuse.get_prompt(langfuse_prompt_id)
-                compiled_prompt = langfuse_prompt.compile(**langfuse_prompt_variables)
+        if langfuse_prompt_variables is None:
+            langfuse_prompt_variables = {}
+
+        compiled_prompt = langfuse_prompt_client.compile(**langfuse_prompt_variables)
 
         return compiled_prompt
+
+    def _get_model_from_prompt(
+        self, langfuse_prompt_client: PROMPT_CLIENT, model: str
+    ) -> str:
+        config = langfuse_prompt_client.config
+        if "model" in config:
+            return config["model"]
+        else:
+            return model.replace("langfuse/", "")
 
     async def async_pre_call_hook(
         self,
@@ -137,9 +115,27 @@ class LangfusePromptManagement(CustomLogger):
     ) -> Union[Exception, str, dict, None]:
 
         metadata = data.get("metadata") or {}
+
+        if isinstance(metadata, dict):
+            langfuse_prompt_id = cast(Optional[str], metadata.get("langfuse_prompt_id"))
+
+            langfuse_prompt_variables = cast(
+                Optional[dict], metadata.get("langfuse_prompt_variables") or {}
+            )
+        else:
+            return
+
+        if langfuse_prompt_id is None:
+            return
+
+        prompt_client = self._get_prompt_from_id(langfuse_prompt_id=langfuse_prompt_id)
         compiled_prompt: Optional[Union[str, list]] = None
         if call_type == "completion" or call_type == "text_completion":
-            compiled_prompt = self._compile_prompt(metadata, call_type)
+            compiled_prompt = self._compile_prompt(
+                langfuse_prompt_client=prompt_client,
+                langfuse_prompt_variables=langfuse_prompt_variables,
+                call_type=call_type,
+            )
         if compiled_prompt is None:
             return await super().async_pre_call_hook(
                 user_api_key_dict, cache, data, call_type
@@ -161,3 +157,45 @@ class LangfusePromptManagement(CustomLogger):
         return await super().async_pre_call_hook(
             user_api_key_dict, cache, data, call_type
         )
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        headers: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+    ) -> Tuple[
+        str,
+        List[AllMessageValues],
+        dict,
+    ]:
+        if prompt_id is None:
+            raise ValueError(
+                "Langfuse prompt id is required. Pass in as parameter 'langfuse_prompt_id'"
+            )
+        langfuse_prompt_client = self._get_prompt_from_id(prompt_id)
+
+        ## SET PROMPT
+        compiled_prompt = self._compile_prompt(
+            langfuse_prompt_client=langfuse_prompt_client,
+            langfuse_prompt_variables=prompt_variables,
+            call_type="completion",
+        )
+
+        if compiled_prompt is None:
+            raise ValueError(f"Langfuse prompt not found. Prompt id={prompt_id}")
+        if isinstance(compiled_prompt, list):
+            messages = compiled_prompt
+        elif isinstance(compiled_prompt, str):
+            messages = [{"role": "user", "content": compiled_prompt}]
+        else:
+            raise ValueError(
+                f"Langfuse prompt is not a list or string. Prompt id={prompt_id}, compiled_prompt type={type(compiled_prompt)}"
+            )
+
+        ## SET MODEL
+        model = self._get_model_from_prompt(langfuse_prompt_client, model)
+
+        return model, messages, non_default_params

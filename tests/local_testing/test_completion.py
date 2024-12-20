@@ -4517,9 +4517,11 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
 
 def test_langfuse_completion():
     litellm.set_verbose = True
+    litellm.callbacks = ["langfuse"]
     resp = litellm.completion(
-        model="langfuse/test-chat-prompt",
-        langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        langfuse_private_key=os.getenv("LANGFUSE_PRIVATE_KEY"),
+        model="langfuse/gpt-3.5-turbo",
+        # langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        # langfuse_private_key=os.getenv("LANGFUSE_PRIVATE_KEY"),
+        prompt_id="test-chat-prompt",
         messages=[{"role": "user", "content": "this is ignored"}],
     )

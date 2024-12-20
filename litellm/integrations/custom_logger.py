@@ -68,6 +68,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: List[AllMessageValues],
         non_default_params: dict,
         headers: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:

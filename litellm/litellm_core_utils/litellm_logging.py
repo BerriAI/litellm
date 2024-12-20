@@ -431,17 +431,31 @@ class Logging(LiteLLMLoggingBaseClass):
         messages: List[AllMessageValues],
         non_default_params: dict,
         headers: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
-        for callback in litellm.callbacks:
-            if isinstance(callback, CustomLogger):
+        for (
+            custom_logger_compatible_callback
+        ) in litellm._known_custom_logger_compatible_callbacks:
+            if model.startswith(custom_logger_compatible_callback):
+                custom_logger = _init_custom_logger_compatible_class(
+                    logging_integration=custom_logger_compatible_callback,
+                    internal_usage_cache=None,
+                    llm_router=None,
+                )
+                if custom_logger is None:
+                    continue
                 model, messages, non_default_params = (
-                    callback.get_chat_completion_prompt(
+                    custom_logger.get_chat_completion_prompt(
                         model=model,
                         messages=messages,
                         non_default_params=non_default_params,
                         headers=headers,
+                        prompt_id=prompt_id,
+                        prompt_variables=prompt_variables,
                     )
                 )
+
         return model, messages, non_default_params
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):

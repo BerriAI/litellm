@@ -846,6 +846,9 @@ def completion(  # type: ignore # noqa: PLR0915
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ### PROMPT MANAGEMENT ###
+    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
         messages=messages,
@@ -901,13 +904,15 @@ def completion(  # type: ignore # noqa: PLR0915
 
     ## PROMPT MANAGEMENT HOOKS ##
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj):
+    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
         model, messages, optional_params = (
             litellm_logging_obj.get_chat_completion_prompt(
                 model=model,
                 messages=messages,
                 non_default_params=non_default_params,
                 headers=headers,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
             )
         )
 
