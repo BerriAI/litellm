@@ -12,7 +12,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.jina_ai.rerank.handler import JinaAIRerank
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
@@ -205,15 +205,13 @@ def rerank(  # noqa: PLR0915
             )
         elif _custom_llm_provider == "infinity":
             # Implement Infinity rerank logic
-            api_key: Optional[str] = (
-                dynamic_api_key or optional_params.api_key or litellm.api_key
-            )
+            api_key = dynamic_api_key or optional_params.api_key or litellm.api_key
 
-            api_base: Optional[str] = (
+            api_base = (
                 dynamic_api_base
                 or optional_params.api_base
                 or litellm.api_base
-                or get_secret("INFINITY_API_BASE")  # type: ignore
+                or get_secret_str("INFINITY_API_BASE")
             )
 
             if api_base is None:

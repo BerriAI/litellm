@@ -1,4 +1,4 @@
-from typing import Any, Coroutine, Optional, Union
+from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -111,7 +111,7 @@ class AzureOpenAIFilesAPI(BaseLLM):
         openai_client: AsyncAzureOpenAI,
     ) -> HttpxBinaryResponseContent:
         response = await openai_client.files.content(**file_content_request)
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     def file_content(
         self,
@@ -152,9 +152,11 @@ class AzureOpenAIFilesAPI(BaseLLM):
                 file_content_request=file_content_request,
                 openai_client=openai_client,
             )
-        response = openai_client.files.content(**file_content_request)
+        response = cast(AzureOpenAI, openai_client).files.content(
+            **file_content_request
+        )
 
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def aretrieve_file(
         self,
