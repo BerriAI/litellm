@@ -4,7 +4,7 @@ LiteLLM **follows the Cohere Rerank API format** for all rerank providers. Here'
 
 ## 1. Create a transformation.py file
 
-Create a config class named `<Provider><Endpoint>Config` that inherits from `BaseRerankConfig`:
+Create a config class named `<Provider><Endpoint>Config` that inherits from [`BaseRerankConfig`](https://github.com/BerriAI/litellm/blob/main/litellm/llms/base_llm/rerank/transformation.py):
 
 ```python
 from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
