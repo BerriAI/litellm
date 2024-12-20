@@ -23,6 +23,8 @@ class CohereRerankConfig(BaseRerankConfig):
 
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         if api_base:
+            # Remove trailing slashes and ensure clean base URL
+            api_base = api_base.rstrip("/")
             if not api_base.endswith("/v1/rerank"):
                 api_base = f"{api_base}/v1/rerank"
             return api_base

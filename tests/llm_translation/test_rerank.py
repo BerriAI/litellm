@@ -194,8 +194,8 @@ async def test_rerank_custom_api_base():
     expected_payload = {
         "model": "Salesforce/Llama-Rank-V1",
         "query": "hello",
-        "documents": ["hello", "world"],
         "top_n": 3,
+        "documents": ["hello", "world"],
     }
 
     with patch(
@@ -214,15 +214,21 @@ async def test_rerank_custom_api_base():
 
         # Assert
         mock_post.assert_called_once()
-        _url, kwargs = mock_post.call_args
-        args_to_api = kwargs["json"]
+        print("call args", mock_post.call_args)
+        args_to_api = mock_post.call_args.kwargs["data"]
+        _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
         assert (
-            _url[0]
-            == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
+            _url == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
         )
-        assert args_to_api == expected_payload
+
+        request_data = json.loads(args_to_api)
+        assert request_data["query"] == expected_payload["query"]
+        assert request_data["documents"] == expected_payload["documents"]
+        assert request_data["top_n"] == expected_payload["top_n"]
+        assert request_data["model"] == expected_payload["model"]
+
         assert response.id is not None
         assert response.results is not None
 
