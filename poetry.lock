@@ -1823,13 +1823,13 @@ signedtoken = ["cryptography (>=3.0.0)", "pyjwt (>=2.0.0,<3)"]
 
 [[package]]
 name = "openai"
-version = "1.54.0"
+version = "1.56.1"
 description = "The official Python library for the openai API"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "openai-1.54.0-py3-none-any.whl", hash = "sha256:24ed8874b56e919f0fbb80b7136c3fb022dc82ce9f5f21579b7b280ea4bba249"},
-    {file = "openai-1.54.0.tar.gz", hash = "sha256:df2a84384314165b706722a7ac8988dc33eba20dd7fc3b939d138110e608b1ce"},
+    {file = "openai-1.56.1-py3-none-any.whl", hash = "sha256:38e61183c2a98fedebbbb04a909a052d9f897358b070483fc0caff17300a227c"},
+    {file = "openai-1.56.1.tar.gz", hash = "sha256:8b0449f22a0c318441eae8a8a789753c3b2cac86542be51ca45df788e26aa180"},
 ]
 
 [package.dependencies]
@@ -3519,4 +3519,4 @@ proxy = ["PyJWT", "apscheduler", "backoff", "cryptography", "fastapi", "fastapi-
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "64154f16e1bbea8b77ba3eddf1cbf051af39f019820d92b638c448445fa32c83"
+content-hash = "1ba487e48917ce3087fa154534c6c495dad7dc8dc1c5881bbb1f196ba6702b91"

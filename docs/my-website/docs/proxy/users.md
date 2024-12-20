@@ -10,7 +10,7 @@ Requirements:
 
 ## Set Budgets
 
-You can set budgets at 3 levels: 
+You can set budgets at 5 levels: 
 - For the proxy 
 - For an internal user 
 - For a customer (end-user)
@@ -392,31 +392,87 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 
 <TabItem value="per-model-key" label="For Key (model specific)">
 
-Apply model specific budgets on a key.
-
-**Expected Behaviour**
-- `model_spend` gets auto-populated in `LiteLLM_VerificationToken` Table
-- After the key crosses the budget set for the `model` in `model_max_budget`, calls fail
-
-By default the `model_max_budget` is set to `{}` and is not checked for keys
-
-:::info
-
-- LiteLLM will track the cost/budgets for the `model` passed to LLM endpoints (`/chat/completions`, `/embeddings`)
-
-
-:::
+Apply model specific budgets on a key. Example: 
+- Budget for `gpt-4o` is $0.0000001, for time period `1d` for `key = "sk-12345"`
+- Budget for `gpt-4o-mini` is $10, for time period `30d` for `key = "sk-12345"`
 
 #### **Add model specific budgets to keys**
+
+The spec for `model_max_budget` is **[`Dict[str, GenericBudgetInfo]`](#genericbudgetinfo)**
 
 ```bash
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-  model_max_budget={"gpt4": 0.5, "gpt-5": 0.01}
+  "model_max_budget": {"gpt-4o": {"budget_limit": "0.0000001", "time_period": "1d"}}
 }'
 ```
+
+
+#### Make a test request
+
+We expect the first request to succeed, and the second request to fail since we cross the budget for `gpt-4o` on the Virtual Key
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+
+<Tabs>
+<TabItem label="Successful Call " value = "allowed">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <sk-generated-key>' \
+--data ' {
+      "model": "gpt-4o",
+      "messages": [
+        {
+          "role": "user",
+          "content": "testing request"
+        }
+      ]
+    }
+'
+```
+
+</TabItem>
+<TabItem label="Unsuccessful call" value = "not-allowed">
+
+Expect this to fail since since we cross the budget `model=gpt-4o` on the Virtual Key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <sk-generated-key>' \
+--data ' {
+      "model": "gpt-4o",
+      "messages": [
+        {
+          "role": "user",
+          "content": "testing request"
+        }
+      ]
+    }
+'
+```
+
+Expected response on failure
+
+```json
+{
+    "error": {
+        "message": "LiteLLM Virtual Key: 9769f3f6768a199f76cc29xxxx, key_alias: None, exceeded budget for model=gpt-4o",
+        "type": "budget_exceeded",
+        "param": null,
+        "code": "400"
+    }
+}
+```
+
+</TabItem>
+
+</Tabs>
+
 
 </TabItem>
 </Tabs>
@@ -782,4 +838,33 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
+```
+
+
+## API Specification 
+
+### `GenericBudgetInfo`
+
+A Pydantic model that defines budget information with a time period and limit.
+
+```python
+class GenericBudgetInfo(BaseModel):
+    budget_limit: float  # The maximum budget amount in USD
+    time_period: str    # Duration string like "1d", "30d", etc.
+```
+
+#### Fields:
+- `budget_limit` (float): The maximum budget amount in USD
+- `time_period` (str): Duration string specifying the time period for the budget. Supported formats:
+  - Seconds: "30s"
+  - Minutes: "30m" 
+  - Hours: "30h"
+  - Days: "30d"
+
+#### Example:
+```json
+{
+  "budget_limit": "0.0001",
+  "time_period": "1d"
+}
 ```

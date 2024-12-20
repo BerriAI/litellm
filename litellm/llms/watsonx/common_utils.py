@@ -1,27 +1,32 @@
-from typing import Callable, Optional, cast
+from typing import Callable, Dict, Optional, Union, cast
 
 import httpx
 
 import litellm
 from litellm import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import WatsonXAPIParams
 
 
-class WatsonXAIError(Exception):
-    def __init__(self, status_code, message, url: Optional[str] = None):
-        self.status_code = status_code
-        self.message = message
-        url = url or "https://https://us-south.ml.cloud.ibm.com"
-        self.request = httpx.Request(method="POST", url=url)
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+class WatsonXAIError(BaseLLMException):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: Optional[Union[Dict, httpx.Headers]] = None,
+    ):
+        super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 iam_token_cache = InMemoryCache()
+
+
+def get_watsonx_iam_url():
+    return (
+        get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
+    )
 
 
 def generate_iam_token(api_key=None, **params) -> str:
@@ -39,15 +44,14 @@ def generate_iam_token(api_key=None, **params) -> str:
             "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
             "apikey": api_key,
         }
+        iam_token_url = get_watsonx_iam_url()
         verbose_logger.debug(
             "calling ibm `/identity/token` to retrieve IAM token.\nURL=%s\nheaders=%s\ndata=%s",
-            "https://iam.cloud.ibm.com/identity/token",
+            iam_token_url,
             headers,
             data,
         )
-        response = httpx.post(
-            "https://iam.cloud.ibm.com/identity/token", data=data, headers=headers
-        )
+        response = httpx.post(iam_token_url, data=data, headers=headers)
         response.raise_for_status()
         json_data = response.json()
 
@@ -151,13 +155,11 @@ def _get_api_params(
     elif token is None and api_key is None:
         raise WatsonXAIError(
             status_code=401,
-            url=url,
             message="Error: API key or token not found. Set WX_API_KEY or WX_TOKEN in environment variables or pass in as a parameter.",
         )
     if project_id is None:
         raise WatsonXAIError(
             status_code=401,
-            url=url,
             message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
         )
 

@@ -2393,6 +2393,114 @@ print("response from proxy", response)
 </TabItem>
 </Tabs>
 
+## **Batch APIs**
+
+Just add the following Vertex env vars to your environment. 
+
+```bash
+# GCS Bucket settings, used to store batch prediction files in
+export GCS_BUCKET_NAME = "litellm-testing-bucket" # the bucket you want to store batch prediction files in
+export GCS_PATH_SERVICE_ACCOUNT="/path/to/service_account.json" # path to your service account json file
+
+# Vertex /batch endpoint settings, used for LLM API requests
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service_account.json" # path to your service account json file
+export VERTEXAI_LOCATION="us-central1" # can be any vertex location
+export VERTEXAI_PROJECT="my-test-project" 
+```
+
+### Usage
+
+
+#### 1. Create a file of batch requests for vertex
+
+LiteLLM expects the file to follow the **[OpenAI batches files format](https://platform.openai.com/docs/guides/batch)**
+
+Each `body` in the file should be an **OpenAI API request**
+
+Create a file called `vertex_batch_completions.jsonl` in the current working directory, the `model` should be the Vertex AI model name
+```
+{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}}
+{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 10}}
+```
+
+
+#### 2. Upload a File of batch requests
+
+For `vertex_ai` litellm will upload the file to the provided `GCS_BUCKET_NAME`
+
+```python
+import os
+oai_client = OpenAI(
+    api_key="sk-1234",               # litellm proxy API key
+    base_url="http://localhost:4000" # litellm proxy base url
+)
+file_name = "vertex_batch_completions.jsonl" # 
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.join(_current_dir, file_name)
+file_obj = oai_client.files.create(
+    file=open(file_path, "rb"),
+    purpose="batch",
+    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm to use vertex_ai for this file upload
+)
+```
+
+**Expected Response**
+
+```json
+{
+    "id": "gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/d3f198cd-c0d1-436d-9b1e-28e3f282997a",
+    "bytes": 416,
+    "created_at": 1733392026,
+    "filename": "litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/d3f198cd-c0d1-436d-9b1e-28e3f282997a",
+    "object": "file",
+    "purpose": "batch",
+    "status": "uploaded",
+    "status_details": null
+}
+```
+
+
+
+#### 3. Create a batch 
+
+```python
+batch_input_file_id = file_obj.id # use `file_obj` from step 2
+create_batch_response = oai_client.batches.create(
+    completion_window="24h",
+    endpoint="/v1/chat/completions",
+    input_file_id=batch_input_file_id, # example input_file_id = "gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/c2b1b785-252b-448c-b180-033c4c63b3ce"
+    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm to use `vertex_ai` for this batch request
+)
+```
+
+**Expected Response**
+
+```json
+{
+    "id": "projects/633608382793/locations/us-central1/batchPredictionJobs/986266568679751680",
+    "completion_window": "24hrs",
+    "created_at": 1733392026,
+    "endpoint": "",
+    "input_file_id": "gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/d3f198cd-c0d1-436d-9b1e-28e3f282997a",
+    "object": "batch",
+    "status": "validating",
+    "cancelled_at": null,
+    "cancelling_at": null,
+    "completed_at": null,
+    "error_file_id": null,
+    "errors": null,
+    "expired_at": null,
+    "expires_at": null,
+    "failed_at": null,
+    "finalizing_at": null,
+    "in_progress_at": null,
+    "metadata": null,
+    "output_file_id": "gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001",
+    "request_counts": null
+}
+```
+
+
 ## Extra
 
 ### Using `GOOGLE_APPLICATION_CREDENTIALS`

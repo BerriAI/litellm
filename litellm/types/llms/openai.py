@@ -301,6 +301,18 @@ class ListBatchRequest(TypedDict, total=False):
     timeout: Optional[float]
 
 
+BatchJobStatus = Literal[
+    "validating",
+    "failed",
+    "in_progress",
+    "finalizing",
+    "completed",
+    "expired",
+    "cancelling",
+    "cancelled",
+]
+
+
 class ChatCompletionAudioDelta(TypedDict, total=False):
     data: str
     transcript: str
@@ -362,15 +374,15 @@ class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
     pass
 
 
+OpenAIMessageContentListBlock = Union[
+    ChatCompletionTextObject,
+    ChatCompletionImageObject,
+    ChatCompletionAudioObject,
+]
+
 OpenAIMessageContent = Union[
     str,
-    Iterable[
-        Union[
-            ChatCompletionTextObject,
-            ChatCompletionImageObject,
-            ChatCompletionAudioObject,
-        ]
-    ],
+    Iterable[OpenAIMessageContentListBlock],
 ]
 
 # The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.

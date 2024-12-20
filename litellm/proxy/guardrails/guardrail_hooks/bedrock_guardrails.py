@@ -11,33 +11,21 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import asyncio
 import json
 import sys
-import traceback
-import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-import aiohttp
-import httpx
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.logging_utils import (
-    convert_litellm_response_object_to_str,
-)
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     BedrockContentItem,
@@ -45,6 +33,7 @@ from litellm.types.guardrails import (
     BedrockTextContent,
     GuardrailEventHooks,
 )
+from litellm.types.utils import ModelResponse
 
 GUARDRAIL_NAME = "bedrock"
 
@@ -70,7 +59,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def convert_to_bedrock_format(
         self,
         messages: Optional[List[Dict[str, str]]] = None,
-        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         bedrock_request: BedrockRequest = BedrockRequest(source="INPUT")
         bedrock_request_content: List[BedrockContentItem] = []
@@ -166,10 +155,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         extra_headers: Optional[dict] = None,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
@@ -214,10 +201,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.url,
             prepared_request.headers,
         )
-        _json_data = json.dumps(request_data)  # type: ignore
+
         response = await self.async_handler.post(
             url=prepared_request.url,
-            json=request_data,  # type: ignore
+            data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
         )
         verbose_proxy_logger.debug("Bedrock AI response: %s", response.text)

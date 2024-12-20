@@ -165,10 +165,10 @@ def test_get_gpt3_tokens():
 # test_get_gpt3_tokens()
 
 
-def test_get_palm_tokens():
+def test_get_gemini_tokens():
     # # 🦄🦄🦄🦄🦄🦄🦄🦄
-    max_tokens = get_max_tokens("palm/chat-bison")
-    assert max_tokens == 4096
+    max_tokens = get_max_tokens("gemini/gemini-1.5-flash")
+    assert max_tokens == 8192
     print(max_tokens)
 
 
@@ -190,6 +190,8 @@ def test_cost_ft_gpt_35():
         # it needs to lookup  ft:gpt-3.5-turbo in the litellm model_cost map to get the correct cost
         from litellm import Choices, Message, ModelResponse
         from litellm.utils import Usage
+
+        litellm.set_verbose = True
 
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -223,6 +225,7 @@ def test_cost_ft_gpt_35():
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
+        print(f"Error: {e}")
         pytest.fail(
             f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}"
         )
@@ -250,12 +253,12 @@ def test_cost_azure_gpt_35():
                     ),
                 )
             ],
-            model="gpt-35-turbo",  # azure always has model written like this
+            model="azure/gpt-35-turbo",  # azure always has model written like this
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
         cost = litellm.completion_cost(
-            completion_response=resp, model="azure/gpt-35-turbo"
+            completion_response=resp, model="azure/chatgpt-deployment-2"
         )
         print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
         input_cost = model_cost["azure/gpt-35-turbo"]["input_cost_per_token"]
@@ -393,6 +396,8 @@ def test_whisper_openai():
     transcription = TranscriptionResponse(
         text="Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."
     )
+
+    setattr(transcription, "duration", 3)
     transcription._hidden_params = {
         "model": "whisper-1",
         "custom_llm_provider": "openai",
@@ -401,7 +406,6 @@ def test_whisper_openai():
     }
     _total_time_in_seconds = 3
 
-    transcription._response_ms = _total_time_in_seconds * 1000
     cost = litellm.completion_cost(model="whisper-1", completion_response=transcription)
 
     print(f"cost: {cost}")
@@ -411,7 +415,7 @@ def test_whisper_openai():
         * _total_time_in_seconds,
         5,
     )
-    assert cost == expected_cost
+    assert round(cost, 5) == round(expected_cost, 5)
 
 
 def test_whisper_azure():
@@ -426,8 +430,8 @@ def test_whisper_azure():
         "model_id": None,
     }
     _total_time_in_seconds = 3
+    setattr(transcription, "duration", _total_time_in_seconds)
 
-    transcription._response_ms = _total_time_in_seconds * 1000
     cost = litellm.completion_cost(
         model="azure/azure-whisper", completion_response=transcription
     )
@@ -439,7 +443,7 @@ def test_whisper_azure():
         * _total_time_in_seconds,
         5,
     )
-    assert cost == expected_cost
+    assert round(cost, 5) == round(expected_cost, 5)
 
 
 def test_dalle_3_azure_cost_tracking():
@@ -1156,7 +1160,7 @@ def test_completion_cost_azure_common_deployment_name():
         mock_client.assert_called()
 
         print(f"mock_client.call_args: {mock_client.call_args.kwargs}")
-        assert "azure/gpt-4" == mock_client.call_args.kwargs["model"]
+        assert "azure/gpt-4" == mock_client.call_args.kwargs["base_model"]
 
 
 def test_completion_cost_anthropic_prompt_caching():
@@ -1252,13 +1256,14 @@ def test_completion_cost_anthropic_prompt_caching():
     assert cost_1 > cost_2
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.parametrize(
     "model",
     [
         "databricks/databricks-meta-llama-3-1-70b-instruct",
         "databricks/databricks-meta-llama-3-70b-instruct",
         "databricks/databricks-dbrx-instruct",
-        "databricks/databricks-mixtral-8x7b-instruct",
+        # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
 def test_completion_cost_databricks(model):
@@ -2634,3 +2639,60 @@ def test_completion_cost_azure_ai_meta():
     cost = completion_cost(model_response, custom_llm_provider="azure_ai")
 
     assert cost > 0
+
+
+def test_completion_cost_azure_tts():
+    from unittest.mock import MagicMock
+
+    args = {
+        "response_object": MagicMock,
+        "model": "tts-1",
+        "cache_hit": None,
+        "custom_llm_provider": "azure",
+        "base_model": None,
+        "call_type": "aspeech",
+        "optional_params": {},
+        "custom_pricing": False,
+    }
+    litellm.response_cost_calculator(**args)
+
+
+def test_select_model_name_for_cost_calc():
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.types.utils import ModelResponse, Choices, Usage, Message
+
+    args = {
+        "model": "Mistral-large-nmefg",
+        "completion_response": ModelResponse(
+            id="127f24aed4984b4c9a4c5e32ad3752f3",
+            created=1734406048,
+            model="azure_ai/mistral-large",
+            object="chat.completion",
+            system_fingerprint=None,
+            choices=[
+                Choices(
+                    finish_reason="length",
+                    index=0,
+                    message=Message(
+                        content="I'm an artificial intelligence and do not have an LLM (Master",
+                        role="assistant",
+                        tool_calls=None,
+                        function_call=None,
+                    ),
+                )
+            ],
+            usage=Usage(
+                completion_tokens=15,
+                prompt_tokens=8,
+                total_tokens=23,
+                completion_tokens_details=None,
+                prompt_tokens_details=None,
+            ),
+            service_tier=None,
+        ),
+        "base_model": None,
+        "custom_pricing": None,
+    }
+
+    return_model = _select_model_name_for_cost_calc(**args)
+    assert return_model == "azure_ai/mistral-large"

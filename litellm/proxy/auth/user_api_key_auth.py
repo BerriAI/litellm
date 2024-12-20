@@ -8,42 +8,13 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
-import json
 import secrets
-import time
-import traceback
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
-from uuid import uuid4
+from datetime import datetime, timezone
+from typing import Optional
 
 import fastapi
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
-from fastapi.responses import (
-    FileResponse,
-    JSONResponse,
-    ORJSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
+from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -51,6 +22,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
+    _handle_failed_db_connection_for_get_key_object,
     allowed_routes_check,
     can_key_call_model,
     common_checks,
@@ -60,11 +32,9 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
-    log_db_metrics,
 )
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,
@@ -259,7 +229,9 @@ async def user_api_key_auth(  # noqa: PLR0915
         jwt_handler,
         litellm_proxy_admin_name,
         llm_model_list,
+        llm_router,
         master_key,
+        model_max_budget_limiter,
         open_telemetry_logger,
         prisma_client,
         proxy_logging_obj,
@@ -269,8 +241,8 @@ async def user_api_key_auth(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
+    route: str = get_request_route(request=request)
     try:
-        route: str = get_request_route(request=request)
         # get the request body
         request_data = await _read_request_body(request=request)
         await pre_db_read_auth_checks(
@@ -542,6 +514,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     general_settings=general_settings,
                     global_proxy_spend=global_proxy_spend,
                     route=route,
+                    llm_router=llm_router,
                 )
 
                 # return UserAPIKeyAuth object
@@ -559,6 +532,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     user_id=user_id,
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
+                    end_user_id=end_user_id,
                 )
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
@@ -800,7 +774,9 @@ async def user_api_key_auth(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            raise Exception("No connected db.")
+            return await _handle_failed_db_connection_for_get_key_object(
+                e=Exception("No connected db.")
+            )
 
         ## check for cache hit (In-Memory Cache)
         _user_role = None
@@ -893,18 +869,17 @@ async def user_api_key_auth(  # noqa: PLR0915
                 # the validation will occur when checking the team has access to this model
                 pass
             else:
-                try:
-                    data = await request.json()
-                except json.JSONDecodeError:
-                    data = {}  # Provide a default value, such as an empty dictionary
-                model = data.get("model", None)
-                fallback_models: Optional[List[str]] = data.get("fallbacks", None)
+                model = request_data.get("model", None)
+                fallback_models: Optional[List[str]] = request_data.get(
+                    "fallbacks", None
+                )
 
                 if model is not None:
                     await can_key_call_model(
                         model=model,
                         llm_model_list=llm_model_list,
                         valid_token=valid_token,
+                        llm_router=llm_router,
                     )
 
                 if fallback_models is not None:
@@ -913,6 +888,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                             model=m,
                             llm_model_list=llm_model_list,
                             valid_token=valid_token,
+                            llm_router=llm_router,
                         )
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
@@ -1047,37 +1023,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 and valid_token.token is not None
             ):
                 ## GET THE SPEND FOR THIS MODEL
-                twenty_eight_days_ago = datetime.now() - timedelta(days=28)
-                model_spend = await prisma_client.db.litellm_spendlogs.group_by(
-                    by=["model"],
-                    sum={"spend": True},
-                    where={
-                        "AND": [
-                            {"api_key": valid_token.token},
-                            {"startTime": {"gt": twenty_eight_days_ago}},
-                            {"model": current_model},
-                        ]
-                    },  # type: ignore
+                await model_max_budget_limiter.is_key_within_model_budget(
+                    user_api_key_dict=valid_token,
+                    model=current_model,
                 )
-                if (
-                    len(model_spend) > 0
-                    and max_budget_per_model.get(current_model, None) is not None
-                ):
-                    if (
-                        "model" in model_spend[0]
-                        and model_spend[0].get("model") == current_model
-                        and "_sum" in model_spend[0]
-                        and "spend" in model_spend[0]["_sum"]
-                        and model_spend[0]["_sum"]["spend"]
-                        >= max_budget_per_model[current_model]
-                    ):
-                        current_model_spend = model_spend[0]["_sum"]["spend"]
-                        current_model_budget = max_budget_per_model[current_model]
-                        raise litellm.BudgetExceededError(
-                            current_cost=current_model_spend,
-                            max_budget=current_model_budget,
-                        )
-
             # Check 6. Team spend is under Team budget
             if (
                 hasattr(valid_token, "team_spend")
@@ -1173,6 +1122,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 general_settings=general_settings,
                 global_proxy_spend=global_proxy_spend,
                 route=route,
+                llm_router=llm_router,
             )
             # Token passed all checks
             if valid_token is None:
@@ -1246,12 +1196,18 @@ async def user_api_key_auth(  # noqa: PLR0915
         )
 
         # Log this exception to OTEL, Datadog etc
+        user_api_key_dict = UserAPIKeyAuth(
+            parent_otel_span=parent_otel_span,
+            api_key=api_key,
+        )
+        request_data = await _read_request_body(request=request)
         asyncio.create_task(
-            proxy_logging_obj.async_log_proxy_authentication_errors(
+            proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
                 original_exception=e,
-                request=request,
-                parent_otel_span=parent_otel_span,
-                api_key=api_key,
+                user_api_key_dict=user_api_key_dict,
+                error_type=ProxyErrorTypes.auth_error,
+                route=route,
             )
         )
 
@@ -1359,15 +1315,27 @@ def _get_user_role(
 
 def get_api_key_from_custom_header(
     request: Request, custom_litellm_key_header_name: str
-):
+) -> str:
+    """
+    Get API key from custom header
+
+    Args:
+        request (Request): Request object
+        custom_litellm_key_header_name (str): Custom header name
+
+    Returns:
+        Optional[str]: API key
+    """
+    api_key: str = ""
     # use this as the virtual key passed to litellm proxy
     custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
+    _headers = {k.lower(): v for k, v in request.headers.items()}
     verbose_proxy_logger.debug(
         "searching for custom_litellm_key_header_name= %s, in headers=%s",
         custom_litellm_key_header_name,
-        request.headers,
+        _headers,
     )
-    custom_api_key = request.headers.get(custom_litellm_key_header_name)
+    custom_api_key = _headers.get(custom_litellm_key_header_name)
     if custom_api_key:
         api_key = _get_bearer_token(api_key=custom_api_key)
         verbose_proxy_logger.debug(
@@ -1376,7 +1344,7 @@ def get_api_key_from_custom_header(
             )
         )
     else:
-        raise ValueError(
+        verbose_proxy_logger.exception(
             f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key

@@ -145,3 +145,9 @@ class InMemoryCache(BaseCache):
     def delete_cache(self, key):
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
+
+    async def async_get_ttl(self, key: str) -> Optional[int]:
+        """
+        Get the remaining TTL of a key in in-memory cache
+        """
+        return self.ttl_dict.get(key, None)

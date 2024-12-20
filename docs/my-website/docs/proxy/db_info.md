@@ -69,3 +69,24 @@ When disabling spend logs (`disable_spend_logs: True`):
 When disabling error logs (`disable_error_logs: True`):
 - You **will not** be able to view Errors on the LiteLLM UI
 - You **will** continue seeing error logs in your application logs and any other logging integrations you are using
+
+
+## Migrating Databases 
+
+If you need to migrate Databases the following Tables should be copied to ensure continuation of services and no downtime
+
+
+| Table Name | Description | 
+|------------|-------------|
+| LiteLLM_VerificationToken | **Required** to ensure existing virtual keys continue working |
+| LiteLLM_UserTable | **Required** to ensure existing virtual keys continue working |
+| LiteLLM_TeamTable | **Required** to ensure Teams are migrated |
+| LiteLLM_TeamMembership | **Required** to ensure Teams member budgets are migrated |
+| LiteLLM_BudgetTable | **Required** to migrate existing budgeting settings |
+| LiteLLM_OrganizationTable | **Optional** Only migrate if you use Organizations in DB |
+| LiteLLM_OrganizationMembership | **Optional** Only migrate if you use Organizations in DB | 
+| LiteLLM_ProxyModelTable | **Optional** Only migrate if you store your LLMs in the DB (i.e you set `STORE_MODEL_IN_DB=True`) |
+| LiteLLM_SpendLogs | **Optional** Only migrate if you want historical data on LiteLLM UI |
+| LiteLLM_ErrorLogs | **Optional** Only migrate if you want historical data on LiteLLM UI |
+
+

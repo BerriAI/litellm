@@ -14,11 +14,11 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 import litellm
-from litellm import client, get_secret_str
-from litellm.llms.files_apis.azure import AzureOpenAIFilesAPI
-from litellm.llms.OpenAI.openai import FileDeleted, FileObject, OpenAIFilesAPI
+from litellm import get_secret_str
+from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
+from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
+from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.types.llms.openai import (
-    Batch,
     CreateFileRequest,
     FileContentRequest,
     FileTypes,
@@ -30,6 +30,7 @@ from litellm.utils import supports_httpx_timeout
 ####### ENVIRONMENT VARIABLES ###################
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
+vertex_ai_files_instance = VertexAIFilesHandler()
 #################################################
 
 
@@ -490,7 +491,7 @@ def file_list(
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -532,7 +533,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -626,6 +627,32 @@ def create_file(
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                create_file_data=_create_file_request,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_files_instance.create_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_file_data=_create_file_request,

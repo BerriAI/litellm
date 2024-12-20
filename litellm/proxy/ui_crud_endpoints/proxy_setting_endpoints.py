@@ -1,11 +1,8 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
 
-import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth

@@ -10,6 +10,7 @@ import litellm.proxy.proxy_server
 
 load_dotenv()
 import io
+import json
 import os
 
 # this file is to test litellm/proxy
@@ -2064,7 +2065,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):
 
 @pytest.mark.asyncio
 async def test_proxy_server_prisma_setup():
-    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_state
     from litellm.proxy.utils import ProxyLogging
     from litellm.caching import DualCache
 
@@ -2077,6 +2078,9 @@ async def test_proxy_server_prisma_setup():
         mock_client.connect = AsyncMock()  # Mock the connect method
         mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
         mock_client.health_check = AsyncMock()  # Mock the health_check method
+        mock_client._set_spend_logs_row_count_in_proxy_state = (
+            AsyncMock()
+        )  # Mock the _set_spend_logs_row_count_in_proxy_state method
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -2091,6 +2095,10 @@ async def test_proxy_server_prisma_setup():
         # Note: This is REALLY IMPORTANT to check that the health check is called
         # This is how we ensure the DB is ready before proceeding
         mock_client.health_check.assert_called_once()
+
+        # check that the spend logs row count is set in proxy state
+        mock_client._set_spend_logs_row_count_in_proxy_state.assert_called_once()
+        assert proxy_state.get_proxy_state_variable("spend_logs_row_count") is not None
 
 
 @pytest.mark.asyncio
@@ -2128,193 +2136,54 @@ async def test_proxy_server_prisma_setup_invalid_db():
 
 
 @pytest.mark.asyncio
-async def test_async_log_proxy_authentication_errors():
+async def test_get_ui_settings_spend_logs_threshold():
     """
-    Test if async_log_proxy_authentication_errors correctly logs authentication errors through custom loggers
+    Test that get_ui_settings correctly sets DISABLE_EXPENSIVE_DB_QUERIES based on spend_logs_row_count threshold
     """
-    import json
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+    from litellm.proxy.proxy_server import proxy_state
     from fastapi import Request
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
-    from litellm.integrations.custom_logger import CustomLogger
-
-    # Create a mock custom logger to verify it's called
-    class MockCustomLogger(CustomLogger):
-        def __init__(self):
-            self.called = False
-            self.exception_logged = None
-            self.request_data_logged = None
-            self.user_api_key_dict_logged = None
-
-        async def async_post_call_failure_hook(
-            self,
-            request_data: dict,
-            original_exception: Exception,
-            user_api_key_dict: UserAPIKeyAuth,
-        ):
-            self.called = True
-            self.exception_logged = original_exception
-            self.request_data_logged = request_data
-            print("logged request_data", request_data)
-            if isinstance(request_data, AsyncMock):
-                self.request_data_logged = (
-                    await request_data()
-                )  # get the actual value from AsyncMock
-            else:
-                self.request_data_logged = request_data
-            self.user_api_key_dict_logged = user_api_key_dict
-
-    # Create test data
-    test_data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}
+    from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 
     # Create a mock request
-    request = Request(scope={"type": "http", "method": "POST"})
-    request._json = AsyncMock(return_value=test_data)
-
-    # Create a test exception
-    test_exception = Exception("Invalid API Key")
-
-    # Initialize ProxyLogging
-    mock_logger = MockCustomLogger()
-    litellm.callbacks = [mock_logger]
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-
-    # Call the method
-    await proxy_logging_obj.async_log_proxy_authentication_errors(
-        original_exception=test_exception,
-        request=request,
-        parent_otel_span=None,
-        api_key="test-key",
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
     )
 
-    # Verify the mock logger was called with correct parameters
-    assert mock_logger.called == True
-    assert mock_logger.exception_logged == test_exception
-    assert mock_logger.request_data_logged == test_data
-    assert mock_logger.user_api_key_dict_logged is not None
-    assert (
-        mock_logger.user_api_key_dict_logged.token is not None
-    )  # token should be hashed
-
-
-@pytest.mark.asyncio
-async def test_async_log_proxy_authentication_errors_get_request():
-    """
-    Test if async_log_proxy_authentication_errors correctly handles GET requests
-    that don't have a JSON body
-    """
-    import json
-    from fastapi import Request
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
-    from litellm.integrations.custom_logger import CustomLogger
-
-    class MockCustomLogger(CustomLogger):
-        def __init__(self):
-            self.called = False
-            self.exception_logged = None
-            self.request_data_logged = None
-            self.user_api_key_dict_logged = None
-
-        async def async_post_call_failure_hook(
-            self,
-            request_data: dict,
-            original_exception: Exception,
-            user_api_key_dict: UserAPIKeyAuth,
-        ):
-            self.called = True
-            self.exception_logged = original_exception
-            self.request_data_logged = request_data
-            self.user_api_key_dict_logged = user_api_key_dict
-
-    # Create a mock GET request
-    request = Request(scope={"type": "http", "method": "GET"})
-
-    # Mock the json() method to raise JSONDecodeError
-    async def mock_json():
-        raise json.JSONDecodeError("Expecting value", "", 0)
-
-    request.json = mock_json
-
-    # Create a test exception
-    test_exception = Exception("Invalid API Key")
-
-    # Initialize ProxyLogging
-    mock_logger = MockCustomLogger()
-    litellm.callbacks = [mock_logger]
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-
-    # Call the method
-    await proxy_logging_obj.async_log_proxy_authentication_errors(
-        original_exception=test_exception,
-        request=request,
-        parent_otel_span=None,
-        api_key="test-key",
+    # Test case 1: When spend_logs_row_count > MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY + 1
     )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is True
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY + 1
 
-    # Verify the mock logger was called with correct parameters
-    assert mock_logger.called == True
-    assert mock_logger.exception_logged == test_exception
-    assert mock_logger.user_api_key_dict_logged is not None
-    assert mock_logger.user_api_key_dict_logged.token is not None
-
-
-@pytest.mark.asyncio
-async def test_async_log_proxy_authentication_errors_no_api_key():
-    """
-    Test if async_log_proxy_authentication_errors correctly handles requests
-    with no API key provided
-    """
-    from fastapi import Request
-    from litellm.proxy.utils import ProxyLogging
-    from litellm.caching import DualCache
-    from litellm.integrations.custom_logger import CustomLogger
-
-    class MockCustomLogger(CustomLogger):
-        def __init__(self):
-            self.called = False
-            self.exception_logged = None
-            self.request_data_logged = None
-            self.user_api_key_dict_logged = None
-
-        async def async_post_call_failure_hook(
-            self,
-            request_data: dict,
-            original_exception: Exception,
-            user_api_key_dict: UserAPIKeyAuth,
-        ):
-            self.called = True
-            self.exception_logged = original_exception
-            self.request_data_logged = request_data
-            self.user_api_key_dict_logged = user_api_key_dict
-
-    # Create test data
-    test_data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}
-
-    # Create a mock request
-    request = Request(scope={"type": "http", "method": "POST"})
-    request._json = AsyncMock(return_value=test_data)
-
-    # Create a test exception
-    test_exception = Exception("No API Key Provided")
-
-    # Initialize ProxyLogging
-    mock_logger = MockCustomLogger()
-    litellm.callbacks = [mock_logger]
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-
-    # Call the method with api_key=None
-    await proxy_logging_obj.async_log_proxy_authentication_errors(
-        original_exception=test_exception,
-        request=request,
-        parent_otel_span=None,
-        api_key=None,
+    # Test case 2: When spend_logs_row_count < MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY - 1
     )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is False
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY - 1
 
-    # Verify the mock logger was called with correct parameters
-    assert mock_logger.called == True
-    assert mock_logger.exception_logged == test_exception
-    assert mock_logger.user_api_key_dict_logged is not None
-    assert (
-        mock_logger.user_api_key_dict_logged.token == ""
-    )  # Empty token for no API key
+    # Test case 3: Edge case - exactly MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is False
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY
+
+    # Clean up
+    proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)

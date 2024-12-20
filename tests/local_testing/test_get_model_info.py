@@ -37,7 +37,8 @@ def test_get_model_info_custom_llm_with_same_name_vllm():
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
     try:
-        litellm.get_model_info(model, custom_llm_provider=provider)
+        model_info = litellm.get_model_info(model, custom_llm_provider=provider)
+        print("model_info", model_info)
         pytest.fail("Expected get model info to fail for an unmapped model/provider")
     except Exception:
         pass
@@ -78,7 +79,7 @@ def test_get_model_info_gemini_pro():
 
 
 def test_get_model_info_ollama_chat():
-    from litellm.llms.ollama import OllamaConfig
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
 
     with patch.object(
         litellm.module_level_client,
@@ -94,7 +95,7 @@ def test_get_model_info_ollama_chat():
         assert info["supports_function_calling"] is True
 
         info = get_model_info("ollama/mistral")
-
+        print("info", info)
         assert info["supports_function_calling"] is True
 
         mock_client.assert_called()
@@ -116,3 +117,44 @@ def test_get_model_info_gemini():
         if model.startswith("gemini/") and not "gemma" in model:
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+def test_get_model_info_bedrock_region():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    args = {
+        "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "custom_llm_provider": "bedrock",
+    }
+    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+    info = litellm.get_model_info(**args)
+    print("info", info)
+    assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    assert info["litellm_provider"] == "bedrock"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        "ft:gpt-4-0613:my-org:custom_suffix:id",
+        "ft:davinci-002:my-org:custom_suffix:id",
+        "ft:gpt-4-0613:my-org:custom_suffix:id",
+        "ft:babbage-002:my-org:custom_suffix:id",
+        "gpt-35-turbo",
+        "ada",
+    ],
+)
+def test_get_model_info_completion_cost_unit_tests(model):
+    info = litellm.get_model_info(model)
+    print("info", info)
+
+
+def test_get_model_info_ft_model_with_provider_prefix():
+    args = {
+        "model": "openai/ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        "custom_llm_provider": "openai",
+    }
+    info = litellm.get_model_info(**args)
+    print("info", info)
+    assert info["key"] == "ft:gpt-3.5-turbo"

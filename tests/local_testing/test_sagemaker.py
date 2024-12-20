@@ -23,7 +23,7 @@ import pytest
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -129,7 +129,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
         "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
     ],
 )
-@pytest.mark.flaky(retries=3, delay=1)
+# @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_sagemaker_stream(sync_mode, model):
     try:
         litellm.set_verbose = False

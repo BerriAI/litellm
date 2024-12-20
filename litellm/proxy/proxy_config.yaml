@@ -1,5 +1,6 @@
-include:
-  - model_config.yaml
+model_list:
+  - model_name: openai/o1-preview
+    litellm_params:
+      model: openai/o1-preview
+      api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  callbacks: ["datadog"] 

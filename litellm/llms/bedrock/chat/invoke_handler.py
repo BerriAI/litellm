@@ -4,58 +4,21 @@ Manages calling Bedrock's `/converse` API + `/invoke` API
 
 import copy
 import json
-import os
 import time
 import types
 import urllib.parse
 import uuid
-from enum import Enum
 from functools import partial
-from typing import (
-    Any,
-    AsyncIterator,
-    Callable,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypedDict,
-    Union,
-)
+from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
 
 import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    _get_httpx_client,
-    get_async_httpx_client,
-)
-from litellm.types.llms.bedrock import *
-from litellm.types.llms.openai import (
-    ChatCompletionResponseMessage,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionToolChoiceFunctionParam,
-    ChatCompletionToolChoiceObjectParam,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
-)
-from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage, get_secret
-
-from ...base_aws_llm import BaseAWSLLM
-from ...prompt_templates.factory import (
-    _bedrock_converse_messages_pt,
-    _bedrock_tools_pt,
+from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     construct_tool_use_system_prompt,
     contains_tag,
@@ -64,8 +27,23 @@ from ...prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+    get_async_httpx_client,
+)
+from litellm.types.llms.bedrock import *
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+)
+from litellm.types.utils import GenericStreamingChunk as GChunk
+from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, get_secret
+
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
-from .converse_transformation import AmazonConverseConfig
 
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
@@ -182,6 +160,8 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    fake_stream: bool = False,
+    json_mode: Optional[bool] = False,
 ):
     try:
         if client is None:
@@ -193,13 +173,13 @@ async def make_call(
             api_base,
             headers=headers,
             data=data,
-            stream=True if "ai21" not in api_base else False,
+            stream=not fake_stream,
         )
 
         if response.status_code != 200:
             raise BedrockError(status_code=response.status_code, message=response.text)
 
-        if "ai21" in api_base:
+        if fake_stream:
             model_response: (
                 ModelResponse
             ) = litellm.AmazonConverseConfig()._transform_response(
@@ -215,7 +195,9 @@ async def make_call(
                 print_verbose=litellm.print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
-            completion_stream: Any = MockResponseIterator(model_response=model_response)
+            completion_stream: Any = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
+            )
         else:
             decoder = AWSEventStreamDecoder(model=model)
             completion_stream = decoder.aiter_bytes(
@@ -311,7 +293,7 @@ class BedrockLLM(BaseAWSLLM):
     def process_response(  # noqa: PLR0915
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        response: httpx.Response,
         model_response: ModelResponse,
         stream: bool,
         logging_obj: Logging,
@@ -593,7 +575,6 @@ class BedrockLLM(BaseAWSLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -1028,15 +1009,13 @@ class BedrockLLM(BaseAWSLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                fake_stream=True if "ai21" in api_base else False,
             ),
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
         )
         return streaming_response
-
-    def embedding(self, *args, **kwargs):
-        return super().embedding(*args, **kwargs)
 
 
 def get_response_stream_shape():
@@ -1271,21 +1250,58 @@ class AWSEventStreamDecoder:
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
-    def __init__(self, model_response):
+    def __init__(self, model_response, json_mode: Optional[bool] = False):
         self.model_response = model_response
+        self.json_mode = json_mode
         self.is_done = False
 
     # Sync iterator
     def __iter__(self):
         return self
 
-    def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
+    def _handle_json_mode_chunk(
+        self, text: str, tool_calls: Optional[List[ChatCompletionToolCallChunk]]
+    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
+        """
+        If JSON mode is enabled, convert the tool call to a message.
 
+        Bedrock returns the JSON schema as part of the tool call
+        OpenAI returns the JSON schema as part of the content, this handles placing it in the content
+
+        Args:
+            text: str
+            tool_use: Optional[ChatCompletionToolCallChunk]
+        Returns:
+            Tuple[str, Optional[ChatCompletionToolCallChunk]]
+
+            text: The text to use in the content
+            tool_use: The ChatCompletionToolCallChunk to use in the chunk response
+        """
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        if self.json_mode is True and tool_calls is not None:
+            message = litellm.AnthropicConfig()._convert_tool_response_to_message(
+                tool_calls=tool_calls
+            )
+            if message is not None:
+                text = message.content or ""
+                tool_use = None
+        elif tool_calls is not None and len(tool_calls) > 0:
+            tool_use = tool_calls[0]
+        return text, tool_use
+
+    def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
         try:
-            chunk_usage: litellm.Usage = getattr(chunk_data, "usage")
+            chunk_usage: Usage = getattr(chunk_data, "usage")
+            text = chunk_data.choices[0].message.content or ""  # type: ignore
+            tool_use = None
+            if self.json_mode is True:
+                text, tool_use = self._handle_json_mode_chunk(
+                    text=text,
+                    tool_calls=chunk_data.choices[0].message.tool_calls,  # type: ignore
+                )
             processed_chunk = GChunk(
-                text=chunk_data.choices[0].message.content or "",  # type: ignore
-                tool_use=None,
+                text=text,
+                tool_use=tool_use,
                 is_finished=True,
                 finish_reason=map_finish_reason(
                     finish_reason=chunk_data.choices[0].finish_reason or ""
@@ -1298,8 +1314,8 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                 index=0,
             )
             return processed_chunk
-        except Exception:
-            raise ValueError(f"Failed to decode chunk: {chunk_data}")
+        except Exception as e:
+            raise ValueError(f"Failed to decode chunk: {chunk_data}. Error: {e}")
 
     def __next__(self):
         if self.is_done:

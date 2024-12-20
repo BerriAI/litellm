@@ -212,7 +212,7 @@ async def test_bedrock_guardrail_triggered():
                 session,
                 "sk-1234",
                 model="fake-openai-endpoint",
-                messages=[{"role": "user", "content": f"Hello do you like coffee?"}],
+                messages=[{"role": "user", "content": "Hello do you like coffee?"}],
                 guardrails=["bedrock-pre-guard"],
             )
             pytest.fail("Should have thrown an exception")

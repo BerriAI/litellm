@@ -178,7 +178,7 @@ async def test_audio_speech_router(mode):
         optional_params={},
     )
 
-    from litellm.llms.OpenAI.openai import HttpxBinaryResponseContent
+    from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
     assert isinstance(response, HttpxBinaryResponseContent)
 

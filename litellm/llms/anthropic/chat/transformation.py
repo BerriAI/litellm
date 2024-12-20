@@ -1,22 +1,19 @@
 import json
 import time
-import types
-from re import A
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
-import requests
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicInputSchema,
-    AnthropicMessageRequestBase,
-    AnthropicMessagesRequest,
     AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicSystemMessageContent,
@@ -28,23 +25,22 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper
-from litellm.utils import (
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-    add_dummy_tool,
-    has_tool_call_blocks,
-)
+from litellm.utils import ModelResponse, Usage, add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import AnthropicError, process_anthropic_headers
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-class AnthropicConfig:
+    LoggingClass = LiteLLMLoggingObj
+else:
+    LoggingClass = Any
+
+
+class AnthropicConfig(BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
 
@@ -80,23 +76,9 @@ class AnthropicConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str):
         return [
             "stream",
             "stop",
@@ -127,7 +109,6 @@ class AnthropicConfig:
         pdf_used: bool = False,
         is_vertex_request: bool = False,
     ) -> dict:
-        import json
 
         betas = []
         if prompt_caching_set:
@@ -293,19 +274,36 @@ class AnthropicConfig:
                 new_stop = new_v
         return new_stop
 
+    def _add_tools_to_optional_params(
+        self, optional_params: dict, tools: List[AllAnthropicToolsValues]
+    ) -> dict:
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
+
     def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
-        messages: Optional[List[AllMessageValues]] = None,
-    ):
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "tools":
-                optional_params["tools"] = self._map_tools(value)
+                # check if optional params already has tools
+                tool_value = self._map_tools(value)
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=tool_value
+                )
             if param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: Optional[AnthropicMessagesToolChoice] = (
                     self._map_tool_choice(
@@ -327,6 +325,7 @@ class AnthropicConfig:
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
+
                 json_schema: Optional[dict] = None
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
@@ -338,34 +337,18 @@ class AnthropicConfig:
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                _tool_choice = {"name": "json_tool_call", "type": "tool"}
+
+                _tool_choice = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
                 )
-                optional_params["tools"] = [_tool]
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=[_tool]
+                )
                 optional_params["tool_choice"] = _tool_choice
                 optional_params["json_mode"] = True
             if param == "user":
                 optional_params["metadata"] = {"user_id": value}
-        ## VALIDATE REQUEST
-        """
-        Anthropic doesn't support tool calling without `tools=` param specified.
-        """
-        if (
-            "tools" not in non_default_params
-            and messages is not None
-            and has_tool_call_blocks(messages)
-        ):
-            if litellm.modify_params:
-                optional_params["tools"] = self._map_tools(
-                    add_dummy_tool(custom_llm_provider="anthropic")
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="anthropic",
-                )
 
         return optional_params
 
@@ -394,7 +377,9 @@ class AnthropicConfig:
         else:
             _input_schema["properties"] = {"values": json_schema}
 
-        _tool = AnthropicMessagesTool(name="json_tool_call", input_schema=_input_schema)
+        _tool = AnthropicMessagesTool(
+            name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
+        )
         return _tool
 
     def is_cache_control_set(self, messages: List[AllMessageValues]) -> bool:
@@ -436,7 +421,7 @@ class AnthropicConfig:
                 and isinstance(message["content"], list)
             ):
                 for content in message["content"]:
-                    if "type" in content:
+                    if "type" in content and content["type"] != "text":
                         return True
         return False
 
@@ -493,19 +478,37 @@ class AnthropicConfig:
 
         return anthropic_system_message_list
 
-    def _transform_request(
+    def transform_request(
         self,
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-        _is_function_call: bool,
-        is_vertex_request: bool,
     ) -> dict:
         """
         Translate messages to anthropic format.
         """
+        ## VALIDATE REQUEST
+        """
+        Anthropic doesn't support tool calling without `tools=` param specified.
+        """
+        if (
+            "tools" not in optional_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params["tools"] = self._map_tools(
+                    add_dummy_tool(custom_llm_provider="anthropic")
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="anthropic",
+                )
+
         # Separate system prompt from rest of message
         anthropic_system_message_list = self.translate_system_message(messages=messages)
         # Handling anthropic API Prompt Caching
@@ -532,10 +535,6 @@ class AnthropicConfig:
             ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 optional_params[k] = v
 
-        ## Handle Tool Calling
-        if "tools" in optional_params:
-            _is_function_call = True
-
         ## Handle user_id in metadata
         _litellm_metadata = litellm_params.get("metadata", None)
         if (
@@ -546,57 +545,76 @@ class AnthropicConfig:
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
         data = {
+            "model": model,
             "messages": anthropic_messages,
             **optional_params,
         }
-        if not is_vertex_request:
-            data["model"] = model
+
         return data
 
-    @staticmethod
-    def _process_response(
+    def _transform_response_for_json_mode(
+        self,
+        json_mode: Optional[bool],
+        tool_calls: List[ChatCompletionToolCallChunk],
+    ) -> Optional[LitellmMessage]:
+        _message: Optional[LitellmMessage] = None
+        if json_mode is True and len(tool_calls) == 1:
+            # check if tool name is the default tool name
+            json_mode_content_str: Optional[str] = None
+            if (
+                "name" in tool_calls[0]["function"]
+                and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+            ):
+                json_mode_content_str = tool_calls[0]["function"].get("arguments")
+            if json_mode_content_str is not None:
+                _message = AnthropicConfig._convert_tool_response_to_message(
+                    tool_calls=tool_calls,
+                )
+        return _message
+
+    def transform_response(
+        self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        raw_response: httpx.Response,
         model_response: ModelResponse,
-        stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
-        optional_params: dict,
-        api_key: str,
-        data: Union[dict, str],
-        messages: List,
-        print_verbose,
-        encoding,
-        json_mode: bool,
+        logging_obj: LoggingClass,
+        request_data: Dict,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(
-            dict(response.headers)
+            dict(raw_response.headers)
         )
         ## LOGGING
         logging_obj.post_call(
             input=messages,
             api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
         )
-        print_verbose(f"raw model_response: {response.text}")
+
         ## RESPONSE OBJECT
         try:
-            completion_response = response.json()
+            completion_response = raw_response.json()
         except Exception as e:
-            response_headers = getattr(response, "headers", None)
+            response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
                 message="Unable to get json response - {}, Original Response: {}".format(
-                    str(e), response.text
+                    str(e), raw_response.text
                 ),
-                status_code=response.status_code,
+                status_code=raw_response.status_code,
                 headers=response_headers,
             )
         if "error" in completion_response:
-            response_headers = getattr(response, "headers", None)
+            response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
                 message=str(completion_response["error"]),
-                status_code=response.status_code,
+                status_code=raw_response.status_code,
                 headers=response_headers,
             )
         else:
@@ -625,19 +643,14 @@ class AnthropicConfig:
             )
 
             ## HANDLE JSON MODE - anthropic returns single function call
-            if json_mode and len(tool_calls) == 1:
-                json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
-                    "arguments"
-                )
-                if json_mode_content_str is not None:
-                    _converted_message = (
-                        AnthropicConfig._convert_tool_response_to_message(
-                            tool_calls=tool_calls,
-                        )
-                    )
-                    if _converted_message is not None:
-                        completion_response["stop_reason"] = "stop"
-                        _message = _converted_message
+            json_mode_message = self._transform_response_for_json_mode(
+                json_mode=json_mode,
+                tool_calls=tool_calls,
+            )
+            if json_mode_message is not None:
+                completion_response["stop_reason"] = "stop"
+                _message = json_mode_message
+
             model_response.choices[0].message = _message  # type: ignore
             model_response._hidden_params["original_response"] = completion_response[
                 "content"
@@ -711,3 +724,42 @@ class AnthropicConfig:
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
         return None
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return AnthropicError(
+            status_code=status_code,
+            message=error_message,
+            headers=cast(httpx.Headers, headers),
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> Dict:
+        if api_key is None:
+            raise litellm.AuthenticationError(
+                message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
+                llm_provider="anthropic",
+                model=model,
+            )
+
+        tools = optional_params.get("tools")
+        prompt_caching_set = self.is_cache_control_set(messages=messages)
+        computer_tool_used = self.is_computer_tool_used(tools=tools)
+        pdf_used = self.is_pdf_used(messages=messages)
+        anthropic_headers = self.get_anthropic_headers(
+            computer_tool_used=computer_tool_used,
+            prompt_caching_set=prompt_caching_set,
+            pdf_used=pdf_used,
+            api_key=api_key,
+            is_vertex_request=False,
+        )
+
+        headers = {**headers, **anthropic_headers}
+        return headers

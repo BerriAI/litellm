@@ -11,6 +11,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
+from litellm.types.utils import GenericBudgetConfigType, GenericBudgetInfo
+
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -103,6 +105,7 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
+    team_id: Optional[str] = None  # the team id that this model belongs to
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -172,6 +175,10 @@ class GenericLiteLLMParams(BaseModel):
 
     max_file_size_mb: Optional[float] = None
 
+    # Deployment budgets
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -207,6 +214,9 @@ class GenericLiteLLMParams(BaseModel):
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
         max_file_size_mb: Optional[float] = None,
+        # Deployment budgets
+        max_budget: Optional[float] = None,
+        budget_duration: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -351,11 +361,15 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # use this for tag-based routing
     tags: Optional[List[str]]
 
+    # deployment budgets
+    max_budget: Optional[float]
+    budget_duration: Optional[str]
+
 
 class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
     litellm_params: Required[LiteLLMParamsTypedDict]
-    model_info: Optional[dict]
+    model_info: dict
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
@@ -436,7 +450,7 @@ class RouterErrors(enum.Enum):
         "Not allowed to access model due to tags configuration"
     )
     no_deployments_with_provider_budget_routing = (
-        "No deployments available - crossed budget for provider"
+        "No deployments available - crossed budget"
     )
 
 
@@ -635,14 +649,18 @@ class RoutingStrategy(enum.Enum):
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
 
 
-class ProviderBudgetInfo(BaseModel):
-    time_period: str  # e.g., '1d', '30d'
-    budget_limit: float
-
-
-ProviderBudgetConfigType = Dict[str, ProviderBudgetInfo]
-
-
 class RouterCacheEnum(enum.Enum):
     TPM = "global_router:{id}:{model}:tpm:{current_minute}"
     RPM = "global_router:{id}:{model}:rpm:{current_minute}"
+
+
+class GenericBudgetWindowDetails(BaseModel):
+    """Details about a provider's budget window"""
+
+    budget_start: float
+    spend_key: str
+    start_time_key: str
+    ttl_seconds: int
+
+
+OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]

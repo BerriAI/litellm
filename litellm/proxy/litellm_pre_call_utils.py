@@ -12,12 +12,10 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
-    LiteLLMRoutes,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
@@ -214,9 +212,6 @@ class LiteLLMProxyRequestSetup:
         - Checks request headers for forwardable headers
         - Checks if user information should be added to the headers
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            get_standard_logging_metadata,
-        )
 
         returned_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(headers)
 
@@ -427,7 +422,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if _metadata_variable_name not in data:
         data[_metadata_variable_name] = {}
 
-    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself
+    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
     if "metadata" in data and data["metadata"] is not None:
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
@@ -499,6 +494,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_max_budget"
     ] = user_api_key_dict.max_budget
+    data[_metadata_variable_name][
+        "user_api_key_model_max_budget"
+    ] = user_api_key_dict.model_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
@@ -587,6 +585,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         f"[PROXY]returned data from litellm_pre_call_utils: {data}"
     )
 
+    ## ENFORCED PARAMS CHECK
+    # loop through each enforced param
+    # example enforced_params ['user', 'metadata', 'metadata.generation_name']
+    _enforced_params_check(
+        request_body=data,
+        general_settings=general_settings,
+        user_api_key_dict=user_api_key_dict,
+        premium_user=premium_user,
+    )
+
     end_time = time.time()
     await service_logger_obj.async_service_success_hook(
         service=ServiceTypes.PROXY_PRE_CALL,
@@ -597,6 +605,64 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         parent_otel_span=user_api_key_dict.parent_otel_span,
     )
     return data
+
+
+def _get_enforced_params(
+    general_settings: Optional[dict], user_api_key_dict: UserAPIKeyAuth
+) -> Optional[list]:
+    enforced_params: Optional[list] = None
+    if general_settings is not None:
+        enforced_params = general_settings.get("enforced_params")
+        if "service_account_settings" in general_settings:
+            service_account_settings = general_settings["service_account_settings"]
+            if "enforced_params" in service_account_settings:
+                if enforced_params is None:
+                    enforced_params = []
+                enforced_params.extend(service_account_settings["enforced_params"])
+    if user_api_key_dict.metadata.get("enforced_params", None) is not None:
+        if enforced_params is None:
+            enforced_params = []
+        enforced_params.extend(user_api_key_dict.metadata["enforced_params"])
+    return enforced_params
+
+
+def _enforced_params_check(
+    request_body: dict,
+    general_settings: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+    premium_user: bool,
+) -> bool:
+    """
+    If enforced params are set, check if the request body contains the enforced params.
+    """
+    enforced_params: Optional[list] = _get_enforced_params(
+        general_settings=general_settings, user_api_key_dict=user_api_key_dict
+    )
+    if enforced_params is None:
+        return True
+    if enforced_params is not None and premium_user is not True:
+        raise ValueError(
+            f"Enforced Params is an Enterprise feature. Enforced Params: {enforced_params}. {CommonProxyErrors.not_premium_user.value}"
+        )
+
+    for enforced_param in enforced_params:
+        _enforced_params = enforced_param.split(".")
+        if len(_enforced_params) == 1:
+            if _enforced_params[0] not in request_body:
+                raise ValueError(
+                    f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                )
+        elif len(_enforced_params) == 2:
+            # this is a scenario where user requires request['metadata']['generation_name'] to exist
+            if _enforced_params[0] not in request_body:
+                raise ValueError(
+                    f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                )
+            if _enforced_params[1] not in request_body[_enforced_params[0]]:
+                raise ValueError(
+                    f"BadRequest please pass param=[{_enforced_params[0]}][{_enforced_params[1]}] in request body. This is a required param"
+                )
+    return True
 
 
 def move_guardrails_to_metadata(

@@ -20,6 +20,15 @@ class RerankRequest(BaseModel):
     max_chunks_per_doc: Optional[int] = None
 
 
+class OptionalRerankParams(TypedDict, total=False):
+    query: str
+    top_n: Optional[int]
+    documents: List[Union[str, dict]]
+    rank_fields: Optional[List[str]]
+    return_documents: Optional[bool]
+    max_chunks_per_doc: Optional[int]
+
+
 class RerankBilledUnits(TypedDict, total=False):
     search_units: int
     total_tokens: int
@@ -36,9 +45,16 @@ class RerankResponseMeta(TypedDict, total=False):
     tokens: RerankTokens
 
 
+class RerankResponseResult(TypedDict):
+    index: int
+    relevance_score: float
+
+
 class RerankResponse(BaseModel):
-    id: str
-    results: List[dict]  # Contains index and relevance_score
+    id: Optional[str] = None
+    results: Optional[List[RerankResponseResult]] = (
+        None  # Contains index and relevance_score
+    )
     meta: Optional[RerankResponseMeta] = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr

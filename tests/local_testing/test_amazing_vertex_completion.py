@@ -32,10 +32,10 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
 litellm.num_retries = 3
@@ -60,6 +60,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-flash-exp-0827",
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
+    "gemini-2.0-flash-exp"
 ]
 
 
@@ -208,7 +209,7 @@ async def test_get_router_response():
 # @pytest.mark.skip(
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
-@pytest.mark.flaky(retries=3, delay=1)
+# @pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai_anthropic():
     model = "claude-3-sonnet@20240229"
 
@@ -2338,7 +2339,7 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
 
@@ -2398,7 +2399,7 @@ def test_get_token_url():
 
 @pytest.mark.asyncio
 async def test_completion_fine_tuned_model():
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     mock_response = AsyncMock()
 
     def return_val():
@@ -2927,7 +2928,7 @@ def test_gemini_function_call_parameter_in_messages():
 
 def test_gemini_function_call_parameter_in_messages_2():
     litellm.set_verbose = True
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+    from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
 

@@ -8,10 +8,11 @@ Remember to set your redirect url to 8501 (streamlit default).
 
 import streamlit as st
 from dotenv import load_dotenv
-import requests, base64, binascii
+import requests
+import base64
+import binascii
 
 load_dotenv()
-import os
 
 
 def is_base64(sb):
@@ -94,7 +95,7 @@ def auth_page(page_param: str):
 
         if response.status_code == 200:
             # Success!
-            st.success(f"Email sent successfully!")
+            st.success("Email sent successfully!")
 
 
 def user_page(page_param: str, user_id: str, token: str):

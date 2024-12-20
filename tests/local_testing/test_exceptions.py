@@ -1146,7 +1146,9 @@ async def test_exception_with_headers_httpx(
 
         except litellm.RateLimitError as e:
             exception_raised = True
-            assert e.litellm_response_headers is not None
+            assert (
+                e.litellm_response_headers is not None
+            ), "litellm_response_headers is None"
             print("e.litellm_response_headers", e.litellm_response_headers)
             assert int(e.litellm_response_headers["retry-after"]) == cooldown_time
 
@@ -1174,3 +1176,16 @@ async def test_bad_request_error_contains_httpx_response(model):
         print("e.response", e.response)
         print("vars(e.response)", vars(e.response))
         assert e.response is not None
+
+
+def test_exceptions_base_class():
+    try:
+        raise litellm.RateLimitError(
+            message="BedrockException: Rate Limit Error",
+            model="model",
+            llm_provider="bedrock",
+        )
+    except litellm.RateLimitError as e:
+        assert isinstance(e, litellm.RateLimitError)
+        assert e.code == "429"
+        assert e.type == "throttling_error"

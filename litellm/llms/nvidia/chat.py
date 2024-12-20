@@ -8,7 +8,6 @@ This file only contains param mapping logic
 API calling is done using the OpenAI SDK with an api_base
 """
 
-import types
 from typing import Optional, Union
 import litellm
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -16,7 +15,10 @@ import json
 import requests
 import os
 
-class NvidiaConfig:
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+
+class NvidiaNimConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
@@ -56,21 +58,7 @@ class NvidiaConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
     
     def available_models(self) -> list:
         '''Get Available NVIDIA models.'''
@@ -170,7 +158,11 @@ class NvidiaConfig:
             ]
 
     def map_openai_params(
-        self, model: str, non_default_params: dict, optional_params: dict
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
     ) -> dict:
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():

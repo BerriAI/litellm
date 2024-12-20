@@ -226,6 +226,7 @@ async def test_datadog_logging_http_request():
 
         # Parse the 'message' field as JSON and check its structure
         message = json.loads(body[0]["message"])
+        print("logged message", json.dumps(message, indent=4))
 
         expected_message_fields = StandardLoggingPayload.__annotations__.keys()
 
@@ -347,84 +348,6 @@ async def test_datadog_logging():
 
 
 @pytest.mark.asyncio
-async def test_datadog_post_call_failure_hook():
-    """Test logging proxy failures (e.g., authentication errors) to DataDog"""
-    try:
-        from litellm.integrations.datadog.datadog import DataDogLogger
-
-        os.environ["DD_SITE"] = "https://fake.datadoghq.com"
-        os.environ["DD_API_KEY"] = "anything"
-        dd_logger = DataDogLogger()
-
-        # Create a mock for the async_client's post method
-        mock_post = AsyncMock()
-        mock_post.return_value.status_code = 202
-        mock_post.return_value.text = "Accepted"
-        dd_logger.async_client.post = mock_post
-
-        # Create a test exception
-        class AuthenticationError(Exception):
-            def __init__(self):
-                self.status_code = 401
-                super().__init__("Invalid API key")
-
-        test_exception = AuthenticationError()
-
-        # Create test request data and user API key dict
-        request_data = {
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "Hello"}],
-        }
-
-        user_api_key_dict = UserAPIKeyAuth(
-            api_key="fake_key", user_id="test_user", team_id="test_team"
-        )
-
-        # Call the failure hook
-        await dd_logger.async_post_call_failure_hook(
-            request_data=request_data,
-            original_exception=test_exception,
-            user_api_key_dict=user_api_key_dict,
-        )
-
-        # Wait for the periodic flush
-        await asyncio.sleep(6)
-
-        # Assert that the mock was called
-        assert mock_post.called, "HTTP request was not made"
-
-        # Get the arguments of the last call
-        args, kwargs = mock_post.call_args
-
-        # Verify endpoint
-        assert kwargs["url"].endswith("/api/v2/logs"), "Incorrect DataDog endpoint"
-
-        # Decode and verify payload
-        body = kwargs["data"]
-        with gzip.open(io.BytesIO(body), "rb") as f:
-            body = f.read().decode("utf-8")
-
-        body = json.loads(body)
-        assert len(body) == 1, "Expected one log entry"
-
-        log_entry = body[0]
-        assert log_entry["status"] == "error", "Expected error status"
-        assert log_entry["service"] == "litellm-server"
-
-        # Verify message content
-        message = json.loads(log_entry["message"])
-        print("logged message", json.dumps(message, indent=2))
-        assert message["exception"] == "Invalid API key"
-        assert message["error_class"] == "AuthenticationError"
-        assert message["status_code"] == 401
-        assert "traceback" in message
-        assert message["user_api_key_dict"]["api_key"] == "fake_key"
-
-    except Exception as e:
-        pytest.fail(f"Test failed with exception: {str(e)}")
-
-
-@pytest.mark.asyncio
 async def test_datadog_payload_environment_variables():
     """Test that DataDog payload correctly includes environment variables in the payload structure"""
     try:
@@ -459,10 +382,119 @@ async def test_datadog_payload_environment_variables():
             assert (
                 dd_payload["service"] == "test-service"
             ), "Incorrect service in payload"
+
             assert (
-                dd_payload["ddtags"]
-                == "env:test-env,service:test-service,version:1.0.0"
+                "env:test-env,service:test-service,version:1.0.0,HOSTNAME:"
+                in dd_payload["ddtags"]
             ), "Incorrect tags in payload"
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_datadog_payload_content_truncation():
+    """
+    Test that DataDog payload correctly truncates long content
+
+    DataDog has a limit of 1MB for the logged payload size.
+    """
+    dd_logger = DataDogLogger()
+
+    # Create a standard payload with very long content
+    standard_payload = create_standard_logging_payload()
+    long_content = "x" * 80_000  # Create string longer than MAX_STR_LENGTH (10_000)
+
+    # Modify payload with long content
+    standard_payload["error_str"] = long_content
+    standard_payload["messages"] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": long_content,
+                        "detail": "low",
+                    },
+                }
+            ],
+        }
+    ]
+    standard_payload["response"] = {"choices": [{"message": {"content": long_content}}]}
+
+    # Create the payload
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs={"standard_logging_object": standard_payload},
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    print("dd_payload", json.dumps(dd_payload, indent=2))
+
+    # Parse the message back to dict to verify truncation
+    message_dict = json.loads(dd_payload["message"])
+
+    # Verify truncation of fields
+    assert len(message_dict["error_str"]) < 10_100, "error_str not truncated correctly"
+    assert (
+        len(str(message_dict["messages"])) < 10_100
+    ), "messages not truncated correctly"
+    assert (
+        len(str(message_dict["response"])) < 10_100
+    ), "response not truncated correctly"
+
+
+def test_datadog_static_methods():
+    """Test the static helper methods in DataDogLogger class"""
+
+    # Test with default environment variables
+    assert DataDogLogger._get_datadog_source() == "litellm"
+    assert DataDogLogger._get_datadog_service() == "litellm-server"
+    assert DataDogLogger._get_datadog_hostname() is not None
+    assert DataDogLogger._get_datadog_env() == "unknown"
+    assert DataDogLogger._get_datadog_pod_name() == "unknown"
+
+    # Test tags format with default values
+    assert (
+        "env:unknown,service:litellm,version:unknown,HOSTNAME:"
+        in DataDogLogger._get_datadog_tags()
+    )
+
+    # Test with custom environment variables
+    test_env = {
+        "DD_SOURCE": "custom-source",
+        "DD_SERVICE": "custom-service",
+        "HOSTNAME": "test-host",
+        "DD_ENV": "production",
+        "DD_VERSION": "1.0.0",
+        "POD_NAME": "pod-123",
+    }
+
+    with patch.dict(os.environ, test_env):
+        assert DataDogLogger._get_datadog_source() == "custom-source"
+        print(
+            "DataDogLogger._get_datadog_source()", DataDogLogger._get_datadog_source()
+        )
+        assert DataDogLogger._get_datadog_service() == "custom-service"
+        print(
+            "DataDogLogger._get_datadog_service()", DataDogLogger._get_datadog_service()
+        )
+        assert DataDogLogger._get_datadog_hostname() == "test-host"
+        print(
+            "DataDogLogger._get_datadog_hostname()",
+            DataDogLogger._get_datadog_hostname(),
+        )
+        assert DataDogLogger._get_datadog_env() == "production"
+        print("DataDogLogger._get_datadog_env()", DataDogLogger._get_datadog_env())
+        assert DataDogLogger._get_datadog_pod_name() == "pod-123"
+        print(
+            "DataDogLogger._get_datadog_pod_name()",
+            DataDogLogger._get_datadog_pod_name(),
+        )
+
+        # Test tags format with custom values
+        expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
+        print("DataDogLogger._get_datadog_tags()", DataDogLogger._get_datadog_tags())
+        assert DataDogLogger._get_datadog_tags() == expected_custom_tags

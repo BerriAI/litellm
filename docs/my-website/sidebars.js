@@ -65,12 +65,6 @@ const sidebars = {
           items: [
             "proxy/user_keys",
             "proxy/response_headers", 
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/langfuse"
           ],
         },
         {
@@ -97,6 +91,13 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Team Management",
+          items: [
+            "proxy/team_model_add"
+          ],
+        },
+        {
+          type: "category",
           label: "Spend Tracking + Budgets",
           items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
         },
@@ -108,7 +109,7 @@ const sidebars = {
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/team_logging","proxy/alerting", "proxy/prometheus",],
+          items: ["proxy/logging", "proxy/logging_spec", "proxy/team_logging","proxy/alerting", "proxy/prometheus"],
         },
         {
           type: "category",
@@ -133,6 +134,7 @@ const sidebars = {
             "oidc"
           ]
         },
+        "proxy/prompt_management",
         "proxy/caching",
         "proxy/call_hooks",
         "proxy/rules", 
@@ -177,12 +179,14 @@ const sidebars = {
         "providers/ollama", 
         "providers/perplexity", 
         "providers/friendliai",
+        "providers/galadriel",
         "providers/groq", 
         "providers/github", 
         "providers/deepseek", 
         "providers/fireworks_ai",
         "providers/clarifai", 
         "providers/vllm", 
+        "providers/infinity",
         "providers/xinference", 
         "providers/cloudflare_workers", 
         "providers/deepinfra",
@@ -195,11 +199,9 @@ const sidebars = {
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
-        "providers/palm", 
         "providers/sambanova", 
         "providers/custom_llm_server",
         "providers/petals",
-        
       ],
     },
     {
@@ -210,6 +212,7 @@ const sidebars = {
         "completion/provider_specific_params",
         "guides/finetuned_models",
         "completion/audio",
+        "completion/document_understanding",
         "completion/vision",
         "completion/json_mode",
         "completion/prompt_caching",
@@ -257,17 +260,24 @@ const sidebars = {
             "text_to_speech",
           ]
         },
+        {
+          type: "category",
+          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
+          items: [
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse",
+          ],
+        },
         "rerank",
         "assistants",
         "batches",
         "realtime",
         "fine_tuning",
         "moderation",
-        {
-          type: "link",
-          label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
-          href: "/docs/pass_through/vertex_ai",
-        },
       ],
     },
     {
@@ -313,8 +323,16 @@ const sidebars = {
     },
     {
       type: "category",
+      label: "Adding Providers",
+      items: [
+        "adding_provider/directory_structure", 
+        "adding_provider/new_rerank_provider"],
+    },
+    {
+      type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/mlflow",
         "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",

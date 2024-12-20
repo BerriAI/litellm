@@ -297,6 +297,83 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
 
 @pytest.mark.parametrize(
+    "callback_vars",
+    [
+        {
+            "turn_off_message_logging": True,
+        },
+        {
+            "turn_off_message_logging": False,
+        },
+    ],
+)
+def test_dynamic_turn_off_message_logging(callback_vars):
+    user_api_key_dict = UserAPIKeyAuth(
+        token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
+        key_name="sk-...63Fg",
+        key_alias=None,
+        spend=0.000111,
+        max_budget=None,
+        expires=None,
+        models=[],
+        aliases={},
+        config={},
+        user_id=None,
+        team_id="ishaan-special-team_e02dd54f-f790-4755-9f93-73734f415898",
+        max_parallel_requests=None,
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "datadog",
+                    "callback_vars": callback_vars,
+                }
+            ]
+        },
+        tpm_limit=None,
+        rpm_limit=None,
+        budget_duration=None,
+        budget_reset_at=None,
+        allowed_cache_controls=[],
+        permissions={},
+        model_spend={},
+        model_max_budget={},
+        soft_budget_cooldown=False,
+        litellm_budget_table=None,
+        org_id=None,
+        team_spend=0.000132,
+        team_alias=None,
+        team_tpm_limit=None,
+        team_rpm_limit=None,
+        team_max_budget=None,
+        team_models=[],
+        team_blocked=False,
+        soft_budget=None,
+        team_model_aliases=None,
+        team_member_spend=None,
+        team_member=None,
+        team_metadata={},
+        end_user_id=None,
+        end_user_tpm_limit=None,
+        end_user_rpm_limit=None,
+        end_user_max_budget=None,
+        last_refreshed_at=1726101560.967527,
+        api_key="7c305cc48fe72272700dc0d67dc691c2d1f2807490ef5eb2ee1d3a3ca86e12b1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_model_region=None,
+        parent_otel_span=None,
+        rpm_limit_per_model=None,
+        tpm_limit_per_model=None,
+    )
+    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+
+    assert callbacks is not None
+    assert (
+        callbacks.callback_vars["turn_off_message_logging"]
+        == callback_vars["turn_off_message_logging"]
+    )
+
+
+@pytest.mark.parametrize(
     "allow_client_side_credentials, expect_error", [(True, False), (False, True)]
 )
 def test_is_request_body_safe_global_enabled(
@@ -444,7 +521,7 @@ def test_foward_litellm_user_info_to_backend_llm_call():
 
 def test_update_internal_user_params():
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        _update_internal_user_params,
+        _update_internal_new_user_params,
     )
     from litellm.proxy._types import NewUserRequest
 
@@ -456,7 +533,7 @@ def test_update_internal_user_params():
 
     data = NewUserRequest(user_role="internal_user", user_email="krrish3@berri.ai")
     data_json = data.model_dump()
-    updated_data_json = _update_internal_user_params(data_json, data)
+    updated_data_json = _update_internal_new_user_params(data_json, data)
     assert updated_data_json["models"] == litellm.default_internal_user_params["models"]
     assert (
         updated_data_json["max_budget"]
@@ -530,7 +607,7 @@ def test_prepare_key_update_data():
 
     data = UpdateKeyRequest(key="test_key", metadata=None)
     updated_data = prepare_key_update_data(data, existing_key_row)
-    assert updated_data["metadata"] == None
+    assert updated_data["metadata"] is None
 
 
 @pytest.mark.parametrize(
@@ -679,3 +756,223 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     assert sorted(result["metadata"]["tags"]) == sorted(
         expected_tags
     ), f"Expected {expected_tags}, got {result['metadata']['tags']}"
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_api_key_dict, expected_enforced_params",
+    [
+        (
+            {"enforced_params": ["param1", "param2"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            ["param1", "param2"],
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            ["param1", "param2"],
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["param1", "param2"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["param3", "param4"]},
+            ),
+            ["param1", "param2", "param3", "param4"],
+        ),
+    ],
+)
+def test_get_enforced_params(
+    general_settings, user_api_key_dict, expected_enforced_params
+):
+    from litellm.proxy.litellm_pre_call_utils import _get_enforced_params
+
+    enforced_params = _get_enforced_params(general_settings, user_api_key_dict)
+    assert enforced_params == expected_enforced_params
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_api_key_dict, request_body, expected_error",
+    [
+        (
+            {"enforced_params": ["param1", "param2"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            True,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key", user_id="test_user_id", org_id="test_org_id"
+            ),
+            {},
+            True,
+        ),
+        (
+            {},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["user"]},
+            ),
+            {},
+            True,
+        ),
+        (
+            {},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+                metadata={"enforced_params": ["user"]},
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"enforced_params": ["user"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"service_account_settings": {"enforced_params": ["user"]}},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"user": "test_user"},
+            False,
+        ),
+        (
+            {"enforced_params": ["metadata.generation_name"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"metadata": {}},
+            True,
+        ),
+        (
+            {"enforced_params": ["metadata.generation_name"]},
+            UserAPIKeyAuth(
+                api_key="test_api_key",
+            ),
+            {"metadata": {"generation_name": "test_generation_name"}},
+            False,
+        ),
+    ],
+)
+def test_enforced_params_check(
+    general_settings, user_api_key_dict, request_body, expected_error
+):
+    from litellm.proxy.litellm_pre_call_utils import _enforced_params_check
+
+    if expected_error:
+        with pytest.raises(ValueError):
+            _enforced_params_check(
+                request_body=request_body,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                premium_user=True,
+            )
+    else:
+        _enforced_params_check(
+            request_body=request_body,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            premium_user=True,
+        )
+
+
+def test_get_key_models():
+    from litellm.proxy.auth.model_checks import get_key_models
+    from collections import defaultdict
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        models=["default"],
+    )
+    proxy_model_list = ["gpt-4o", "gpt-3.5-turbo"]
+    model_access_groups = defaultdict(list)
+    model_access_groups["default"].extend(["gpt-4o", "gpt-3.5-turbo"])
+    model_access_groups["default"].extend(["gpt-4o-mini"])
+    model_access_groups["team2"].extend(["gpt-3.5-turbo"])
+
+    result = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    assert result == ["gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"]
+
+
+def test_get_team_models():
+    from litellm.proxy.auth.model_checks import get_team_models
+    from collections import defaultdict
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        models=[],
+        team_models=["default"],
+    )
+    proxy_model_list = ["gpt-4o", "gpt-3.5-turbo"]
+    model_access_groups = defaultdict(list)
+    model_access_groups["default"].extend(["gpt-4o", "gpt-3.5-turbo"])
+    model_access_groups["default"].extend(["gpt-4o-mini"])
+    model_access_groups["team2"].extend(["gpt-3.5-turbo"])
+
+    result = get_team_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    assert result == ["gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"]
+
+
+def test_update_config_fields():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    args = {
+        "current_config": {
+            "litellm_settings": {
+                "default_team_settings": [
+                    {
+                        "team_id": "c91e32bb-0f2a-4aa1-86c4-307ca2e03ea3",
+                        "success_callback": ["langfuse"],
+                        "failure_callback": ["langfuse"],
+                        "langfuse_public_key": "my-fake-key",
+                        "langfuse_secret": "my-fake-secret",
+                    }
+                ]
+            },
+        },
+        "param_name": "litellm_settings",
+        "db_param_value": {
+            "telemetry": False,
+            "drop_params": True,
+            "num_retries": 5,
+            "request_timeout": 600,
+            "success_callback": ["langfuse"],
+            "default_team_settings": [],
+            "context_window_fallbacks": [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}],
+        },
+    }
+    updated_config = proxy_config._update_config_fields(**args)
+
+    all_team_config = updated_config["litellm_settings"]["default_team_settings"]
+
+    # check if team id config returned
+    team_config = proxy_config._get_team_config(
+        team_id="c91e32bb-0f2a-4aa1-86c4-307ca2e03ea3", all_teams_config=all_team_config
+    )
+    assert team_config["langfuse_public_key"] == "my-fake-key"
+    assert team_config["langfuse_secret"] == "my-fake-secret"

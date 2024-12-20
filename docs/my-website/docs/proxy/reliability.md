@@ -315,6 +315,64 @@ litellm_settings:
   cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
 
+### Fallback to Specific Model ID
+
+If all models in a group are in cooldown (e.g. rate limited), LiteLLM will fallback to the model with the specific model ID.
+
+This skips any cooldown check for the fallback model.
+
+1. Specify the model ID in `model_info`
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+    model_info:
+      id: my-specific-model-id # 👈 KEY CHANGE
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: anthropic-claude
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+**Note:** This will only fallback to the model with the specific model ID. If you want to fallback to another model group, you can set `fallbacks=[{"gpt-4": ["anthropic-claude"]}]`
+
+2. Set fallbacks in config
+
+```yaml
+litellm_settings:
+  fallbacks: [{"gpt-4": ["my-specific-model-id"]}]
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true
+}'
+```
+
+Validate it works, by checking the response header `x-litellm-model-id`
+
+```bash
+x-litellm-model-id: my-specific-model-id
+```
+
 ### Test Fallbacks! 
 
 Check if your fallbacks are working as expected. 
@@ -336,6 +394,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 '
 ```
+
 
 #### **Content Policy Fallbacks**
 ```bash

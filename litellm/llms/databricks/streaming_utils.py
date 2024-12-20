@@ -1,16 +1,14 @@
 import json
-from typing import List, Optional
+from typing import Optional
 
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import (
-    ChatCompletionDeltaChunk,
-    ChatCompletionResponseMessage,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
+from litellm.types.utils import GenericStreamingChunk, Usage
 
 
 class ModelResponseIterator:
@@ -55,9 +53,7 @@ class ModelResponseIterator:
                 is_finished = True
                 finish_reason = processed_chunk.choices[0].finish_reason
 
-            usage_chunk: Optional[litellm.Usage] = getattr(
-                processed_chunk, "usage", None
-            )
+            usage_chunk: Optional[Usage] = getattr(processed_chunk, "usage", None)
             if usage_chunk is not None:
 
                 usage = ChatCompletionUsageBlock(

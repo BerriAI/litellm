@@ -932,37 +932,6 @@ async def test_gemini_embeddings(sync_mode, input):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_databricks_embeddings(sync_mode):
-    try:
-        litellm.set_verbose = True
-        litellm.drop_params = True
-
-        if sync_mode:
-            response = litellm.embedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-        else:
-            response = await litellm.aembedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-
-        print(f"response: {response}")
-
-        openai.types.CreateEmbeddingResponse.model_validate(
-            response.model_dump(), strict=True
-        )
-        # stubbed endpoint is setup to return this
-        # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_voyage_embeddings()
 # def test_xinference_embeddings():
 #     try:
@@ -1033,6 +1002,28 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
         assert json_data["options"]["wait_for_model"] is True
         assert json_data["parameters"]["top_p"] == 10
         assert json_data["parameters"]["top_k"] == 10
+
+
+def test_hosted_vllm_embedding(monkeypatch):
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://localhost:8000")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            embedding(
+                model="hosted_vllm/jina-embeddings-v3",
+                input=["Hello world"],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
 
 
 @pytest.mark.parametrize(

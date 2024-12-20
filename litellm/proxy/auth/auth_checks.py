@@ -11,10 +11,8 @@ Run checks for:
 
 import time
 import traceback
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-import httpx
 from pydantic import BaseModel
 
 import litellm
@@ -22,6 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
+    DB_CONNECTION_ERROR_TYPES,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -34,7 +33,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.router import Router
+from litellm.types.services import ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 
@@ -60,6 +60,7 @@ def common_checks(  # noqa: PLR0915
     global_proxy_spend: Optional[float],
     general_settings: dict,
     route: str,
+    llm_router: Optional[Router],
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -97,7 +98,12 @@ def common_checks(  # noqa: PLR0915
             # this means the team has access to all models on the proxy
             pass
         # check if the team model is an access_group
-        elif model_in_access_group(_model, team_object.models) is True:
+        elif (
+            model_in_access_group(
+                model=_model, team_models=team_object.models, llm_router=llm_router
+            )
+            is True
+        ):
             pass
         elif _model and "*" in _model:
             pass
@@ -150,40 +156,6 @@ def common_checks(  # noqa: PLR0915
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
-    if general_settings.get("enforced_params", None) is not None:
-        # Enterprise ONLY Feature
-        # we already validate if user is premium_user when reading the config
-        # Add an extra premium_usercheck here too, just incase
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                "Trying to use `enforced_params`"
-                + CommonProxyErrors.not_premium_user.value
-            )
-
-        if RouteChecks.is_llm_api_route(route=route):
-            # loop through each enforced param
-            # example enforced_params ['user', 'metadata', 'metadata.generation_name']
-            for enforced_param in general_settings["enforced_params"]:
-                _enforced_params = enforced_param.split(".")
-                if len(_enforced_params) == 1:
-                    if _enforced_params[0] not in request_body:
-                        raise ValueError(
-                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
-                        )
-                elif len(_enforced_params) == 2:
-                    # this is a scenario where user requires request['metadata']['generation_name'] to exist
-                    if _enforced_params[0] not in request_body:
-                        raise ValueError(
-                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
-                        )
-                    if _enforced_params[1] not in request_body[_enforced_params[0]]:
-                        raise ValueError(
-                            f"BadRequest please pass param=[{_enforced_params[0]}][{_enforced_params[1]}] in request body. This is a required param"
-                        )
-
-        pass
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
         litellm.max_budget > 0
@@ -373,36 +345,33 @@ async def get_end_user_object(
         return None
 
 
-def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
+def model_in_access_group(
+    model: str, team_models: Optional[List[str]], llm_router: Optional[Router]
+) -> bool:
     from collections import defaultdict
-
-    from litellm.proxy.proxy_server import llm_router
 
     if team_models is None:
         return True
     if model in team_models:
         return True
 
-    access_groups = defaultdict(list)
+    access_groups: dict[str, list[str]] = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
+        access_groups = llm_router.get_model_access_groups(model_name=model)
 
-    models_in_current_access_groups = []
     if len(access_groups) > 0:  # check if token contains any model access groups
         for idx, m in enumerate(
             team_models
         ):  # loop token models, if any of them are an access group add the access group
             if m in access_groups:
-                # if it is an access group we need to remove it from valid_token.models
-                models_in_group = access_groups[m]
-                models_in_current_access_groups.extend(models_in_group)
+                return True
 
     # Filter out models that are access_groups
     filtered_models = [m for m in team_models if m not in access_groups]
-    filtered_models += models_in_current_access_groups
 
     if model in filtered_models:
         return True
+
     return False
 
 
@@ -523,10 +492,6 @@ async def _cache_management_object(
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     await user_api_key_cache.async_set_cache(key=key, value=value)
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_set_cache(
-            key=key, value=value
-        )
 
 
 async def _cache_team_object(
@@ -788,9 +753,10 @@ async def get_key_object(
         )
 
         return _response
-    except httpx.ConnectError as e:
+    except DB_CONNECTION_ERROR_TYPES as e:
         return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception:
+        traceback.print_exc()
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
@@ -878,7 +844,10 @@ async def get_org_object(
 
 
 async def can_key_call_model(
-    model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -898,35 +867,28 @@ async def can_key_call_model(
     )
     from collections import defaultdict
 
-    from litellm.proxy.proxy_server import llm_router
-
-    access_groups = defaultdict(list)
+    access_groups: Dict[str, List[str]] = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
-
-    models_in_current_access_groups = []
-    if len(access_groups) > 0:  # check if token contains any model access groups
+        access_groups = llm_router.get_model_access_groups(model_name=model)
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
         for idx, m in enumerate(
             valid_token.models
         ):  # loop token models, if any of them are an access group add the access group
             if m in access_groups:
-                # if it is an access group we need to remove it from valid_token.models
-                models_in_group = access_groups[m]
-                models_in_current_access_groups.extend(models_in_group)
+                return True
 
     # Filter out models that are access_groups
     filtered_models = [m for m in valid_token.models if m not in access_groups]
 
-    filtered_models += models_in_current_access_groups
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
     all_model_access: bool = False
 
     if (
-        len(filtered_models) == 0
-        or "*" in filtered_models
-        or "openai/*" in filtered_models
-    ):
+        len(filtered_models) == 0 and len(valid_token.models) == 0
+    ) or "*" in filtered_models:
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:

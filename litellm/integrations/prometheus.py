@@ -1,18 +1,10 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
-import os
-import subprocess
 import sys
-import traceback
-import uuid
-from datetime import date, datetime, timedelta
-from typing import Optional, TypedDict, Union
+from datetime import datetime, timedelta
+from typing import Optional
 
-import dotenv
-import requests  # type: ignore
-
-import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -68,6 +60,7 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                     "user",
+                    STATUS_CODE,
                 ],
             )
 
@@ -365,7 +358,9 @@ class PrometheusLogger(CustomLogger):
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
-        end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
+        end_user_id = get_end_user_id_for_cost_tracking(
+            litellm_params, service_type="prometheus"
+        )
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -668,7 +663,9 @@ class PrometheusLogger(CustomLogger):
             "standard_logging_object", {}
         )
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
+        end_user_id = get_end_user_id_for_cost_tracking(
+            litellm_params, service_type="prometheus"
+        )
         user_id = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -730,13 +727,14 @@ class PrometheusLogger(CustomLogger):
             ).inc()
 
             self.litellm_proxy_total_requests_metric.labels(
-                user_api_key_dict.end_user_id,
-                user_api_key_dict.api_key,
-                user_api_key_dict.key_alias,
-                request_data.get("model", ""),
-                user_api_key_dict.team_id,
-                user_api_key_dict.team_alias,
-                user_api_key_dict.user_id,
+                end_user=user_api_key_dict.end_user_id,
+                hashed_api_key=user_api_key_dict.api_key,
+                api_key_alias=user_api_key_dict.key_alias,
+                requested_model=request_data.get("model", ""),
+                team=user_api_key_dict.team_id,
+                team_alias=user_api_key_dict.team_alias,
+                user=user_api_key_dict.user_id,
+                status_code=str(getattr(original_exception, "status_code", None)),
             ).inc()
             pass
         except Exception as e:
@@ -753,13 +751,14 @@ class PrometheusLogger(CustomLogger):
         """
         try:
             self.litellm_proxy_total_requests_metric.labels(
-                user_api_key_dict.end_user_id,
-                user_api_key_dict.api_key,
-                user_api_key_dict.key_alias,
-                data.get("model", ""),
-                user_api_key_dict.team_id,
-                user_api_key_dict.team_alias,
-                user_api_key_dict.user_id,
+                end_user=user_api_key_dict.end_user_id,
+                hashed_api_key=user_api_key_dict.api_key,
+                api_key_alias=user_api_key_dict.key_alias,
+                requested_model=data.get("model", ""),
+                team=user_api_key_dict.team_id,
+                team_alias=user_api_key_dict.team_alias,
+                user=user_api_key_dict.user_id,
+                status_code="200",
             ).inc()
         except Exception as e:
             verbose_logger.exception(

@@ -17,7 +17,7 @@ async def log_event(request: Request):
         # For now, just printing the received data
 
         return {"message": "Request received successfully"}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 

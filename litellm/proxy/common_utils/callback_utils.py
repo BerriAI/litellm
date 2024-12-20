@@ -1,8 +1,7 @@
-import sys
-from typing import Any, Dict, List, Optional, get_args
+from typing import Any, Dict, List, Optional
 
 import litellm
-from litellm import get_secret, get_secret_str
+from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.utils import get_instance_fn
@@ -48,7 +47,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 imported_list.append(open_telemetry_logger)
                 setattr(proxy_server, "open_telemetry_logger", open_telemetry_logger)
             elif isinstance(callback, str) and callback == "presidio":
-                from litellm.proxy.hooks.presidio_pii_masking import (
+                from litellm.proxy.guardrails.guardrail_hooks.presidio import (
                     _OPTIONAL_PresidioPIIMasking,
                 )
 

@@ -45,81 +45,59 @@ def test_map_azure_model_group(model_group_header, expected_model):
 
 
 @pytest.mark.asyncio
-@pytest.mark.respx
-async def test_azure_ai_with_image_url(respx_mock: MockRouter):
+async def test_azure_ai_with_image_url():
     """
     Important test:
 
     Test that Azure AI studio can handle image_url passed when content is a list containing both text and image_url
     """
+    from openai import AsyncOpenAI
+
     litellm.set_verbose = True
 
-    # Mock response based on the actual API response
-    mock_response = {
-        "id": "cmpl-53860ea1efa24d2883555bfec13d2254",
-        "choices": [
-            {
-                "finish_reason": "stop",
-                "index": 0,
-                "logprobs": None,
-                "message": {
-                    "content": "The image displays a graphic with the text 'LiteLLM' in black",
-                    "role": "assistant",
-                    "refusal": None,
-                    "audio": None,
-                    "function_call": None,
-                    "tool_calls": None,
-                },
-            }
-        ],
-        "created": 1731801937,
-        "model": "phi35-vision-instruct",
-        "object": "chat.completion",
-        "usage": {
-            "completion_tokens": 69,
-            "prompt_tokens": 617,
-            "total_tokens": 686,
-            "completion_tokens_details": None,
-            "prompt_tokens_details": None,
-        },
-    }
-
-    # Mock the API request
-    mock_request = respx_mock.post(
-        "https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com"
-    ).mock(return_value=httpx.Response(200, json=mock_response))
-
-    response = await litellm.acompletion(
-        model="azure_ai/Phi-3-5-vision-instruct-dcvov",
-        api_base="https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "What is in this image?",
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-                        },
-                    },
-                ],
-            },
-        ],
+    client = AsyncOpenAI(
         api_key="fake-api-key",
+        base_url="https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com",
     )
 
-    # Verify the request was made
-    assert mock_request.called
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="azure_ai/Phi-3-5-vision-instruct-dcvov",
+                api_base="https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "What is in this image?",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                                },
+                            },
+                        ],
+                    },
+                ],
+                api_key="fake-api-key",
+                client=client,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error: {e}")
 
-    # Check the request body
-    request_body = json.loads(mock_request.calls[0].request.content)
-    assert request_body == {
-        "model": "Phi-3-5-vision-instruct-dcvov",
-        "messages": [
+        # Verify the request was made
+        mock_client.assert_called_once()
+
+        # Check the request body
+        request_body = mock_client.call_args.kwargs
+        assert request_body["model"] == "Phi-3-5-vision-instruct-dcvov"
+        assert request_body["messages"] == [
             {
                 "role": "user",
                 "content": [
@@ -132,7 +110,4 @@ async def test_azure_ai_with_image_url(respx_mock: MockRouter):
                     },
                 ],
             }
-        ],
-    }
-
-    print(f"response: {response}")
+        ]

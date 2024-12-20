@@ -828,19 +828,24 @@ litellm_settings:
 #### Spec 
 
 ```python
+key_generation_settings: Optional[StandardKeyGenerationConfig] = None
+```
+
+#### Types
+
+```python
+class StandardKeyGenerationConfig(TypedDict, total=False):
+    team_key_generation: TeamUIKeyGenerationConfig
+    personal_key_generation: PersonalUIKeyGenerationConfig
+
 class TeamUIKeyGenerationConfig(TypedDict):
-    allowed_team_member_roles: List[str]
+    allowed_team_member_roles: List[str] # either 'user' or 'admin'
     required_params: List[str] # require params on `/key/generate` to be set if a team key (team_id in request) is being generated
 
 
 class PersonalUIKeyGenerationConfig(TypedDict):
     allowed_user_roles: List[LitellmUserRoles] 
     required_params: List[str] # require params on `/key/generate` to be set if a personal key (no team_id in request) is being generated
-
-
-class StandardKeyGenerationConfig(TypedDict, total=False):
-    team_key_generation: TeamUIKeyGenerationConfig
-    personal_key_generation: PersonalUIKeyGenerationConfig
 
 
 class LitellmUserRoles(str, enum.Enum):

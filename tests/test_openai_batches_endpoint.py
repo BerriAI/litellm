@@ -85,3 +85,37 @@ async def test_batches_operations():
 
         # Test delete file
         await delete_file(session, file_id)
+
+
+@pytest.mark.skip(reason="Local only test to verify if things work well")
+def test_vertex_batches_endpoint():
+    """
+    Test VertexAI Batches Endpoint
+    """
+    import os
+
+    oai_client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
+    file_name = "local_testing/vertex_batch_completions.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
+    file_obj = oai_client.files.create(
+        file=open(file_path, "rb"),
+        purpose="batch",
+        extra_body={"custom_llm_provider": "vertex_ai"},
+    )
+    print("Response from creating file=", file_obj)
+
+    batch_input_file_id = file_obj.id
+    assert (
+        batch_input_file_id is not None
+    ), f"Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+
+    create_batch_response = oai_client.batches.create(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        extra_body={"custom_llm_provider": "vertex_ai"},
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    print("response from create batch", create_batch_response)
+    pass

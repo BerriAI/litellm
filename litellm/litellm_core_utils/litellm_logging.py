@@ -18,12 +18,13 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import (
+    _custom_logger_compatible_callbacks_literal,
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
     verbose_logger,
 )
-from litellm.caching.caching import DualCache, InMemoryCache, S3Cache
+from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -33,7 +34,6 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
-from litellm.proxy._types import CommonProxyErrors
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
@@ -41,6 +41,7 @@ from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
     ImageResponse,
+    LiteLLMLoggingBaseClass,
     ModelResponse,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
@@ -49,21 +50,18 @@ from litellm.types.utils import (
     StandardLoggingModelCostFailureDebugInformation,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
-    StandardPassThroughResponseObject,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import (
-    _get_base_model_from_metadata,
-    print_verbose,
-    prompt_token_calculator,
-)
+from litellm.utils import _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
+from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.braintrust_logging import BraintrustLogger
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -75,6 +73,7 @@ from ..integrations.helicone import HeliconeLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
+from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
@@ -82,7 +81,6 @@ from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
 from ..integrations.prometheus import PrometheusLogger
-from ..integrations.prometheus_services import PrometheusServicesLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.supabase import Supabase
@@ -188,7 +186,7 @@ in_memory_trace_id_cache = ServiceTraceIDCache()
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
-class Logging:
+class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
     stream_options = None
@@ -220,6 +218,7 @@ class Logging:
         ] = None,
         kwargs: Optional[Dict] = None,
     ):
+        _input: Optional[str] = messages  # save original value of messages
         if messages is not None:
             if isinstance(messages, str):
                 messages = [
@@ -246,7 +245,6 @@ class Logging:
         self.sync_streaming_chunks: List[Any] = (
             []
         )  # for generating complete stream response
-        self.model_call_details: Dict[Any, Any] = {}
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: Optional[
@@ -277,9 +275,10 @@ class Logging:
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
 
-        self.model_call_details = {
+        self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
+            "input": _input,
         }
 
     def process_dynamic_callbacks(self):
@@ -374,7 +373,11 @@ class Logging:
             for param in _supported_callback_params:
                 if param in kwargs:
                     _param_value = kwargs.pop(param)
-                    if _param_value is not None and "os.environ/" in _param_value:
+                    if (
+                        _param_value is not None
+                        and isinstance(_param_value, str)
+                        and "os.environ/" in _param_value
+                    ):
                         _param_value = get_secret_str(secret_name=_param_value)
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
         return standard_callback_dynamic_params
@@ -725,6 +728,11 @@ class Logging:
             )
         )
 
+        prompt = ""  # use for tts cost calc
+        _input = self.model_call_details.get("input", None)
+        if _input is not None and isinstance(_input, str):
+            prompt = _input
+
         if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
@@ -742,6 +750,7 @@ class Logging:
                 "call_type": self.call_type,
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
+                "prompt": prompt,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             self.model_call_details["response_cost_failure_debug_information"] = (
@@ -756,7 +765,6 @@ class Logging:
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
-
             return response_cost
         except Exception as e:  # error calculating cost
             self.model_call_details["response_cost_failure_debug_information"] = (
@@ -777,7 +785,12 @@ class Logging:
         return None
 
     def _success_handler_helper_fn(
-        self, result=None, start_time=None, end_time=None, cache_hit=None
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
     ):
         try:
             if start_time is None:
@@ -795,7 +808,9 @@ class Logging:
             ## if model in model cost map - log the response cost
             ## else set cost to None
             if (
-                result is not None and self.stream is not True
+                standard_logging_object is None
+                and result is not None
+                and self.stream is not True
             ):  # handle streaming separately
                 if (
                     isinstance(result, ModelResponse)
@@ -826,9 +841,11 @@ class Logging:
                                     "metadata"
                                 ] = {}
 
-                            self.model_call_details["litellm_params"]["metadata"][
+                            self.model_call_details["litellm_params"]["metadata"][  # type: ignore
                                 "hidden_params"
-                            ] = getattr(result, "_hidden_params", {})
+                            ] = getattr(
+                                result, "_hidden_params", {}
+                            )
                     ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details["standard_logging_object"] = (
@@ -853,6 +870,10 @@ class Logging:
                             status="success",
                         )
                     )
+            elif standard_logging_object is not None:
+                self.model_call_details["standard_logging_object"] = (
+                    standard_logging_object
+                )
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
@@ -885,6 +906,7 @@ class Logging:
             end_time=end_time,
             result=result,
             cache_hit=cache_hit,
+            standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
@@ -896,7 +918,10 @@ class Logging:
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
-            if self.stream:
+            if self.stream and (
+                isinstance(result, litellm.ModelResponse)
+                or isinstance(result, TextCompletionResponse)
+            ):
                 complete_streaming_response: Optional[
                     Union[ModelResponse, TextCompletionResponse]
                 ] = _assemble_complete_response_from_streaming_chunks(
@@ -948,10 +973,10 @@ class Logging:
                 ),
                 result=result,
             )
-
             ## LOGGING HOOK ##
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
+
                     self.model_call_details, result = callback.logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
@@ -1315,6 +1340,8 @@ class Logging:
                             "atranscription", False
                         )
                         is not True
+                        and self.call_type
+                        != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -1399,7 +1426,11 @@ class Logging:
             "Logging Details LiteLLM-Async Success Call, cache_hit={}".format(cache_hit)
         )
         start_time, end_time, result = self._success_handler_helper_fn(
-            start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
+            start_time=start_time,
+            end_time=end_time,
+            result=result,
+            cache_hit=cache_hit,
+            standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
@@ -1407,7 +1438,10 @@ class Logging:
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = None
-        if self.stream is True:
+        if self.stream is True and (
+            isinstance(result, litellm.ModelResponse)
+            or isinstance(result, TextCompletionResponse)
+        ):
             complete_streaming_response: Optional[
                 Union[ModelResponse, TextCompletionResponse]
             ] = _assemble_complete_response_from_streaming_chunks(
@@ -2110,7 +2144,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
 
 
 def _init_custom_logger_compatible_class(  # noqa: PLR0915
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+    logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: Optional[DualCache],
     llm_router: Optional[
         Any
@@ -2192,6 +2226,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _gcs_bucket_logger = GCSBucketLogger()
         _in_memory_loggers.append(_gcs_bucket_logger)
         return _gcs_bucket_logger  # type: ignore
+    elif logging_integration == "azure_storage":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, AzureBlobStorageLogger):
+                return callback  # type: ignore
+
+        _azure_storage_logger = AzureBlobStorageLogger()
+        _in_memory_loggers.append(_azure_storage_logger)
+        return _azure_storage_logger  # type: ignore
     elif logging_integration == "opik":
         for callback in _in_memory_loggers:
             if isinstance(callback, OpikLogger):
@@ -2319,10 +2361,18 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         _mlflow_logger = MlflowLogger()
         _in_memory_loggers.append(_mlflow_logger)
         return _mlflow_logger  # type: ignore
+    elif logging_integration == "langfuse":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LangfusePromptManagement):
+                return callback
+
+        langfuse_logger = LangfusePromptManagement()
+        _in_memory_loggers.append(langfuse_logger)
+        return langfuse_logger  # type: ignore
 
 
-def get_custom_logger_compatible_class(
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
+def get_custom_logger_compatible_class(  # noqa: PLR0915
+    logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
@@ -2368,9 +2418,17 @@ def get_custom_logger_compatible_class(
         for callback in _in_memory_loggers:
             if isinstance(callback, GCSBucketLogger):
                 return callback
+    elif logging_integration == "azure_storage":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, AzureBlobStorageLogger):
+                return callback
     elif logging_integration == "opik":
         for callback in _in_memory_loggers:
             if isinstance(callback, OpikLogger):
+                return callback
+    elif logging_integration == "langfuse":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, LangfusePromptManagement):
                 return callback
     elif logging_integration == "otel":
         from litellm.integrations.opentelemetry import OpenTelemetry
@@ -2540,6 +2598,15 @@ class StandardLoggingPayloadSetup:
                     clean_metadata["user_api_key_hash"] = metadata.get(
                         "user_api_key"
                     )  # this is the hash
+            _potential_requester_metadata = metadata.get(
+                "metadata", None
+            )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
+            if (
+                clean_metadata["requester_metadata"] is None
+                and _potential_requester_metadata is not None
+                and isinstance(_potential_requester_metadata, dict)
+            ):
+                clean_metadata["requester_metadata"] = _potential_requester_metadata
         return clean_metadata
 
     @staticmethod
@@ -2680,6 +2747,51 @@ class StandardLoggingPayloadSetup:
                         clean_hidden_params[key] = hidden_params[key]  # type: ignore
         return clean_hidden_params
 
+    @staticmethod
+    def strip_trailing_slash(api_base: Optional[str]) -> Optional[str]:
+        if api_base:
+            return api_base.rstrip("/")
+        return api_base
+
+    @staticmethod
+    def get_error_information(
+        original_exception: Optional[Exception],
+    ) -> StandardLoggingPayloadErrorInformation:
+        error_status: str = str(getattr(original_exception, "status_code", ""))
+        error_class: str = (
+            str(original_exception.__class__.__name__) if original_exception else ""
+        )
+        _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
+        return StandardLoggingPayloadErrorInformation(
+            error_code=error_status,
+            error_class=error_class,
+            llm_provider=_llm_provider_in_exception,
+        )
+
+    @staticmethod
+    def get_response_time(
+        start_time_float: float,
+        end_time_float: float,
+        completion_start_time_float: float,
+        stream: bool,
+    ) -> float:
+        """
+        Get the response time for the LLM response
+
+        Args:
+            start_time_float: float - start time of the LLM call
+            end_time_float: float - end time of the LLM call
+            completion_start_time_float: float - time to first token of the LLM response (for streaming responses)
+            stream: bool - True when a stream response is returned
+
+        Returns:
+            float: The response time for the LLM response
+        """
+        if stream is True:
+            return completion_start_time_float - start_time_float
+        else:
+            return end_time_float - start_time_float
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -2753,6 +2865,12 @@ def get_standard_logging_object_payload(
                 completion_start_time=completion_start_time,
             )
         )
+        response_time = StandardLoggingPayloadSetup.get_response_time(
+            start_time_float=start_time_float,
+            end_time_float=end_time_float,
+            completion_start_time_float=completion_start_time_float,
+            stream=kwargs.get("stream", False),
+        )
         # clean up litellm hidden params
         clean_hidden_params = StandardLoggingPayloadSetup.get_hidden_params(
             hidden_params
@@ -2766,7 +2884,6 @@ def get_standard_logging_object_payload(
         if cache_hit is True:
 
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-
             saved_cache_cost = (
                 logging_obj._response_cost_calculator(
                     result=init_response_obj, cache_hit=False  # type: ignore
@@ -2785,6 +2902,10 @@ def get_standard_logging_object_payload(
         )
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+        )
+
         ## get final response object ##
         final_response_obj = StandardLoggingPayloadSetup.get_final_response_obj(
             response_obj=response_obj,
@@ -2802,6 +2923,7 @@ def get_standard_logging_object_payload(
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
+            response_time=response_time,
             model=kwargs.get("model", "") or "",
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
@@ -2811,7 +2933,10 @@ def get_standard_logging_object_payload(
             completion_tokens=usage.completion_tokens,
             request_tags=request_tags,
             end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", ""),
+            api_base=StandardLoggingPayloadSetup.strip_trailing_slash(
+                litellm_params.get("api_base", "")
+            )
+            or "",
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
@@ -2821,6 +2946,7 @@ def get_standard_logging_object_payload(
             hidden_params=clean_hidden_params,
             model_map_information=model_cost_information,
             error_str=error_str,
+            error_information=error_information,
             response_cost_failure_debug_info=kwargs.get(
                 "response_cost_failure_debug_information"
             ),
@@ -2832,6 +2958,60 @@ def get_standard_logging_object_payload(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
+
+
+def truncate_standard_logging_payload_content(
+    standard_logging_object: StandardLoggingPayload,
+):
+    """
+    Truncate error strings and message content in logging payload
+
+    Some loggers like DataDog have a limit on the size of the payload. (1MB)
+
+    This function truncates the error string and the message content if they exceed a certain length.
+    """
+    MAX_STR_LENGTH = 10_000
+
+    # Truncate fields that might exceed max length
+    fields_to_truncate = ["error_str", "messages", "response"]
+    for field in fields_to_truncate:
+        _truncate_field(
+            standard_logging_object=standard_logging_object,
+            field_name=field,
+            max_length=MAX_STR_LENGTH,
+        )
+
+
+def _truncate_text(text: str, max_length: int) -> str:
+    """Truncate text if it exceeds max_length"""
+    return (
+        text[:max_length]
+        + "...truncated by litellm, this logger does not support large content"
+        if len(text) > max_length
+        else text
+    )
+
+
+def _truncate_field(
+    standard_logging_object: StandardLoggingPayload, field_name: str, max_length: int
+) -> None:
+    """
+    Helper function to truncate a field in the logging payload
+
+    This converts the field to a string and then truncates it if it exceeds the max length.
+
+    Why convert to string ?
+    1. User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
+        - Converting to string and then truncating the logged content catches this
+    2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
+    """
+    field_value = standard_logging_object.get(field_name)  # type: ignore
+    if field_value:
+        str_value = str(field_value)
+        if len(str_value) > max_length:
+            standard_logging_object[field_name] = _truncate_text(  # type: ignore
+                text=str_value, max_length=max_length
+            )
 
 
 def get_standard_logging_metadata(

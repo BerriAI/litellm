@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import asyncio
+)  # Adds the parent directory to the system-path
 import logging
 import time
 
@@ -20,6 +19,10 @@ import pytest
 
 import litellm
 from litellm import create_batch, create_file
+from litellm._logging import verbose_logger
+from test_gcs_bucket import load_vertex_ai_credentials
+
+verbose_logger.setLevel(logging.DEBUG)
 
 
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
@@ -205,4 +208,33 @@ def test_cancel_batch():
 
 
 def test_list_batch():
+    pass
+
+
+@pytest.mark.asyncio
+async def test_vertex_batch_prediction():
+    load_vertex_ai_credentials()
+    file_name = "vertex_batch_completions.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
+    file_obj = await litellm.acreate_file(
+        file=open(file_path, "rb"),
+        purpose="batch",
+        custom_llm_provider="vertex_ai",
+    )
+    print("Response from creating file=", file_obj)
+
+    batch_input_file_id = file_obj.id
+    assert (
+        batch_input_file_id is not None
+    ), f"Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+
+    create_batch_response = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider="vertex_ai",
+        metadata={"key1": "value1", "key2": "value2"},
+    )
+    print("create_batch_response=", create_batch_response)
     pass

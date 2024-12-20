@@ -7,17 +7,14 @@
 
 import asyncio
 import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
-import fastapi
 import httpx
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Request,
     Response,
@@ -26,9 +23,8 @@ from fastapi import (
 )
 
 import litellm
-from litellm import CreateFileRequest, FileContentRequest, get_secret_str
+from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.router import Router
@@ -59,6 +55,8 @@ def get_files_provider_config(
     custom_llm_provider: str,
 ):
     global files_config
+    if custom_llm_provider == "vertex_ai":
+        return None
     if files_config is None:
         raise ValueError("files_config is not set, set it on your config.yaml file.")
     for setting in files_config:
@@ -212,9 +210,9 @@ async def create_file(
             if llm_provider_config is not None:
                 # add llm_provider_config to data
                 _create_file_request.update(llm_provider_config)
-
+            _create_file_request.pop("custom_llm_provider", None)  # type: ignore
             # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-            response = await litellm.acreate_file(**_create_file_request)  # type: ignore
+            response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
 
         ### ALERTING ###
         asyncio.create_task(
@@ -239,7 +237,6 @@ async def create_file(
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
         )
-
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(

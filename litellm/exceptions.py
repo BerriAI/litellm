@@ -306,6 +306,8 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+        self.code = "429"
+        self.type = "throttling_error"
 
     def __str__(self):
         _message = self.message

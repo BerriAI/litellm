@@ -1,22 +1,19 @@
 import json
 import time
-import traceback
-import types
 import uuid
-from itertools import chain
 from typing import Any, List, Optional
 
 import aiohttp
 import httpx
-import requests
 from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
-from litellm.types.utils import StreamingChoices
+from litellm.types.utils import ModelResponse, StreamingChoices
 
 
 class OllamaError(Exception):
@@ -30,7 +27,7 @@ class OllamaError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class OllamaChatConfig:
+class OllamaChatConfig(OpenAIGPTConfig):
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
@@ -81,15 +78,10 @@ class OllamaChatConfig:
     num_thread: Optional[int] = None
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
-    temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
-    top_p: Optional[float] = None
     system: Optional[str] = None
     template: Optional[str] = None
 
@@ -120,26 +112,9 @@ class OllamaChatConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and k != "function_name"  # special param for function calling
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(
-        self,
-    ):
+    def get_supported_openai_params(self, model: str):
         return [
             "max_tokens",
             "max_completion_tokens",
@@ -156,8 +131,12 @@ class OllamaChatConfig:
         ]
 
     def map_openai_params(
-        self, model: str, non_default_params: dict, optional_params: dict
-    ):
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
@@ -215,7 +194,7 @@ class OllamaChatConfig:
 
 # ollama implementation
 def get_ollama_response(  # noqa: PLR0915
-    model_response: litellm.ModelResponse,
+    model_response: ModelResponse,
     messages: list,
     optional_params: dict,
     model: str,
@@ -314,13 +293,14 @@ def get_ollama_response(  # noqa: PLR0915
             url=url, api_key=api_key, data=data, logging_obj=logging_obj
         )
 
-    _request = {
-        "url": f"{url}",
-        "json": data,
-    }
+    headers: Optional[dict] = None
     if api_key is not None:
-        _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
-    response = requests.post(**_request)  # type: ignore
+        headers = {"Authorization": "Bearer {}".format(api_key)}
+    response = litellm.module_level_client.post(
+        url=url,
+        json=data,
+        headers=headers,
+    )
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 

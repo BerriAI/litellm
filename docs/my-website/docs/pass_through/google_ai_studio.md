@@ -7,6 +7,14 @@ import TabItem from '@theme/TabItem';
 
 Pass-through endpoints for Google AI Studio - call provider-specific endpoint, in native format (no translation).
 
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ | supports all models on `/generateContent` endpoint |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
+| Streaming | ✅ | |
+
+
 Just replace `https://generativelanguage.googleapis.com` with `LITELLM_PROXY_BASE_URL/gemini`
 
 #### **Example Usage**

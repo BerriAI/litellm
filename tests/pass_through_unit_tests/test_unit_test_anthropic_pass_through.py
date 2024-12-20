@@ -87,7 +87,11 @@ async def test_anthropic_passthrough_handler(
     assert isinstance(result["result"], litellm.ModelResponse)
 
 
-def test_create_anthropic_response_logging_payload(mock_logging_obj):
+@pytest.mark.parametrize(
+    "metadata_params",
+    [{"metadata": {"user_id": "test"}}, {"litellm_metadata": {"user": "test"}}, {}],
+)
+def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_params):
     # Test the logging payload creation
     model_response = litellm.ModelResponse()
     model_response.choices = [{"message": {"content": "Test response"}}]
@@ -95,18 +99,109 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj):
     start_time = datetime.now()
     end_time = datetime.now()
 
-    result = (
-        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
-            litellm_model_response=model_response,
-            model="claude-3-opus-20240229",
-            kwargs={},
-            start_time=start_time,
-            end_time=end_time,
-            logging_obj=mock_logging_obj,
-        )
+    result = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+        litellm_model_response=model_response,
+        model="claude-3-opus-20240229",
+        kwargs={
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+                    "user_api_key_user_id": "default_user_id",
+                    "user_api_key_team_id": None,
+                    "user_api_key_end_user_id": "default_user_id",
+                },
+                "api_base": "https://api.anthropic.com/v1/messages",
+            },
+            "call_type": "pass_through_endpoint",
+            "litellm_call_id": "5cf924cb-161c-4c1d-a565-31aa71ab50ab",
+            "passthrough_logging_payload": {
+                "url": "https://api.anthropic.com/v1/messages",
+                "request_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Open a new Firefox window, navigate to google.com.",
+                                }
+                            ],
+                        },
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "I'll help you open Firefox and navigate to Google. First, let me check the desktop with a screenshot to locate the Firefox icon.",
+                                },
+                                {
+                                    "type": "tool_use",
+                                    "id": "toolu_01Tour7YxyXkwhuSP25dQEP7",
+                                    "name": "computer",
+                                    "input": {"action": "screenshot"},
+                                },
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_01Tour7YxyXkwhuSP25dQEP7",
+                                    "content": "",
+                                }
+                            ],
+                        },
+                    ],
+                    "tools": [
+                        {
+                            "type": "computer_20241022",
+                            "name": "computer",
+                            "display_width_px": 1280,
+                            "display_height_px": 800,
+                        },
+                        {"type": "text_editor_20241022", "name": "str_replace_editor"},
+                        {"type": "bash_20241022", "name": "bash"},
+                    ],
+                    "max_tokens": 4096,
+                    "model": "claude-3-5-sonnet-20241022",
+                    **metadata_params,
+                },
+                "response_body": {
+                    "id": "msg_015uSaCZBvu9gUSkAmZtMfxC",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet-20241022",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Now I'll click on the Firefox icon to launch it.",
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_01TQsF5p7Pf4LGKyLUDDySVr",
+                            "name": "computer",
+                            "input": {"action": "mouse_move", "coordinate": [24, 36]},
+                        },
+                    ],
+                    "stop_reason": "tool_use",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 2202, "output_tokens": 89},
+                },
+            },
+            "response_cost": 0.007941,
+            "model": "claude-3-5-sonnet-20241022",
+        },
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=mock_logging_obj,
     )
 
     assert isinstance(result, dict)
     assert "model" in result
     assert "response_cost" in result
     assert "standard_logging_object" in result
+    if metadata_params:
+        assert "test" == result["standard_logging_object"]["end_user"]
+    else:
+        assert "" == result["standard_logging_object"]["end_user"]

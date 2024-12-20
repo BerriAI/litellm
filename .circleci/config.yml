@@ -68,6 +68,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "pytest-xdist==3.6.1"
       - save_cache:
           paths:
             - ./venv
@@ -103,7 +104,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants and not langfuse and not caching and not cache"
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -784,7 +785,33 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  
+  installing_litellm_on_python_3_13:
+    docker:
+      - image: cimg/python:3.13.1
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
 
   check_code_and_doc_quality:
     docker:
@@ -815,6 +842,8 @@ jobs:
       - run: python ./tests/documentation_tests/test_router_settings.py
       - run: python ./tests/documentation_tests/test_api_docs.py
       - run: python ./tests/code_coverage_tests/ensure_async_clients_test.py
+      - run: python ./tests/code_coverage_tests/enforce_llms_folder_style.py
+      - run: python ./tests/documentation_tests/test_circular_imports.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -1293,14 +1322,15 @@ jobs:
             cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
 
       - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
+          name: Check if litellm dir, tests dir, or pyproject.toml was modified
           command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/|tests/')" ]; then
+              echo "litellm, tests, or pyproject.toml updated"
             else
-              echo "No changes to litellm or pyproject.toml. Skipping PyPI publish."
+              echo "No changes to litellm, tests, or pyproject.toml. Skipping PyPI publish."
               circleci step halt
             fi
+
 
       - run:
           name: Checkout code
@@ -1603,6 +1633,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - load_testing:
           filters:
             branches:
@@ -1634,6 +1670,7 @@ workflows:
             - e2e_ui_testing
             - litellm_proxy_unit_testing
             - installing_litellm_on_python
+            - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
