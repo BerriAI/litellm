@@ -1355,7 +1355,7 @@ class ProxyConfig:
                 config[key] = get_secret(value)
         return config
 
-    def _get_team_config(self, team_id: str, all_teams_config: list[Dict]) -> Dict:
+    def _get_team_config(self, team_id: str, all_teams_config: List[Dict]) -> Dict:
         team_config: dict = {}
         for team in all_teams_config:
             if "team_id" not in team:
