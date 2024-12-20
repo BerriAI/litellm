@@ -1024,6 +1024,7 @@ from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
+from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.together_ai.chat import TogetherAIConfig

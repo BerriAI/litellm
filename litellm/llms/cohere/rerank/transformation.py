@@ -25,10 +25,10 @@ class CohereRerankConfig(BaseRerankConfig):
 
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         if api_base:
-            if not api_base.endswith("/rerank"):
-                api_base = f"{api_base}/rerank"
+            if not api_base.endswith("/v1/rerank"):
+                api_base = f"{api_base}/v1/rerank"
             return api_base
-        return "https://api.cohere.ai/v2/rerank"
+        return "https://api.cohere.ai/v1/rerank"
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
@@ -42,7 +42,7 @@ class CohereRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: Optional[dict],
         model: str,
         drop_params: bool,
         query: str,

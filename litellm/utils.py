@@ -6212,6 +6212,8 @@ class ProviderConfigManager:
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider:
             return litellm.CohereRerankConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            return litellm.AzureAIRerankConfig()
         raise ValueError(f"Provider {provider} does not support rerank config")
 
 
