@@ -1,6 +1,6 @@
 # Directory Structure
 
-When adding a new provider, you need to create a directory structure for the provider that follows the following structure:
+When adding a new provider, you need to create a directory for the provider that follows the following structure:
 
 ```
 litellm/llms/
