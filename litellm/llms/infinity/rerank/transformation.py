@@ -9,8 +9,10 @@ from typing import List, Optional
 
 import httpx
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import RerankBilledUnits, RerankResponseMeta, RerankTokens
 from litellm.types.utils import RerankResponse
 
@@ -18,6 +20,32 @@ from .common_utils import InfinityError
 
 
 class InfinityRerankConfig(CohereRerankConfig):
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        if api_key is None:
+            api_key = (
+                get_secret_str("INFINITY_API_KEY")
+                or get_secret_str("INFINITY_API_KEY")
+                or litellm.infinity_key
+            )
+
+        default_headers = {
+            "Authorization": f"bearer {api_key}",
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+
+        # If 'Authorization' is provided in headers, it overrides the default.
+        if "Authorization" in headers:
+            default_headers["Authorization"] = headers["Authorization"]
+
+        # Merge other headers, overriding any default ones except Authorization
+        return {**default_headers, **headers}
+
     def transform_rerank_response(
         self,
         model: str,
