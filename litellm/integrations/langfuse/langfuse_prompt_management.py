@@ -19,12 +19,12 @@ if TYPE_CHECKING:
     from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
 
-    LANGFUSE = Langfuse
+    LangfuseClass = Langfuse
 
     PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
 else:
     PROMPT_CLIENT = Any
-    LANGFUSE = Any
+    LangfuseClass = Any
 
 
 @lru_cache(maxsize=10)
@@ -33,7 +33,7 @@ def langfuse_client_init(
     langfuse_secret=None,
     langfuse_host=None,
     flush_interval=1,
-) -> LANGFUSE:
+) -> LangfuseClass:
     """
     Initialize Langfuse client with caching to prevent multiple initializations.
 
@@ -107,7 +107,7 @@ class LangfusePromptManagement(CustomLogger):
         )
 
     def _get_prompt_from_id(
-        self, langfuse_prompt_id: str, langfuse_client: LANGFUSE
+        self, langfuse_prompt_id: str, langfuse_client: LangfuseClass
     ) -> PROMPT_CLIENT:
         return langfuse_client.get_prompt(langfuse_prompt_id)
 
