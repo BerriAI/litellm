@@ -322,6 +322,13 @@ const sidebars = {
     },
     {
       type: "category",
+      label: "Adding Providers",
+      items: [
+        "adding_provider/directory_structure", 
+        "adding_provider/new_rerank_provider"],
+    },
+    {
+      type: "category",
       label: "Logging & Observability",
       items: [
         "observability/mlflow",
