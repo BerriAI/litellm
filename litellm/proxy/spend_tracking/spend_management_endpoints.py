@@ -2,7 +2,7 @@
 import collections
 import os
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,11 +12,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.proxy_server import PrismaClient
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+else:
+    PrismaClient = Any
 
 router = APIRouter()
 
