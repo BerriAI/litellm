@@ -4016,22 +4016,19 @@ def test_completion_deepseek():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="Account deleted by IBM.")
+# @pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx_error():
     litellm.set_verbose = True
-    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    model_name = "watsonx_text/ibm/granite-13b-chat-v2"
 
-    with pytest.raises(litellm.BadRequestError) as e:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            stop=["stop"],
-            max_tokens=20,
-        )
-        # Add any assertions here to check the response
-        print(response)
-
-    assert "use 'watsonx_text' route instead" in str(e).lower()
+    response = completion(
+        model=model_name,
+        messages=messages,
+        stop=["stop"],
+        max_tokens=20,
+    )
+    # Add any assertions here to check the response
+    print(response)
 
 
 @pytest.mark.skip(reason="Skip test. account deleted.")

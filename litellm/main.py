@@ -2585,43 +2585,23 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="watsonx",
             )
         elif custom_llm_provider == "watsonx_text":
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = watsonxai.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
-                custom_prompt_dict=custom_prompt_dict,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,  # type: ignore
-                logger_fn=logger_fn,
-                encoding=encoding,
-                logging_obj=logging,
-                timeout=timeout,  # type: ignore
                 acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="watsonx_text",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
             )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] is True
-                and not isinstance(response, CustomStreamWrapper)
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    iter(response),
-                    model,
-                    custom_llm_provider="watsonx",
-                    logging_obj=logging,
-                )
-
-            if optional_params.get("stream", False):
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=None,
-                    original_response=response,
-                )
-            ## RESPONSE OBJECT
-            response = response
         elif custom_llm_provider == "vllm":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             model_response = vllm_handler.completion(
