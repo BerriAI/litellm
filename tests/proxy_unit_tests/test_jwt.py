@@ -1140,14 +1140,26 @@ async def test_end_user_jwt_auth(monkeypatch):
     )  # jwt token decoded sub value
 
     temp_response = Response()
-
-    resp = await chat_completion(
-        request=request,
-        fastapi_response=temp_response,
-        model="gpt-4o",
-        user_api_key_dict=result,
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
     )
 
-    assert resp is not None
+    with patch.object(
+        litellm.proxy.hooks.proxy_track_cost_callback, "_should_track_cost_callback"
+    ) as mock_client:
+        resp = await chat_completion(
+            request=request,
+            fastapi_response=temp_response,
+            model="gpt-4o",
+            user_api_key_dict=result,
+        )
 
-    await asyncio.sleep(1)
+        assert resp is not None
+
+        await asyncio.sleep(1)
+
+        mock_client.assert_called_once()
+
+        mock_client.call_args.kwargs[
+            "end_user_id"
+        ] == "81b3e52a-67a6-4efb-9645-70527e101479"
