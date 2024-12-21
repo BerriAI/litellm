@@ -259,7 +259,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <TableBody>
                     {chatHistory.map((message, index) => (
                       <TableRow key={index}>
-                        <TableCell>{`${message.role}: ${message.content}`}</TableCell>
+                        <TableCell>
+                          <div style={{ 
+                            whiteSpace: "pre-wrap", 
+                            wordBreak: "break-word",
+                            maxWidth: "100%" 
+                          }}>
+                            <strong>{message.role}:</strong> {message.content}
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
