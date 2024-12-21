@@ -1,13 +1,21 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.utils import ModelResponse
 
 from ...base_llm.chat.transformation import BaseConfig
-from ..common_utils import WatsonXAIError
+from ..common_utils import (
+    WatsonXAIError,
+    _generate_watsonx_token,
+    _get_api_params,
+    convert_watsonx_messages_to_prompt,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -225,9 +233,28 @@ class IBMWatsonXAIConfig(BaseConfig):
         litellm_params: Dict,
         headers: Dict,
     ) -> Dict:
-        raise NotImplementedError(
-            "transform_request not implemented. Done in watsonx/completion handler.py"
+        provider = model.split("/")[0]
+        prompt = convert_watsonx_messages_to_prompt(
+            model=model,
+            messages=messages,
+            provider=provider,
+            custom_prompt_dict={},
         )
+        extra_body_params = optional_params.pop("extra_body", {})
+        optional_params.update(extra_body_params)
+        watsonx_api_params = _get_api_params(params=optional_params)
+        # init the payload to the text generation call
+        payload = {
+            "input": prompt,
+            "moderations": optional_params.pop("moderations", {}),
+            "parameters": optional_params,
+        }
+
+        if not model.startswith("deployment/"):
+            payload["model_id"] = model
+            payload["project_id"] = watsonx_api_params["project_id"]
+
+        return payload
 
     def transform_response(
         self,
@@ -259,6 +286,61 @@ class IBMWatsonXAIConfig(BaseConfig):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        token = cast(Optional[str], optional_params.get("token"))
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            token = _generate_watsonx_token(api_key=api_key, token=token)
+            # build auth headers
+            headers["Authorization"] = f"Bearer {token}"
         return headers
+
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        url = (
+            api_base
+            or get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
+            or get_secret_str("WATSONX_URL")
+            or get_secret_str("WX_URL")
+            or get_secret_str("WML_URL")
+        )
+
+        if url is None:
+            raise WatsonXAIError(
+                status_code=401,
+                message="Error: Watsonx URL not set. Set WATSONX_API_BASE in environment variables or pass in as parameter - 'api_base='.",
+            )
+
+        if model.startswith("deployment/"):
+            # deployment models are passed in as 'deployment/<deployment_id>'
+            if optional_params.get("space_id") is None:
+                raise WatsonXAIError(
+                    status_code=401,
+                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
+                )
+            deployment_id = "/".join(model.split("/")[1:])
+            endpoint = (
+                WatsonXAIEndpoint.DEPLOYMENT_TEXT_GENERATION_STREAM.value
+                if stream
+                else WatsonXAIEndpoint.DEPLOYMENT_TEXT_GENERATION.value
+            )
+            endpoint = endpoint.format(deployment_id=deployment_id)
+        else:
+            endpoint = (
+                WatsonXAIEndpoint.TEXT_GENERATION_STREAM
+                if stream
+                else WatsonXAIEndpoint.TEXT_GENERATION
+            )
+        url = url.rstrip("/") + endpoint
+
+        ## add api version
+        api_version = optional_params.pop(
+            "api_version", litellm.WATSONX_DEFAULT_API_VERSION
+        )
+        url = url + f"?version={api_version}"
+        return url

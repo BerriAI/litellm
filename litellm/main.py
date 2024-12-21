@@ -145,7 +145,6 @@ from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
-from .llms.watsonx.completion.handler import IBMWatsonXAI
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -205,7 +204,6 @@ google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_model_garden_chat_completion = VertexAIModelGardenModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
-watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
@@ -2585,6 +2583,51 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="watsonx",
             )
         elif custom_llm_provider == "watsonx_text":
+            api_key = (
+                api_key
+                or optional_params.pop("apikey", None)
+                or get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_API_KEY")
+                or get_secret_str("WX_API_KEY")
+            )
+
+            api_base = (
+                api_base
+                or optional_params.pop(
+                    "url",
+                    optional_params.pop(
+                        "api_base", optional_params.pop("base_url", None)
+                    ),
+                )
+                or get_secret_str("WATSONX_API_BASE")
+                or get_secret_str("WATSONX_URL")
+                or get_secret_str("WX_URL")
+                or get_secret_str("WML_URL")
+            )
+
+            wx_credentials = optional_params.pop(
+                "wx_credentials",
+                optional_params.pop(
+                    "watsonx_credentials", None
+                ),  # follow {provider}_credentials, same as vertex ai
+            )
+
+            token: Optional[str] = None
+            if wx_credentials is not None:
+                api_base = wx_credentials.get("url", api_base)
+                api_key = wx_credentials.get(
+                    "apikey", wx_credentials.get("api_key", api_key)
+                )
+                token = wx_credentials.get(
+                    "token",
+                    wx_credentials.get(
+                        "watsonx_token", None
+                    ),  # follow format of {provider}_token, same as azure - e.g. 'azure_ad_token=..'
+                )
+
+            if token is not None:
+                optional_params["token"] = token
+
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3667,17 +3710,17 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "watsonx":
-            response = watsonxai.embedding(
-                model=model,
-                input=input,
-                encoding=encoding,
-                logging_obj=logging,
-                optional_params=optional_params,
-                model_response=EmbeddingResponse(),
-                aembedding=aembedding,
-                api_key=api_key,
-            )
+        # elif custom_llm_provider == "watsonx": # [TODO]: move to base_llm_http_handler
+        #     response = watsonxai.embedding(
+        #         model=model,
+        #         input=input,
+        #         encoding=encoding,
+        #         logging_obj=logging,
+        #         optional_params=optional_params,
+        #         model_response=EmbeddingResponse(),
+        #         aembedding=aembedding,
+        #         api_key=api_key,
+        #     )
         elif custom_llm_provider == "azure_ai":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there

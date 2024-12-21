@@ -6,13 +6,9 @@ from pydantic import BaseModel
 
 
 class WatsonXAPIParams(TypedDict):
-    url: str
-    api_key: Optional[str]
-    token: str
     project_id: str
     space_id: Optional[str]
     region_name: Optional[str]
-    api_version: str
 
 
 class WatsonXAIEndpoint(str, Enum):
