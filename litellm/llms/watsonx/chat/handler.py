@@ -8,6 +8,9 @@ from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
 from ..common_utils import WatsonXAIError, _generate_watsonx_token, _get_api_params
+from .transformation import IBMWatsonXChatConfig
+
+watsonx_chat_transformation = IBMWatsonXChatConfig()
 
 
 class WatsonXChatHandler(OpenAILikeChatHandler):
@@ -30,28 +33,39 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         optional_params: dict,
         acompletion=None,
         litellm_params=None,
-        logger_fn=None,
         headers: Optional[dict] = None,
+        logger_fn=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         custom_endpoint: Optional[bool] = None,
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        watsonx_token = _generate_watsonx_token(
-            api_key=api_key, token=optional_params.pop("token", None)
-        )
-        if headers is None:
-            headers = {}
-        headers.update(
-            {
-                "Authorization": f"Bearer {watsonx_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
+        api_params = _get_api_params(params=optional_params)
+
+        ## UPDATE HEADERS
+        headers = watsonx_chat_transformation.validate_environment(
+            headers=headers or {},
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
         )
 
-        stream: Optional[bool] = optional_params.get("stream", False)
+        ## GET API URL
+        api_base = watsonx_chat_transformation.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+            stream=optional_params.get("stream", False),
+        )
+
+        ## UPDATE PAYLOAD (optional params)
+        watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
+            model=model,
+            api_params=api_params,
+        )
+        optional_params.update(watsonx_auth_payload)
 
         return super().completion(
             model=model,

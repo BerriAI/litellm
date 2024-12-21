@@ -26,8 +26,8 @@ from litellm.utils import map_finish_reason
 
 from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import (
+    IBMWatsonXMixin,
     WatsonXAIError,
-    _generate_watsonx_token,
     _get_api_params,
     convert_watsonx_messages_to_prompt,
 )
@@ -40,7 +40,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class IBMWatsonXAIConfig(BaseConfig):
+class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     """
     Reference: https://cloud.ibm.com/apidocs/watsonx-ai#text-generation
     (See ibm_watsonx_ai.metanames.GenTextParamsMetaNames for a list of all available params)
@@ -322,27 +322,6 @@ class IBMWatsonXAIConfig(BaseConfig):
         setattr(model_response, "usage", usage)
         return model_response
 
-    def validate_environment(
-        self,
-        headers: Dict,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        api_key: Optional[str] = None,
-    ) -> Dict:
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        token = cast(Optional[str], optional_params.get("token"))
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
-            # build auth headers
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
-
     def get_complete_url(
         self,
         api_base: str,
@@ -350,20 +329,7 @@ class IBMWatsonXAIConfig(BaseConfig):
         optional_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        url = (
-            api_base
-            or get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
-            or get_secret_str("WATSONX_URL")
-            or get_secret_str("WX_URL")
-            or get_secret_str("WML_URL")
-        )
-
-        if url is None:
-            raise WatsonXAIError(
-                status_code=401,
-                message="Error: Watsonx URL not set. Set WATSONX_API_BASE in environment variables or pass in as parameter - 'api_base='.",
-            )
-
+        url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
             # deployment models are passed in as 'deployment/<deployment_id>'
             if optional_params.get("space_id") is None:
@@ -387,10 +353,9 @@ class IBMWatsonXAIConfig(BaseConfig):
         url = url.rstrip("/") + endpoint
 
         ## add api version
-        api_version = optional_params.pop(
-            "api_version", litellm.WATSONX_DEFAULT_API_VERSION
+        url = self._add_api_version_to_url(
+            url=url, api_version=optional_params.pop("api_version", None)
         )
-        url = url + f"?version={api_version}"
         return url
 
     def get_model_response_iterator(

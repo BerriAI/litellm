@@ -76,7 +76,6 @@ def _generate_watsonx_token(api_key: Optional[str], token: Optional[str]) -> str
 
 def _get_api_params(
     params: dict,
-    print_verbose: Optional[Callable] = None,
 ) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
@@ -154,3 +153,49 @@ def convert_watsonx_messages_to_prompt(
             model=model, messages=messages, custom_llm_provider="watsonx"
         )
     return prompt
+
+
+# Mixin class for shared IBM Watson X functionality
+class IBMWatsonXMixin:
+    def validate_environment(
+        self,
+        headers: Dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        api_key: Optional[str] = None,
+    ) -> Dict:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        token = cast(Optional[str], optional_params.get("token"))
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            token = _generate_watsonx_token(api_key=api_key, token=token)
+            # build auth headers
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    def _get_base_url(self, api_base: Optional[str]) -> str:
+        url = (
+            api_base
+            or get_secret_str("WATSONX_API_BASE")  # consistent with 'AZURE_API_BASE'
+            or get_secret_str("WATSONX_URL")
+            or get_secret_str("WX_URL")
+            or get_secret_str("WML_URL")
+        )
+
+        if url is None:
+            raise WatsonXAIError(
+                status_code=401,
+                message="Error: Watsonx URL not set. Set WATSONX_API_BASE in environment variables or pass in as parameter - 'api_base='.",
+            )
+        return url
+
+    def _add_api_version_to_url(self, url: str, api_version: Optional[str]) -> str:
+        api_version = api_version or litellm.WATSONX_DEFAULT_API_VERSION
+        url = url + f"?version={api_version}"
+
+        return url
