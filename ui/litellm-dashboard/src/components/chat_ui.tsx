@@ -25,6 +25,7 @@ import {
 import { message, Select } from "antd";
 import { modelAvailableCall } from "./networking";
 import openai from "openai";
+import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
 
@@ -36,15 +37,15 @@ interface ChatUIProps {
 }
 
 async function generateModelResponse(
-  inputMessage: string,
+  chatHistory: { role: string; content: string }[],
   updateUI: (chunk: string) => void,
   selectedModel: string,
   accessToken: string
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal != true) {
-    console.log = function() {};
+  if (isLocal !== true) {
+    console.log = function () {};
   }
   console.log("isLocal:", isLocal);
   const proxyBaseUrl = isLocal
@@ -60,12 +61,7 @@ async function generateModelResponse(
     const response = await client.chat.completions.create({
       model: selectedModel,
       stream: true,
-      messages: [
-        {
-          role: "user",
-          content: inputMessage,
-        },
-      ],
+      messages: chatHistory as ChatCompletionMessageParam[],
     });
 
     for await (const chunk of response) {
@@ -88,7 +84,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>('session');
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ role: string; content: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
@@ -183,15 +179,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    setChatHistory((prevHistory) => [
-      ...prevHistory,
-      { role: "user", content: inputMessage },
-    ]);
+
+    const newUserMessage = { role: "user", content: inputMessage };
+
+    const updatedChatHistory = [...chatHistory, newUserMessage];
+
+    setChatHistory(updatedChatHistory);
 
     try {
       if (selectedModel) {
         await generateModelResponse(
-          inputMessage,
+          updatedChatHistory,
           (chunk) => updateUI("assistant", chunk),
           selectedModel,
           effectiveApiKey
@@ -203,6 +201,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
 
     setInputMessage("");
+  };
+
+  const clearChatHistory = () => {
+    setChatHistory([]);
+    message.success("Chat history cleared.");
   };
 
   if (userRole && userRole === "Admin Viewer") {
@@ -229,47 +232,51 @@ const ChatUI: React.FC<ChatUIProps> = ({
             <TabList>
               <Tab>Chat</Tab>
             </TabList>
-
             <TabPanels>
               <TabPanel>
-              <div className="sm:max-w-2xl">
-          <Grid numItems={2}>
-            <Col>
-              <Text>API Key Source</Text>
-              <Select
-                defaultValue="session"
-                style={{ width: "100%" }}
-                onChange={(value) => setApiKeySource(value as "session" | "custom")}
-                options={[
-                  { value: 'session', label: 'Current UI Session' },
-                  { value: 'custom', label: 'Virtual Key' },
-                ]}
-              />
-              {apiKeySource === 'custom' && (
-                <TextInput
-                  className="mt-2"
-                  placeholder="Enter custom API key"
-                  type="password"
-                  onValueChange={setApiKey}
-                  value={apiKey}
-                />
-              )}
-            </Col>
-            <Col className="mx-2">
-            <Text>Select Model:</Text>
+                <div className="sm:max-w-2xl">
+                  <Grid numItems={2}>
+                    <Col>
+                      <Text>API Key Source</Text>
+                      <Select
+                        defaultValue="session"
+                        style={{ width: "100%" }}
+                        onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                        options={[
+                          { value: 'session', label: 'Current UI Session' },
+                          { value: 'custom', label: 'Virtual Key' },
+                        ]}
+                      />
+                      {apiKeySource === 'custom' && (
+                        <TextInput
+                          className="mt-2"
+                          placeholder="Enter custom API key"
+                          type="password"
+                          onValueChange={setApiKey}
+                          value={apiKey}
+                        />
+                      )}
+                    </Col>
+                    <Col className="mx-2">
+                      <Text>Select Model:</Text>
+                      <Select
+                        placeholder="Select a Model"
+                        onChange={onChange}
+                        options={modelInfo}
+                        style={{ width: "350px" }}
+                        showSearch={true}
+                      />
+                    </Col>
+                  </Grid>
 
-            <Select
-                placeholder="Select a Model"
-                onChange={onChange}
-                options={modelInfo}
-                style={{ width: "350px" }}
-                showSearch={true}
-              />
-            </Col>
-          </Grid>
-        
-          
-        </div>
+                  {/* Clear Chat Button */}
+                  <Button
+                    onClick={clearChatHistory}
+                    className="mt-4"
+                  >
+                    Clear Chat
+                  </Button>
+                </div>
                 <Table
                   className="mt-5"
                   style={{
@@ -315,7 +322,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
-                      onKeyDown={handleKeyDown} // Add this line
+                      onKeyDown={handleKeyDown}
                       placeholder="Type your message..."
                     />
                     <Button
