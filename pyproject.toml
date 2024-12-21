@@ -26,7 +26,6 @@ tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
 aiohttp = "*"
-requests = "^2.31.0"
 pydantic = "^2.0.0"
 jsonschema = "^4.22.0"
 
