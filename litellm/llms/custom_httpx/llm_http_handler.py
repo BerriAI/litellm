@@ -404,6 +404,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         api_base: Optional[str],
         optional_params: dict,
+        litellm_params: dict,
         model_response: EmbeddingResponse,
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
@@ -426,6 +427,7 @@ class BaseLLMHTTPHandler:
         api_base = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
+            optional_params=optional_params,
         )
 
         data = provider_config.transform_embedding_request(
@@ -459,6 +461,8 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 timeout=timeout,
                 client=client,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -486,6 +490,8 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
     async def aembedding(
@@ -498,6 +504,8 @@ class BaseLLMHTTPHandler:
         provider_config: BaseEmbeddingConfig,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
@@ -526,6 +534,8 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=request_data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
         )
 
     def rerank(

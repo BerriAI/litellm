@@ -145,6 +145,7 @@ from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
+from .llms.watsonx.common_utils import IBMWatsonXMixin
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -3508,6 +3509,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params={},
             )
         elif custom_llm_provider == "gemini":
             gemini_api_key = (
@@ -3684,6 +3686,32 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params={},
+            )
+        elif custom_llm_provider == "watsonx":
+            credentials = IBMWatsonXMixin.get_watsonx_credentials(
+                optional_params=optional_params, api_key=api_key, api_base=api_base
+            )
+
+            api_key = credentials["api_key"]
+            api_base = credentials["api_base"]
+
+            if "token" in credentials:
+                optional_params["token"] = credentials["token"]
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
+                client=client,
+                aembedding=aembedding,
             )
         elif custom_llm_provider == "xinference":
             api_key = (
@@ -3710,17 +3738,6 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
-        # elif custom_llm_provider == "watsonx": # [TODO]: move to base_llm_http_handler
-        #     response = watsonxai.embedding(
-        #         model=model,
-        #         input=input,
-        #         encoding=encoding,
-        #         logging_obj=logging,
-        #         optional_params=optional_params,
-        #         model_response=EmbeddingResponse(),
-        #         aembedding=aembedding,
-        #         api_key=api_key,
-        #     )
         elif custom_llm_provider == "azure_ai":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there

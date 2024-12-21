@@ -611,3 +611,6 @@ class FineTuningJobCreate(BaseModel):
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
+
+
+AllEmbeddingInputValues = Union[str, List[str], Iterable[int], Iterable[Iterable[int]]]

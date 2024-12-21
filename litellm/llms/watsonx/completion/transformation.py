@@ -233,13 +233,6 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "us-south",
         ]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
-    ) -> BaseLLMException:
-        return WatsonXAIError(
-            status_code=status_code, message=error_message, headers=headers
-        )
-
     def transform_request(
         self,
         model: str,

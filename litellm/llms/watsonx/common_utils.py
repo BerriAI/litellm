@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.watsonx import WatsonXAPIParams
+from litellm.types.llms.watsonx import WatsonXAPIParams, WatsonXCredentials
 
 
 class WatsonXAIError(BaseLLMException):
@@ -199,3 +199,67 @@ class IBMWatsonXMixin:
         url = url + f"?version={api_version}"
 
         return url
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return WatsonXAIError(
+            status_code=status_code, message=error_message, headers=headers
+        )
+
+    @staticmethod
+    def get_watsonx_credentials(
+        optional_params: dict, api_key: Optional[str], api_base: Optional[str]
+    ) -> WatsonXCredentials:
+        api_key = (
+            api_key
+            or optional_params.pop("apikey", None)
+            or get_secret_str("WATSONX_APIKEY")
+            or get_secret_str("WATSONX_API_KEY")
+            or get_secret_str("WX_API_KEY")
+        )
+
+        api_base = (
+            api_base
+            or optional_params.pop(
+                "url",
+                optional_params.pop("api_base", optional_params.pop("base_url", None)),
+            )
+            or get_secret_str("WATSONX_API_BASE")
+            or get_secret_str("WATSONX_URL")
+            or get_secret_str("WX_URL")
+            or get_secret_str("WML_URL")
+        )
+
+        wx_credentials = optional_params.pop(
+            "wx_credentials",
+            optional_params.pop(
+                "watsonx_credentials", None
+            ),  # follow {provider}_credentials, same as vertex ai
+        )
+
+        token: Optional[str] = None
+        if wx_credentials is not None:
+            api_base = wx_credentials.get("url", api_base)
+            api_key = wx_credentials.get(
+                "apikey", wx_credentials.get("api_key", api_key)
+            )
+            token = wx_credentials.get(
+                "token",
+                wx_credentials.get(
+                    "watsonx_token", None
+                ),  # follow format of {provider}_token, same as azure - e.g. 'azure_ad_token=..'
+            )
+        if api_key is None or not isinstance(api_key, str):
+            raise WatsonXAIError(
+                status_code=401,
+                message="Error: Watsonx API key not set. Set WATSONX_API_KEY in environment variables or pass in as parameter - 'api_key='.",
+            )
+        if api_base is None or not isinstance(api_base, str):
+            raise WatsonXAIError(
+                status_code=401,
+                message="Error: Watsonx API base not set. Set WATSONX_API_BASE in environment variables or pass in as parameter - 'api_base='.",
+            )
+        return WatsonXCredentials(
+            api_key=api_key, api_base=api_base, token=cast(Optional[str], token)
+        )

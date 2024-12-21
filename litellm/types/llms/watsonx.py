@@ -11,6 +11,12 @@ class WatsonXAPIParams(TypedDict):
     region_name: Optional[str]
 
 
+class WatsonXCredentials(TypedDict):
+    api_key: str
+    api_base: str
+    token: Optional[str]
+
+
 class WatsonXAIEndpoint(str, Enum):
     TEXT_GENERATION = "/ml/v1/text/generation"
     TEXT_GENERATION_STREAM = "/ml/v1/text/generation_stream"

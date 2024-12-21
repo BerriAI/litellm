@@ -6244,7 +6244,9 @@ class ProviderConfigManager:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
             return litellm.TritonEmbeddingConfig()
-        raise ValueError(f"Provider {provider} does not support embedding config")
+        elif litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXEmbeddingConfig()
+        raise ValueError(f"Provider {provider.value} does not support embedding config")
 
     @staticmethod
     def get_provider_rerank_config(
