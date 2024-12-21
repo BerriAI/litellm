@@ -1175,11 +1175,11 @@ from .exceptions import (
 from .budget_manager import BudgetManager
 
 
-def run_server():
+def run_server(*args, **kwargs):
     try:
         from .proxy.proxy_cli import run_server as proxy_run_server
 
-        return proxy_run_server
+        return proxy_run_server(*args, **kwargs)
     except ImportError:
         raise ImportError(
             "Please install the required dependencies by running `pip install litellm[proxy]`"
