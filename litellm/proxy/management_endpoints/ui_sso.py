@@ -8,7 +8,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -447,7 +447,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
 
     # User might not be already created on first generation of key
     # But if it is, we want their models preferences
-    default_ui_key_values = {
+    default_ui_key_values: Dict[str, Any] = {
         "duration": "24hr",
         "key_max_budget": litellm.max_ui_session_budget,
         "aliases": {},
