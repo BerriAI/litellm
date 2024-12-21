@@ -7,6 +7,7 @@ from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
     LiteLLMLoggingObj,
 )
+from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import TritonError
@@ -48,7 +49,7 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
     def transform_embedding_request(
         self,
         model: str,
-        input: Union[str, List[str], List[float], List[List[float]]],
+        input: AllEmbeddingInputValues,
         optional_params: dict,
         headers: dict,
     ) -> dict:
