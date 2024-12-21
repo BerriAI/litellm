@@ -13,21 +13,27 @@ API_KEY = "sk-1234"  # Replace with your actual API key
 
 @pytest.mark.asyncio
 async def test_file_operations():
-    async with aiohttp.ClientSession() as session:
-        # Test file upload and get file_id
-        file_id = await upload_file(session)
+    openai_client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
+    file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    uploaded_file = await openai_client.files.create(
+        purpose="fine-tune",
+        file=file_content,
+    )
+    list_files = await openai_client.files.list()
+    print("list_files=", list_files)
 
-        # Test list files
-        await list_files(session)
+    get_file = await openai_client.files.retrieve(file_id=uploaded_file.id)
+    print("get_file=", get_file)
 
-        # Test get file
-        await get_file(session, file_id)
+    get_file_content = await openai_client.files.content(file_id=uploaded_file.id)
+    print("get_file_content=", get_file_content.content)
 
-        # Test get file content
-        await get_file_content(session, file_id)
+    assert get_file_content.content == file_content
+    # try get_file_content.write_to_file
+    get_file_content.write_to_file("get_file_content.jsonl")
 
-        # Test delete file
-        await delete_file(session, file_id)
+    delete_file = await openai_client.files.delete(file_id=uploaded_file.id)
+    print("delete_file=", delete_file)
 
 
 async def upload_file(session, purpose="fine-tune"):
@@ -81,6 +87,7 @@ async def get_file_content(session, file_id):
     async with session.get(url, headers=headers) as response:
         assert response.status == 200
         content = await response.text()
+        print("content from /files/{file_id}/content=", content)
         assert content  # Check if content is not empty
         print(f"Get file content successful for file ID: {file_id}")
 
