@@ -1,10 +1,11 @@
 #### SPEND MANAGEMENT #####
+import collections
 import os
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -15,6 +16,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+else:
+    PrismaClient = Any
 
 router = APIRouter()
 
@@ -1354,7 +1360,6 @@ async def global_view_spend_tags(
     """
     import traceback
 
-    from enterprise.utils import ui_get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -2451,20 +2456,6 @@ async def global_spend_models(
     return response
 
 
-@router.post(
-    "/global/predict/spend/logs",
-    tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
-)
-async def global_predict_spend_logs(request: Request):
-    from enterprise.utils import _forecast_daily_cost
-
-    data = await request.json()
-    data = data.get("data")
-    return _forecast_daily_cost(data)
-
-
 @router.get("/provider/budgets", response_model=ProviderBudgetResponse)
 async def provider_budgets() -> ProviderBudgetResponse:
     """
@@ -2554,3 +2545,110 @@ async def provider_budgets() -> ProviderBudgetResponse:
             "/provider/budgets: Exception occured - {}".format(str(e))
         )
         raise handle_exception_on_proxy(e)
+
+
+async def get_spend_by_tags(
+    prisma_client: PrismaClient, start_date=None, end_date=None
+):
+    response = await prisma_client.db.query_raw(
+        """
+        SELECT
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        COUNT(*) AS log_count,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs"
+        GROUP BY individual_request_tag;
+        """
+    )
+
+    return response
+
+
+async def ui_get_spend_by_tags(
+    start_date: str,
+    end_date: str,
+    prisma_client: Optional[PrismaClient] = None,
+    tags_str: Optional[str] = None,
+):
+    """
+    Should cover 2 cases:
+    1. When user is getting spend for all_tags. "all_tags" in tags_list
+    2. When user is getting spend for specific tags.
+    """
+
+    # tags_str is a list of strings csv of tags
+    # tags_str = tag1,tag2,tag3
+    # convert to list if it's not None
+    tags_list: Optional[List[str]] = None
+    if tags_str is not None and len(tags_str) > 0:
+        tags_list = tags_str.split(",")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response = None
+    if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
+        # Get spend for all tags
+        sql_query = """
+        SELECT
+            individual_request_tag,
+            spend_date,
+            log_count,
+            total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+        ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+        )
+    else:
+        # filter by tags list
+        sql_query = """
+        SELECT
+            individual_request_tag,
+            SUM(log_count) AS log_count,
+            SUM(total_spend) AS total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+          AND individual_request_tag = ANY($3::text[])
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+            tags_list,
+        )
+
+    # print("tags - spend")
+    # print(response)
+    # Bar Chart 1 - Spend per tag - Top 10 tags by spend
+    total_spend_per_tag: collections.defaultdict = collections.defaultdict(float)
+    total_requests_per_tag: collections.defaultdict = collections.defaultdict(int)
+    for row in response:
+        tag_name = row["individual_request_tag"]
+        tag_spend = row["total_spend"]
+
+        total_spend_per_tag[tag_name] += tag_spend
+        total_requests_per_tag[tag_name] += row["log_count"]
+
+    sorted_tags = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)
+    # convert to ui format
+    ui_tags = []
+    for tag in sorted_tags:
+        current_spend = tag[1]
+        if current_spend is not None and isinstance(current_spend, float):
+            current_spend = round(current_spend, 4)
+        ui_tags.append(
+            {
+                "name": tag[0],
+                "spend": current_spend,
+                "log_count": total_requests_per_tag[tag[0]],
+            }
+        )
+
+    return {"spend_per_tag": ui_tags}
