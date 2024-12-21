@@ -19,6 +19,12 @@ from ..common_utils import TritonError
 
 
 class TritonConfig(BaseConfig):
+    """
+    Base class for Triton configurations.
+
+    Handles routing between /infer and /generate triton completion llms
+    """
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, Headers]
     ) -> BaseLLMException:
