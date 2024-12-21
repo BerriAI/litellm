@@ -75,11 +75,11 @@ class VertexAIModelGardenModels(VertexBase):
             from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
                 VertexLLM,
             )
-        except Exception:
+        except Exception as e:
 
             raise VertexAIError(
                 status_code=400,
-                message="""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`""",
+                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
         if not (

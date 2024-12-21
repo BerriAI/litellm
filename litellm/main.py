@@ -128,7 +128,6 @@ from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
 from .llms.together_ai.completion.handler import TogetherAITextCompletion
-from .llms.triton.completion.handler import TritonChatCompletion
 from .llms.vertex_ai import vertex_ai_non_gemini
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
@@ -194,7 +193,6 @@ azure_audio_transcriptions = AzureAudioTranscription()
 huggingface = Huggingface()
 predibase_chat_completions = PredibaseChatCompletion()
 codestral_text_completions = CodestralTextCompletion()
-triton_chat_completions = TritonChatCompletion()
 bedrock_chat_completion = BedrockLLM()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
@@ -846,6 +844,9 @@ def completion(  # type: ignore # noqa: PLR0915
     client = kwargs.get("client", None)
     ### Admin Controls ###
     no_log = kwargs.get("no-log", False)
+    ### PROMPT MANAGEMENT ###
+    prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
+    prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
         messages=messages,
@@ -894,10 +895,25 @@ def completion(  # type: ignore # noqa: PLR0915
     ]
 
     default_params = openai_params + all_litellm_params
+
     litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
+
+    ## PROMPT MANAGEMENT HOOKS ##
+
+    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
+        model, messages, optional_params = (
+            litellm_logging_obj.get_chat_completion_prompt(
+                model=model,
+                messages=messages,
+                non_default_params=non_default_params,
+                headers=headers,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+            )
+        )
 
     try:
         if base_url is not None:
@@ -1002,9 +1018,6 @@ def completion(  # type: ignore # noqa: PLR0915
             and supports_system_message is False
         ):
             messages = map_system_message_pt(messages=messages)
-        model_api_key = get_api_key(
-            llm_provider=custom_llm_provider, dynamic_api_key=api_key
-        )  # get the api key from the environment if required for the model
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
@@ -2696,24 +2709,22 @@ def completion(  # type: ignore # noqa: PLR0915
 
         elif custom_llm_provider == "triton":
             api_base = litellm.api_base or api_base
-            model_response = triton_chat_completions.completion(
-                api_base=api_base,
-                timeout=timeout,  # type: ignore
+            response = base_llm_http_handler.completion(
                 model=model,
+                stream=stream,
                 messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
                 optional_params=optional_params,
-                logging_obj=logging,
-                stream=stream,
-                acompletion=acompletion,
-                client=client,
                 litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
             )
-
-            ## RESPONSE OBJECT
-            response = model_response
-            return response
-
         elif custom_llm_provider == "cloudflare":
             api_key = (
                 api_key
@@ -3462,9 +3473,10 @@ def embedding(  # noqa: PLR0915
                 raise ValueError(
                     "api_base is required for triton. Please pass `api_base`"
                 )
-            response = triton_chat_completions.embedding(  # type: ignore
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
+                custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,

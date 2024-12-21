@@ -2249,10 +2249,19 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
             )
     elif custom_llm_provider == "triton":
-        keys = list(non_default_params.keys())
-        for k in keys:
-            non_default_params.pop(k, None)
-        final_params = {**non_default_params, **kwargs}
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.TritonEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
         return final_params
     elif custom_llm_provider == "databricks":
         supported_params = get_supported_openai_params(
@@ -2440,6 +2449,23 @@ def _remove_strict_from_schema(schema):
             _remove_strict_from_schema(item)
 
     return schema
+
+
+def _remove_unsupported_params(
+    non_default_params: dict, supported_openai_params: Optional[List[str]]
+) -> dict:
+    """
+    Remove unsupported params from non_default_params
+    """
+    remove_keys = []
+    if supported_openai_params is None:
+        return {}  # no supported params, so no optional openai params to send
+    for param in non_default_params.keys():
+        if param not in supported_openai_params:
+            remove_keys.append(param)
+    for key in remove_keys:
+        non_default_params.pop(key, None)
+    return non_default_params
 
 
 def get_optional_params(  # noqa: PLR0915
@@ -2688,11 +2714,13 @@ def get_optional_params(  # noqa: PLR0915
                 # Always keeps this in elif code blocks
                 else:
                     unsupported_params[k] = non_default_params[k]
+
         if unsupported_params:
             if litellm.drop_params is True or (
                 drop_params is not None and drop_params is True
             ):
-                pass
+                for k in unsupported_params.keys():
+                    non_default_params.pop(k, None)
             else:
                 raise UnsupportedParamsError(
                     status_code=500,
@@ -2792,6 +2820,17 @@ def get_optional_params(  # noqa: PLR0915
                 if drop_params is not None and isinstance(drop_params, bool)
                 else False
             ),
+        )
+    elif custom_llm_provider == "triton":
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.TritonConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
         )
 
     elif custom_llm_provider == "maritalk":
@@ -6203,6 +6242,8 @@ class ProviderConfigManager:
     ) -> BaseEmbeddingConfig:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
+        elif litellm.LlmProviders.TRITON == provider:
+            return litellm.TritonEmbeddingConfig()
         raise ValueError(f"Provider {provider} does not support embedding config")
 
     @staticmethod
@@ -6228,7 +6269,13 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    proxy_server_request = litellm_params.get("proxy_server_request") or {}
+    _metadata = cast(dict, litellm_params.get("metadata", {}) or {})
+
+    end_user_id = cast(
+        Optional[str],
+        litellm_params.get("user_api_key_end_user_id")
+        or _metadata.get("user_api_key_end_user_id"),
+    )
     if litellm.disable_end_user_cost_tracking:
         return None
     if (
@@ -6236,7 +6283,7 @@ def get_end_user_id_for_cost_tracking(
         and litellm.disable_end_user_cost_tracking_prometheus_only
     ):
         return None
-    return proxy_server_request.get("body", {}).get("user", None)
+    return end_user_id
 
 
 def is_prompt_caching_valid_prompt(

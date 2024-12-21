@@ -281,6 +281,7 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
         }
 
 
+@pytest.mark.skip(reason="causes openai rate limit errors")
 def test_audio_speech_cost_calc():
     from litellm.integrations.custom_logger import CustomLogger
 

@@ -1113,8 +1113,8 @@ def test_models_by_provider():
     "litellm_params, disable_end_user_cost_tracking, expected_end_user_id",
     [
         ({}, False, None),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+        ({"user_api_key_end_user_id": "123"}, False, "123"),
+        ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking(
@@ -1133,8 +1133,8 @@ def test_get_end_user_id_for_cost_tracking(
     "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
     [
         ({}, False, None),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+        ({"user_api_key_end_user_id": "123"}, False, "123"),
+        ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking_prometheus_only(

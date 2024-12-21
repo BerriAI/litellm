@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
@@ -424,6 +424,40 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        headers: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        for (
+            custom_logger_compatible_callback
+        ) in litellm._known_custom_logger_compatible_callbacks:
+            if model.startswith(custom_logger_compatible_callback):
+                custom_logger = _init_custom_logger_compatible_class(
+                    logging_integration=custom_logger_compatible_callback,
+                    internal_usage_cache=None,
+                    llm_router=None,
+                )
+                if custom_logger is None:
+                    continue
+                model, messages, non_default_params = (
+                    custom_logger.get_chat_completion_prompt(
+                        model=model,
+                        messages=messages,
+                        non_default_params=non_default_params,
+                        headers=headers,
+                        prompt_id=prompt_id,
+                        prompt_variables=prompt_variables,
+                        dynamic_callback_params=self.standard_callback_dynamic_params,
+                    )
+                )
+
+        return model, messages, non_default_params
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -2585,6 +2619,7 @@ class StandardLoggingPayloadSetup:
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
+            user_api_key_end_user_id=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3041,6 +3076,7 @@ def get_standard_logging_metadata(
         spend_logs_metadata=None,
         requester_ip_address=None,
         requester_metadata=None,
+        user_api_key_end_user_id=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
