@@ -2,8 +2,6 @@ name: Reset litellm_stable branch
 
 on:
   release:
-    types: [published]
-
 jobs:
   update-stable-branch:
     if: ${{ startsWith(github.event.release.tag_name, 'v') && !endsWith(github.event.release.tag_name, '-stable') }}
