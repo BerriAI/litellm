@@ -1,7 +1,7 @@
 model_list:
-  - model_name: openai/o1-preview
+  - model_name: openai/*
     litellm_params:
-      model: openai/o1-preview
+      model: openai/*
       api_key: os.environ/OPENAI_API_KEY
 
 
