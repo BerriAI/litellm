@@ -588,14 +588,14 @@ def test_call_with_end_user_over_budget(prisma_client):
             request._url = URL(url="/chat/completions")
             bearer_token = "Bearer sk-1234"
 
-            result = await user_api_key_auth(request=request, api_key=bearer_token)
-
             async def return_body():
                 return_string = f'{{"model": "gemini-pro-vision", "user": "{user}"}}'
                 # return string as bytes
                 return return_string.encode()
 
             request.body = return_body
+
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
 
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm import Choices, Message, ModelResponse, Usage
@@ -624,7 +624,7 @@ def test_call_with_end_user_over_budget(prisma_client):
                     "litellm_params": {
                         "metadata": {
                             "user_api_key": "sk-1234",
-                            "user_api_key_user_id": user,
+                            "user_api_key_end_user_id": user,
                         },
                         "proxy_server_request": {
                             "body": {
@@ -653,6 +653,7 @@ def test_call_with_end_user_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
+        print(f"raised error: {e}, traceback: {traceback.format_exc()}")
         error_detail = e.message
         assert "Budget has been exceeded! Current" in error_detail
         assert isinstance(e, ProxyException)
@@ -3634,3 +3635,19 @@ async def test_enforce_unique_key_alias(prisma_client):
     except Exception as e:
         print("Unexpected error:", e)
         pytest.fail(f"An unexpected error occurred: {str(e)}")
+
+
+def test_should_track_cost_callback():
+    """
+    Test that the should_track_cost_callback function works as expected
+    """
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
+    )
+
+    assert _should_track_cost_callback(
+        user_api_key=None,
+        user_id=None,
+        team_id=None,
+        end_user_id="1234",
+    )

@@ -6269,7 +6269,13 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    proxy_server_request = litellm_params.get("proxy_server_request") or {}
+    _metadata = cast(dict, litellm_params.get("metadata", {}) or {})
+
+    end_user_id = cast(
+        Optional[str],
+        litellm_params.get("user_api_key_end_user_id")
+        or _metadata.get("user_api_key_end_user_id"),
+    )
     if litellm.disable_end_user_cost_tracking:
         return None
     if (
@@ -6277,7 +6283,7 @@ def get_end_user_id_for_cost_tracking(
         and litellm.disable_end_user_cost_tracking_prometheus_only
     ):
         return None
-    return proxy_server_request.get("body", {}).get("user", None)
+    return end_user_id
 
 
 def is_prompt_caching_valid_prompt(

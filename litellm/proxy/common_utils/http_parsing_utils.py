@@ -60,7 +60,7 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
             return {}
         return dict(request.headers)
     except Exception as e:
-        verbose_proxy_logger.exception(
+        verbose_proxy_logger.debug(
             "Unexpected error reading request headers - {}".format(e)
         )
         return {}
