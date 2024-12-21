@@ -7774,7 +7774,7 @@ async def login(request: Request):  # noqa: PLR0915
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
                     "duration": "24hr",
-                    "key_max_budget": 5,
+                    "key_max_budget": litellm.max_ui_session_budget,
                     "models": [],
                     "aliases": {},
                     "config": {},
@@ -7841,7 +7841,7 @@ async def login(request: Request):  # noqa: PLR0915
                     **{  # type: ignore
                         "user_role": user_role,
                         "duration": "24hr",
-                        "key_max_budget": 5,
+                        "key_max_budget": litellm.max_ui_session_budget,
                         "models": [],
                         "aliases": {},
                         "config": {},
@@ -7972,7 +7972,7 @@ async def onboarding(invite_link: str):
         **{
             "user_role": user_obj.user_role,
             "duration": "24hr",
-            "key_max_budget": 5,
+            "key_max_budget": litellm.max_ui_session_budget,
             "models": [],
             "aliases": {},
             "config": {},

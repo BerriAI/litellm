@@ -88,6 +88,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userRole,
   userID,
 }) => {
+  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>('session');
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<any[]>([]);
@@ -115,36 +116,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("model_info:", fetchedAvailableModels);
   
         if (fetchedAvailableModels?.data.length > 0) {
-          const options = fetchedAvailableModels["data"].map((item: { id: string }) => ({
-            value: item.id,
-            label: item.id
-          }));
-  
-          // Now, 'options' contains the list you wanted
-          console.log(options); // You can log it to verify the list
+          // Create a Map to store unique models using the model ID as key
+          const uniqueModelsMap = new Map();
+          
+          fetchedAvailableModels["data"].forEach((item: { id: string }) => {
+            uniqueModelsMap.set(item.id, {
+              value: item.id,
+              label: item.id
+            });
+          });
 
-          // if options.length > 0, only store unique values
-          if (options.length > 0) {
-            const uniqueModels = Array.from(new Set(options));
+          // Convert Map values back to array
+          const uniqueModels = Array.from(uniqueModelsMap.values());
 
-            console.log("Unique models:", uniqueModels);
+          // Sort models alphabetically
+          uniqueModels.sort((a, b) => a.label.localeCompare(b.label));
 
-            // sort uniqueModels alphabetically
-            uniqueModels.sort((a: any, b: any) => a.label.localeCompare(b.label));
-
-
-            console.log("Model info:", modelInfo);
-            
-            // setModelInfo(options) should be inside the if block to avoid setting it when no data is available
-            setModelInfo(uniqueModels);
-          }
-
-
-          setSelectedModel(fetchedAvailableModels.data[0].id);
+          setModelInfo(uniqueModels);
+          setSelectedModel(uniqueModels[0].value);
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
-        // Handle error as needed
       }
     };
   
@@ -176,7 +168,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
-    if (!apiKey || !token || !userRole || !userID) {
+    if (!token || !userRole || !userID) {
+      return;
+    }
+
+    const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+
+    if (!effectiveApiKey) {
+      message.error("Please provide an API key or select Current UI Session");
       return;
     }
 
@@ -191,7 +190,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           inputMessage,
           (chunk) => updateUI("assistant", chunk),
           selectedModel,
-          apiKey
+          effectiveApiKey
         );
       }
     } catch (error) {
@@ -232,8 +231,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <div className="sm:max-w-2xl">
           <Grid numItems={2}>
             <Col>
-            <Text>API Key</Text>
-              <TextInput placeholder="Type API Key here" type="password" onValueChange={setApiKey} value={apiKey}/>
+              <Text>API Key Source</Text>
+              <Select
+                defaultValue="session"
+                style={{ width: "100%" }}
+                onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                options={[
+                  { value: 'session', label: 'Current UI Session' },
+                  { value: 'custom', label: 'Virtual Key' },
+                ]}
+              />
+              {apiKeySource === 'custom' && (
+                <TextInput
+                  className="mt-2"
+                  placeholder="Enter custom API key"
+                  type="password"
+                  onValueChange={setApiKey}
+                  value={apiKey}
+                />
+              )}
             </Col>
             <Col className="mx-2">
             <Text>Select Model:</Text>
@@ -242,10 +258,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 placeholder="Select a Model"
                 onChange={onChange}
                 options={modelInfo}
-                style={{ width: "200px" }}
-                
-                
-               
+                style={{ width: "350px" }}
+                showSearch={true}
               />
             </Col>
           </Grid>
@@ -270,7 +284,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <TableBody>
                     {chatHistory.map((message, index) => (
                       <TableRow key={index}>
-                        <TableCell>{`${message.role}: ${message.content}`}</TableCell>
+                        <TableCell>
+                          <div style={{ 
+                            whiteSpace: "pre-wrap", 
+                            wordBreak: "break-word",
+                            maxWidth: "100%" 
+                          }}>
+                            <strong>{message.role}:</strong> {message.content}
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

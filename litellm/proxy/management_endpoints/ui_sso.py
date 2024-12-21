@@ -449,7 +449,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     # But if it is, we want their models preferences
     default_ui_key_values = {
         "duration": "24hr",
-        "key_max_budget": 0.01,
+        "key_max_budget": litellm.max_ui_session_budget,
         "aliases": {},
         "config": {},
         "spend": 0,
