@@ -1386,7 +1386,7 @@ class AzureChatCompletion(BaseLLM):
             input=input,
             **optional_params,
         )
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def async_audio_speech(
         self,
@@ -1415,14 +1415,14 @@ class AzureChatCompletion(BaseLLM):
             client_type="async",
         )  # type: ignore
 
-        response = await azure_client.audio.speech.create(
+        azure_response = await azure_client.audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
             **optional_params,
         )
 
-        return response
+        return HttpxBinaryResponseContent(response=azure_response.response)
 
     def get_headers(
         self,

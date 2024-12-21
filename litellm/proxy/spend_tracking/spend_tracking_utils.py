@@ -1,7 +1,7 @@
 import json
 import secrets
 from datetime import datetime as dt
-from typing import Optional
+from typing import Optional, cast
 
 from pydantic import BaseModel
 
@@ -40,7 +40,9 @@ def get_logging_payload(
 
     if kwargs is None:
         kwargs = {}
-    if response_obj is None:
+    if response_obj is None or (
+        not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict)
+    ):
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
@@ -50,10 +52,10 @@ def get_logging_payload(
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    usage = response_obj.get("usage", None) or {}
+    usage = cast(dict, response_obj).get("usage", None) or {}
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
-    id = response_obj.get("id") or kwargs.get("litellm_call_id")
+    id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):

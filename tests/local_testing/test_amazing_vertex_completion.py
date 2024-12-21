@@ -210,7 +210,7 @@ async def test_get_router_response():
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
 # @pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai_anthropic():
+def test_aavertex_ai_anthropic():
     model = "claude-3-sonnet@20240229"
 
     vertex_ai_project = "adroit-crow-413218"
