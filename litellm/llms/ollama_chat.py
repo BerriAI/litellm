@@ -10,6 +10,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.ollama.common_utils import process_response_format
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -152,8 +153,8 @@ class OllamaChatConfig(OpenAIGPTConfig):
                 optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "response_format" and value["type"] == "json_object":
-                optional_params["format"] = "json"
+            if param == "response_format" and isinstance(value, dict):
+                optional_params["format"] = process_response_format(value)
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output

@@ -22,7 +22,7 @@ from litellm.types.utils import (
     ProviderField,
 )
 
-from ..common_utils import OllamaError, _convert_image
+from ..common_utils import OllamaError, _convert_image, process_response_format
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -172,8 +172,7 @@ class OllamaConfig(BaseConfig):
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and isinstance(value, dict):
-                if value["type"] == "json_object":
-                    optional_params["format"] = "json"
+                optional_params["format"] = process_response_format(value)
 
         return optional_params
 

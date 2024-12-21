@@ -2,6 +2,7 @@ from typing import Union
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
@@ -43,3 +44,29 @@ def _convert_image(image):
     image_data.convert("RGB").save(jpeg_image, "JPEG")
     jpeg_image.seek(0)
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
+
+
+def process_response_format(response_format: dict) -> str:
+    """
+    Process OpenAI-style response format specification into Ollama API format
+    string
+
+    Args:
+        response_format (dict): OpenAI-style response format specification
+
+    Returns:
+        str: Format string for Ollama API
+    """
+    format_type = response_format.get("type")
+    if format_type == "json_object":
+        return "json"
+    elif format_type == "json_schema":
+        schema = response_format.get("json_schema", {}).get("schema")
+        if not schema:
+            raise ValueError("Invalid JSON schema format")
+        return schema
+    else:
+        verbose_logger.warning(
+            f"Unsupported response format type: {format_type}, falling back to 'json'"
+        )
+        return "json"
