@@ -6,6 +6,11 @@ import os
 import sys
 import traceback
 
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
 from dotenv import load_dotenv
 from openai.types.image import Image
 from litellm.caching import InMemoryCache
@@ -14,10 +19,6 @@ logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
 import os
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -142,7 +143,7 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
             "api_version": "2023-09-01-preview",
             "metadata": {
                 "model_info": {
-                    "base_model": "dall-e-3",
+                    "base_model": "azure/dall-e-3",
                 }
             },
         }
@@ -158,8 +159,15 @@ def test_image_generation_azure_dall_e_3():
             api_version="2023-12-01-preview",
             api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
             api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+            metadata={
+                "model_info": {
+                    "base_model": "azure/dall-e-3",
+                }
+            },
         )
         print(f"response: {response}")
+
+        print("response", response._hidden_params)
         assert len(response.data) > 0
     except litellm.InternalServerError as e:
         pass
