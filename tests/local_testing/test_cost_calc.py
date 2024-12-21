@@ -92,7 +92,7 @@ def test_run(model: str):
         print("Non-stream cost  : NONE")
     print(f"Non-stream cost  : {completion_cost(response) * 100:.4f} (response)")
 
-    response = router.completion(**kwargs, stream=True)  # type: ignore
+    response = router.completion(**kwargs, stream=True, stream_options={"include_usage": True})  # type: ignore
     response = stream_chunk_builder(list(response), messages=kwargs["messages"])  # type: ignore
     output = response.choices[0].message.content.replace("\n", "")  # type: ignore
     streaming_cost_calc = completion_cost(response) * 100

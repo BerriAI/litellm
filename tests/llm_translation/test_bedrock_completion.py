@@ -2224,13 +2224,19 @@ def test_bedrock_nova_topk(top_k_param):
         captured_data = result
         return result
 
-    with patch('litellm.AmazonConverseConfig._transform_request', side_effect=mock_transform):
+    with patch(
+        "litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform
+    ):
         litellm.completion(**data)
 
         # Assert that additionalRequestParameters exists and contains topK
-        assert 'additionalModelRequestFields' in captured_data
-        assert 'inferenceConfig' in captured_data['additionalModelRequestFields']
-        assert captured_data['additionalModelRequestFields']['inferenceConfig']['topK'] == 10
+        assert "additionalModelRequestFields" in captured_data
+        assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
+        assert (
+            captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"]
+            == 10
+        )
+
 
 def test_bedrock_empty_content_real_call():
     completion(
@@ -2261,3 +2267,61 @@ def test_bedrock_process_empty_text_blocks():
     }
     modified_message = process_empty_text_blocks(**message)
     assert modified_message["content"][0]["text"] == "Please continue."
+
+
+def test_nova_optional_params_tool_choice():
+    litellm.drop_params = True
+    litellm.set_verbose = True
+    litellm.completion(
+        messages=[
+            {"role": "user", "content": "A WWII competitive game for 4-8 players"}
+        ],
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        temperature=0.3,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "GameDefinition",
+                    "description": "Correctly extracted `GameDefinition` with all the required parameters with correct types",
+                    "parameters": {
+                        "$defs": {
+                            "TurnDurationEnum": {
+                                "enum": ["action", "encounter", "battle", "operation"],
+                                "title": "TurnDurationEnum",
+                                "type": "string",
+                            }
+                        },
+                        "properties": {
+                            "id": {
+                                "anyOf": [{"type": "integer"}, {"type": "null"}],
+                                "default": None,
+                                "title": "Id",
+                            },
+                            "prompt": {"title": "Prompt", "type": "string"},
+                            "name": {"title": "Name", "type": "string"},
+                            "description": {"title": "Description", "type": "string"},
+                            "competitve": {"title": "Competitve", "type": "boolean"},
+                            "players_min": {"title": "Players Min", "type": "integer"},
+                            "players_max": {"title": "Players Max", "type": "integer"},
+                            "turn_duration": {
+                                "$ref": "#/$defs/TurnDurationEnum",
+                                "description": "how long the passing of a turn should represent for a game at this scale",
+                            },
+                        },
+                        "required": [
+                            "competitve",
+                            "description",
+                            "name",
+                            "players_max",
+                            "players_min",
+                            "prompt",
+                            "turn_duration",
+                        ],
+                        "type": "object",
+                    },
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
+    )
