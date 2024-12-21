@@ -3,7 +3,7 @@ import os
 import sys
 from unittest.mock import Mock
 from litellm.proxy.utils import _get_redoc_url, _get_docs_url
-
+import json
 import pytest
 from fastapi import Request
 
@@ -976,3 +976,35 @@ def test_update_config_fields():
     )
     assert team_config["langfuse_public_key"] == "my-fake-key"
     assert team_config["langfuse_secret"] == "my-fake-secret"
+
+
+@pytest.mark.parametrize(
+    "proxy_model_list,provider",
+    [
+        (["openai/*"], "openai"),
+        (["bedrock/*"], "bedrock"),
+        (["anthropic/*"], "anthropic"),
+        (["cohere/*"], "cohere"),
+    ],
+)
+def test_get_complete_model_list(proxy_model_list, provider):
+    """
+    Test that get_complete_model_list correctly expands model groups like 'openai/*' into individual models with provider prefixes
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    complete_list = get_complete_model_list(
+        proxy_model_list=proxy_model_list,
+        key_models=[],
+        team_models=[],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+
+    # Check that we got a non-empty list back
+    assert len(complete_list) > 0
+
+    print("complete_list", json.dumps(complete_list, indent=4))
+
+    for _model in complete_list:
+        assert provider in _model
