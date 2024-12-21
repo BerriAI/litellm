@@ -249,10 +249,24 @@ class TritonInferConfig(TritonGenerateConfig):
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         _json_response = raw_response.json()
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise TritonError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+
+        _triton_response_data = raw_response_json["outputs"][0]["data"]
+        triton_response_data: Optional[str] = None
+        if isinstance(_triton_response_data, list):
+            triton_response_data = "".join(_triton_response_data)
+        else:
+            triton_response_data = _triton_response_data
+
         model_response.choices = [
             Choices(
                 index=0,
-                message=Message(content=_json_response["outputs"][0]["data"]),
+                message=Message(content=triton_response_data),
             )
         ]
 
