@@ -36,12 +36,8 @@ from litellm.proxy._types import (
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 import httpx
-import dotenv
 from enum import Enum
 
-litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 #############################################
 if set_verbose == True:
     _turn_on_debug()
@@ -1182,7 +1178,19 @@ from .exceptions import (
     MockException,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
+
+
+def run_server(*args, **kwargs):
+    try:
+        from .proxy.proxy_cli import run_server as proxy_run_server
+
+        return proxy_run_server(*args, **kwargs)
+    except ImportError:
+        raise ImportError(
+            "Please install the required dependencies by running `pip install litellm[proxy]`"
+        )
+
+
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
