@@ -6247,7 +6247,13 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    end_user_id = cast(Optional[str], litellm_params.get("user_api_key_end_user_id"))
+    _metadata = cast(dict, litellm_params.get("metadata", {}) or {})
+
+    end_user_id = cast(
+        Optional[str],
+        litellm_params.get("user_api_key_end_user_id")
+        or _metadata.get("user_api_key_end_user_id"),
+    )
     if litellm.disable_end_user_cost_tracking:
         return None
     if (
