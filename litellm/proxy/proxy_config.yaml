@@ -3,6 +3,13 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
 
 
 # for /files endpoints
