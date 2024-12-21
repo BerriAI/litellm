@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -36,10 +36,10 @@ async def _PROXY_track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
         metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
-        user_id = metadata.get("user_api_key_user_id", None)
-        team_id = metadata.get("user_api_key_team_id", None)
-        org_id = metadata.get("user_api_key_org_id", None)
-        key_alias = metadata.get("user_api_key_alias", None)
+        user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
+        team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
+        org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
+        key_alias = cast(Optional[str], metadata.get("user_api_key_alias", None))
         end_user_max_budget = metadata.get("user_api_end_user_max_budget", None)
         sl_object: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
@@ -61,7 +61,12 @@ async def _PROXY_track_cost_callback(
             verbose_proxy_logger.debug(
                 f"user_api_key {user_api_key}, prisma_client: {prisma_client}"
             )
-            if user_api_key is not None or user_id is not None or team_id is not None:
+            if _should_track_cost_callback(
+                user_api_key=user_api_key,
+                user_id=user_id,
+                team_id=team_id,
+                end_user_id=end_user_id,
+            ):
                 ## UPDATE DATABASE
                 await update_database(
                     token=user_api_key,
@@ -128,3 +133,22 @@ async def _PROXY_track_cost_callback(
             )
         )
         verbose_proxy_logger.exception("Error in tracking cost callback - %s", str(e))
+
+
+def _should_track_cost_callback(
+    user_api_key: Optional[str],
+    user_id: Optional[str],
+    team_id: Optional[str],
+    end_user_id: Optional[str],
+) -> bool:
+    """
+    Determine if the cost callback should be tracked based on the kwargs
+    """
+    if (
+        user_api_key is not None
+        or user_id is not None
+        or team_id is not None
+        or end_user_id is not None
+    ):
+        return True
+    return False

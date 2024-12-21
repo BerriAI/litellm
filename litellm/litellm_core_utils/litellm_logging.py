@@ -2619,6 +2619,7 @@ class StandardLoggingPayloadSetup:
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
+            user_api_key_end_user_id=None,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3075,6 +3076,7 @@ def get_standard_logging_metadata(
         spend_logs_metadata=None,
         requester_ip_address=None,
         requester_metadata=None,
+        user_api_key_end_user_id=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

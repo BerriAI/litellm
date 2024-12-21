@@ -458,6 +458,18 @@ class LangFuseLogger:
 
             tags = metadata.pop("tags", []) if supports_tags else []
 
+            standard_logging_object: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
+
+            if standard_logging_object is None:
+                end_user_id = None
+            else:
+                end_user_id = standard_logging_object["metadata"].get(
+                    "user_api_key_end_user_id", None
+                )
+
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
@@ -541,7 +553,7 @@ class LangFuseLogger:
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
-                    "user_id": user_id,
+                    "user_id": end_user_id,
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
@@ -566,10 +578,6 @@ class LangFuseLogger:
 
             cost = kwargs.get("response_cost", None)
             print_verbose(f"trace: {cost}")
-
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
