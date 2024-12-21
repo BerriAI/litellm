@@ -1,7 +1,9 @@
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
-from openai._legacy_response import HttpxBinaryResponseContent
+from openai._legacy_response import (
+    HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
+)
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -46,6 +48,11 @@ FileTypes = Union[
 
 
 EmbeddingInput = Union[str, List[str]]
+
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
+    _hidden_params: dict = {}
+    pass
 
 
 class NotGiven:

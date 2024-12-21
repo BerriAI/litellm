@@ -1253,13 +1253,13 @@ class OpenAIChatCompletion(BaseLLM):
             client=client,
         )
 
-        response = openai_client.audio.speech.create(
+        response = cast(OpenAI, openai_client).audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
             **optional_params,
         )
-        return response  # type: ignore
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def async_audio_speech(
         self,
@@ -1276,13 +1276,16 @@ class OpenAIChatCompletion(BaseLLM):
         client=None,
     ) -> HttpxBinaryResponseContent:
 
-        openai_client = self._get_openai_client(
-            is_async=True,
-            api_key=api_key,
-            api_base=api_base,
-            timeout=timeout,
-            max_retries=max_retries,
-            client=client,
+        openai_client = cast(
+            AsyncOpenAI,
+            self._get_openai_client(
+                is_async=True,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                client=client,
+            ),
         )
 
         response = await openai_client.audio.speech.create(
@@ -1292,7 +1295,7 @@ class OpenAIChatCompletion(BaseLLM):
             **optional_params,
         )
 
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def ahealth_check(
         self,
@@ -1477,7 +1480,7 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> HttpxBinaryResponseContent:
         response = await openai_client.files.content(**file_content_request)
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     def file_content(
         self,
@@ -1515,9 +1518,9 @@ class OpenAIFilesAPI(BaseLLM):
                 file_content_request=file_content_request,
                 openai_client=openai_client,
             )
-        response = openai_client.files.content(**file_content_request)
+        response = cast(OpenAI, openai_client).files.content(**file_content_request)
 
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def aretrieve_file(
         self,
