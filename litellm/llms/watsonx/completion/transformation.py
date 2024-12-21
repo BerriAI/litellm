@@ -1,3 +1,5 @@
+import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
@@ -7,7 +9,8 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
-from litellm.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import map_finish_reason
 
 from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import (
@@ -270,9 +273,42 @@ class IBMWatsonXAIConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError(
-            "transform_response not implemented. Done in watsonx/completion handler.py"
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=raw_response.text,
         )
+
+        json_resp = raw_response.json()
+
+        if "results" not in json_resp:
+            raise WatsonXAIError(
+                status_code=500,
+                message=f"Error: Invalid response from Watsonx.ai API: {json_resp}",
+            )
+        if model_response is None:
+            model_response = ModelResponse(model=json_resp.get("model_id", None))
+        generated_text = json_resp["results"][0]["generated_text"]
+        prompt_tokens = json_resp["results"][0]["input_token_count"]
+        completion_tokens = json_resp["results"][0]["generated_token_count"]
+        model_response.choices[0].message.content = generated_text  # type: ignore
+        model_response.choices[0].finish_reason = map_finish_reason(
+            json_resp["results"][0]["stop_reason"]
+        )
+        if json_resp.get("created_at"):
+            model_response.created = int(
+                datetime.fromisoformat(json_resp["created_at"]).timestamp()
+            )
+        else:
+            model_response.created = int(time.time())
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        setattr(model_response, "usage", usage)
+        return model_response
 
     def validate_environment(
         self,
