@@ -324,13 +324,18 @@ curl 'http://0.0.0.0:4000/key/generate' \
 ```
 
 
-### Virtual Key (Model Specific)
+### ✨ Virtual Key (Model Specific)
 
 Apply model specific budgets on a key. Example: 
 - Budget for `gpt-4o` is $0.0000001, for time period `1d` for `key = "sk-12345"`
 - Budget for `gpt-4o-mini` is $10, for time period `30d` for `key = "sk-12345"`
 
-#### **Add model specific budgets to keys**
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/#pricing)
+
+:::
+
 
 The spec for `model_max_budget` is **[`Dict[str, GenericBudgetInfo]`](#genericbudgetinfo)**
 
