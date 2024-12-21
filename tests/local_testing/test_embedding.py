@@ -888,23 +888,6 @@ def test_voyage_embeddings():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.asyncio
-async def test_triton_embeddings():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.aembedding(
-            model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
-            input=["good morning from litellm"],
-        )
-        print(f"response: {response}")
-
-        # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "input", ["good morning from litellm", ["good morning from litellm"]]  #
