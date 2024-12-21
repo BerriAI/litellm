@@ -6242,6 +6242,8 @@ class ProviderConfigManager:
     ) -> BaseEmbeddingConfig:
         if litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
+        elif litellm.LlmProviders.TRITON == provider:
+            return litellm.TritonEmbeddingConfig()
         raise ValueError(f"Provider {provider} does not support embedding config")
 
     @staticmethod
