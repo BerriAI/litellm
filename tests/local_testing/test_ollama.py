@@ -1,13 +1,12 @@
 import asyncio
+import json
 import os
 import sys
-import traceback
 
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 load_dotenv()
-import io
-import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,7 +18,12 @@ import pytest
 import litellm
 
 ## for ollama we can't test making the completion call
-from litellm.utils import EmbeddingResponse, get_llm_provider, get_optional_params
+from litellm.utils import (
+    EmbeddingResponse,
+    get_llm_provider,
+    get_optional_params,
+    type_to_response_format_param,
+)
 
 
 def test_get_ollama_params():
@@ -74,6 +78,31 @@ def test_ollama_json_mode():
 
 
 # test_ollama_json_mode()
+
+
+def test_ollama_structured_format():
+    # assert that format receives a structred json schema
+    class Country(BaseModel):
+        name: str
+        code: str
+        languages: list[str]
+
+    model_schema = type_to_response_format_param(Country) or {}
+    model_schema = model_schema.get("json_schema", {}).get("schema", {})
+    try:
+        converted_params = get_optional_params(
+            custom_llm_provider="ollama",
+            model="llama2",
+            temperature=0.5,
+            response_format=Country,
+        )
+        assert converted_params == {
+            "temperature": 0.5,
+            "format": model_schema,
+            "stream": False,
+        }, f"{converted_params} != {{'temperature': 0.5, 'format': {model_schema}, 'stream': False}}"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
@@ -135,7 +164,6 @@ def test_ollama_aembeddings(mock_aembeddings):
 
 @pytest.mark.skip(reason="local only test")
 def test_ollama_chat_function_calling():
-    import json
 
     tools = [
         {
