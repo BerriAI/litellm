@@ -1267,7 +1267,7 @@
         "max_input_tokens": 4097,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
-        "litellm_provider": "text-completion-openai",
+        "litellm_provider": "azure_text",
         "mode": "completion"
     },
     "azure/gpt-35-turbo-instruct": {
@@ -1275,7 +1275,7 @@
         "max_input_tokens": 4097,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
-        "litellm_provider": "text-completion-openai",
+        "litellm_provider": "azure_text",
         "mode": "completion"
     },
     "azure/gpt-35-turbo-instruct-0914": {
@@ -1283,7 +1283,7 @@
         "max_input_tokens": 4097,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
-        "litellm_provider": "text-completion-openai",
+        "litellm_provider": "azure_text",
         "mode": "completion"
     },
     "azure/mistral-large-latest": {
