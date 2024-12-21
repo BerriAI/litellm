@@ -1567,3 +1567,38 @@ def test_get_fallback_model_group():
     }
     fallback_model_group, _ = get_fallback_model_group(**args)
     assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_fallbacks_with_different_messages():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+        ],
+    )
+
+    resp = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+        fallbacks=[
+            {
+                "model": "claude-3-haiku",
+                "messages": [{"role": "user", "content": "Hey, how's it going?"}],
+            }
+        ],
+    )
+
+    print(resp)
