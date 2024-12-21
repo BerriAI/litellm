@@ -152,10 +152,14 @@ def test_e2e_batches_files():
     input_path = "input.jsonl"
     output_path = "out.jsonl"
 
-    batch_id = create_batch_oai_sdk(input_path)
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    input_file_path = os.path.join(_current_dir, input_path)
+    output_file_path = os.path.join(_current_dir, output_path)
+
+    batch_id = create_batch_oai_sdk(input_file_path)
     await_batch_completion(batch_id)
-    write_content_to_file(batch_id, output_path)
-    read_jsonl(output_path)
+    write_content_to_file(batch_id, output_file_path)
+    read_jsonl(output_file_path)
 
 
 @pytest.mark.skip(reason="Local only test to verify if things work well")
