@@ -61,7 +61,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.openai.openai import HttpxBinaryResponseContent
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
     else:
