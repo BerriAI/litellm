@@ -115,36 +115,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("model_info:", fetchedAvailableModels);
   
         if (fetchedAvailableModels?.data.length > 0) {
-          const options = fetchedAvailableModels["data"].map((item: { id: string }) => ({
-            value: item.id,
-            label: item.id
-          }));
-  
-          // Now, 'options' contains the list you wanted
-          console.log(options); // You can log it to verify the list
+          // Create a Map to store unique models using the model ID as key
+          const uniqueModelsMap = new Map();
+          
+          fetchedAvailableModels["data"].forEach((item: { id: string }) => {
+            uniqueModelsMap.set(item.id, {
+              value: item.id,
+              label: item.id
+            });
+          });
 
-          // if options.length > 0, only store unique values
-          if (options.length > 0) {
-            const uniqueModels = Array.from(new Set(options));
+          // Convert Map values back to array
+          const uniqueModels = Array.from(uniqueModelsMap.values());
 
-            console.log("Unique models:", uniqueModels);
+          // Sort models alphabetically
+          uniqueModels.sort((a, b) => a.label.localeCompare(b.label));
 
-            // sort uniqueModels alphabetically
-            uniqueModels.sort((a: any, b: any) => a.label.localeCompare(b.label));
-
-
-            console.log("Model info:", modelInfo);
-            
-            // setModelInfo(options) should be inside the if block to avoid setting it when no data is available
-            setModelInfo(uniqueModels);
-          }
-
-
-          setSelectedModel(fetchedAvailableModels.data[0].id);
+          setModelInfo(uniqueModels);
+          setSelectedModel(uniqueModels[0].value);
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
-        // Handle error as needed
       }
     };
   
@@ -242,10 +233,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 placeholder="Select a Model"
                 onChange={onChange}
                 options={modelInfo}
-                style={{ width: "200px" }}
-                
-                
-               
+                style={{ width: "350px" }}
+                showSearch={true}
               />
             </Col>
           </Grid>
