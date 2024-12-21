@@ -88,6 +88,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userRole,
   userID,
 }) => {
+  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>('session');
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<any[]>([]);
@@ -167,7 +168,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
-    if (!apiKey || !token || !userRole || !userID) {
+    if (!token || !userRole || !userID) {
+      return;
+    }
+
+    const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+
+    if (!effectiveApiKey) {
+      message.error("Please provide an API key or select Current UI Session");
       return;
     }
 
@@ -182,7 +190,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           inputMessage,
           (chunk) => updateUI("assistant", chunk),
           selectedModel,
-          apiKey
+          effectiveApiKey
         );
       }
     } catch (error) {
@@ -223,8 +231,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <div className="sm:max-w-2xl">
           <Grid numItems={2}>
             <Col>
-            <Text>API Key</Text>
-              <TextInput placeholder="Type API Key here" type="password" onValueChange={setApiKey} value={apiKey}/>
+              <Text>API Key Source</Text>
+              <Select
+                defaultValue="session"
+                style={{ width: "100%" }}
+                onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                options={[
+                  { value: 'session', label: 'Current UI Session' },
+                  { value: 'custom', label: 'Virtual Key' },
+                ]}
+              />
+              {apiKeySource === 'custom' && (
+                <TextInput
+                  className="mt-2"
+                  placeholder="Enter custom API key"
+                  type="password"
+                  onValueChange={setApiKey}
+                  value={apiKey}
+                />
+              )}
             </Col>
             <Col className="mx-2">
             <Text>Select Model:</Text>
