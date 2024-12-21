@@ -270,6 +270,7 @@ def validate_redacted_message_span_attributes(span):
         "metadata.user_api_key_alias",
         "metadata.user_api_key_user_id",
         "metadata.user_api_key_org_id",
+        "metadata.user_api_key_end_user_id",
     ]
 
     _all_attributes = set(
