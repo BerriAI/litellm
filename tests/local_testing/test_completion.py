@@ -4026,7 +4026,11 @@ def test_completion_watsonx_error():
         messages=messages,
         stop=["stop"],
         max_tokens=20,
+        stream=True,
     )
+
+    for chunk in response:
+        print(chunk)
     # Add any assertions here to check the response
     print(response)
 

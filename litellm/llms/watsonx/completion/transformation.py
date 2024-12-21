@@ -1,15 +1,27 @@
+import json
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
 from litellm.utils import map_finish_reason
 
 from ...base_llm.chat.transformation import BaseConfig
@@ -380,3 +392,48 @@ class IBMWatsonXAIConfig(BaseConfig):
         )
         url = url + f"?version={api_version}"
         return url
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return WatsonxTextCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class WatsonxTextCompletionResponseIterator(BaseModelResponseIterator):
+    # def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+    #     return self.chunk_parser(json.loads(str_line))
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            results = chunk.get("results", [])
+            if len(results) > 0:
+                text = results[0].get("generated_text", "")
+                finish_reason = results[0].get("stop_reason")
+                is_finished = finish_reason != "not_finished"
+
+                return GenericStreamingChunk(
+                    text=text,
+                    is_finished=is_finished,
+                    finish_reason=finish_reason,
+                    usage=ChatCompletionUsageBlock(
+                        prompt_tokens=results[0].get("input_token_count", 0),
+                        completion_tokens=results[0].get("generated_token_count", 0),
+                        total_tokens=results[0].get("input_token_count", 0)
+                        + results[0].get("generated_token_count", 0),
+                    ),
+                )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="stop",
+                usage=None,
+            )
+        except Exception as e:
+            raise e

@@ -611,44 +611,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_watsonx_stream(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                parsed_response = chunk
-            elif isinstance(chunk, (str, bytes)):
-                if isinstance(chunk, bytes):
-                    chunk = chunk.decode("utf-8")
-                if "generated_text" in chunk:
-                    response = chunk.replace("data: ", "").strip()
-                    parsed_response = json.loads(response)
-                else:
-                    return {
-                        "text": "",
-                        "is_finished": False,
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                    }
-            else:
-                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
-                raise ValueError(
-                    f"Unable to parse response. Original response: {chunk}"
-                )
-            results = parsed_response.get("results", [])
-            if len(results) > 0:
-                text = results[0].get("generated_text", "")
-                finish_reason = results[0].get("stop_reason")
-                is_finished = finish_reason != "not_finished"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                    "prompt_tokens": results[0].get("input_token_count", 0),
-                    "completion_tokens": results[0].get("generated_token_count", 0),
-                }
-            return {"text": "", "is_finished": False}
-        except Exception as e:
-            raise e
-
     def handle_triton_stream(self, chunk):
         try:
             if isinstance(chunk, dict):
