@@ -2,18 +2,27 @@
 Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate` endpoint.
 """
 
+import json
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
     BaseLLMException,
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionUsageBlock,
+    Choices,
+    GenericStreamingChunk,
+    Message,
+    ModelResponse,
+)
 
 from ..common_utils import TritonError
 
@@ -181,7 +190,6 @@ class TritonGenerateConfig(TritonConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        _json_response = raw_response.json()
         try:
             raw_response_json = raw_response.json()
         except Exception:
@@ -254,7 +262,6 @@ class TritonInferConfig(TritonGenerateConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        _json_response = raw_response.json()
         try:
             raw_response_json = raw_response.json()
         except Exception:
@@ -277,3 +284,32 @@ class TritonInferConfig(TritonGenerateConfig):
         ]
 
         return model_response
+
+
+class TritonResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            text = ""
+            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            is_finished = False
+            finish_reason = ""
+            usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields = None
+            index = int(chunk.get("index", 0))
+
+            # set values
+            text = chunk.get("text_output", "")
+            finish_reason = chunk.get("stop_reason", "")
+            is_finished = chunk.get("is_finished", False)
+
+            return GenericStreamingChunk(
+                text=text,
+                tool_use=tool_use,
+                is_finished=is_finished,
+                finish_reason=finish_reason,
+                usage=usage,
+                index=index,
+                provider_specific_fields=provider_specific_fields,
+            )
+        except json.JSONDecodeError:
+            raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
