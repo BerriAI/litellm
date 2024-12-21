@@ -6,6 +6,9 @@ import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 from test_openai_files_endpoints import upload_file, delete_file
+import os
+import sys
+import time
 
 
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
@@ -85,6 +88,78 @@ async def test_batches_operations():
 
         # Test delete file
         await delete_file(session, file_id)
+
+
+from openai import OpenAI
+
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+
+
+def create_batch_oai_sdk(filepath) -> str:
+    batch_input_file = client.files.create(file=open(filepath, "rb"), purpose="batch")
+    batch_input_file_id = batch_input_file.id
+
+    rq = client.batches.create(
+        input_file_id=batch_input_file_id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
+        metadata={
+            "description": filepath,
+        },
+    )
+
+    print(f"Batch submitted. ID: {rq.id}")
+    return rq.id
+
+
+def await_batch_completion(batch_id: str):
+    while True:
+        batch = client.batches.retrieve(batch_id)
+        if batch.status == "completed":
+            print(f"Batch {batch_id} completed.")
+            return
+
+        print("waiting for batch to complete...")
+        time.sleep(10)
+
+
+def write_content_to_file(batch_id: str, output_path: str) -> str:
+    batch = client.batches.retrieve(batch_id)
+    content = client.files.content(batch.output_file_id)
+    print("content from files.content", content.content)
+    content.write_to_file(output_path)
+
+
+import jsonlines
+
+
+def read_jsonl(filepath: str):
+    results = []
+    with jsonlines.open(filepath) as f:
+        for line in f:
+            results.append(line)
+
+    for item in results:
+        print(item)
+        custom_id = item["custom_id"]
+        print(custom_id)
+
+
+def test_e2e_batches_files():
+    """
+    [PROD Test] Ensures OpenAI Batches + files work with OpenAI SDK
+    """
+    input_path = "input.jsonl"
+    output_path = "out.jsonl"
+
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    input_file_path = os.path.join(_current_dir, input_path)
+    output_file_path = os.path.join(_current_dir, output_path)
+
+    batch_id = create_batch_oai_sdk(input_file_path)
+    await_batch_completion(batch_id)
+    write_content_to_file(batch_id, output_file_path)
+    read_jsonl(output_file_path)
 
 
 @pytest.mark.skip(reason="Local only test to verify if things work well")
