@@ -608,8 +608,12 @@ async def user_api_key_auth(  # noqa: PLR0915
         end_user_params = {}
         if "user" in request_data:
             try:
+                end_user_id = request_data["user"]
+                end_user_params["end_user_id"] = end_user_id
+
+                # get end-user object
                 _end_user_object = await get_end_user_object(
-                    end_user_id=request_data["user"],
+                    end_user_id=end_user_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
@@ -621,7 +625,6 @@ async def user_api_key_auth(  # noqa: PLR0915
                     )
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
-                        end_user_params["end_user_id"] = _end_user_object.user_id
                         if budget_info.tpm_limit is not None:
                             end_user_params["end_user_tpm_limit"] = (
                                 budget_info.tpm_limit

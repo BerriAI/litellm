@@ -72,8 +72,12 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
             query_params = dict(request.query_params)
             if "api-version" in query_params:
                 data["api_version"] = query_params["api-version"]
+    except KeyError:
+        pass
     except Exception as e:
-        verbose_logger.error("error checking api version in query params: %s", str(e))
+        verbose_logger.exception(
+            "error checking api version in query params: %s", str(e)
+        )
 
 
 def convert_key_logging_metadata_to_callback(
@@ -266,6 +270,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
         )
         return user_api_key_logged_metadata
 
