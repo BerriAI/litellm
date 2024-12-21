@@ -69,6 +69,7 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    _check_non_standard_fallback_format,
     get_fallback_model_group,
     run_async_fallback,
 )
@@ -2647,6 +2648,27 @@ class Router:
 
             try:
                 verbose_router_logger.info("Trying to fallback b/w models")
+
+                # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
+                is_non_standard_fallback_format = _check_non_standard_fallback_format(
+                    fallbacks=fallbacks
+                )
+
+                if is_non_standard_fallback_format:
+                    input_kwargs.update(
+                        {
+                            "fallback_model_group": fallbacks,
+                            "original_model_group": original_model_group,
+                        }
+                    )
+
+                    response = await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
+
+                    return response
+
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
                         fallback_model_group: Optional[List[str]] = (
@@ -2722,7 +2744,7 @@ class Router:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     fallback_model_group, generic_fallback_idx = (
                         get_fallback_model_group(
-                            fallbacks=fallbacks,
+                            fallbacks=fallbacks,  # if fallbacks = [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
                             model_group=cast(str, model_group),
                         )
                     )
