@@ -5384,7 +5384,8 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
-        request_kwargs: Optional[Dict] = None,
+        custom_tokenizer: Optional[Dict] = None,
+        request_kwargs: Optional[Dict] = None
     ):
         """
         Returns the deployment based on routing strategy
@@ -5467,6 +5468,7 @@ class Router:
                 healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
+                custom_tokenizer=custom_tokenizer,
             )
         elif (
             self.routing_strategy == "usage-based-routing-v2"
@@ -5477,6 +5479,7 @@ class Router:
                 healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
+                custom_tokenizer=custom_tokenizer,
             )
         else:
             deployment = None

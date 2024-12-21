@@ -329,6 +329,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         rpm_values: Optional[list],
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
+        custom_tokenizer: Optional[Dict] = None,
     ) -> Optional[dict]:
         """
         Common checks for get available deployment, across sync + async implementations
@@ -345,7 +346,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             rpm_dict[rpm_keys[idx]] = rpm_values[idx]
 
         try:
-            input_tokens = token_counter(messages=messages, text=input)
+            input_tokens = token_counter(messages=messages, text=input, custom_tokenizer=custom_tokenizer)
         except Exception:
             input_tokens = 0
         verbose_router_logger.debug(f"input_tokens={input_tokens}")
@@ -549,6 +550,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         parent_otel_span: Optional[Span] = None,
+        custom_tokenizer: Optional[Dict] = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -589,6 +591,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
+            custom_tokenizer=custom_tokenizer,
         )
 
         try:
