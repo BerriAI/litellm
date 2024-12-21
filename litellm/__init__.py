@@ -1173,7 +1173,19 @@ from .exceptions import (
     MockException,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
+
+
+def run_server():
+    try:
+        from .proxy.proxy_cli import run_server as proxy_run_server
+
+        return proxy_run_server
+    except ImportError:
+        raise ImportError(
+            "Please install the required dependencies by running `pip install litellm[proxy]`"
+        )
+
+
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
