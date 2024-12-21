@@ -154,7 +154,9 @@ class OllamaChatConfig(OpenAIGPTConfig):
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and isinstance(value, dict):
-                optional_params["format"] = process_response_format(value)
+                format = process_response_format(value)
+                if format is not None:
+                    optional_params["format"] = format
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output

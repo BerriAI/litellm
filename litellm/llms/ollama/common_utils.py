@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 
 import httpx
 
@@ -46,7 +46,7 @@ def _convert_image(image):
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
 
 
-def process_response_format(response_format: dict) -> str:
+def process_response_format(response_format: dict) -> Optional[str]:
     """
     Process OpenAI-style response format specification into Ollama API format
     string
@@ -66,7 +66,4 @@ def process_response_format(response_format: dict) -> str:
             raise ValueError("Invalid JSON schema format")
         return schema
     else:
-        verbose_logger.warning(
-            f"Unsupported response format type: {format_type}, falling back to 'json'"
-        )
-        return "json"
+        verbose_logger.warning(f"Unsupported response format type: {format_type}")
