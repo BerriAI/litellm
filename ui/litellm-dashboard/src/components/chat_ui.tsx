@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Card,
@@ -21,8 +21,6 @@ import {
   TextInput,
   Button,
 } from "@tremor/react";
-
-
 
 import { message, Select } from "antd";
 import { modelAvailableCall } from "./networking";
@@ -81,7 +79,6 @@ async function generateModelResponse(
   }
 }
 
-
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
   token,
@@ -95,14 +92,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
-  const [modelInfo, setModelInfo] = useState<any[]>([]);// Declare modelInfo at the component level
+  const [modelInfo, setModelInfo] = useState<any[]>([]);
+
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
-
-    
 
     // Fetch model info and set the default selected model
     const fetchModelInfo = async () => {
@@ -143,6 +140,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
     fetchModelInfo();
   }, [accessToken, userID, userRole]);
   
+
+  useEffect(() => {
+    // Scroll to the bottom of the chat whenever chatHistory updates
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatHistory]);
 
   const updateUI = (role: string, chunk: string) => {
     setChatHistory((prevHistory) => {
@@ -201,7 +205,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setInputMessage("");
   };
 
-  if (userRole && userRole == "Admin Viewer") {
+  if (userRole && userRole === "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
       <div>
@@ -295,13 +299,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         </TableCell>
                       </TableRow>
                     ))}
+                    <TableRow>
+                      <TableCell>
+                        <div ref={chatEndRef} />
+                      </TableCell>
+                    </TableRow>
                   </TableBody>
                 </Table>
                 <div
                   className="mt-3"
                   style={{ position: "absolute", bottom: 5, width: "95%" }}
                 >
-                  <div className="flex">
+                  <div className="flex" style={{ marginTop: "16px" }}>
                     <TextInput
                       type="text"
                       value={inputMessage}
