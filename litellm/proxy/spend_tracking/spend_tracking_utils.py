@@ -40,10 +40,8 @@ def get_logging_payload(
 
     if kwargs is None:
         kwargs = {}
-    if (
-        response_obj is None
-        and not isinstance(response_obj, BaseModel)
-        and not isinstance(response_obj, dict)
+    if response_obj is None or (
+        not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict)
     ):
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
