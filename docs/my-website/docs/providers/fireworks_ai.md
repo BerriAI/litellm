@@ -8,13 +8,22 @@ https://fireworks.ai/
 **We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests**
 :::
 
+## Overview
+
+This guide explains how to integrate LiteLLM with Fireworks AI. You can connect to Fireworks AI in three main ways:
+
+1. <b> Using Fireworks AI serverless models </b> – Easy connection to Fireworks-managed models.
+2. <b> Connecting to a model in your own Fireworks account </b> – Access models that are hosted within your Fireworks account.
+3. <b> Connecting via a direct-route deployment </b> – A more flexible, customizable connection to a specific Fireworks instance.
+
+
 ## API Key
 ```python
 # env variable
 os.environ['FIREWORKS_AI_API_KEY']
 ```
 
-## Sample Usage
+## Sample Usage - Serverless Models
 ```python
 from litellm import completion
 import os
@@ -29,7 +38,7 @@ response = completion(
 print(response)
 ```
 
-## Sample Usage - Streaming
+## Sample Usage - Serverless Models - Streaming
 ```python
 from litellm import completion
 import os
@@ -46,6 +55,39 @@ response = completion(
 for chunk in response:
     print(chunk)
 ```
+
+## Sample Usage -  Models in Your Own Fireworks Account 
+```python
+from litellm import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = ""
+response = completion(
+    model="fireworks_ai/accounts/fireworks/models/YOUR_MODEL_ID", 
+    messages=[
+       {"role": "user", "content": "hello from litellm"}
+   ],
+)
+print(response)
+```
+
+## Sample Usage - Direct-Route Deployment
+```python
+from litellm import completion
+import os
+
+os.environ['FIREWORKS_AI_API_KEY'] = "YOUR_DIRECT_API_KEY"
+response = completion(
+    model="fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b#accounts/gitlab/deployments/2fb7764c", 
+    messages=[
+       {"role": "user", "content": "hello from litellm"}
+   ],
+   api_base="https://gitlab-2fb7764c.direct.fireworks.ai/v1"
+)
+print(response)
+```
+
+> **Note:** The above is for the chat interface, if you want to use the text completion interface it's model="text-completion-openai/accounts/fireworks/models/qwen2p5-coder-7b#accounts/gitlab/deployments/2fb7764c"
 
 
 ## Usage with LiteLLM Proxy 
