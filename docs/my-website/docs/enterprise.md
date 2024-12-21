@@ -31,9 +31,10 @@ This covers:
         - ✅ [Team Based Logging](./proxy/team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
         - ✅ [Disable Logging for a Team](./proxy/team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
     - **Controlling Guardrails by Virtual Keys**
-    - **Spend Tracking & Data Exports**
+    - **Spend Tracking, Budgets & Data Exports**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
         - ✅ [Set USD Budgets Spend for Custom Tags](./proxy/provider_budget_routing#-tag-budgets)
+        - ✅ [Set Model budgets for Virtual Keys](./proxy/users#-virtual-key-model-specific)
         - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
         - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](./proxy/cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
     - **Prometheus Metrics**

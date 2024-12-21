@@ -179,6 +179,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+
     const newUserMessage = { role: "user", content: inputMessage };
 
     const updatedChatHistory = [...chatHistory, newUserMessage];
@@ -231,7 +232,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
             <TabList>
               <Tab>Chat</Tab>
             </TabList>
-
             <TabPanels>
               <TabPanel>
                 <div className="sm:max-w-2xl">
