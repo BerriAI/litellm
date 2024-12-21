@@ -2,7 +2,6 @@
 from typing import Any, Optional, Union
 
 import httpx
-import requests
 
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -16,7 +15,7 @@ class BaseLLM:
     def process_response(
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        response: httpx.Response,
         model_response: ModelResponse,
         stream: bool,
         logging_obj: Any,
@@ -35,7 +34,7 @@ class BaseLLM:
     def process_text_completion_response(
         self,
         model: str,
-        response: Union[requests.Response, httpx.Response],
+        response: httpx.Response,
         model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: Any,
