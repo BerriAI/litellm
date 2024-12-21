@@ -6,8 +6,13 @@ import subprocess
 import sys
 import urllib.parse as urlparse
 
-import click
-from dotenv import load_dotenv
+try:
+    import click
+    from dotenv import load_dotenv
+except ImportError:
+    raise ImportError(
+        "Please install the required dependencies by running `pip install litellm[proxy]`"
+    )
 
 sys.path.append(os.getcwd())
 
