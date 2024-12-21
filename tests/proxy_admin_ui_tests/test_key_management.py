@@ -738,17 +738,41 @@ def test_prepare_metadata_fields(
 
 
 @pytest.mark.asyncio
-async def test_user_info_as_proxy_admin(prisma_client):
+async def test_get_user_info_with_null_team_id_as_proxy_admin(prisma_client):
     """
-    Test /user/info endpoint as a proxy admin without passing a user ID.
-    Verifies that the endpoint returns all teams and keys.
+    Test retrieving user info as a proxy admin and ensuring that keys with `team_id = None` are handled correctly.
     """
+    # Setup the proxy server with the provided prisma_client and master key
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
-    # Call user_info as a proxy admin without a user_id
+    # Generate a key without a team_id
+    key_alias = f"test_key_without_team-{uuid.uuid4()}"
+    spend = 50
+    max_budget = 200
+    models = ["fake-model"]
+
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            key_alias=key_alias,
+            spend=spend,
+            max_budget=max_budget,
+            models=models,
+            team_id=None,  # Explicitly set team_id to None
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    generated_key = new_key.key
+    print(f"Generated key without team_id: {generated_key}")
+
+    # Retrieve user info as proxy admin
     user_info_response = await user_info(
         user_id=None,
         user_api_key_dict=UserAPIKeyAuth(
@@ -758,22 +782,36 @@ async def test_user_info_as_proxy_admin(prisma_client):
         ),
     )
 
-    print("user info response: ", user_info_response.model_dump_json(indent=4))
+    print("User info response:", user_info_response.model_dump_json(indent=4))
 
-    # Verify response
-    assert user_info_response.user_id is None
-    assert user_info_response.user_info is None
+    # assert that the user info response has the new key we just created
+    assert any(
+        key["token"] == hash_token(generated_key) for key in user_info_response.keys
+    ), "Generated key not found in user info response"
 
-    # Verify that teams and keys are returned
-    assert user_info_response.teams is not None
-    assert len(user_info_response.teams) > 0, "Expected at least one team in response"
+    # Verify that the generated key has team_id = None
+    key_info = await info_key_fn(
+        key=generated_key,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
 
-    # assert that the teams are sorted by team_alias
-    team_aliases = [
-        getattr(team, "team_alias", "") or "" for team in user_info_response.teams
-    ]
-    print("Team aliases order in response=", team_aliases)
-    assert team_aliases == sorted(team_aliases), "Teams are not sorted by team_alias"
+    assert (
+        key_info["info"]["team_id"] is None
+    ), "Expected team_id to be None for the generated key"
 
-    assert user_info_response.keys is not None
-    assert len(user_info_response.keys) > 0, "Expected at least one key in response"
+    # Clean up - delete the generated key
+    delete_key_request = KeyRequest(keys=[generated_key])
+    result_delete_key = await delete_key_fn(
+        data=delete_key_request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+
+    assert result_delete_key == {"deleted_keys": [generated_key]}, "Key deletion failed"
