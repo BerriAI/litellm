@@ -36,12 +36,8 @@ from litellm.proxy._types import (
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
 import httpx
-import dotenv
 from enum import Enum
 
-litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 #############################################
 if set_verbose == True:
     _turn_on_debug()

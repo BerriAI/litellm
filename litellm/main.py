@@ -35,7 +35,6 @@ from typing import (
     cast,
 )
 
-import dotenv
 import httpx
 import openai
 import tiktoken

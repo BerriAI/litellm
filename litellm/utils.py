@@ -40,7 +40,6 @@ from inspect import iscoroutine
 from os.path import abspath, dirname, join
 
 import aiohttp
-import dotenv
 import httpx
 import openai
 import tiktoken
