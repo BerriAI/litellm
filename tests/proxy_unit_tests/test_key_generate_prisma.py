@@ -3634,3 +3634,19 @@ async def test_enforce_unique_key_alias(prisma_client):
     except Exception as e:
         print("Unexpected error:", e)
         pytest.fail(f"An unexpected error occurred: {str(e)}")
+
+
+def test_should_track_cost_callback():
+    """
+    Test that the should_track_cost_callback function works as expected
+    """
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
+    )
+
+    assert _should_track_cost_callback(
+        user_api_key=None,
+        user_id=None,
+        team_id=None,
+        end_user_id="1234",
+    )
