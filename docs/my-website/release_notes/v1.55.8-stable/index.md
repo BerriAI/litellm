@@ -1,6 +1,6 @@
 # v1.55.8-stable
 
-A new LiteLLM Stable release just went out. Here are 5 updates since v1.52.2-stable. 
+A new LiteLLM Stable release [just went out](https://github.com/BerriAI/litellm/releases/tag/v1.55.8-stable). Here are 5 updates since v1.52.2-stable. 
 
 ## Langfuse Prompt Management
 
@@ -22,7 +22,7 @@ Pass in prompts specific to model when doing fallbacks. [Start here](https://doc
 ## ✨ Azure Data Lake Storage Support
 
 Send LLM usage (spend, tokens) data to [Azure Data Lake](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction). This makes it easy to consume usage data on other services (eg. Databricks)
- [Start here](https://docs.litellm.ai/docs/logging/azure_data_lake_storage)
+ [Start here](https://docs.litellm.ai/docs/proxy/logging#azure-blob-storage)
 
 ## Docker Run LiteLLM
 
@@ -32,4 +32,8 @@ docker run \
 -p 4000:4000 \
 ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.55.8-stable
 ```
+
+## Get Daily Updates
+
+LiteLLM ships new releases every day. [Follow us on LinkedIn](https://www.linkedin.com/company/berri-ai/) to get daily updates. 
 
