@@ -350,9 +350,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-      - run:
-          name: Verify DATABASE_URL
-          command: echo "DATABASE_URL is set to $DATABASE_URL"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
