@@ -404,7 +404,7 @@ async def _get_user_info_for_proxy_admin():
     sql_query = """
         SELECT 
             (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
-            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard') as keys
+            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id IS DISTINCT FROM 'litellm-dashboard') as keys
     """
     if prisma_client is None:
         raise Exception(
