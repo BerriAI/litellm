@@ -2,7 +2,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from litellm._logging import verbose_logger
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from litellm import ModelResponse as _ModelResponse
@@ -38,7 +42,7 @@ def convert_litellm_response_object_to_str(
 
 
 def _assemble_complete_response_from_streaming_chunks(
-    result: Union[ModelResponse, TextCompletionResponse],
+    result: Union[ModelResponse, TextCompletionResponse, ModelResponseStream],
     start_time: datetime,
     end_time: datetime,
     request_kwargs: dict,

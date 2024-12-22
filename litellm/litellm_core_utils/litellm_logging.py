@@ -43,6 +43,8 @@ from litellm.types.utils import (
     ImageResponse,
     LiteLLMLoggingBaseClass,
     ModelResponse,
+    ModelResponseBase,
+    ModelResponseStream,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
@@ -741,6 +743,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         result: Union[
             ModelResponse,
+            ModelResponseStream,
             EmbeddingResponse,
             ImageResponse,
             TranscriptionResponse,
@@ -848,6 +851,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ):  # handle streaming separately
                 if (
                     isinstance(result, ModelResponse)
+                    or isinstance(result, ModelResponseStream)
                     or isinstance(result, EmbeddingResponse)
                     or isinstance(result, ImageResponse)
                     or isinstance(result, TranscriptionResponse)
@@ -955,6 +959,7 @@ class Logging(LiteLLMLoggingBaseClass):
             if self.stream and (
                 isinstance(result, litellm.ModelResponse)
                 or isinstance(result, TextCompletionResponse)
+                or isinstance(result, ModelResponseStream)
             ):
                 complete_streaming_response: Optional[
                     Union[ModelResponse, TextCompletionResponse]
@@ -966,17 +971,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     streaming_chunks=self.sync_streaming_chunks,
                     is_async=False,
                 )
-            _caching_complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = None
             if complete_streaming_response is not None:
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details["complete_streaming_response"] = (
-                    complete_streaming_response
-                )
-                _caching_complete_streaming_response = copy.deepcopy(
                     complete_streaming_response
                 )
                 self.model_call_details["response_cost"] = (
@@ -1474,6 +1473,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ] = None
         if self.stream is True and (
             isinstance(result, litellm.ModelResponse)
+            or isinstance(result, litellm.ModelResponseStream)
             or isinstance(result, TextCompletionResponse)
         ):
             complete_streaming_response: Optional[

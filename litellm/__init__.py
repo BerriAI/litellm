@@ -985,6 +985,7 @@ from .utils import (
     get_api_base,
     get_first_chars_messages,
     ModelResponse,
+    ModelResponseStream,
     EmbeddingResponse,
     ImageResponse,
     TranscriptionResponse,
