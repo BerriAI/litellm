@@ -547,6 +547,24 @@ async def update_team(
     return {"team_id": team_row.team_id, "data": team_row}
 
 
+def _check_team_member_admin_add(
+    member: Union[Member, List[Member]],
+    premium_user: bool,
+):
+    if isinstance(member, Member) and member.role == "admin":
+        if premium_user is not True:
+            raise ValueError(
+                f"Assigning team admins is a premium feature. {CommonProxyErrors.not_premium_user.value}"
+            )
+    elif isinstance(member, List):
+        for m in member:
+            if m.role == "admin":
+                if premium_user is not True:
+                    raise ValueError(
+                        f"Assigning team admins is a premium feature. Got={m}. {CommonProxyErrors.not_premium_user.value}. "
+                    )
+
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -578,6 +596,7 @@ async def team_member_add(
     """
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
+        premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -593,6 +612,14 @@ async def team_member_add(
         raise HTTPException(
             status_code=400, detail={"error": "No member/members passed in"}
         )
+
+    try:
+        _check_team_member_admin_add(
+            member=data.member,
+            premium_user=premium_user,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
     existing_team_row = await get_team_object(
         team_id=data.team_id,
