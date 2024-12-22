@@ -64,7 +64,6 @@ const config = {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
-        blog: false, // Optional: disable the blog plugin
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
@@ -116,6 +115,7 @@ const config = {
             label: 'Hosted',
             to: "docs/hosted"
           },
+          {to: 'blog', label: 'Blog', position: 'left'},
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
