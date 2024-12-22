@@ -11,7 +11,7 @@ LiteLLM supports Embedding Models on Triton Inference Servers
 | Provider Route on LiteLLM | `triton/` |
 | Supported Operations | `/chat/completion`, `/completion`, `/embedding` |
 | Supported Triton endpoints | `/infer`, `/generate`, `/embeddings` |
-| Link to Provider Doc | [Triton Inference Server ↗](https://github.com/michaelfeil/infinity) |
+| Link to Provider Doc | [Triton Inference Server ↗](https://developer.nvidia.com/triton-inference-server) |
 
 ## Triton `/generate` - Chat Completion 
 
