@@ -22,7 +22,7 @@ Pass in prompts specific to model when doing fallbacks. [Start here](https://doc
 ## ✨ Azure Data Lake Storage Support
 
 Send LLM usage (spend, tokens) data to [Azure Data Lake](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction). This makes it easy to consume usage data on other services (eg. Databricks)
- [Start here](https://docs.litellm.ai/docs/logging/azure_data_lake_storage)
+ [Start here](https://docs.litellm.ai/docs/proxy/logging#azure-blob-storage)
 
 ## Docker Run LiteLLM
 
