@@ -14,7 +14,7 @@ import io
 import os
 import time
 
-# this file is to test litellm proxy
+# this file is to test litellm-proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -695,15 +695,6 @@ def test_personal_key_generation_check():
         )
 
 
-@pytest.fixture
-def set_small_database_url():
-    original_database_url = os.getenv("DATABASE_URL")
-    small_database_url = os.getenv("SMALL_DATABASE_URL")
-    os.environ["DATABASE_URL"] = small_database_url
-    yield
-    os.environ["DATABASE_URL"] = original_database_url
-
-
 @pytest.mark.parametrize(
     "update_request_data, non_default_values, existing_metadata, expected_result",
     [
@@ -728,11 +719,7 @@ def set_small_database_url():
     ],
 )
 def test_prepare_metadata_fields(
-    update_request_data,
-    non_default_values,
-    existing_metadata,
-    expected_result,
-    set_small_database_url,
+    update_request_data, non_default_values, existing_metadata, expected_result
 ):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_metadata_fields,
@@ -751,9 +738,7 @@ def test_prepare_metadata_fields(
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_with_null_team_id_as_proxy_admin(
-    prisma_client, set_small_database_url
-):
+async def test_get_user_info_with_null_team_id_as_proxy_admin(prisma_client):
     """
     Test retrieving user info as a proxy admin and ensuring that keys with `team_id = None` are handled correctly.
     """
