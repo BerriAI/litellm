@@ -3097,7 +3097,7 @@ def test_completion_azure_with_litellm_key():
         # Add any assertions here to check the response
         print(response)
 
-        ######### RESET ENV VARs for this ################
+        ######### RESET ENV VARS for this ################
         os.environ["AZURE_API_BASE"] = litellm.api_base
         os.environ["AZURE_API_VERSION"] = litellm.api_version
         os.environ["AZURE_API_KEY"] = litellm.api_key
