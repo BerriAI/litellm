@@ -805,7 +805,7 @@ def test_watsonx_embeddings():
 
     client = HTTPHandler()
 
-    def mock_wx_embed_request(method: str, url: str, **kwargs):
+    def mock_wx_embed_request(url: str, **kwargs):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -824,7 +824,9 @@ def test_watsonx_embeddings():
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
                 token="secret-token",
+                client=client,
             )
+
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
@@ -835,6 +837,9 @@ def test_watsonx_embeddings():
 
 @pytest.mark.asyncio
 async def test_watsonx_aembeddings():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
 
     def mock_async_client(*args, **kwargs):
 
@@ -859,12 +864,14 @@ async def test_watsonx_aembeddings():
 
     try:
         litellm.set_verbose = True
-        with patch("httpx.AsyncClient", side_effect=mock_async_client):
+        with patch.object(client, "post", side_effect=mock_async_client) as mock_client:
             response = await litellm.aembedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
                 token="secret-token",
+                client=client,
             )
+            mock_client.assert_called_once()
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
