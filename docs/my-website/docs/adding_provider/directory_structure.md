@@ -5,16 +5,16 @@ When adding a new provider, you need to create a directory for the provider that
 ```
 litellm/llms/
 └── provider_name/
-    ├── completion/
+    ├── completion/ # use when endpoint is equivalent to openai's `/v1/completions`
     │   ├── handler.py
     │   └── transformation.py
-    ├── chat/
+    ├── chat/ # use when endpoint is equivalent to openai's `/v1/chat/completions`
     │   ├── handler.py
     │   └── transformation.py
-    ├── embed/
+    ├── embed/ # use when endpoint is equivalent to openai's `/v1/embeddings`
     │   ├── handler.py
     │   └── transformation.py
-    └── rerank/
+    └── rerank/ # use when endpoint is equivalent to cohere's `/rerank` endpoint.
         ├── handler.py
         └── transformation.py
 ```
