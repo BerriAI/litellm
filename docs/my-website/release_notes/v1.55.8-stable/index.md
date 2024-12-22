@@ -1,6 +1,6 @@
 # v1.55.8-stable
 
-A new LiteLLM Stable release just went out. Here are 5 updates since v1.52.2-stable. 
+A new LiteLLM Stable release [just went out](https://github.com/BerriAI/litellm/releases/tag/v1.55.8-stable). Here are 5 updates since v1.52.2-stable. 
 
 ## Langfuse Prompt Management
 
