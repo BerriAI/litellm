@@ -2,6 +2,8 @@
 
 A new LiteLLM Stable release [just went out](https://github.com/BerriAI/litellm/releases/tag/v1.55.8-stable). Here are 5 updates since v1.52.2-stable. 
 
+`langfuse`, `fallbacks`, `new models`, `azure_storage`
+
 ## Langfuse Prompt Management
 
 This makes it easy to run experiments or change the specific models `gpt-4o` to `gpt-4o-mini` on Langfuse, instead of making changes in your applications. [Start here](https://docs.litellm.ai/docs/proxy/prompt_management)
