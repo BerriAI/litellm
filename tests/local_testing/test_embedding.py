@@ -801,6 +801,9 @@ def test_fireworks_embeddings():
 
 
 def test_watsonx_embeddings():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
 
     def mock_wx_embed_request(method: str, url: str, **kwargs):
         mock_response = MagicMock()
@@ -816,7 +819,7 @@ def test_watsonx_embeddings():
 
     try:
         litellm.set_verbose = True
-        with patch("requests.request", side_effect=mock_wx_embed_request):
+        with patch.object(client, "post", side_effect=mock_wx_embed_request):
             response = litellm.embedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
