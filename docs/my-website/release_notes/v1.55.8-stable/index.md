@@ -33,3 +33,7 @@ docker run \
 ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.55.8-stable
 ```
 
+## Get Daily Updates
+
+LiteLLM ships new releases every day. [Follow us on LinkedIn](https://www.linkedin.com/company/berri-ai/) to get daily updates. 
+
