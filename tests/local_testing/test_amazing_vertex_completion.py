@@ -1805,7 +1805,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
 
             for chunk in response:
                 chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
         else:
             response = await litellm.acompletion(**data)
             print(f"completion: {response}")
@@ -1815,7 +1815,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
             async for chunk in response:
                 print(f"chunk: {chunk}")
                 chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
 
         complete_response = litellm.stream_chunk_builder(chunks=chunks)
         assert (
