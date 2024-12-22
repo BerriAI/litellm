@@ -107,7 +107,13 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         """
         OPTIONAL
 

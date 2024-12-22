@@ -991,6 +991,7 @@ from .utils import (
     get_api_base,
     get_first_chars_messages,
     ModelResponse,
+    ModelResponseStream,
     EmbeddingResponse,
     ImageResponse,
     TranscriptionResponse,
@@ -1157,6 +1158,7 @@ from .llms.perplexity.chat.transformation import PerplexityChatConfig
 from .llms.azure.chat.o1_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
