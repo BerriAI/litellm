@@ -1524,7 +1524,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
             num_finish_reason = 0
             for chunk in response:
                 print(f"chunk: {chunk}")
-                if isinstance(chunk, ModelResponse):
+                if isinstance(chunk, ModelResponseStream):
                     if chunk.choices[0].finish_reason is not None:
                         num_finish_reason += 1
             assert num_finish_reason == 1
@@ -1542,7 +1542,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
             num_finish_reason = 0
             async for chunk in response:
                 print(f"type of chunk: {type(chunk)}")
-                if isinstance(chunk, ModelResponse):
+                if isinstance(chunk, ModelResponseStream):
                     print(f"OUTSIDE CHUNK: {chunk.choices[0]}")
                     if chunk.choices[0].finish_reason is not None:
                         num_finish_reason += 1
