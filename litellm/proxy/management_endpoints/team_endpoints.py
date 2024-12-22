@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -547,6 +547,49 @@ async def update_team(
     return {"team_id": team_row.team_id, "data": team_row}
 
 
+def _check_team_member_admin_add(
+    member: Union[Member, List[Member]],
+    premium_user: bool,
+):
+    if isinstance(member, Member) and member.role == "admin":
+        if premium_user is not True:
+            raise ValueError(
+                f"Assigning team admins is a premium feature. {CommonProxyErrors.not_premium_user.value}"
+            )
+    elif isinstance(member, List):
+        for m in member:
+            if m.role == "admin":
+                if premium_user is not True:
+                    raise ValueError(
+                        f"Assigning team admins is a premium feature. Got={m}. {CommonProxyErrors.not_premium_user.value}. "
+                    )
+
+
+def team_call_validation_checks(
+    prisma_client: Optional[PrismaClient],
+    data: TeamMemberAddRequest,
+    premium_user: bool,
+):
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if data.team_id is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    if data.member is None:
+        raise HTTPException(
+            status_code=400, detail={"error": "No member/members passed in"}
+        )
+
+    try:
+        _check_team_member_admin_add(
+            member=data.member,
+            premium_user=premium_user,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
+
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -578,21 +621,22 @@ async def team_member_add(
     """
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
+        premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
-
-    if data.team_id is None:
-        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
-
-    if data.member is None:
-        raise HTTPException(
-            status_code=400, detail={"error": "No member/members passed in"}
+    try:
+        team_call_validation_checks(
+            prisma_client=prisma_client,
+            data=data,
+            premium_user=premium_user,
         )
+    except HTTPException as e:
+        raise e
+
+    prisma_client = cast(PrismaClient, prisma_client)
 
     existing_team_row = await get_team_object(
         team_id=data.team_id,
