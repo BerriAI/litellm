@@ -115,7 +115,7 @@ const config = {
             label: 'Hosted',
             to: "docs/hosted"
           },
-          {to: 'blog', label: 'Blog', position: 'left'},
+          {to: 'blog', label: 'Release Notes', position: 'left'},
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
