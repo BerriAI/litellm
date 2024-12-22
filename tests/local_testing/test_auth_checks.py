@@ -207,6 +207,7 @@ def test_common_checks_import():
     """
     try:
         from litellm.proxy.auth.user_api_key_auth import common_checks
+        from litellm.proxy._types import CommonProxyErrors
 
         common_checks(
             request_body={},
@@ -221,7 +222,5 @@ def test_common_checks_import():
         pytest.fail(
             "common_checks can only be imported by the 'user_api_key_auth()' function."
         )
-    except TypeError as e:
-        assert "user_api_key_auth" in str(e)
-    except ImportError as e:
-        assert "user_api_key_auth" in str(e)
+    except Exception as e:
+        assert CommonProxyErrors.not_premium_user.value in str(e)

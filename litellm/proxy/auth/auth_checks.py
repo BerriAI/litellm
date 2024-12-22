@@ -22,6 +22,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    CommonProxyErrors,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -69,12 +70,12 @@ def _allowed_import_check() -> bool:
 
     if caller_signature != allowed_signature:
         raise TypeError(
-            f"The function '{caller_function}' does not match the required signature of 'user_api_key_auth'."
+            f"The function '{caller_function}' does not match the required signature of 'user_api_key_auth'. {CommonProxyErrors.not_premium_user.value}"
         )
     # Check if the caller module is allowed
     if caller_function != allowed_function:
         raise ImportError(
-            f"This function can only be imported by '{allowed_function}'."
+            f"This function can only be imported by '{allowed_function}'. {CommonProxyErrors.not_premium_user.value}"
         )
 
     return True
