@@ -37,6 +37,17 @@ const config = {
         disableInDev: false,
       },
     ],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'release_notes', 
+        path: './release_notes', // Folder where your release notes are stored
+        routeBasePath: '/release_notes', // URL path for the release notes
+        include: ['**/*.md', '**/*.mdx'], // Files to include
+        // Other blog options
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -115,7 +126,7 @@ const config = {
             label: 'Hosted',
             to: "docs/hosted"
           },
-          {to: 'blog', label: 'Release Notes', position: 'left'},
+          { to: '/release_notes', label: 'Release Notes', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
