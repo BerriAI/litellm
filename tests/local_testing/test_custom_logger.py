@@ -122,8 +122,13 @@ async def test_async_chat_openai_stream():
 
         complete_streaming_response = complete_streaming_response.strip("'")
 
+        print(f"complete_streaming_response: {complete_streaming_response}")
+
         await asyncio.sleep(3)
 
+        print(
+            f"tmp_function.complete_streaming_response_in_callback: {tmp_function.complete_streaming_response_in_callback}"
+        )
         # problematic line
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"

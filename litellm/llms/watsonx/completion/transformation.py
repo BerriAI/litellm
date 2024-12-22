@@ -1,13 +1,31 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+import time
+from datetime import datetime
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+)
 
 import httpx
 
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import ModelResponse
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
+from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
+from litellm.utils import map_finish_reason
 
 from ...base_llm.chat.transformation import BaseConfig
-from ..common_utils import WatsonXAIError
+from ..common_utils import (
+    IBMWatsonXMixin,
+    WatsonXAIError,
+    _get_api_params,
+    convert_watsonx_messages_to_prompt,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -17,7 +35,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class IBMWatsonXAIConfig(BaseConfig):
+class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
     """
     Reference: https://cloud.ibm.com/apidocs/watsonx-ai#text-generation
     (See ibm_watsonx_ai.metanames.GenTextParamsMetaNames for a list of all available params)
@@ -210,13 +228,6 @@ class IBMWatsonXAIConfig(BaseConfig):
             "us-south",
         ]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
-    ) -> BaseLLMException:
-        return WatsonXAIError(
-            status_code=status_code, message=error_message, headers=headers
-        )
-
     def transform_request(
         self,
         model: str,
@@ -225,9 +236,28 @@ class IBMWatsonXAIConfig(BaseConfig):
         litellm_params: Dict,
         headers: Dict,
     ) -> Dict:
-        raise NotImplementedError(
-            "transform_request not implemented. Done in watsonx/completion handler.py"
+        provider = model.split("/")[0]
+        prompt = convert_watsonx_messages_to_prompt(
+            model=model,
+            messages=messages,
+            provider=provider,
+            custom_prompt_dict={},
         )
+        extra_body_params = optional_params.pop("extra_body", {})
+        optional_params.update(extra_body_params)
+        watsonx_api_params = _get_api_params(params=optional_params)
+        # init the payload to the text generation call
+        payload = {
+            "input": prompt,
+            "moderations": optional_params.pop("moderations", {}),
+            "parameters": optional_params,
+        }
+
+        if not model.startswith("deployment/"):
+            payload["model_id"] = model
+            payload["project_id"] = watsonx_api_params["project_id"]
+
+        return payload
 
     def transform_response(
         self,
@@ -243,22 +273,120 @@ class IBMWatsonXAIConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError(
-            "transform_response not implemented. Done in watsonx/completion handler.py"
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response=raw_response.text,
         )
 
-    def validate_environment(
+        json_resp = raw_response.json()
+
+        if "results" not in json_resp:
+            raise WatsonXAIError(
+                status_code=500,
+                message=f"Error: Invalid response from Watsonx.ai API: {json_resp}",
+            )
+        if model_response is None:
+            model_response = ModelResponse(model=json_resp.get("model_id", None))
+        generated_text = json_resp["results"][0]["generated_text"]
+        prompt_tokens = json_resp["results"][0]["input_token_count"]
+        completion_tokens = json_resp["results"][0]["generated_token_count"]
+        model_response.choices[0].message.content = generated_text  # type: ignore
+        model_response.choices[0].finish_reason = map_finish_reason(
+            json_resp["results"][0]["stop_reason"]
+        )
+        if json_resp.get("created_at"):
+            model_response.created = int(
+                datetime.fromisoformat(json_resp["created_at"]).timestamp()
+            )
+        else:
+            model_response.created = int(time.time())
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        setattr(model_response, "usage", usage)
+        return model_response
+
+    def get_complete_url(
         self,
-        headers: Dict,
+        api_base: str,
         model: str,
-        messages: List[AllMessageValues],
-        optional_params: Dict,
-        api_key: Optional[str] = None,
-    ) -> Dict:
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        return headers
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        url = self._get_base_url(api_base=api_base)
+        if model.startswith("deployment/"):
+            # deployment models are passed in as 'deployment/<deployment_id>'
+            if optional_params.get("space_id") is None:
+                raise WatsonXAIError(
+                    status_code=401,
+                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
+                )
+            deployment_id = "/".join(model.split("/")[1:])
+            endpoint = (
+                WatsonXAIEndpoint.DEPLOYMENT_TEXT_GENERATION_STREAM.value
+                if stream
+                else WatsonXAIEndpoint.DEPLOYMENT_TEXT_GENERATION.value
+            )
+            endpoint = endpoint.format(deployment_id=deployment_id)
+        else:
+            endpoint = (
+                WatsonXAIEndpoint.TEXT_GENERATION_STREAM
+                if stream
+                else WatsonXAIEndpoint.TEXT_GENERATION
+            )
+        url = url.rstrip("/") + endpoint
+
+        ## add api version
+        url = self._add_api_version_to_url(
+            url=url, api_version=optional_params.pop("api_version", None)
+        )
+        return url
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return WatsonxTextCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class WatsonxTextCompletionResponseIterator(BaseModelResponseIterator):
+    # def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+    #     return self.chunk_parser(json.loads(str_line))
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        try:
+            results = chunk.get("results", [])
+            if len(results) > 0:
+                text = results[0].get("generated_text", "")
+                finish_reason = results[0].get("stop_reason")
+                is_finished = finish_reason != "not_finished"
+
+                return GenericStreamingChunk(
+                    text=text,
+                    is_finished=is_finished,
+                    finish_reason=finish_reason,
+                    usage=ChatCompletionUsageBlock(
+                        prompt_tokens=results[0].get("input_token_count", 0),
+                        completion_tokens=results[0].get("generated_token_count", 0),
+                        total_tokens=results[0].get("input_token_count", 0)
+                        + results[0].get("generated_token_count", 0),
+                    ),
+                )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="stop",
+                usage=None,
+            )
+        except Exception as e:
+            raise e

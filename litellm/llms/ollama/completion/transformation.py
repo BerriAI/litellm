@@ -350,7 +350,13 @@ class OllamaConfig(BaseConfig):
     ) -> dict:
         return headers
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         """
         OPTIONAL
 

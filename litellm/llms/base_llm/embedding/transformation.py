@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 if TYPE_CHECKING:
@@ -16,12 +16,11 @@ else:
 
 
 class BaseEmbeddingConfig(BaseConfig, ABC):
-
     @abstractmethod
     def transform_embedding_request(
         self,
         model: str,
-        input: Union[str, List[str], List[float], List[List[float]]],
+        input: AllEmbeddingInputValues,
         optional_params: dict,
         headers: dict,
     ) -> dict:
@@ -34,14 +33,20 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        api_key: Optional[str],
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
     ) -> EmbeddingResponse:
         return model_response
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         """
         OPTIONAL
 
