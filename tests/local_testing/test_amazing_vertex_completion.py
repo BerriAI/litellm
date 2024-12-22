@@ -343,7 +343,7 @@ async def test_aaavertex_ai_anthropic_async_streaming():
 
 
 @pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai():
+def test_avertex_ai():
     import random
 
     litellm.num_retries = 3
@@ -394,7 +394,7 @@ def test_vertex_ai():
 
 
 @pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai_stream():
+def test_avertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     litellm.vertex_project = "adroit-crow-413218"
