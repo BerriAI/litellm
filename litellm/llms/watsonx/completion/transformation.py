@@ -1,4 +1,3 @@
-import json
 import time
 from datetime import datetime
 from typing import (
@@ -10,15 +9,11 @@ from typing import (
     List,
     Optional,
     Union,
-    cast,
 )
 
 import httpx
 
-import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage

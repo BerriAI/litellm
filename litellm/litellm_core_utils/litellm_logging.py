@@ -43,7 +43,6 @@ from litellm.types.utils import (
     ImageResponse,
     LiteLLMLoggingBaseClass,
     ModelResponse,
-    ModelResponseBase,
     ModelResponseStream,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,

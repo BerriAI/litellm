@@ -4,10 +4,9 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
-from typing import List, Optional, Tuple, Union, cast
+from typing import List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema

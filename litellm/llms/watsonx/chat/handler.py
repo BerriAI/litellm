@@ -3,11 +3,10 @@ from typing import Callable, Optional, Union
 import httpx
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
-from ..common_utils import WatsonXAIError, _generate_watsonx_token, _get_api_params
+from ..common_utils import _get_api_params
 from .transformation import IBMWatsonXChatConfig
 
 watsonx_chat_transformation = IBMWatsonXChatConfig()

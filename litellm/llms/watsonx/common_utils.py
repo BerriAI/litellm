@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, Optional, Union, cast
+from typing import Dict, List, Optional, Union, cast
 
 import httpx
 

@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import List, Optional, cast
+from typing import Optional
 
 import httpx
 
