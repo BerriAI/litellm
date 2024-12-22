@@ -67,3 +67,4 @@ litellm/tests/langfuse.log
 litellm/proxy/google-cloud-sdk/*
 tests/llm_translation/log.txt
 venv/
+tests/local_testing/log.txt

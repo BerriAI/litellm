@@ -664,9 +664,18 @@ class CustomStreamWrapper:
             # pop model keyword
             chunk.pop("model", None)
 
-        model_response = ModelResponseStream(
-            stream=True, model=_model, stream_options=self.stream_options, **chunk
-        )
+        chunk_dict = {}
+        for key, value in chunk.items():
+            if key != "stream":
+                chunk_dict[key] = value
+
+        args = {
+            "model": _model,
+            "stream_options": self.stream_options,
+            **chunk_dict,
+        }
+
+        model_response = ModelResponseStream(**args)
         if self.response_id is not None:
             model_response.id = self.response_id
         else:
