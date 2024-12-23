@@ -258,11 +258,10 @@ async def test_async_create_batch(provider):
 
     print("all_files_list = ", all_files_list)
 
-    await asyncio.sleep(10)
+    result_file_name = "batch_job_results_furniture.jsonl"
 
-    # # write this file content to a file
-    # with open("file_content.json", "w") as f:
-    #     json.dump(file_content, f)
+    with open(result_file_name, "wb") as file:
+        file.write(file_content.content)
 
 
 def test_retrieve_batch():
