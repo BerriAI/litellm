@@ -66,6 +66,7 @@ def load_vertex_ai_credentials():
 
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GCS_PATH_SERVICE_ACCOUNT"] = os.path.abspath(temp_file.name)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
     print("created gcs path service account=", os.environ["GCS_PATH_SERVICE_ACCOUNT"])
 
 
@@ -277,7 +278,7 @@ def test_list_batch():
 
 
 @pytest.mark.asyncio
-async def test_vertex_batch_prediction():
+async def test_avertex_batch_prediction():
     load_vertex_ai_credentials()
     file_name = "vertex_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
