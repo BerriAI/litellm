@@ -534,8 +534,10 @@ def mock_completion(
     n: Optional[int] = None,
     mock_response: Union[str, Exception, dict] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
+    mock_timeout: Optional[bool] = False,
     logging=None,
     custom_llm_provider=None,
+    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     **kwargs,
 ):
     """
@@ -548,6 +550,8 @@ def mock_completion(
         messages (List): A list of message objects representing the conversation context.
         stream (bool, optional): If True, returns a mock streaming response (default is False).
         mock_response (str, optional): The content of the mock response (default is "This is a mock request").
+        mock_timeout (bool, optional): If True, the mock response will be a timeout error (default is False).
+        timeout (float, optional): The timeout value to use for the mock response (default is None).
         **kwargs: Additional keyword arguments that can be used but are not required.
 
     Returns:
@@ -560,6 +564,16 @@ def mock_completion(
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
     """
     try:
+        if mock_response is None:
+            mock_response = "This is a mock request"
+
+        if mock_timeout is True and timeout is not None:
+            if isinstance(timeout, float):
+                time.sleep(timeout)
+            elif isinstance(timeout, str):
+                time.sleep(float(timeout))
+            elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+                time.sleep(timeout.connect)
         ## LOGGING
         if logging is not None:
             logging.pre_call(
@@ -788,6 +802,7 @@ def completion(  # type: ignore # noqa: PLR0915
     api_base = kwargs.get("api_base", None)
     mock_response = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
+    mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))
     force_timeout = kwargs.get("force_timeout", 600)  ## deprecated
     logger_fn = kwargs.get("logger_fn", None)
     verbose = kwargs.get("verbose", False)
@@ -1102,7 +1117,7 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
-        if mock_response or mock_tool_calls:
+        if mock_response or mock_tool_calls or mock_timeout:
             return mock_completion(
                 model,
                 messages,
@@ -1114,6 +1129,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 acompletion=acompletion,
                 mock_delay=kwargs.get("mock_delay", None),
                 custom_llm_provider=custom_llm_provider,
+                mock_timeout=mock_timeout,
+                timeout=timeout,
             )
 
         if custom_llm_provider == "azure":

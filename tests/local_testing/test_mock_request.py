@@ -11,6 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+import time
 
 
 def test_mock_request():
@@ -92,3 +93,46 @@ async def test_async_mock_streaming_request_n_greater_than_1():
     # assert (
     #     complete_response == "LiteLLM is awesome"
     # ), f"Unexpected response got {complete_response}"
+
+
+def test_mock_request_with_mock_timeout():
+    """
+    Allow user to set 'mock_timeout = True', this allows for testing if fallbacks/retries are working on timeouts.
+    """
+    start_time = time.time()
+    response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
+        timeout=3,
+        mock_timeout=True,
+    )
+    print(response)
+    end_time = time.time()
+    assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
+
+
+def test_router_mock_request_with_mock_timeout():
+    """
+    Allow user to set 'mock_timeout = True', this allows for testing if fallbacks/retries are working on timeouts.
+    """
+    start_time = time.time()
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+    )
+    response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
+        timeout=3,
+        mock_timeout=True,
+    )
+    print(response)
+    end_time = time.time()
+    assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
