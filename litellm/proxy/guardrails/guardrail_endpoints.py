@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -14,7 +14,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 router = APIRouter()
 
 
-def _get_guardrail_names_from_config(guardrails_config: list[dict]) -> list[str]:
+def _get_guardrail_names_from_config(guardrails_config: List[Dict]) -> List[str]:
     return [guardrail["guardrail_name"] for guardrail in guardrails_config]
 
 
