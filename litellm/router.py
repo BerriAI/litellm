@@ -2997,7 +2997,9 @@ class Router:
         if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
             response = await response
         ## PROCESS RESPONSE HEADERS
-        await self.set_response_headers(response=response, model_group=model_group)
+        response = await self.set_response_headers(
+            response=response, model_group=model_group
+        )
 
         return response
 
@@ -4571,11 +4573,15 @@ class Router:
             rpm_limit = None
 
         returned_dict = {}
-        if tpm_limit is not None and current_tpm is not None:
-            returned_dict["x-ratelimit-remaining-tokens"] = tpm_limit - current_tpm
+        if tpm_limit is not None:
+            returned_dict["x-ratelimit-remaining-tokens"] = tpm_limit - (
+                current_tpm or 0
+            )
             returned_dict["x-ratelimit-limit-tokens"] = tpm_limit
-        if rpm_limit is not None and current_rpm is not None:
-            returned_dict["x-ratelimit-remaining-requests"] = rpm_limit - current_rpm
+        if rpm_limit is not None:
+            returned_dict["x-ratelimit-remaining-requests"] = rpm_limit - (
+                current_rpm or 0
+            )
             returned_dict["x-ratelimit-limit-requests"] = rpm_limit
 
         return returned_dict
