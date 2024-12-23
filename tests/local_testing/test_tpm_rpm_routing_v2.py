@@ -46,9 +46,11 @@ def test_tpm_rpm_updated():
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     deployment = "azure/chatgpt-v-2"
+    total_tokens = 50
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
+    standard_logging_payload["total_tokens"] = total_tokens
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -59,8 +61,9 @@ def test_tpm_rpm_updated():
         },
         "standard_logging_object": standard_logging_payload,
     }
+
     start_time = time.time()
-    response_obj = {"usage": {"total_tokens": 50}}
+    response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
     lowest_tpm_logger.pre_call_check(deployment=kwargs["litellm_params"])
     lowest_tpm_logger.log_success_event(
@@ -103,11 +106,13 @@ def test_get_available_deployments():
     )
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
+    total_tokens = 50
     deployment_id = "1234"
     deployment = "azure/chatgpt-v-2"
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
+    standard_logging_payload["total_tokens"] = total_tokens
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -119,7 +124,7 @@ def test_get_available_deployments():
         "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
-    response_obj = {"usage": {"total_tokens": 50}}
+    response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
@@ -128,10 +133,12 @@ def test_get_available_deployments():
         end_time=end_time,
     )
     ## DEPLOYMENT 2 ##
+    total_tokens = 20
     deployment_id = "5678"
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
+    standard_logging_payload["total_tokens"] = total_tokens
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -143,7 +150,7 @@ def test_get_available_deployments():
         "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
-    response_obj = {"usage": {"total_tokens": 20}}
+    response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
@@ -283,9 +290,11 @@ def test_router_skip_rate_limited_deployments():
 
     ## DEPLOYMENT 1 ##
     deployment_id = 1
+    total_tokens = 1439
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = "azure-model"
     standard_logging_payload["model_id"] = str(deployment_id)
+    standard_logging_payload["total_tokens"] = total_tokens
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -296,7 +305,7 @@ def test_router_skip_rate_limited_deployments():
         "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
-    response_obj = {"usage": {"total_tokens": 1439}}
+    response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
     router.lowesttpm_logger_v2.log_success_event(
         response_obj=response_obj,
