@@ -55,6 +55,7 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     GenericStreamingChunk,
+    PromptTokensDetailsWrapper,
     TopLogprob,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse
@@ -849,6 +850,17 @@ class VertexGeminiConfig(BaseConfig):
 
                     model_response.choices.append(choice)
 
+            cached_tokens: Optional[int] = None
+            prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+            if "cachedContentTokenCount" in completion_response["usageMetadata"]:
+                cached_tokens = completion_response["usageMetadata"][
+                    "cachedContentTokenCount"
+                ]
+
+            if cached_tokens is not None:
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=cached_tokens,
+                )
             ## GET USAGE ##
             usage = litellm.Usage(
                 prompt_tokens=completion_response["usageMetadata"].get(
@@ -860,6 +872,7 @@ class VertexGeminiConfig(BaseConfig):
                 total_tokens=completion_response["usageMetadata"].get(
                     "totalTokenCount", 0
                 ),
+                prompt_tokens_details=prompt_tokens_details,
             )
 
             setattr(model_response, "usage", usage)
