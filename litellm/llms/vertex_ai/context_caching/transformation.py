@@ -4,7 +4,7 @@ Transformation logic for context caching.
 Why separate file? Make it easy to see how transformation works
 """
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
@@ -15,6 +15,37 @@ from ..gemini.transformation import (
     _gemini_convert_messages_with_history,
     _transform_system_message,
 )
+
+
+def get_last_continuous_block_idx(
+    filtered_messages: List[Tuple[int, AllMessageValues]]  # (idx, message)
+) -> Optional[int]:
+    """
+    Find the last array index in the most recent continuous sequence of message blocks.
+
+    Args:
+        filtered_messages: List of tuples containing (index, message) pairs
+
+    Returns:
+        int: The array index of the last continuous message
+    """
+    if not filtered_messages:
+        return None
+
+    if len(filtered_messages) == 1:
+        return 0
+
+    last_valid_idx = len(filtered_messages) - 1
+    current_value = filtered_messages[last_valid_idx][0]
+
+    # Work backwards through the array indices
+    for i in range(len(filtered_messages) - 2, -1, -1):
+        if filtered_messages[i][0] != current_value - 1:
+            return last_valid_idx
+        current_value = filtered_messages[i][0]
+        last_valid_idx = i
+
+    return last_valid_idx
 
 
 def separate_cached_messages(
@@ -41,21 +72,10 @@ def separate_cached_messages(
             filtered_messages.append((idx, message))
 
     # Validate only one block of continuous cached messages
-    if len(filtered_messages) > 1:
-        expected_idx = filtered_messages[0][0] + 1
-        for idx, _ in filtered_messages[1:]:
-            if idx != expected_idx:
-                raise VertexAIError(
-                    status_code=422,
-                    message="Gemini Context Caching only supports 1 message/block of continuous messages. Your idx, messages were - {}".format(
-                        filtered_messages
-                    ),
-                )
-            expected_idx += 1
-
+    last_continuous_block_idx = get_last_continuous_block_idx(filtered_messages)
     # Separate messages based on the block of cached messages
-    if filtered_messages:
-        first_cached_idx = filtered_messages[0][0]
+    if filtered_messages and last_continuous_block_idx is not None:
+        first_cached_idx = filtered_messages[last_continuous_block_idx][0]
         last_cached_idx = filtered_messages[-1][0]
 
         cached_messages = messages[first_cached_idx : last_cached_idx + 1]
