@@ -23,7 +23,7 @@ model_val = None
 
 def test_completion_with_no_model():
     # test on empty
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         response = completion(messages=messages)
 
 
