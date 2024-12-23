@@ -17,35 +17,34 @@ from ..gemini.transformation import (
 )
 
 
-def get_last_continuous_block_idx(
+def get_first_continuous_block_idx(
     filtered_messages: List[Tuple[int, AllMessageValues]]  # (idx, message)
-) -> Optional[int]:
+) -> int:
     """
-    Find the last array index in the most recent continuous sequence of message blocks.
+    Find the array index that ends the first continuous sequence of message blocks.
 
     Args:
         filtered_messages: List of tuples containing (index, message) pairs
 
     Returns:
-        int: The array index of the last continuous message
+        int: The array index where the first continuous sequence ends
     """
     if not filtered_messages:
-        return None
+        return -1
 
     if len(filtered_messages) == 1:
         return 0
 
-    last_valid_idx = len(filtered_messages) - 1
-    current_value = filtered_messages[last_valid_idx][0]
+    current_value = filtered_messages[0][0]
 
-    # Work backwards through the array indices
-    for i in range(len(filtered_messages) - 2, -1, -1):
-        if filtered_messages[i][0] != current_value - 1:
-            return last_valid_idx
+    # Search forward through the array indices
+    for i in range(1, len(filtered_messages)):
+        if filtered_messages[i][0] != current_value + 1:
+            return i - 1
         current_value = filtered_messages[i][0]
-        last_valid_idx = i
 
-    return last_valid_idx
+    # If we made it through the whole list, return the last index
+    return len(filtered_messages) - 1
 
 
 def separate_cached_messages(
@@ -72,11 +71,11 @@ def separate_cached_messages(
             filtered_messages.append((idx, message))
 
     # Validate only one block of continuous cached messages
-    last_continuous_block_idx = get_last_continuous_block_idx(filtered_messages)
+    last_continuous_block_idx = get_first_continuous_block_idx(filtered_messages)
     # Separate messages based on the block of cached messages
     if filtered_messages and last_continuous_block_idx is not None:
-        first_cached_idx = filtered_messages[last_continuous_block_idx][0]
-        last_cached_idx = filtered_messages[-1][0]
+        first_cached_idx = filtered_messages[0][0]
+        last_cached_idx = filtered_messages[last_continuous_block_idx][0]
 
         cached_messages = messages[first_cached_idx : last_cached_idx + 1]
         non_cached_messages = (

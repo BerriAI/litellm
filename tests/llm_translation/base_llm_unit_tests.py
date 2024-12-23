@@ -45,6 +45,7 @@ def _usage_format_tests(usage: litellm.Usage):
     }
     ```
     """
+    print(f"usage={usage}")
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
     assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
