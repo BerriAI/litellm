@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import traceback
-
+import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,12 +20,53 @@ from typing import Optional
 import litellm
 from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
-from test_gcs_bucket import load_vertex_ai_credentials
 
 verbose_logger.setLevel(logging.DEBUG)
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+
+
+def load_vertex_ai_credentials():
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    os.environ["GCS_FLUSH_INTERVAL"] = "1"
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
+
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("GCS_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("GCS_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary files
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GCS_PATH_SERVICE_ACCOUNT"] = os.path.abspath(temp_file.name)
+    print("created gcs path service account=", os.environ["GCS_PATH_SERVICE_ACCOUNT"])
 
 
 class TestCustomLogger(CustomLogger):

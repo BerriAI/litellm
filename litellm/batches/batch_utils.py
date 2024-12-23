@@ -45,7 +45,7 @@ async def batches_async_logging(
                 "in _batches_async_logging... batch status= %s", batch.status
             )
 
-            if batch.status in ["completed", "failed"]:
+            if batch.status == "completed":
                 end_time = datetime.datetime.now()
                 await _handle_completed_batch(
                     batch=batch,
@@ -56,6 +56,8 @@ async def batches_async_logging(
                     **kwargs,
                 )
                 break
+            elif batch.status == "failed":
+                pass
         except Exception as e:
             verbose_logger.error("error in batches_async_logging", e)
         await asyncio.sleep(BATCH_STATUS_POLL_INTERVAL_SECONDS)
