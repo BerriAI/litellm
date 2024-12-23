@@ -44,6 +44,9 @@ This covers:
         - ✅ [Custom Branding + Routes on Swagger Docs](./proxy/enterprise#swagger-docs---custom-routes--branding)
         - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
         - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
+    - **Guardrails**
+        - ✅ [Setting team/key based guardrails](./proxy/guardrails/quick_start.md#-control-guardrails-per-project-api-key)
+        - ✅ [API endpoint listing available guardrails](./proxy/guardrails/bedrock.md#list-guardrails)
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
