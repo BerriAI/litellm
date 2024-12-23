@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
