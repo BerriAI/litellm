@@ -527,6 +527,73 @@ async def _async_streaming(response, model, custom_llm_provider, args):
         )
 
 
+def _handle_mock_potential_exceptions(
+    mock_response: Union[str, Exception, dict],
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+):
+    if isinstance(mock_response, Exception):
+        if isinstance(mock_response, openai.APIError):
+            raise mock_response
+        raise litellm.MockException(
+            status_code=getattr(mock_response, "status_code", 500),  # type: ignore
+            message=getattr(mock_response, "text", str(mock_response)),
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,  # type: ignore
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+        )
+    elif isinstance(mock_response, str) and mock_response == "litellm.RateLimitError":
+        raise litellm.RateLimitError(
+            message="this is a mock rate limit error",
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,
+        )
+    elif (
+        isinstance(mock_response, str)
+        and mock_response == "litellm.InternalServerError"
+    ):
+        raise litellm.InternalServerError(
+            message="this is a mock internal server error",
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,
+        )
+    elif isinstance(mock_response, str) and mock_response.startswith(
+        "Exception: content_filter_policy"
+    ):
+        raise litellm.MockException(
+            status_code=400,
+            message=mock_response,
+            llm_provider="azure",
+            model=model,  # type: ignore
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+        )
+
+
+def _handle_mock_timeout(
+    mock_timeout: Optional[bool],
+    timeout: Optional[Union[float, str, httpx.Timeout]],
+    model: str,
+):
+    if mock_timeout is True and timeout is not None:
+        if isinstance(timeout, float):
+            time.sleep(timeout)
+        elif isinstance(timeout, str):
+            time.sleep(float(timeout))
+        elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+            time.sleep(timeout.connect)
+        raise litellm.Timeout(
+            message="This is a mock timeout error",
+            llm_provider="openai",
+            model=model,
+        )
+
+
 def mock_completion(
     model: str,
     messages: List,
@@ -567,68 +634,25 @@ def mock_completion(
         if mock_response is None:
             mock_response = "This is a mock request"
 
-        if mock_timeout is True and timeout is not None:
-            if isinstance(timeout, float):
-                time.sleep(timeout)
-            elif isinstance(timeout, str):
-                time.sleep(float(timeout))
-            elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
-                time.sleep(timeout.connect)
-            raise litellm.Timeout(
-                message="This is a mock timeout error",
-                llm_provider="openai",
-                model=model,
-            )
+        _handle_mock_timeout(mock_timeout=mock_timeout, timeout=timeout, model=model)
+
         ## LOGGING
         if logging is not None:
             logging.pre_call(
                 input=messages,
                 api_key="mock-key",
             )
-        if isinstance(mock_response, Exception):
-            if isinstance(mock_response, openai.APIError):
-                raise mock_response
-            raise litellm.MockException(
-                status_code=getattr(mock_response, "status_code", 500),  # type: ignore
-                message=getattr(mock_response, "text", str(mock_response)),
-                llm_provider=getattr(
-                    mock_response, "llm_provider", custom_llm_provider or "openai"
-                ),  # type: ignore
-                model=model,  # type: ignore
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
-            )
-        elif (
-            isinstance(mock_response, str) and mock_response == "litellm.RateLimitError"
-        ):
-            raise litellm.RateLimitError(
-                message="this is a mock rate limit error",
-                llm_provider=getattr(
-                    mock_response, "llm_provider", custom_llm_provider or "openai"
-                ),  # type: ignore
-                model=model,
-            )
-        elif (
-            isinstance(mock_response, str)
-            and mock_response == "litellm.InternalServerError"
-        ):
-            raise litellm.InternalServerError(
-                message="this is a mock internal server error",
-                llm_provider=getattr(
-                    mock_response, "llm_provider", custom_llm_provider or "openai"
-                ),  # type: ignore
-                model=model,
-            )
-        elif isinstance(mock_response, str) and mock_response.startswith(
-            "Exception: content_filter_policy"
-        ):
-            raise litellm.MockException(
-                status_code=400,
-                message=mock_response,
-                llm_provider="azure",
-                model=model,  # type: ignore
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
-            )
-        elif isinstance(mock_response, str) and mock_response.startswith(
+
+        _handle_mock_potential_exceptions(
+            mock_response=mock_response,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        mock_response = cast(
+            Union[str, dict], mock_response
+        )  # after this point, mock_response is a string or dict
+        if isinstance(mock_response, str) and mock_response.startswith(
             "Exception: mock_streaming_error"
         ):
             mock_response = litellm.MockException(
