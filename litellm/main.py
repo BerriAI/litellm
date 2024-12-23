@@ -574,6 +574,11 @@ def mock_completion(
                 time.sleep(float(timeout))
             elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
                 time.sleep(timeout.connect)
+            raise litellm.Timeout(
+                message="This is a mock timeout error",
+                llm_provider="openai",
+                model=model,
+            )
         ## LOGGING
         if logging is not None:
             logging.pre_call(
