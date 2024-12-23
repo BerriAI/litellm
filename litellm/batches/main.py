@@ -27,7 +27,7 @@ from litellm.types.llms.openai import Batch, CreateBatchRequest, RetrieveBatchRe
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import client, supports_httpx_timeout
 
-from .batch_utils import _batches_async_logging
+from .batch_utils import batches_async_logging
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
@@ -82,7 +82,7 @@ async def acreate_batch(
         # Start async logging job
         if response is not None:
             asyncio.create_task(
-                _batches_async_logging(
+                batches_async_logging(
                     logging_obj=kwargs.get("litellm_logging_obj", None),
                     batch_id=response.id,
                     custom_llm_provider=custom_llm_provider,
