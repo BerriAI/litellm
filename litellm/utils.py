@@ -713,7 +713,7 @@ def client(original_function):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
-        if _is_async_request(call_type):
+        if _is_async_request(kwargs):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
                 # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
@@ -1203,15 +1203,27 @@ def client(original_function):  # noqa: PLR0915
         return wrapper
 
 
-def _is_async_request(call_type: Optional[str]) -> bool:
+def _is_async_request(kwargs: Optional[dict]) -> bool:
     """
     Returns True if the call type is an internal async request.
 
     eg. litellm.acompletion, litellm.aimage_generation, litellm.acreate_batch, litellm._arealtime
     """
-    if call_type is None:
+    if kwargs is None:
         return False
-    return True if call_type.startswith("a") or call_type.startswith("_a") else False
+    if (
+        kwargs.get("acompletion", False) is True
+        or kwargs.get("aembedding", False) is True
+        or kwargs.get("aimg_generation", False) is True
+        or kwargs.get("amoderation", False) is True
+        or kwargs.get("atext_completion", False) is True
+        or kwargs.get("atranscription", False) is True
+        or kwargs.get("arerank", False) is True
+        or kwargs.get("_arealtime", False) is True
+        or kwargs.get("acreate_batch", False) is True
+    ):
+        return True
+    return False
 
 
 @lru_cache(maxsize=128)

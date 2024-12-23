@@ -52,7 +52,7 @@ async def test_create_batch(provider):
     3. Retrieve the specific batch
     """
     custom_logger = TestCustomLogger()
-    litellm.callbacks = [custom_logger]
+    litellm.callbacks = [custom_logger, "datadog"]
 
     if provider == "azure":
         # Don't have anymore Azure Quota
@@ -83,7 +83,7 @@ async def test_create_batch(provider):
     )
 
     print("response from litellm.create_batch=", create_batch_response)
-    await asyncio.sleep(1)
+    await asyncio.sleep(6)
 
     # Assert that the create batch event is logged on CustomLogger
     assert custom_logger.standard_logging_object is not None
