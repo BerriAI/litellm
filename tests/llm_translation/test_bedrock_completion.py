@@ -33,7 +33,7 @@ from litellm import (
 )
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
 
@@ -1262,7 +1262,9 @@ def test_bedrock_get_base_model(model, expected_base_model):
     assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
 
 
-from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+)
 
 
 def test_bedrock_converse_translation_tool_message():
@@ -1320,7 +1322,7 @@ def test_base_aws_llm_get_credentials():
 
     import boto3
 
-    from litellm.llms.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     start_time = time.time()
     session = boto3.Session(
@@ -1603,7 +1605,9 @@ def test_bedrock_completion_test_3():
     Check if content in tool result is formatted correctly
     """
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
-    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     messages = [
         {
@@ -1625,7 +1629,7 @@ def test_bedrock_completion_test_3():
                 )
             ],
             function_call=None,
-        ),
+        ).model_dump(),
         {
             "tool_call_id": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
             "role": "tool",
@@ -2106,3 +2110,218 @@ class TestBedrockRerank(BaseLLMRerankTest):
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         }
+
+
+@pytest.mark.parametrize(
+    "messages, continue_message_index",
+    [
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": ""}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Hello!"}]},
+            ],
+            0,
+        ),
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+            ],
+            1,
+        ),
+    ],
+)
+def test_bedrock_empty_content_handling(messages, continue_message_index):
+    """
+    Test that empty content in messages is handled correctly with default messages
+    """
+    # Test with default behavior (modify_params=True)
+    litellm.modify_params = True
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+    print(formatted_messages)
+    # Verify assistant message with default text was inserted
+    assert formatted_messages[0]["role"] == "user"
+    assert formatted_messages[1]["role"] == "assistant"
+    assert (
+        formatted_messages[continue_message_index]["content"][0]["text"]
+        == "Please continue."
+    )
+
+
+def test_bedrock_custom_continue_message():
+    """
+    Test that custom continue messages are used when provided
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+    ]
+
+    custom_continue = {
+        "role": "assistant",
+        "content": [{"text": "Custom continue message", "type": "text"}],
+    }
+
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+        assistant_continue_message=custom_continue,
+    )
+
+    # Verify custom message was used
+    assert formatted_messages[1]["role"] == "assistant"
+    assert formatted_messages[1]["content"][0]["text"] == "Custom continue message"
+
+
+def test_bedrock_no_default_message():
+    """
+    Test that empty content is handled correctly when modify_params=False
+    """
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Hi again"},
+        {"role": "assistant", "content": "Valid response"},
+    ]
+
+    litellm.modify_params = False
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+
+    # Verify empty message is present and valid message remains
+    assistant_messages = [
+        msg for msg in formatted_messages if msg["role"] == "assistant"
+    ]
+    assert len(assistant_messages) == 2  # Both empty and valid messages present
+    assert assistant_messages[0]["content"][0]["text"] == ""  # First message is empty
+    assert (
+        assistant_messages[1]["content"][0]["text"] == "Valid response"
+    )  # Second message is valid
+
+
+@pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
+def test_bedrock_nova_topk(top_k_param):
+    litellm.set_verbose = True
+    data = {
+        "model": "bedrock/us.amazon.nova-pro-v1:0",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        top_k_param: 10,
+    }
+    original_transform = litellm.AmazonConverseConfig()._transform_request
+    captured_data = None
+
+    def mock_transform(*args, **kwargs):
+        nonlocal captured_data
+        result = original_transform(*args, **kwargs)
+        captured_data = result
+        return result
+
+    with patch(
+        "litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform
+    ):
+        litellm.completion(**data)
+
+        # Assert that additionalRequestParameters exists and contains topK
+        assert "additionalModelRequestFields" in captured_data
+        assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
+        assert (
+            captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"]
+            == 10
+        )
+
+
+def test_bedrock_empty_content_real_call():
+    completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "",
+                    },
+                    {"type": "text", "text": "Hey, how's it going?"},
+                ],
+            }
+        ],
+    )
+
+
+def test_bedrock_process_empty_text_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        process_empty_text_blocks,
+    )
+
+    message = {
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+        "assistant_continue_message": None,
+    }
+    modified_message = process_empty_text_blocks(**message)
+    assert modified_message["content"][0]["text"] == "Please continue."
+
+
+def test_nova_optional_params_tool_choice():
+    litellm.drop_params = True
+    litellm.set_verbose = True
+    litellm.completion(
+        messages=[
+            {"role": "user", "content": "A WWII competitive game for 4-8 players"}
+        ],
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        temperature=0.3,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "GameDefinition",
+                    "description": "Correctly extracted `GameDefinition` with all the required parameters with correct types",
+                    "parameters": {
+                        "$defs": {
+                            "TurnDurationEnum": {
+                                "enum": ["action", "encounter", "battle", "operation"],
+                                "title": "TurnDurationEnum",
+                                "type": "string",
+                            }
+                        },
+                        "properties": {
+                            "id": {
+                                "anyOf": [{"type": "integer"}, {"type": "null"}],
+                                "default": None,
+                                "title": "Id",
+                            },
+                            "prompt": {"title": "Prompt", "type": "string"},
+                            "name": {"title": "Name", "type": "string"},
+                            "description": {"title": "Description", "type": "string"},
+                            "competitve": {"title": "Competitve", "type": "boolean"},
+                            "players_min": {"title": "Players Min", "type": "integer"},
+                            "players_max": {"title": "Players Max", "type": "integer"},
+                            "turn_duration": {
+                                "$ref": "#/$defs/TurnDurationEnum",
+                                "description": "how long the passing of a turn should represent for a game at this scale",
+                            },
+                        },
+                        "required": [
+                            "competitve",
+                            "description",
+                            "name",
+                            "players_max",
+                            "players_min",
+                            "prompt",
+                            "turn_duration",
+                        ],
+                        "type": "object",
+                    },
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
+    )

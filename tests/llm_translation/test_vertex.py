@@ -95,7 +95,7 @@ def test_completion_pydantic_obj_2():
 
 
 def test_build_vertex_schema():
-    from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import (
+    from litellm.llms.vertex_ai.common_utils import (
         _build_vertex_schema,
     )
     import json
@@ -125,6 +125,7 @@ def test_build_vertex_schema():
 @pytest.mark.parametrize(
     "tools, key",
     [
+        ([{"googleSearch": {}}], "googleSearch"),
         ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
         ([{"code_execution": {}}], "code_execution"),
     ],
@@ -1121,7 +1122,7 @@ def test_logprobs():
 
 def test_process_gemini_image():
     """Test the _process_gemini_image function for different image sources"""
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+    from litellm.llms.vertex_ai.gemini.transformation import (
         _process_gemini_image,
     )
     from litellm.types.llms.vertex_ai import PartType, FileDataType, BlobType
@@ -1171,7 +1172,7 @@ def test_process_gemini_image():
 
 def test_get_image_mime_type_from_url():
     """Test the _get_image_mime_type_from_url function for different image URLs"""
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+    from litellm.llms.vertex_ai.gemini.transformation import (
         _get_image_mime_type_from_url,
     )
 
@@ -1226,7 +1227,7 @@ def test_vertex_embedding_url(model, expected_url):
 
     When a fine-tuned embedding model is used, the URL is different from the standard one.
     """
-    from litellm.llms.vertex_ai_and_google_ai_studio.common_utils import _get_vertex_url
+    from litellm.llms.vertex_ai.common_utils import _get_vertex_url
 
     url, endpoint = _get_vertex_url(
         mode="embedding",

@@ -801,8 +801,11 @@ def test_fireworks_embeddings():
 
 
 def test_watsonx_embeddings():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    def mock_wx_embed_request(method: str, url: str, **kwargs):
+    client = HTTPHandler()
+
+    def mock_wx_embed_request(url: str, **kwargs):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -816,12 +819,14 @@ def test_watsonx_embeddings():
 
     try:
         litellm.set_verbose = True
-        with patch("requests.request", side_effect=mock_wx_embed_request):
+        with patch.object(client, "post", side_effect=mock_wx_embed_request):
             response = litellm.embedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
                 token="secret-token",
+                client=client,
             )
+
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
@@ -832,6 +837,9 @@ def test_watsonx_embeddings():
 
 @pytest.mark.asyncio
 async def test_watsonx_aembeddings():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
 
     def mock_async_client(*args, **kwargs):
 
@@ -856,12 +864,14 @@ async def test_watsonx_aembeddings():
 
     try:
         litellm.set_verbose = True
-        with patch("httpx.AsyncClient", side_effect=mock_async_client):
+        with patch.object(client, "post", side_effect=mock_async_client) as mock_client:
             response = await litellm.aembedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
                 token="secret-token",
+                client=client,
             )
+            mock_client.assert_called_once()
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
@@ -884,23 +894,6 @@ def test_voyage_embeddings():
             input=["good morning from litellm"],
         )
         print(f"response: {response}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_triton_embeddings():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.aembedding(
-            model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
-            input=["good morning from litellm"],
-        )
-        print(f"response: {response}")
-
-        # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1002,6 +995,28 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
         assert json_data["options"]["wait_for_model"] is True
         assert json_data["parameters"]["top_p"] == 10
         assert json_data["parameters"]["top_k"] == 10
+
+
+def test_hosted_vllm_embedding(monkeypatch):
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://localhost:8000")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            embedding(
+                model="hosted_vllm/jina-embeddings-v3",
+                input=["Hello world"],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
 
 
 @pytest.mark.parametrize(

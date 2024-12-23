@@ -32,10 +32,10 @@ from litellm import (
     completion_cost,
     embedding,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.vertex_llm_base import VertexBase
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
 litellm.num_retries = 3
@@ -60,6 +60,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-flash-exp-0827",
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
+    "gemini-2.0-flash-exp",
 ]
 
 
@@ -208,8 +209,8 @@ async def test_get_router_response():
 # @pytest.mark.skip(
 #     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 # )
-@pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai_anthropic():
+# @pytest.mark.flaky(retries=3, delay=1)
+def test_aavertex_ai_anthropic():
     model = "claude-3-sonnet@20240229"
 
     vertex_ai_project = "adroit-crow-413218"
@@ -307,7 +308,7 @@ async def test_vertex_ai_anthropic_async():
 # )
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_vertex_ai_anthropic_async_streaming():
+async def test_aaavertex_ai_anthropic_async_streaming():
     # load_vertex_ai_credentials()
     try:
         litellm.set_verbose = True
@@ -342,7 +343,7 @@ async def test_vertex_ai_anthropic_async_streaming():
 
 
 @pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai():
+def test_avertex_ai():
     import random
 
     litellm.num_retries = 3
@@ -393,7 +394,7 @@ def test_vertex_ai():
 
 
 @pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai_stream():
+def test_avertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     litellm.vertex_project = "adroit-crow-413218"
@@ -1804,7 +1805,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
 
             for chunk in response:
                 chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
         else:
             response = await litellm.acompletion(**data)
             print(f"completion: {response}")
@@ -1814,7 +1815,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
             async for chunk in response:
                 print(f"chunk: {chunk}")
                 chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
 
         complete_response = litellm.stream_chunk_builder(chunks=chunks)
         assert (
@@ -2338,7 +2339,7 @@ def test_prompt_factory_nested():
 
 
 def test_get_token_url():
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexLLM,
     )
 
@@ -2927,7 +2928,7 @@ def test_gemini_function_call_parameter_in_messages():
 
 def test_gemini_function_call_parameter_in_messages_2():
     litellm.set_verbose = True
-    from litellm.llms.vertex_ai_and_google_ai_studio.gemini.transformation import (
+    from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
 

@@ -261,6 +261,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     const [errorModels, setErrorModels] = useState<string[]>([]);
     const [errorBudget, setErrorBudget] = useState<boolean>(false);
 
+    let metadataString = '';
+    try {
+      metadataString = JSON.stringify(token.metadata, null, 2);
+    } catch (error) {
+      console.error("Error stringifying metadata:", error);
+      // You can choose a fallback, such as an empty string or a warning message
+      metadataString = '';
+    }
+
+    // Ensure token is defined and handle gracefully if not
+    const initialValues = token ? {
+      ...token,
+      budget_duration: token.budget_duration,
+      metadata: metadataString
+    } : { metadata: metadataString };
+
+
     const handleOk = () => {
       form
         .validateFields()
@@ -286,7 +303,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={{...token, budget_duration: token.budget_duration}} // Pass initial values here
+          initialValues={initialValues}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -441,13 +458,14 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <InputNumber step={1} precision={1} width={200} />
               </Form.Item>
               <Form.Item
-                label="Metadata"
+                label="Metadata (ensure this is valid JSON)"
                 name="metadata"
-                initialValue={token.metadata}
               >
                 <TextArea
-                  value={String(token.metadata)}
                   rows={10}
+                  onChange={(e) => {
+                    form.setFieldsValue({ metadata: e.target.value });
+                  }}
                 />
               </Form.Item>
             </>
@@ -674,6 +692,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const currentKey = formValues.token; 
   formValues.key = currentKey;
+
+  // Convert metadata back to an object if it exists and is a string
+  if (formValues.metadata && typeof formValues.metadata === 'string') {
+    try {
+      formValues.metadata = JSON.parse(formValues.metadata);
+    } catch (error) {
+      console.error("Error parsing metadata JSON:", error);
+      message.error("Invalid metadata JSON for formValue " + formValues.metadata);
+      return;
+    }
+  }
 
   // Convert the budget_duration back to the API expected format
   if (formValues.budget_duration) {

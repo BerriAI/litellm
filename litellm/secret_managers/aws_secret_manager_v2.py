@@ -13,20 +13,15 @@ Requires:
 * `pip install boto3>=1.28.57`
 """
 
-import ast
-import asyncio
-import base64
 import json
 import os
-import re
-import sys
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -49,7 +44,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         if use_aws_secret_manager is None or use_aws_secret_manager is False:
             return
         try:
-            import boto3
 
             cls.validate_environment()
             litellm.secret_manager_client = cls()
@@ -254,10 +248,8 @@ class AWSSecretsManagerV2(BaseAWSLLM):
     ) -> tuple[str, Any, bytes]:
         """Prepare the AWS Secrets Manager request"""
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}

@@ -785,7 +785,33 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  
+  installing_litellm_on_python_3_13:
+    docker:
+      - image: cimg/python:3.13.1
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
 
   check_code_and_doc_quality:
     docker:
@@ -816,6 +842,8 @@ jobs:
       - run: python ./tests/documentation_tests/test_router_settings.py
       - run: python ./tests/documentation_tests/test_api_docs.py
       - run: python ./tests/code_coverage_tests/ensure_async_clients_test.py
+      - run: python ./tests/code_coverage_tests/enforce_llms_folder_style.py
+      - run: python ./tests/documentation_tests/test_circular_imports.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -968,6 +996,124 @@ jobs:
             pwd
             ls
             python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+  e2e_openai_misc_endpoints:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "jsonlines==4.0.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            pip install "openai==1.54.0 "
+            # Run pytest and generate JUnit XML report
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e GROQ_API_KEY=$GROQ_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e AUTO_INFER_REGION=True \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
+              -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
+              -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
+              -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -s -vv tests/openai_misc_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
@@ -1544,6 +1690,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - e2e_openai_misc_endpoints:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - proxy_logging_guardrails_model_info_tests:
           filters:
             branches:
@@ -1605,6 +1757,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - load_testing:
           filters:
             branches:
@@ -1621,6 +1779,7 @@ workflows:
           requires:
             - local_testing
             - build_and_test
+            - e2e_openai_misc_endpoints
             - load_testing
             - test_bad_database_url
             - llm_translation_testing
@@ -1636,6 +1795,7 @@ workflows:
             - e2e_ui_testing
             - litellm_proxy_unit_testing
             - installing_litellm_on_python
+            - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality

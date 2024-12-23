@@ -1,6 +1,4 @@
 import json
-import os
-import threading
 import traceback
 from typing import Optional
 
@@ -14,17 +12,14 @@ from ..exceptions import (
     APIError,
     AuthenticationError,
     BadRequestError,
-    BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     NotFoundError,
-    OpenAIError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
-    UnsupportedParamsError,
 )
 
 
@@ -189,7 +184,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             #################### Start of Provider Exception mapping ####################
             ################################################################################
 
-            if "Request Timeout Error" in error_str or "Request timed out" in error_str:
+            if (
+                "Request Timeout Error" in error_str
+                or "Request timed out" in error_str
+                or "Timed out generating response" in error_str
+            ):
                 exception_mapping_worked = True
                 raise Timeout(
                     message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
@@ -286,7 +285,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "Web server is returning an unknown error" in error_str:
+                elif (
+                    "Web server is returning an unknown error" in error_str
+                    or "The server had an error processing your request." in error_str
+                ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{exception_provider} - {message}",
@@ -649,6 +651,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                    )
+                elif "model_no_support_for_function" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"{custom_llm_provider}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                     )

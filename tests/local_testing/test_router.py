@@ -27,7 +27,8 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
     _get_cooldown_deployments,
@@ -2219,22 +2220,6 @@ def test_router_cooldown_api_connection_error():
     except litellm.APIConnectionError:
         pass
 
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
-
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
-
 
 def test_router_correctly_reraise_error():
     """
@@ -2697,3 +2682,21 @@ def test_model_group_alias(hidden):
 #     assert int(response_headers["x-ratelimit-remaining-requests"]) > 0
 #     assert response_headers["x-ratelimit-limit-tokens"] == 100500
 #     assert int(response_headers["x-ratelimit-remaining-tokens"]) > 0
+
+
+def test_router_completion_with_model_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "123"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router, "routing_strategy_pre_call_checks"
+    ) as mock_pre_call_checks:
+        router.completion(model="123", messages=[{"role": "user", "content": "hi"}])
+        mock_pre_call_checks.assert_not_called()

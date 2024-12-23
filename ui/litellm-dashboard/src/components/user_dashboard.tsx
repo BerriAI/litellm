@@ -4,7 +4,7 @@ import {
   userInfoCall,
   modelAvailableCall,
   getTotalSpendCall,
-  getProxyBaseUrlAndLogoutUrl,
+  getProxyUISettings,
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -28,6 +28,8 @@ export interface ProxySettings {
   PROXY_LOGOUT_URL: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
+  DISABLE_EXPENSIVE_DB_QUERIES: boolean;
+  NUM_SPEND_LOGS_ROWS: number;
 }
 
 
@@ -81,7 +83,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   );
 
   // Assuming useSearchParams() hook exists and works in your setup
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams()!;
   const viewSpend = searchParams.get("viewSpend");
   const router = useRouter();
 
@@ -172,7 +174,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       } else {
         const fetchData = async () => {
           try {
-            const proxy_settings: ProxySettings = await getProxyBaseUrlAndLogoutUrl(accessToken);
+            const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
             setProxySettings(proxy_settings);
 
             const response = await userInfoCall(

@@ -76,7 +76,7 @@ const CreateKeyPage = () => {
   });
 
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
-  const searchParams = useSearchParams();
+  const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");

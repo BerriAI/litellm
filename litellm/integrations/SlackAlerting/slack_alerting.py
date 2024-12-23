@@ -4,16 +4,10 @@ import asyncio
 import datetime
 import os
 import random
-import threading
 import time
-import traceback
-from datetime import datetime as dt
-from datetime import timedelta, timezone
-from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, TypedDict, Union, get_args
+from datetime import timedelta
+from typing import Any, Dict, List, Literal, Optional, Union
 
-import aiohttp
-import dotenv
 from openai import APIError
 
 import litellm
@@ -26,21 +20,13 @@ from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import (
-    AlertType,
-    CallInfo,
-    UserAPIKeyAuth,
-    VirtualKeyEvent,
-    WebhookEvent,
-)
+from litellm.proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
+from litellm.router import Router
 from litellm.types.integrations.slack_alerting import *
-from litellm.types.router import LiteLLM_Params
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
@@ -93,7 +79,7 @@ class SlackAlerting(CustomBatchLogger):
         alert_types: Optional[List[AlertType]] = None,
         alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
         alerting_args: Optional[Dict] = None,
-        llm_router: Optional[litellm.Router] = None,
+        llm_router: Optional[Router] = None,
     ):
         if alerting is not None:
             self.alerting = alerting
@@ -1260,7 +1246,7 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
-        from litellm.proxy.proxy_server import premium_user, prisma_client
+        from litellm.proxy.proxy_server import premium_user
         from litellm.proxy.utils import send_email
 
         email_logo_url = os.getenv(
@@ -1369,7 +1355,6 @@ Model Info:
         if alert_type not in self.alert_types:
             return
 
-        import json
         from datetime import datetime
 
         # Get the current timestamp

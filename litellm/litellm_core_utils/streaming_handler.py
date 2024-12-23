@@ -5,17 +5,14 @@ import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 import httpx
 from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
+from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -27,8 +24,8 @@ from litellm.types.utils import (
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
-from .default_encoding import encoding
 from .exception_mapping_utils import exception_type
+from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
 MAX_THREADS = 100
@@ -86,8 +83,17 @@ class CustomStreamWrapper:
             )
             or {}
         )
+
+        _api_base = get_api_base(
+            model=model or "",
+            optional_params=self.logging_obj.model_call_details.get(
+                "litellm_params", {}
+            ),
+        )
+
         self._hidden_params = {
             "model_id": (_model_info.get("id", None)),
+            "api_base": _api_base,
         }  # returned as x-litellm-model-id response header in proxy
 
         self._hidden_params["additional_headers"] = process_response_headers(
@@ -222,40 +228,6 @@ class CustomStreamWrapper:
         if hold is False:  # reset
             self.holding_chunk = ""
         return hold, curr_chunk
-
-    def handle_anthropic_text_chunk(self, chunk):
-        """
-        For old anthropic models - claude-1, claude-2.
-
-        Claude-3 is handled from within Anthropic.py VIA ModelResponseIterator()
-        """
-        str_line = chunk
-        if isinstance(chunk, bytes):  # Handle binary data
-            str_line = chunk.decode("utf-8")  # Convert bytes to string
-        text = ""
-        is_finished = False
-        finish_reason = None
-        if str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
-            type_chunk = data_json.get("type", None)
-            if type_chunk == "completion":
-                text = data_json.get("completion")
-                finish_reason = data_json.get("stop_reason")
-                if finish_reason is not None:
-                    is_finished = True
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        elif "error" in str_line:
-            raise ValueError(f"Unable to parse response. Original response: {str_line}")
-        else:
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
 
     def handle_predibase_chunk(self, chunk):
         try:
@@ -404,32 +376,6 @@ class CustomStreamWrapper:
             is_finished = True
             finish_reason = "stop"
             return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-            }
-        except Exception:
-            raise ValueError(f"Unable to parse response. Original response: {chunk}")
-
-    def handle_cohere_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
-        try:
-            text = ""
-            is_finished = False
-            finish_reason = ""
-            index: Optional[int] = None
-            if "index" in data_json:
-                index = data_json.get("index")
-            if "text" in data_json:
-                text = data_json["text"]
-            elif "is_finished" in data_json:
-                is_finished = data_json["is_finished"]
-                finish_reason = data_json["finish_reason"]
-            else:
-                raise Exception(data_json)
-            return {
-                "index": index,
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
@@ -630,70 +576,6 @@ class CustomStreamWrapper:
             )
             return ""
 
-    def handle_cloudlfare_stream(self, chunk):
-        try:
-            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
-            chunk = chunk.decode("utf-8")
-            str_line = chunk
-            text = ""
-            is_finished = False
-            finish_reason = None
-
-            if "[DONE]" in chunk:
-                return {"text": text, "is_finished": True, "finish_reason": "stop"}
-            elif str_line.startswith("data:"):
-                data_json = json.loads(str_line[5:])
-                print_verbose(f"delta content: {data_json}")
-                text = data_json["response"]
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            else:
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-
-        except Exception as e:
-            raise e
-
-    def handle_ollama_stream(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                json_chunk = chunk
-            else:
-                json_chunk = json.loads(chunk)
-            if "error" in json_chunk:
-                raise Exception(f"Ollama Error - {json_chunk}")
-
-            text = ""
-            is_finished = False
-            finish_reason = None
-            if json_chunk["done"] is True:
-                text = ""
-                is_finished = True
-                finish_reason = "stop"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            elif json_chunk["response"]:
-                print_verbose(f"delta content: {json_chunk}")
-                text = json_chunk["response"]
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
-            else:
-                raise Exception(f"Ollama Error - {json_chunk}")
-        except Exception as e:
-            raise e
-
     def handle_ollama_chat_stream(self, chunk):
         # for ollama_chat/ provider
         try:
@@ -726,44 +608,6 @@ class CustomStreamWrapper:
                 }
             else:
                 raise Exception(f"Ollama Error - {json_chunk}")
-        except Exception as e:
-            raise e
-
-    def handle_watsonx_stream(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                parsed_response = chunk
-            elif isinstance(chunk, (str, bytes)):
-                if isinstance(chunk, bytes):
-                    chunk = chunk.decode("utf-8")
-                if "generated_text" in chunk:
-                    response = chunk.replace("data: ", "").strip()
-                    parsed_response = json.loads(response)
-                else:
-                    return {
-                        "text": "",
-                        "is_finished": False,
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                    }
-            else:
-                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
-                raise ValueError(
-                    f"Unable to parse response. Original response: {chunk}"
-                )
-            results = parsed_response.get("results", [])
-            if len(results) > 0:
-                text = results[0].get("generated_text", "")
-                finish_reason = results[0].get("stop_reason")
-                is_finished = finish_reason != "not_finished"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                    "prompt_tokens": results[0].get("input_token_count", 0),
-                    "completion_tokens": results[0].get("generated_token_count", 0),
-                }
-            return {"text": "", "is_finished": False}
         except Exception as e:
             raise e
 
@@ -803,49 +647,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_clarifai_completion_chunk(self, chunk):
-        try:
-            if isinstance(chunk, dict):
-                parsed_response = chunk
-            elif isinstance(chunk, (str, bytes)):
-                if isinstance(chunk, bytes):
-                    parsed_response = chunk.decode("utf-8")
-                else:
-                    parsed_response = chunk
-            else:
-                raise ValueError("Unable to parse streaming chunk")
-            if isinstance(parsed_response, dict):
-                data_json = parsed_response
-            else:
-                data_json = json.loads(parsed_response)
-            text = (
-                data_json.get("outputs", "")[0]
-                .get("data", "")
-                .get("text", "")
-                .get("raw", "")
-            )
-            len(
-                encoding.encode(
-                    data_json.get("outputs", "")[0]
-                    .get("input", "")
-                    .get("data", "")
-                    .get("text", "")
-                    .get("raw", "")
-                )
-            )
-            len(encoding.encode(text))
-            return {
-                "text": text,
-                "is_finished": True,
-            }
-        except Exception as e:
-            verbose_logger.exception(
-                "litellm.CustomStreamWrapper.handle_clarifai_chunk(): Exception occured - {}".format(
-                    str(e)
-                )
-            )
-            return ""
-
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
     ):
@@ -863,9 +664,18 @@ class CustomStreamWrapper:
             # pop model keyword
             chunk.pop("model", None)
 
-        model_response = ModelResponse(
-            stream=True, model=_model, stream_options=self.stream_options, **chunk
-        )
+        chunk_dict = {}
+        for key, value in chunk.items():
+            if key != "stream":
+                chunk_dict[key] = value
+
+        args = {
+            "model": _model,
+            "stream_options": self.stream_options,
+            **chunk_dict,
+        }
+
+        model_response = ModelResponseStream(**args)
         if self.response_id is not None:
             model_response.id = self.response_id
         else:
@@ -903,9 +713,9 @@ class CustomStreamWrapper:
 
     def return_processed_chunk_logic(  # noqa
         self,
-        completion_obj: dict,
+        completion_obj: Dict[str, Any],
         model_response: ModelResponseStream,
-        response_obj: dict,
+        response_obj: Dict[str, Any],
     ):
 
         print_verbose(
@@ -1048,11 +858,11 @@ class CustomStreamWrapper:
 
     def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
-        response_obj: dict = {}
+        response_obj: Dict[str, Any] = {}
 
         try:
             # return this for all models
-            completion_obj = {"content": ""}
+            completion_obj: Dict[str, Any] = {"content": ""}
             from litellm.types.utils import GenericStreamingChunk as GChunk
 
             if (
@@ -1104,19 +914,6 @@ class CustomStreamWrapper:
                         setattr(model_response, key, value)
 
                 response_obj = anthropic_response_obj
-            elif (
-                self.custom_llm_provider
-                and self.custom_llm_provider == "anthropic_text"
-            ):
-                response_obj = self.handle_anthropic_text_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider and self.custom_llm_provider == "clarifai":
-                response_obj = self.handle_clarifai_completion_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -1235,11 +1032,6 @@ class CustomStreamWrapper:
                             )
                 else:
                     completion_obj["content"] = str(chunk)
-            elif self.custom_llm_provider == "cohere":
-                response_obj = self.handle_cohere_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
@@ -1262,27 +1054,10 @@ class CustomStreamWrapper:
                 new_chunk = self.completion_stream[:chunk_size]
                 completion_obj["content"] = new_chunk
                 self.completion_stream = self.completion_stream[chunk_size:]
-            elif self.custom_llm_provider == "ollama":
-                response_obj = self.handle_ollama_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "ollama_chat":
                 response_obj = self.handle_ollama_chat_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider == "cloudflare":
-                response_obj = self.handle_cloudlfare_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    self.received_finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider == "watsonx":
-                response_obj = self.handle_watsonx_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "triton":
@@ -1304,7 +1079,7 @@ class CustomStreamWrapper:
                         total_tokens=response_obj["usage"].total_tokens,
                     )
             elif self.custom_llm_provider == "text-completion-codestral":
-                response_obj = litellm.MistralTextCompletionConfig()._chunk_parser(
+                response_obj = litellm.CodestralTextCompletionConfig()._chunk_parser(
                     chunk
                 )
                 completion_obj["content"] = response_obj["text"]
@@ -1349,7 +1124,7 @@ class CustomStreamWrapper:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
                 if self.custom_llm_provider == "azure":
-                    if hasattr(chunk, "model"):
+                    if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
                         # for azure, we need to pass the model from the orignal chunk
                         self.model = chunk.model
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
@@ -1381,21 +1156,29 @@ class CustomStreamWrapper:
 
                 if response_obj["usage"] is not None:
                     if isinstance(response_obj["usage"], dict):
-                        model_response.usage = litellm.Usage(
-                            prompt_tokens=response_obj["usage"].get(
-                                "prompt_tokens", None
-                            )
-                            or None,
-                            completion_tokens=response_obj["usage"].get(
-                                "completion_tokens", None
-                            )
-                            or None,
-                            total_tokens=response_obj["usage"].get("total_tokens", None)
-                            or None,
+                        setattr(
+                            model_response,
+                            "usage",
+                            litellm.Usage(
+                                prompt_tokens=response_obj["usage"].get(
+                                    "prompt_tokens", None
+                                )
+                                or None,
+                                completion_tokens=response_obj["usage"].get(
+                                    "completion_tokens", None
+                                )
+                                or None,
+                                total_tokens=response_obj["usage"].get(
+                                    "total_tokens", None
+                                )
+                                or None,
+                            ),
                         )
                     elif isinstance(response_obj["usage"], BaseModel):
-                        model_response.usage = litellm.Usage(
-                            **response_obj["usage"].model_dump()
+                        setattr(
+                            model_response,
+                            "usage",
+                            litellm.Usage(**response_obj["usage"].model_dump()),
                         )
 
             model_response.model = self.model
@@ -1528,7 +1311,7 @@ class CustomStreamWrapper:
             raise StopIteration
         except Exception as e:
             traceback.format_exc()
-            e.message = str(e)
+            setattr(e, "message", str(e))
             raise exception_type(
                 model=self.model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -1625,7 +1408,9 @@ class CustomStreamWrapper:
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
-                    response: Optional[ModelResponse] = self.chunk_creator(chunk=chunk)
+                    response: Optional[ModelResponseStream] = self.chunk_creator(
+                        chunk=chunk
+                    )
                     print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
                     if response is None:
@@ -1752,6 +1537,8 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "text-completion-openai"
                 or self.custom_llm_provider == "text-completion-codestral"
                 or self.custom_llm_provider == "azure_text"
+                or self.custom_llm_provider == "cohere_chat"
+                or self.custom_llm_provider == "cohere"
                 or self.custom_llm_provider == "anthropic"
                 or self.custom_llm_provider == "anthropic_text"
                 or self.custom_llm_provider == "huggingface"
@@ -1769,6 +1556,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "bedrock"
                 or self.custom_llm_provider == "triton"
                 or self.custom_llm_provider == "watsonx"
+                or self.custom_llm_provider == "cloudflare"
                 or self.custom_llm_provider in litellm.openai_compatible_providers
                 or self.custom_llm_provider in litellm._custom_providers
             ):
@@ -1785,7 +1573,7 @@ class CustomStreamWrapper:
                     # __anext__ also calls async_success_handler, which does logging
                     print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
 
-                    processed_chunk: Optional[ModelResponse] = self.chunk_creator(
+                    processed_chunk: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
                     print_verbose(
@@ -1812,7 +1600,7 @@ class CustomStreamWrapper:
                     if self.logging_obj._llm_caching_handler is not None:
                         asyncio.create_task(
                             self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
-                                processed_chunk=processed_chunk,
+                                processed_chunk=cast(ModelResponse, processed_chunk),
                             )
                         )
 
@@ -1851,8 +1639,8 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk: Optional[ModelResponse] = self.chunk_creator(
-                            chunk=chunk
+                        processed_chunk: Optional[ModelResponseStream] = (
+                            self.chunk_creator(chunk=chunk)
                         )
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"

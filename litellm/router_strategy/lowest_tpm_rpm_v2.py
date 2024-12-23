@@ -1,11 +1,9 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm import token_counter
@@ -14,6 +12,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
+from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import get_utc_datetime, print_verbose
 
 if TYPE_CHECKING:
@@ -24,20 +23,7 @@ else:
     Span = Any
 
 
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
-
-
-class RoutingArgs(LiteLLMBase):
+class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 

@@ -1,7 +1,9 @@
 from os import PathLike
 from typing import IO, Any, Iterable, List, Literal, Mapping, Optional, Tuple, Union
 
-from openai._legacy_response import HttpxBinaryResponseContent
+from openai._legacy_response import (
+    HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
+)
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -46,6 +48,11 @@ FileTypes = Union[
 
 
 EmbeddingInput = Union[str, List[str]]
+
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
+    _hidden_params: dict = {}
+    pass
 
 
 class NotGiven:
@@ -374,15 +381,15 @@ class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
     pass
 
 
+OpenAIMessageContentListBlock = Union[
+    ChatCompletionTextObject,
+    ChatCompletionImageObject,
+    ChatCompletionAudioObject,
+]
+
 OpenAIMessageContent = Union[
     str,
-    Iterable[
-        Union[
-            ChatCompletionTextObject,
-            ChatCompletionImageObject,
-            ChatCompletionAudioObject,
-        ]
-    ],
+    Iterable[OpenAIMessageContentListBlock],
 ]
 
 # The prompt(s) to generate completions for, encoded as a string, array of strings, array of tokens, or array of token arrays.
@@ -604,3 +611,6 @@ class FineTuningJobCreate(BaseModel):
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
+
+
+AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]

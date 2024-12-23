@@ -6,7 +6,6 @@ Custom cost calculation for Azure AI models only requied for rerank.
 
 from typing import Tuple
 
-from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 

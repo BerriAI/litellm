@@ -768,5 +768,12 @@ async def test_user_info_as_proxy_admin(prisma_client):
     assert user_info_response.teams is not None
     assert len(user_info_response.teams) > 0, "Expected at least one team in response"
 
+    # assert that the teams are sorted by team_alias
+    team_aliases = [
+        getattr(team, "team_alias", "") or "" for team in user_info_response.teams
+    ]
+    print("Team aliases order in response=", team_aliases)
+    assert team_aliases == sorted(team_aliases), "Teams are not sorted by team_alias"
+
     assert user_info_response.keys is not None
     assert len(user_info_response.keys) > 0, "Expected at least one key in response"

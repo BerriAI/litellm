@@ -1,16 +1,6 @@
 from typing import List, Optional
 
-from ..types.utils import (
-    Categories,
-    CategoryAppliedInputTypes,
-    CategoryScores,
-    Embedding,
-    EmbeddingResponse,
-    ImageObject,
-    ImageResponse,
-    Moderation,
-    ModerationCreateResponse,
-)
+from ..types.utils import Embedding, EmbeddingResponse, ImageObject, ImageResponse
 
 
 def mock_embedding(model: str, mock_response: Optional[List[float]]):

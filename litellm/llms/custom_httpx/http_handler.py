@@ -1,13 +1,11 @@
 import asyncio
 import os
-import traceback
 from typing import TYPE_CHECKING, Any, Callable, List, Mapping, Optional, Union
 
 import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
-from litellm.caching import InMemoryCache
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -27,8 +25,6 @@ headers = {
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
-
-import re
 
 
 def mask_sensitive_info(error_message):
@@ -211,7 +207,6 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-
             if stream is True:
                 setattr(e, "message", await e.response.aread())
                 setattr(e, "text", await e.response.aread())
@@ -241,6 +236,66 @@ class AsyncHTTPHandler:
 
             req = self.client.build_request(
                 "PUT", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+            )
+            response = await self.client.send(req)
+            response.raise_for_status()
+            return response
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
+            # Retry the request with a new session if there is a connection error
+            new_client = self.create_client(
+                timeout=timeout, concurrent_limit=1, event_hooks=self.event_hooks
+            )
+            try:
+                return await self.single_connection_post_request(
+                    url=url,
+                    client=new_client,
+                    data=data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    stream=stream,
+                )
+            finally:
+                await new_client.aclose()
+        except httpx.TimeoutException as e:
+            headers = {}
+            error_response = getattr(e, "response", None)
+            if error_response is not None:
+                for key, value in error_response.headers.items():
+                    headers["response_headers-{}".format(key)] = value
+
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+                headers=headers,
+            )
+        except httpx.HTTPStatusError as e:
+            setattr(e, "status_code", e.response.status_code)
+            if stream is True:
+                setattr(e, "message", await e.response.aread())
+            else:
+                setattr(e, "message", e.response.text)
+            raise e
+        except Exception as e:
+            raise e
+
+    async def patch(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,  # type: ignore
+        json: Optional[dict] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        stream: bool = False,
+    ):
+        try:
+            if timeout is None:
+                timeout = self.timeout
+
+            req = self.client.build_request(
+                "PATCH", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -432,7 +487,7 @@ class HTTPHandler:
         self,
         url: str,
         data: Optional[Union[dict, str]] = None,
-        json: Optional[Union[dict, str]] = None,
+        json: Optional[Union[dict, str, List]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         stream: bool = False,
@@ -447,6 +502,51 @@ class HTTPHandler:
             else:
                 req = self.client.build_request(
                     "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                )
+            response = self.client.send(req, stream=stream)
+            response.raise_for_status()
+            return response
+        except httpx.TimeoutException:
+            raise litellm.Timeout(
+                message=f"Connection timed out after {timeout} seconds.",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            )
+        except httpx.HTTPStatusError as e:
+
+            if stream is True:
+                setattr(e, "message", mask_sensitive_info(e.response.read()))
+                setattr(e, "text", mask_sensitive_info(e.response.read()))
+            else:
+                error_text = mask_sensitive_info(e.response.text)
+                setattr(e, "message", error_text)
+                setattr(e, "text", error_text)
+
+            setattr(e, "status_code", e.response.status_code)
+
+            raise e
+        except Exception as e:
+            raise e
+
+    def patch(
+        self,
+        url: str,
+        data: Optional[Union[dict, str]] = None,
+        json: Optional[Union[dict, str]] = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+        stream: bool = False,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ):
+        try:
+
+            if timeout is not None:
+                req = self.client.build_request(
+                    "PATCH", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                )
+            else:
+                req = self.client.build_request(
+                    "PATCH", url, data=data, json=json, params=params, headers=headers  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()

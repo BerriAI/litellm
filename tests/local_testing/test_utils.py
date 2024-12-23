@@ -6,6 +6,8 @@ from unittest import mock
 
 from dotenv import load_dotenv
 
+from litellm.types.utils import StandardCallbackDynamicParams
+
 load_dotenv()
 import os
 
@@ -18,8 +20,10 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.proxy.utils import (
     duration_in_seconds,
-    _extract_from_regex,
+)
+from litellm.litellm_core_utils.duration_parser import (
     get_last_day_of_month,
+    _extract_from_regex,
 )
 from litellm.utils import (
     check_valid_key,
@@ -35,6 +39,8 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
+from unittest.mock import AsyncMock, MagicMock, patch
+
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -435,8 +441,8 @@ def test_token_counter():
         print(tokens)
         assert tokens > 0
 
-        tokens = token_counter(model="palm/chat-bison", messages=messages)
-        print("palm/chat-bison")
+        tokens = token_counter(model="gemini/chat-bison", messages=messages)
+        print("gemini/chat-bison")
         print(tokens)
         assert tokens > 0
 
@@ -463,7 +469,7 @@ def test_token_counter():
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
         ("anthropic.claude-instant-v1", False),
-        ("palm/chat-bison", False),
+        ("gemini/gemini-1.5-flash", True),
     ],
 )
 def test_supports_function_calling(model, expected_bool):
@@ -541,6 +547,92 @@ def test_redact_msgs_from_logs():
         == "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
     )
 
+    litellm.turn_off_message_logging = False
+    print("Test passed")
+
+
+def test_redact_msgs_from_logs_with_dynamic_params():
+    """
+    Tests redaction behavior based on standard_callback_dynamic_params setting:
+    In all tests litellm.turn_off_message_logging is True
+
+
+    1. When standard_callback_dynamic_params.turn_off_message_logging is False (or not set): No redaction should occur. User has opted out of redaction.
+    2. When standard_callback_dynamic_params.turn_off_message_logging is True: Redaction should occur. User has opted in to redaction.
+    3. standard_callback_dynamic_params.turn_off_message_logging not set, litellm.turn_off_message_logging is True: Redaction should occur.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+
+    litellm.turn_off_message_logging = True
+    test_content = "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
+    response_obj = litellm.ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": test_content,
+                    "role": "assistant",
+                },
+            }
+        ]
+    )
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    # Test Case 1: standard_callback_dynamic_params = False (or not set)
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        turn_off_message_logging=False
+    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+    # Assert no redaction occurred
+    assert _redacted_response_obj.choices[0].message.content == test_content
+
+    # Test Case 2: standard_callback_dynamic_params = True
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        turn_off_message_logging=True
+    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+    # Assert redaction occurred
+    assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
+
+    # Test Case 3: standard_callback_dynamic_params does not override litellm.turn_off_message_logging
+    # since litellm.turn_off_message_logging is True redaction should occur
+    standard_callback_dynamic_params = StandardCallbackDynamicParams()
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+    # Assert no redaction occurred
+    assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
+
+    # Reset settings
     litellm.turn_off_message_logging = False
     print("Test passed")
 
@@ -1021,8 +1113,8 @@ def test_models_by_provider():
     "litellm_params, disable_end_user_cost_tracking, expected_end_user_id",
     [
         ({}, False, None),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+        ({"user_api_key_end_user_id": "123"}, False, "123"),
+        ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking(
@@ -1041,8 +1133,8 @@ def test_get_end_user_id_for_cost_tracking(
     "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
     [
         ({}, False, None),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, False, "123"),
-        ({"proxy_server_request": {"body": {"user": "123"}}}, True, None),
+        ({"user_api_key_end_user_id": "123"}, False, "123"),
+        ({"user_api_key_end_user_id": "123"}, True, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking_prometheus_only(
@@ -1059,3 +1151,92 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
         )
         == expected_end_user_id
     )
+
+
+def test_is_prompt_caching_enabled_error_handling():
+    """
+    Assert that `is_prompt_caching_valid_prompt` safely handles errors in `token_counter`.
+    """
+    with patch(
+        "litellm.utils.token_counter",
+        side_effect=Exception(
+            "Mocked error, This should not raise an error. Instead is_prompt_caching_valid_prompt should return False."
+        ),
+    ):
+        result = litellm.utils.is_prompt_caching_valid_prompt(
+            messages=[{"role": "user", "content": "test"}],
+            tools=None,
+            custom_llm_provider="anthropic",
+            model="anthropic/claude-3-5-sonnet-20240620",
+        )
+
+        assert result is False  # Should return False when an error occurs
+
+
+def test_is_prompt_caching_enabled_return_default_image_dimensions():
+    """
+    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    when processing messages containing images
+
+    IMPORTANT: Ensures Get token counter does not make a GET request to the image url
+    """
+    with patch("litellm.utils.token_counter") as mock_token_counter:
+        litellm.utils.is_prompt_caching_valid_prompt(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                                "detail": "high",
+                            },
+                        },
+                    ],
+                }
+            ],
+            tools=None,
+            custom_llm_provider="openai",
+            model="gpt-4o-mini",
+        )
+
+        # Assert token_counter was called with use_default_image_token_count=True
+        args_to_mock_token_counter = mock_token_counter.call_args[1]
+        print("args_to_mock", args_to_mock_token_counter)
+        assert args_to_mock_token_counter["use_default_image_token_count"] is True
+
+
+def test_token_counter_with_image_url_with_detail_high():
+    """
+    Assert that token_counter does not make a GET request to the image url when `use_default_image_token_count=True`
+
+    PROD TEST this is importat - Can impact latency very badly
+    """
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+    from litellm._logging import verbose_logger
+    import logging
+
+    verbose_logger.setLevel(logging.DEBUG)
+
+    _tokens = litellm.utils.token_counter(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://www.gstatic.com/webp/gallery/1.webp",
+                            "detail": "high",
+                        },
+                    },
+                ],
+            }
+        ],
+        model="gpt-4o-mini",
+        use_default_image_token_count=True,
+    )
+    print("tokens", _tokens)
+    assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7

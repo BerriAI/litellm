@@ -37,6 +37,17 @@ const config = {
         disableInDev: false,
       },
     ],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'release_notes', 
+        path: './release_notes', // Folder where your release notes are stored
+        routeBasePath: '/release_notes', // URL path for the release notes
+        include: ['**/*.md', '**/*.mdx'], // Files to include
+        // Other blog options
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -64,7 +75,6 @@ const config = {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
-        blog: false, // Optional: disable the blog plugin
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
@@ -116,6 +126,7 @@ const config = {
             label: 'Hosted',
             to: "docs/hosted"
           },
+          { to: '/release_notes', label: 'Release Notes', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
@@ -130,15 +141,7 @@ const config = {
             href: 'https://discord.com/invite/wuPM9dRgDw',
             label: 'Discord',
             position: 'right',
-          },
-          {
-            type: 'html',
-            position: 'right',
-            value:
-              `<a href=# class=navbar__link data-fr-widget>
-                I'm Confused
-              </a>`
-          },
+          }
         ],
       },
       footer: {

@@ -1,23 +1,20 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
-import os
 import traceback
-from datetime import datetime as datetimeObj
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
-import dotenv
 from pydantic import BaseModel
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
-from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.services import ServiceLoggerPayload
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
 
@@ -64,10 +61,40 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    #### PROMPT MANAGEMENT HOOKS ####
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        headers: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
     #### PRE-CALL CHECKS - router/proxy only ####
     """
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
+
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: List,
+        messages: Optional[List[AllMessageValues]],
+        request_kwargs: Optional[dict] = None,
+        parent_otel_span: Optional[Span] = None,
+    ) -> List[dict]:
+        return healthy_deployments
 
     async def async_pre_call_check(
         self, deployment: dict, parent_otel_span: Optional[Span]

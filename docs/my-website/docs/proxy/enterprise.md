@@ -28,7 +28,9 @@ Features:
     - ✅ [Disable Logging for a Team](./team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
 - **Spend Tracking & Data Exports**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-    - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+    - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
+    - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
+    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
 - **Prometheus Metrics**
     - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)

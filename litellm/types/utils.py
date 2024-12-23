@@ -33,6 +33,28 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
+class LiteLLMPydanticObjectBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump(**kwargs)  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict(**kwargs)
+
+    def fields_set(self):
+        try:
+            return self.model_fields_set  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.__fields_set__
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
 
@@ -52,11 +74,7 @@ class ProviderField(TypedDict):
     field_value: str
 
 
-class ModelInfo(TypedDict, total=False):
-    """
-    Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
-    """
-
+class ModelInfoBase(TypedDict, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
@@ -97,7 +115,6 @@ class ModelInfo(TypedDict, total=False):
             "completion", "embedding", "image_generation", "chat", "audio_transcription"
         ]
     ]
-    supported_openai_params: Required[Optional[List[str]]]
     supports_system_messages: Optional[bool]
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
@@ -109,6 +126,14 @@ class ModelInfo(TypedDict, total=False):
     supports_pdf_input: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
+
+
+class ModelInfo(ModelInfoBase, total=False):
+    """
+    Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
+    """
+
+    supported_openai_params: Required[Optional[List[str]]]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -783,6 +808,8 @@ class ModelResponseStream(ModelResponseBase):
     def __init__(
         self,
         choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
+        id: Optional[str] = None,
+        created: Optional[int] = None,
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
@@ -799,6 +826,20 @@ class ModelResponseStream(ModelResponseBase):
             kwargs["choices"] = new_choices
         else:
             kwargs["choices"] = [StreamingChoices()]
+
+        if id is None:
+            id = _generate_id()
+        else:
+            id = id
+        if created is None:
+            created = int(time.time())
+        else:
+            created = created
+
+        kwargs["id"] = id
+        kwargs["created"] = created
+        kwargs["object"] = "chat.completion.chunk"
+
         super().__init__(**kwargs)
 
     def __contains__(self, key):
@@ -1336,6 +1377,213 @@ class ResponseFormatChunk(TypedDict, total=False):
     response_schema: dict
 
 
+class LoggedLiteLLMParams(TypedDict, total=False):
+    force_timeout: Optional[float]
+    custom_llm_provider: Optional[str]
+    api_base: Optional[str]
+    litellm_call_id: Optional[str]
+    model_alias_map: Optional[dict]
+    metadata: Optional[dict]
+    model_info: Optional[dict]
+    proxy_server_request: Optional[dict]
+    acompletion: Optional[bool]
+    preset_cache_key: Optional[str]
+    no_log: Optional[bool]
+    input_cost_per_second: Optional[float]
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    output_cost_per_second: Optional[float]
+    cooldown_time: Optional[float]
+
+
+class AdapterCompletionStreamWrapper:
+    def __init__(self, completion_stream):
+        self.completion_stream = completion_stream
+
+    def __iter__(self):
+        return self
+
+    def __aiter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                    raise Exception
+                return chunk
+            raise StopIteration
+        except StopIteration:
+            raise StopIteration
+        except Exception as e:
+            print(f"AdapterCompletionStreamWrapper - {e}")  # noqa
+
+    async def __anext__(self):
+        try:
+            async for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                    raise Exception
+                return chunk
+            raise StopIteration
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
+    user_api_key_alias: Optional[str]
+    user_api_key_org_id: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+    user_api_key_end_user_id: Optional[str]
+
+
+class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
+    """
+    Specific metadata k,v pairs logged to integration for easier cost tracking
+    """
+
+    spend_logs_metadata: Optional[
+        dict
+    ]  # special param to log k,v pairs to spendlogs for a call
+    requester_ip_address: Optional[str]
+    requester_metadata: Optional[dict]
+
+
+class StandardLoggingAdditionalHeaders(TypedDict, total=False):
+    x_ratelimit_limit_requests: int
+    x_ratelimit_limit_tokens: int
+    x_ratelimit_remaining_requests: int
+    x_ratelimit_remaining_tokens: int
+
+
+class StandardLoggingHiddenParams(TypedDict):
+    model_id: Optional[str]
+    cache_key: Optional[str]
+    api_base: Optional[str]
+    response_cost: Optional[str]
+    additional_headers: Optional[StandardLoggingAdditionalHeaders]
+
+
+class StandardLoggingModelInformation(TypedDict):
+    model_map_key: str
+    model_map_value: Optional[ModelInfo]
+
+
+class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
+    """
+    Debug information, if cost tracking fails.
+
+    Avoid logging sensitive information like response or optional params
+    """
+
+    error_str: Required[str]
+    traceback_str: Required[str]
+    model: str
+    cache_hit: Optional[bool]
+    custom_llm_provider: Optional[str]
+    base_model: Optional[str]
+    call_type: str
+    custom_pricing: Optional[bool]
+
+
+class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
+    error_code: Optional[str]
+    error_class: Optional[str]
+    llm_provider: Optional[str]
+
+
+StandardLoggingPayloadStatus = Literal["success", "failure"]
+
+
+class StandardLoggingPayload(TypedDict):
+    id: str
+    trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
+    call_type: str
+    response_cost: float
+    response_cost_failure_debug_info: Optional[
+        StandardLoggingModelCostFailureDebugInformation
+    ]
+    status: StandardLoggingPayloadStatus
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: float  # Note: making this camelCase was a mistake, everything should be snake case
+    endTime: float
+    completionStartTime: float
+    response_time: float
+    model_map_information: StandardLoggingModelInformation
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    metadata: StandardLoggingMetadata
+    cache_hit: Optional[bool]
+    cache_key: Optional[str]
+    saved_cache_cost: float
+    request_tags: list
+    end_user: Optional[str]
+    requester_ip_address: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
+    error_str: Optional[str]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
+    model_parameters: dict
+    hidden_params: StandardLoggingHiddenParams
+
+
+from typing import AsyncIterator, Iterator
+
+
+class CustomStreamingDecoder:
+    async def aiter_bytes(
+        self, iterator: AsyncIterator[bytes]
+    ) -> AsyncIterator[
+        Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]
+    ]:
+        raise NotImplementedError
+
+    def iter_bytes(
+        self, iterator: Iterator[bytes]
+    ) -> Iterator[Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]]:
+        raise NotImplementedError
+
+
+class StandardPassThroughResponseObject(TypedDict):
+    response: str
+
+
+OPENAI_RESPONSE_HEADERS = [
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+]
+
+
+class StandardCallbackDynamicParams(TypedDict, total=False):
+    # Langfuse dynamic params
+    langfuse_public_key: Optional[str]
+    langfuse_secret: Optional[str]
+    langfuse_secret_key: Optional[str]
+    langfuse_host: Optional[str]
+
+    # GCS dynamic params
+    gcs_bucket_name: Optional[str]
+    gcs_path_service_account: Optional[str]
+
+    # Langsmith dynamic params
+    langsmith_api_key: Optional[str]
+    langsmith_project: Optional[str]
+    langsmith_base_url: Optional[str]
+
+    # Logging settings
+    turn_off_message_logging: Optional[bool]  # when true will not log messages
+
+
 all_litellm_params = [
     "metadata",
     "litellm_trace_id",
@@ -1348,6 +1596,8 @@ all_litellm_params = [
     "mock_response",
     "api_key",
     "api_version",
+    "prompt_id",
+    "prompt_variables",
     "api_base",
     "force_timeout",
     "logger_fn",
@@ -1410,202 +1660,9 @@ all_litellm_params = [
     "user_continue_message",
     "fallback_depth",
     "max_fallbacks",
-]
-
-
-class LoggedLiteLLMParams(TypedDict, total=False):
-    force_timeout: Optional[float]
-    custom_llm_provider: Optional[str]
-    api_base: Optional[str]
-    litellm_call_id: Optional[str]
-    model_alias_map: Optional[dict]
-    metadata: Optional[dict]
-    model_info: Optional[dict]
-    proxy_server_request: Optional[dict]
-    acompletion: Optional[bool]
-    preset_cache_key: Optional[str]
-    no_log: Optional[bool]
-    input_cost_per_second: Optional[float]
-    input_cost_per_token: Optional[float]
-    output_cost_per_token: Optional[float]
-    output_cost_per_second: Optional[float]
-    cooldown_time: Optional[float]
-
-
-class AdapterCompletionStreamWrapper:
-    def __init__(self, completion_stream):
-        self.completion_stream = completion_stream
-
-    def __iter__(self):
-        return self
-
-    def __aiter__(self):
-        return self
-
-    def __next__(self):
-        try:
-            for chunk in self.completion_stream:
-                if chunk == "None" or chunk is None:
-                    raise Exception
-                return chunk
-            raise StopIteration
-        except StopIteration:
-            raise StopIteration
-        except Exception as e:
-            print(f"AdapterCompletionStreamWrapper - {e}")  # noqa
-
-    async def __anext__(self):
-        try:
-            async for chunk in self.completion_stream:
-                if chunk == "None" or chunk is None:
-                    raise Exception
-                return chunk
-            raise StopIteration
-        except StopIteration:
-            raise StopAsyncIteration
-
-
-class StandardLoggingUserAPIKeyMetadata(TypedDict):
-    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
-    user_api_key_alias: Optional[str]
-    user_api_key_org_id: Optional[str]
-    user_api_key_team_id: Optional[str]
-    user_api_key_user_id: Optional[str]
-    user_api_key_team_alias: Optional[str]
-
-
-class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
-    """
-    Specific metadata k,v pairs logged to integration for easier cost tracking
-    """
-
-    spend_logs_metadata: Optional[
-        dict
-    ]  # special param to log k,v pairs to spendlogs for a call
-    requester_ip_address: Optional[str]
-    requester_metadata: Optional[dict]
-
-
-class StandardLoggingAdditionalHeaders(TypedDict, total=False):
-    x_ratelimit_limit_requests: int
-    x_ratelimit_limit_tokens: int
-    x_ratelimit_remaining_requests: int
-    x_ratelimit_remaining_tokens: int
-
-
-class StandardLoggingHiddenParams(TypedDict):
-    model_id: Optional[str]
-    cache_key: Optional[str]
-    api_base: Optional[str]
-    response_cost: Optional[str]
-    additional_headers: Optional[StandardLoggingAdditionalHeaders]
-
-
-class StandardLoggingModelInformation(TypedDict):
-    model_map_key: str
-    model_map_value: Optional[ModelInfo]
-
-
-class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
-    """
-    Debug information, if cost tracking fails.
-
-    Avoid logging sensitive information like response or optional params
-    """
-
-    error_str: Required[str]
-    traceback_str: Required[str]
-    model: str
-    cache_hit: Optional[bool]
-    custom_llm_provider: Optional[str]
-    base_model: Optional[str]
-    call_type: str
-    custom_pricing: Optional[bool]
-
-
-StandardLoggingPayloadStatus = Literal["success", "failure"]
-
-
-class StandardLoggingPayload(TypedDict):
-    id: str
-    trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
-    call_type: str
-    response_cost: float
-    response_cost_failure_debug_info: Optional[
-        StandardLoggingModelCostFailureDebugInformation
-    ]
-    status: StandardLoggingPayloadStatus
-    total_tokens: int
-    prompt_tokens: int
-    completion_tokens: int
-    startTime: float
-    endTime: float
-    completionStartTime: float
-    model_map_information: StandardLoggingModelInformation
-    model: str
-    model_id: Optional[str]
-    model_group: Optional[str]
-    api_base: str
-    metadata: StandardLoggingMetadata
-    cache_hit: Optional[bool]
-    cache_key: Optional[str]
-    saved_cache_cost: float
-    request_tags: list
-    end_user: Optional[str]
-    requester_ip_address: Optional[str]
-    messages: Optional[Union[str, list, dict]]
-    response: Optional[Union[str, list, dict]]
-    error_str: Optional[str]
-    model_parameters: dict
-    hidden_params: StandardLoggingHiddenParams
-
-
-from typing import AsyncIterator, Iterator
-
-
-class CustomStreamingDecoder:
-    async def aiter_bytes(
-        self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[
-        Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]
-    ]:
-        raise NotImplementedError
-
-    def iter_bytes(
-        self, iterator: Iterator[bytes]
-    ) -> Iterator[Optional[Union[GenericStreamingChunk, StreamingChatCompletionChunk]]]:
-        raise NotImplementedError
-
-
-class StandardPassThroughResponseObject(TypedDict):
-    response: str
-
-
-OPENAI_RESPONSE_HEADERS = [
-    "x-ratelimit-remaining-requests",
-    "x-ratelimit-remaining-tokens",
-    "x-ratelimit-limit-requests",
-    "x-ratelimit-limit-tokens",
-    "x-ratelimit-reset-requests",
-    "x-ratelimit-reset-tokens",
-]
-
-
-class StandardCallbackDynamicParams(TypedDict, total=False):
-    # Langfuse dynamic params
-    langfuse_public_key: Optional[str]
-    langfuse_secret: Optional[str]
-    langfuse_secret_key: Optional[str]
-    langfuse_host: Optional[str]
-
-    # GCS dynamic params
-    gcs_bucket_name: Optional[str]
-    gcs_path_service_account: Optional[str]
-
-    # Langsmith dynamic params
-    langsmith_api_key: Optional[str]
-    langsmith_project: Optional[str]
-    langsmith_base_url: Optional[str]
+    "max_budget",
+    "budget_duration",
+] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -1625,3 +1682,98 @@ class PersonalUIKeyGenerationConfig(KeyGenerationConfig):
 class StandardKeyGenerationConfig(TypedDict, total=False):
     team_key_generation: TeamUIKeyGenerationConfig
     personal_key_generation: PersonalUIKeyGenerationConfig
+
+
+class GenericBudgetInfo(BaseModel):
+    time_period: str  # e.g., '1d', '30d'
+    budget_limit: float
+
+
+GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
+
+
+class BudgetConfig(BaseModel):
+    max_budget: float
+    budget_duration: str
+
+
+class LlmProviders(str, Enum):
+    OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"  # embedding only
+    JINA_AI = "jina_ai"
+    XAI = "xai"
+    CUSTOM_OPENAI = "custom_openai"
+    TEXT_COMPLETION_OPENAI = "text-completion-openai"
+    COHERE = "cohere"
+    COHERE_CHAT = "cohere_chat"
+    CLARIFAI = "clarifai"
+    ANTHROPIC = "anthropic"
+    ANTHROPIC_TEXT = "anthropic_text"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
+    TOGETHER_AI = "together_ai"
+    OPENROUTER = "openrouter"
+    VERTEX_AI = "vertex_ai"
+    VERTEX_AI_BETA = "vertex_ai_beta"
+    GEMINI = "gemini"
+    AI21 = "ai21"
+    BASETEN = "baseten"
+    AZURE = "azure"
+    AZURE_TEXT = "azure_text"
+    AZURE_AI = "azure_ai"
+    SAGEMAKER = "sagemaker"
+    SAGEMAKER_CHAT = "sagemaker_chat"
+    BEDROCK = "bedrock"
+    VLLM = "vllm"
+    NLP_CLOUD = "nlp_cloud"
+    PETALS = "petals"
+    OOBABOOGA = "oobabooga"
+    OLLAMA = "ollama"
+    OLLAMA_CHAT = "ollama_chat"
+    DEEPINFRA = "deepinfra"
+    PERPLEXITY = "perplexity"
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    NVIDIA_NIM = "nvidia_nim"
+    CEREBRAS = "cerebras"
+    AI21_CHAT = "ai21_chat"
+    VOLCENGINE = "volcengine"
+    CODESTRAL = "codestral"
+    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DEEPSEEK = "deepseek"
+    SAMBANOVA = "sambanova"
+    MARITALK = "maritalk"
+    VOYAGE = "voyage"
+    CLOUDFLARE = "cloudflare"
+    XINFERENCE = "xinference"
+    FIREWORKS_AI = "fireworks_ai"
+    FRIENDLIAI = "friendliai"
+    WATSONX = "watsonx"
+    WATSONX_TEXT = "watsonx_text"
+    TRITON = "triton"
+    PREDIBASE = "predibase"
+    DATABRICKS = "databricks"
+    EMPOWER = "empower"
+    GITHUB = "github"
+    CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
+    HOSTED_VLLM = "hosted_vllm"
+    LM_STUDIO = "lm_studio"
+    GALADRIEL = "galadriel"
+    INFINITY = "infinity"
+
+
+class LiteLLMLoggingBaseClass:
+    """
+    Base class for logging pre and post call
+
+    Meant to simplify type checking for logging obj.
+    """
+
+    def pre_call(self, input, api_key, model=None, additional_args={}):
+        pass
+
+    def post_call(
+        self, original_response, input=None, api_key=None, additional_args={}
+    ):
+        pass

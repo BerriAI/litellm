@@ -12,12 +12,10 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
-    LiteLLMRoutes,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
@@ -74,8 +72,12 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
             query_params = dict(request.query_params)
             if "api-version" in query_params:
                 data["api_version"] = query_params["api-version"]
+    except KeyError:
+        pass
     except Exception as e:
-        verbose_logger.error("error checking api version in query params: %s", str(e))
+        verbose_logger.exception(
+            "error checking api version in query params: %s", str(e)
+        )
 
 
 def convert_key_logging_metadata_to_callback(
@@ -214,9 +216,6 @@ class LiteLLMProxyRequestSetup:
         - Checks request headers for forwardable headers
         - Checks if user information should be added to the headers
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            get_standard_logging_metadata,
-        )
 
         returned_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(headers)
 
@@ -271,6 +270,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
         )
         return user_api_key_logged_metadata
 
@@ -499,6 +499,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_max_budget"
     ] = user_api_key_dict.max_budget
+    data[_metadata_variable_name][
+        "user_api_key_model_max_budget"
+    ] = user_api_key_dict.model_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)

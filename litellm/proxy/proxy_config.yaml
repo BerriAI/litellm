@@ -1,14 +1,18 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: openai/*
     litellm_params:
-      model: openai/gpt-4o
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: anthropic/*
     litellm_params:
-      model: anthropic/fake
-      api_base: https://exampleanthropicendpoint-production.up.railway.app/
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
 
 
-
-litellm_settings:
-  callbacks: ["datadog"] 
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY

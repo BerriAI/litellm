@@ -12,11 +12,6 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
-import copy
-import json
-import re
-import secrets
-import time
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -34,10 +29,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
-from litellm.proxy.management_helpers.utils import (
-    add_new_member,
-    management_endpoint_wrapper,
-)
+from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
@@ -290,11 +282,7 @@ async def user_info(
     --header 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        litellm_master_key_hash,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -382,7 +370,7 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-
+        team_list.sort(key=lambda x: (getattr(x, "team_alias", "")))
         _user_info = (
             user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
         )
@@ -436,6 +424,7 @@ async def _get_user_info_for_proxy_admin():
     # cast all teams to LiteLLM_TeamTable
     _teams_in_db: List = results[0]["teams"] or []
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
+    _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
     return UserInfoResponse(
         user_id=None,
@@ -809,10 +798,8 @@ async def delete_user(
     """
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
-        duration_in_seconds,
         litellm_proxy_admin_name,
         prisma_client,
-        user_api_key_cache,
     )
 
     if prisma_client is None:

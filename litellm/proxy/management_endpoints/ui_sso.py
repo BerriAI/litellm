@@ -8,13 +8,14 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.proxy._types import (
     LitellmUserRoles,
     NewUserRequest,
@@ -52,7 +53,7 @@ async def google_login(request: Request):  # noqa: PLR0915
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
-    from litellm.proxy.proxy_server import master_key, premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
@@ -446,9 +447,9 @@ async def auth_callback(request: Request):  # noqa: PLR0915
 
     # User might not be already created on first generation of key
     # But if it is, we want their models preferences
-    default_ui_key_values = {
+    default_ui_key_values: Dict[str, Any] = {
         "duration": "24hr",
-        "key_max_budget": 0.01,
+        "key_max_budget": litellm.max_ui_session_budget,
         "aliases": {},
         "config": {},
         "spend": 0,
@@ -640,12 +641,15 @@ async def insert_sso_user(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_ui_settings(request: Request):
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings, proxy_state
 
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)
     _is_sso_enabled = _has_user_setup_sso()
-
+    disable_expensive_db_queries = (
+        proxy_state.get_proxy_state_variable("spend_logs_row_count")
+        > MAX_SPENDLOG_ROWS_TO_QUERY
+    )
     default_team_disabled = general_settings.get("default_team_disabled", False)
     if "PROXY_DEFAULT_TEAM_DISABLED" in os.environ:
         if os.environ["PROXY_DEFAULT_TEAM_DISABLED"].lower() == "true":
@@ -656,4 +660,8 @@ async def get_ui_settings(request: Request):
         "PROXY_LOGOUT_URL": _logout_url,
         "DEFAULT_TEAM_DISABLED": default_team_disabled,
         "SSO_ENABLED": _is_sso_enabled,
+        "NUM_SPEND_LOGS_ROWS": proxy_state.get_proxy_state_variable(
+            "spend_logs_row_count"
+        ),
+        "DISABLE_EXPENSIVE_DB_QUERIES": disable_expensive_db_queries,
     }

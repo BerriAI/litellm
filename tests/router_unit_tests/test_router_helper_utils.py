@@ -217,16 +217,11 @@ async def test_router_function_with_retries(model_list, sync_mode):
         "mock_response": "I'm fine, thank you!",
         "num_retries": 0,
     }
-    if sync_mode:
-        response = router.function_with_retries(
-            original_function=router._completion,
-            **data,
-        )
-    else:
-        response = await router.async_function_with_retries(
-            original_function=router._acompletion,
-            **data,
-        )
+    response = await router.async_function_with_retries(
+        original_function=router._acompletion,
+        **data,
+    )
+
     assert response.choices[0].message.content == "I'm fine, thank you!"
 
 
@@ -1063,3 +1058,28 @@ def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_resul
         ),
     )
     assert router._has_default_fallbacks() is expected_result
+
+
+def test_add_optional_pre_call_checks(model_list):
+    router = Router(model_list=model_list)
+
+    router.add_optional_pre_call_checks(["prompt_caching"])
+    assert len(litellm.callbacks) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_callback_filter_deployments(model_list):
+    from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+    router = Router(model_list=model_list)
+
+    healthy_deployments = router.get_model_list(model_name="gpt-3.5-turbo")
+
+    new_healthy_deployments = await router.async_callback_filter_deployments(
+        model="gpt-3.5-turbo",
+        healthy_deployments=healthy_deployments,
+        messages=[],
+        parent_otel_span=None,
+    )
+
+    assert len(new_healthy_deployments) == len(healthy_deployments)

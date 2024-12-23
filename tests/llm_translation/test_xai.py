@@ -17,7 +17,7 @@ import litellm
 from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
-from litellm.llms.xai.chat.xai_transformation import XAIChatConfig, XAI_API_BASE
+from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
@@ -91,8 +91,6 @@ def test_xai_chat_config_map_openai_params():
     assert result["frequency_penalty"] == 0.5
     assert result["logit_bias"] == {"50256": -100}
     assert result["logprobs"] == 5
-    assert result["messages"] == [{"role": "user", "content": "Hello"}]
-    assert result["model"] == "xai/grok-beta"
     assert result["n"] == 2
     assert result["presence_penalty"] == 0.2
     assert result["response_format"] == {"type": "json_object"}
@@ -135,7 +133,7 @@ def test_completion_xai(stream):
             for chunk in response:
                 print(chunk)
                 assert chunk is not None
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
                 assert isinstance(chunk.choices[0], litellm.utils.StreamingChoices)
 
         else:

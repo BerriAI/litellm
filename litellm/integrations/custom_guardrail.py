@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -29,6 +29,7 @@ class CustomGuardrail(CustomLogger):
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
         metadata = data.get("metadata") or {}
         requested_guardrails = metadata.get("guardrails") or []
+
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s",
             self.guardrail_name,

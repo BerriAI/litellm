@@ -5,10 +5,48 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import re
 from re import Match
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from litellm import get_llm_provider
 from litellm._logging import verbose_router_logger
+
+
+class PatternUtils:
+    @staticmethod
+    def calculate_pattern_specificity(pattern: str) -> Tuple[int, int]:
+        """
+        Calculate pattern specificity based on length and complexity.
+
+        Args:
+            pattern: Regex pattern to analyze
+
+        Returns:
+            Tuple of (length, complexity) for sorting
+        """
+        complexity_chars = ["*", "+", "?", "\\", "^", "$", "|", "(", ")"]
+        ret_val = (
+            len(pattern),  # Longer patterns more specific
+            sum(
+                pattern.count(char) for char in complexity_chars
+            ),  # More regex complexity
+        )
+        return ret_val
+
+    @staticmethod
+    def sorted_patterns(
+        patterns: Dict[str, List[Dict]]
+    ) -> List[Tuple[str, List[Dict]]]:
+        """
+        Cached property for patterns sorted by specificity.
+
+        Returns:
+            Sorted list of pattern-deployment tuples
+        """
+        return sorted(
+            patterns.items(),
+            key=lambda x: PatternUtils.calculate_pattern_specificity(x[0]),
+            reverse=True,
+        )
 
 
 class PatternMatchRouter:
@@ -99,13 +137,13 @@ class PatternMatchRouter:
             if request is None:
                 return None
 
+            sorted_patterns = PatternUtils.sorted_patterns(self.patterns)
             regex_filtered_model_names = (
                 [self._pattern_to_regex(m) for m in filtered_model_names]
                 if filtered_model_names is not None
                 else []
             )
-
-            for pattern, llm_deployments in self.patterns.items():
+            for pattern, llm_deployments in sorted_patterns:
                 if (
                     filtered_model_names is not None
                     and pattern not in regex_filtered_model_names

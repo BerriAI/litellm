@@ -1,34 +1,24 @@
 import json
-import types
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
-import litellm
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
-    AnthropicChatCompletionUsageBlock,
-    AnthropicComputerTool,
     AnthropicFinishReason,
-    AnthropicHostedTools,
     AnthropicMessagesRequest,
-    AnthropicMessagesTool,
     AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
     AnthropicResponse,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     AnthropicResponseUsageBlock,
-    AnthropicSystemMessageContent,
     ContentBlockDelta,
-    ContentBlockStart,
-    ContentBlockStop,
     ContentJsonBlockDelta,
     ContentTextBlockDelta,
     MessageBlockDelta,
     MessageDelta,
-    MessageStartBlock,
     UsageDelta,
 )
 from litellm.types.llms.openai import (
@@ -38,10 +28,8 @@ from litellm.types.llms.openai import (
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRequest,
-    ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
-    ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
@@ -49,19 +37,9 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUsageBlock,
     ChatCompletionUserMessage,
-    OpenAIMessageContent,
 )
-from litellm.types.utils import Choices, GenericStreamingChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
-
-from ...base import BaseLLM
-from ...prompt_templates.factory import (
-    anthropic_messages_pt,
-    custom_prompt,
-    prompt_factory,
-)
+from litellm.types.utils import Choices, ModelResponse, Usage
 
 
 class AnthropicExperimentalPassThroughConfig:
@@ -338,7 +316,7 @@ class AnthropicExperimentalPassThroughConfig:
         return "end_turn"
 
     def translate_openai_response_to_anthropic(
-        self, response: litellm.ModelResponse
+        self, response: ModelResponse
     ) -> AnthropicResponse:
         ## translate content block
         anthropic_content = self._translate_openai_content_to_anthropic(choices=response.choices)  # type: ignore
@@ -347,7 +325,7 @@ class AnthropicExperimentalPassThroughConfig:
             openai_finish_reason=response.choices[0].finish_reason  # type: ignore
         )
         # extract usage
-        usage: litellm.Usage = getattr(response, "usage")
+        usage: Usage = getattr(response, "usage")
         anthropic_usage = AnthropicResponseUsageBlock(
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
@@ -393,7 +371,7 @@ class AnthropicExperimentalPassThroughConfig:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
     def translate_streaming_openai_response_to_anthropic(
-        self, response: litellm.ModelResponse
+        self, response: ModelResponse
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -403,7 +381,7 @@ class AnthropicExperimentalPassThroughConfig:
                 ),
             )
             if getattr(response, "usage", None) is not None:
-                litellm_usage_chunk: Optional[litellm.Usage] = response.usage  # type: ignore
+                litellm_usage_chunk: Optional[Usage] = response.usage  # type: ignore
             elif (
                 hasattr(response, "_hidden_params")
                 and "usage" in response._hidden_params

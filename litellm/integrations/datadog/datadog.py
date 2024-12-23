@@ -16,11 +16,10 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import datetime
 import os
-import sys
 import traceback
 import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from httpx import Response
 
@@ -32,7 +31,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
@@ -451,7 +449,7 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_tags():
-        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')}"
+        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')},HOSTNAME:{DataDogLogger._get_datadog_hostname()},POD_NAME:{os.getenv('POD_NAME', 'unknown')}"
 
     @staticmethod
     def _get_datadog_source():
@@ -463,8 +461,12 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_hostname():
-        return ""
+        return os.getenv("HOSTNAME", "")
 
     @staticmethod
     def _get_datadog_env():
         return os.getenv("DD_ENV", "unknown")
+
+    @staticmethod
+    def _get_datadog_pod_name():
+        return os.getenv("POD_NAME", "unknown")

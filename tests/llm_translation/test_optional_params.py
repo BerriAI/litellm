@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.llms.prompt_templates.factory import map_system_message_pt
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
@@ -190,9 +190,10 @@ def test_databricks_optional_params():
         custom_llm_provider="databricks",
         max_tokens=10,
         temperature=0.2,
+        stream=True,
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 2
+    assert len(optional_params) == 3
     assert "user" not in optional_params
 
 
@@ -411,7 +412,9 @@ def test_dynamic_drop_params(drop_params):
 
 
 def test_dynamic_drop_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -457,7 +460,9 @@ def test_dynamic_drop_params_parallel_tool_calls():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -497,8 +502,24 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
+def test_dynamic_drop_additional_params_stream_options():
+    """
+    Make a call to vertex ai, dropping 'stream_options' specifically
+    """
+    optional_params = litellm.utils.get_optional_params(
+        model="mistral-large-2411@001",
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+        additional_drop_params=["stream_options"],
+    )
+
+    assert "stream_options" not in optional_params
+
+
 def test_dynamic_drop_additional_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",

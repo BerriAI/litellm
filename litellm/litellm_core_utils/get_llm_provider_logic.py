@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -52,6 +51,39 @@ def handle_cohere_chat_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def handle_anthropic_text_model_custom_llm_provider(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Tuple[str, Optional[str]]:
+    """
+    if user sets model = "anthropic/claude-2" -> use custom_llm_provider = "anthropic_text"
+
+    Args:
+        model:
+        custom_llm_provider:
+
+    Returns:
+        model, custom_llm_provider
+    """
+
+    if custom_llm_provider:
+        if (
+            custom_llm_provider == "anthropic"
+            and litellm.AnthropicTextConfig._is_anthropic_text_model(model)
+        ):
+            return model, "anthropic_text"
+
+    if "/" in model:
+        _custom_llm_provider, _model = model.split("/", 1)
+        if (
+            _custom_llm_provider
+            and _custom_llm_provider == "anthropic"
+            and litellm.AnthropicTextConfig._is_anthropic_text_model(_model)
+        ):
+            return _model, "anthropic_text"
+
+    return model, custom_llm_provider
+
+
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -89,6 +121,10 @@ def get_llm_provider(  # noqa: PLR0915
 
         ### Handle cases when custom_llm_provider is set to cohere/command-r-plus but it should use cohere_chat route
         model, custom_llm_provider = handle_cohere_chat_model_custom_llm_provider(
+            model, custom_llm_provider
+        )
+
+        model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
             model, custom_llm_provider
         )
 
@@ -210,7 +246,10 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "text-completion-openai"
         ## anthropic
         elif model in litellm.anthropic_models:
-            custom_llm_provider = "anthropic"
+            if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
+                custom_llm_provider = "anthropic_text"
+            else:
+                custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
@@ -245,9 +284,7 @@ def get_llm_provider(  # noqa: PLR0915
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
-        elif model in litellm.ai21_models:
-            custom_llm_provider = "ai21"
-        elif model in litellm.ai21_chat_models:
+        elif model in litellm.ai21_chat_models or model in litellm.ai21_models:
             custom_llm_provider = "ai21_chat"
             api_base = (
                 api_base
@@ -455,7 +492,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.FireworksAIConfig()._get_openai_compatible_provider_info(
-            model, api_base, api_key
+            model=model, api_base=api_base, api_key=api_key
         )
     elif custom_llm_provider == "azure_ai":
         (
@@ -498,14 +535,6 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
-    elif custom_llm_provider == "voyage":
-        # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
-        api_base = (
-            api_base
-            or get_secret_str("VOYAGE_API_BASE")
-            or "https://api.voyageai.com/v1"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("VOYAGE_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
@@ -531,7 +560,9 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
     elif custom_llm_provider == "galadriel":
         api_base = (
-            api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
+            api_base
+            or get_secret("GALADRIEL_API_BASE")
+            or "https://api.galadriel.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     if api_base is not None and not isinstance(api_base, str):

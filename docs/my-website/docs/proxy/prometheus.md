@@ -6,11 +6,11 @@ import Image from '@theme/IdealImage';
 
 :::info
 
-✨ Prometheus metrics is on LiteLLM Enterprise starting at $250/mo
+✨ Prometheus metrics is on LiteLLM Enterprise
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Get free 7-day trial key](https://www.litellm.ai/#trial)
 
 :::
 
@@ -77,7 +77,7 @@ Use this to track overall LiteLLM Proxy usage.
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_proxy_failed_requests_metric`             | Total number of failed responses from proxy - the client did not get a success response from litellm proxy. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "exception_status", "exception_class"`          |
-| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "exception_status", "exception_class"`          |
+| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "status_code"`          |
 
 ## LLM API / Provider Metrics
 

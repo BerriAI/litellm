@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
-
+from fastapi.routing import APIRoute
+from fastapi.responses import Response
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
@@ -1026,3 +1027,139 @@ def test_get_public_key_from_jwk_url():
 
     assert public_key is not None
     assert public_key == jwk_response[0]
+
+
+@pytest.mark.asyncio
+async def test_end_user_jwt_auth(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.proxy_server import user_api_key_auth
+    import json
+
+    monkeypatch.delenv("JWT_AUDIENCE", None)
+    jwt_handler = JWTHandler()
+
+    litellm_jwtauth = LiteLLM_JWTAuth(
+        end_user_id_jwt_field="sub",
+    )
+
+    cache = DualCache()
+
+    keys = [
+        {
+            "kid": "d-1733370597545",
+            "alg": "RS256",
+            "kty": "RSA",
+            "use": "sig",
+            "n": "j5Ik60FJSUIPMVdMSU8vhYvyPPH7rUsUllNI0BfBlIkgEYFk2mg4KX1XDQc6mcKFjbq9k_7TSkHWKnfPhNkkb0MdmZLKbwTrmte2k8xWDxp-rSmZpIJwC1zuPDx5joLHBgIb09-K2cPL2rvwzP75WtOr_QLXBerHAbXx8cOdI7mrSRWJ9iXbKv_pLDnZHnGNld75tztb8nCtgrywkF010jGi1xxaT8UKsTvK-QkIBkYI6m6WR9LMnG2OZm-ExuvNPUenfYUsqnynPF4SMNZwyQqJfavSLKI8uMzB2s9pcbx5HfQwIOYhMlgBHjhdDn2IUSnXSJqSsN6RQO18M2rgPQ",
+            "e": "AQAB",
+        },
+        {
+            "kid": "s-f836dd32-ef71-426a-8804-946a7f230bc9",
+            "alg": "RS256",
+            "kty": "RSA",
+            "use": "sig",
+            "n": "2A5-ZA18YKn7M4OtxsfXBc3Z7n2WyHTxbK4GEBlmD9T9TDr4sbJaI4oHfTvzsAC3H2r2YkASzrCISXMXQJjLHoeLgDVcKs8qTdLj7K5FNT9fA0kU9ayUjSGrqkz57SG7oNf9Wp__Qa-H-bs6Z8_CEfBy0JA9QSHUfrdOXp4vCB_qLn6DE0DJH9ELAq_0nktVQk_oxlvXlGtVZSZe31mNNgiD__RJMogf-SIFcYOkMLVGTTEBYiCk1mHxXS6oJZaVSWiBgHzu5wkra5AfQLUVelQaupT5H81hFPmiceEApf_2DacnqqRV4-Nl8sjhJtuTXiprVS2Z5r2pOMz_kVGNgw",
+            "e": "AQAB",
+        },
+    ]
+
+    cache.set_cache(
+        key="litellm_jwt_auth_keys",
+        value=keys,
+    )
+
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=litellm_jwtauth,
+        leeway=100000000000000,
+    )
+
+    token = "eyJraWQiOiJkLTE3MzMzNzA1OTc1NDUiLCJ0eXAiOiJKV1QiLCJ2ZXJzaW9uIjoiNCIsImFsZyI6IlJTMjU2In0.eyJpYXQiOjE3MzM1MDcyNzcsImV4cCI6MTczMzUwNzg3Nywic3ViIjoiODFiM2U1MmEtNjdhNi00ZWZiLTk2NDUtNzA1MjdlMTAxNDc5IiwidElkIjoicHVibGljIiwic2Vzc2lvbkhhbmRsZSI6Ijg4M2Y4YWFmLWUwOTEtNGE1Ny04YTJhLTRiMjcwMmZhZjMzYyIsInJlZnJlc2hUb2tlbkhhc2gxIjoiNDVhNDRhYjlmOTMwMGQyOTY4ZjkxODZkYWQ0YTcwY2QwNjk2YzBiNTBmZmUxZmQ4ZTM2YzU1NGU0MWE4ODU0YiIsInBhcmVudFJlZnJlc2hUb2tlbkhhc2gxIjpudWxsLCJhbnRpQ3NyZlRva2VuIjpudWxsLCJpc3MiOiJodHRwOi8vbG9jYWxob3N0OjMwMDEvYXV0aC9zdCIsImxlZ2FjeV9jb21wYW55X2lkIjoxNTI0OTM5LCJsZWdhY3lfaWQiOjM5NzAyNzk1LCJzY29wZSI6WyJza2lsbF91cCJdLCJzdC1ldiI6eyJ0IjoxNzMzNTA3Mjc4NzAwLCJ2IjpmYWxzZX19.XlYrT6dRIjaZKkJtdr7C_UuxajFRbNpA9BnIsny3rxiPVyS8rhIBwxW12tZwgttRywmXrXK-msowFhWU4XdL5Qfe4lwZb2HTbDeGiQPvQTlOjWWYMhgCoKdPtjCQsAcW45rg7aQ0p42JFQPoAQa8AnGfxXpgx2vSR7njiZ3ZZyHerDdKQHyIGSFVOxoK0TgR-hxBVY__Wjg8UTKgKSz9KU_uwnPgpe2DeYmP-LTK2oeoygsVRmbldY_GrrcRe3nqYcUfFkxSs0FSsoSv35jIxiptXfCjhEB1Y5eaJhHEjlYlP2rw98JysYxjO2rZbAdUpL3itPeo3T2uh1NZr_lArw"
+
+    response = await jwt_handler.auth_jwt(token=token)
+
+    assert response is not None
+
+    end_user_id = jwt_handler.get_end_user_id(
+        token=response,
+        default_value=None,
+    )
+
+    assert end_user_id is not None
+
+    ## CHECK USER API KEY AUTH ##
+    from starlette.datastructures import URL
+
+    bearer_token = "Bearer " + token
+
+    api_route = APIRoute(path="/chat/completions", endpoint=chat_completion)
+    request = Request(
+        {
+            "type": "http",
+            "route": api_route,
+            "path": "/chat/completions",
+            "headers": [(b"authorization", f"Bearer {bearer_token}".encode("latin-1"))],
+            "method": "POST",
+        }
+    )
+
+    async def return_body():
+        body_dict = {
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        }
+        # Serialize the dictionary to JSON and encode it to bytes
+        return json.dumps(body_dict).encode("utf-8")
+
+    request.body = return_body
+
+    ## 1. INITIAL TEAM CALL - should fail
+    # use generated key to auth in
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"enable_jwt_auth": True, "pass_through_all_models": True},
+    )
+    setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        MagicMock(),
+    )
+    setattr(litellm.proxy.proxy_server, "prisma_client", {})
+    setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+    from litellm.proxy.proxy_server import cost_tracking
+
+    cost_tracking()
+    result = await user_api_key_auth(request=request, api_key=bearer_token)
+    assert (
+        result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
+    )  # jwt token decoded sub value
+
+    temp_response = Response()
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
+    )
+
+    with patch.object(
+        litellm.proxy.hooks.proxy_track_cost_callback, "_should_track_cost_callback"
+    ) as mock_client:
+        resp = await chat_completion(
+            request=request,
+            fastapi_response=temp_response,
+            model="gpt-4o",
+            user_api_key_dict=result,
+        )
+
+        assert resp is not None
+
+        await asyncio.sleep(1)
+
+        mock_client.assert_called_once()
+
+        mock_client.call_args.kwargs[
+            "end_user_id"
+        ] == "81b3e52a-67a6-4efb-9645-70527e101479"

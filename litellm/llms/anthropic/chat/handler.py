@@ -4,32 +4,22 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-import os
-import time
-import traceback
-import types
-from enum import Enum
-from functools import partial
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
-import requests  # type: ignore
-from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm import verbose_logger
+from litellm import LlmProviders
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
-    AllAnthropicToolsValues,
     AnthropicChatCompletionUsageBlock,
     ContentBlockDelta,
     ContentBlockStart,
@@ -39,52 +29,15 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
 )
 from litellm.types.llms.openai import (
-    AllMessageValues,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import GenericStreamingChunk
-from litellm.utils import CustomStreamWrapper, ModelResponse
+from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import AnthropicConfig
-
-
-# makes headers for API call
-def validate_environment(
-    api_key,
-    user_headers,
-    model,
-    messages: List[AllMessageValues],
-    is_vertex_request: bool,
-    tools: Optional[List[AllAnthropicToolsValues]],
-    anthropic_version: Optional[str] = None,
-):
-
-    if api_key is None:
-        raise litellm.AuthenticationError(
-            message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
-            llm_provider="anthropic",
-            model=model,
-        )
-
-    prompt_caching_set = AnthropicConfig().is_cache_control_set(messages=messages)
-    computer_tool_used = AnthropicConfig().is_computer_tool_used(tools=tools)
-    pdf_used = AnthropicConfig().is_pdf_used(messages=messages)
-    headers = AnthropicConfig().get_anthropic_headers(
-        anthropic_version=anthropic_version,
-        computer_tool_used=computer_tool_used,
-        prompt_caching_set=prompt_caching_set,
-        pdf_used=pdf_used,
-        api_key=api_key,
-        is_vertex_request=is_vertex_request,
-    )
-
-    if user_headers is not None and isinstance(user_headers, dict):
-        headers = {**headers, **user_headers}
-    return headers
 
 
 async def make_call(
@@ -260,7 +213,7 @@ class AnthropicChatCompletion(BaseLLM):
         data: dict,
         optional_params: dict,
         json_mode: bool,
-        litellm_params=None,
+        litellm_params: dict,
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -295,17 +248,16 @@ class AnthropicChatCompletion(BaseLLM):
                 headers=error_headers,
             )
 
-        return AnthropicConfig._process_response(
+        return AnthropicConfig().transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             api_key=api_key,
-            data=data,
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )
@@ -315,6 +267,7 @@ class AnthropicChatCompletion(BaseLLM):
         model: str,
         messages: list,
         api_base: str,
+        custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -335,23 +288,25 @@ class AnthropicChatCompletion(BaseLLM):
         is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
         _is_function_call = False
         messages = copy.deepcopy(messages)
-        headers = validate_environment(
-            api_key,
-            headers,
-            model,
+        headers = AnthropicConfig().validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
             messages=messages,
-            tools=optional_params.get("tools"),
-            is_vertex_request=is_vertex_request,
+            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
         )
 
-        data = AnthropicConfig()._transform_request(
+        config = ProviderConfigManager.get_provider_chat_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+        data = config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
-            _is_function_call=_is_function_call,
-            is_vertex_request=is_vertex_request,
         )
 
         ## LOGGING
@@ -471,17 +426,16 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=error_headers,
                     )
 
-        return AnthropicConfig._process_response(
+        return AnthropicConfig().transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             api_key=api_key,
-            data=data,  # type: ignore
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             encoding=encoding,
             json_mode=json_mode,
         )
