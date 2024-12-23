@@ -18,7 +18,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
-
+from litellm.types.utils import StandardLoggingPayload
 import pytest
 
 import litellm
@@ -28,6 +28,7 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
 from litellm.utils import get_utc_datetime
+from create_mock_standard_logging_payload import create_standard_logging_payload
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
 
@@ -44,14 +45,19 @@ def test_tpm_rpm_updated():
     )
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
+    deployment = "azure/chatgpt-v-2"
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = model_group
+    standard_logging_payload["model_id"] = deployment_id
     kwargs = {
         "litellm_params": {
             "metadata": {
-                "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "model_group": model_group,
+                "deployment": deployment,
             },
             "model_info": {"id": deployment_id},
-        }
+        },
+        "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 50}}
@@ -98,14 +104,19 @@ def test_get_available_deployments():
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     deployment_id = "1234"
+    deployment = "azure/chatgpt-v-2"
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = model_group
+    standard_logging_payload["model_id"] = deployment_id
     kwargs = {
         "litellm_params": {
             "metadata": {
-                "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "model_group": model_group,
+                "deployment": deployment,
             },
             "model_info": {"id": deployment_id},
-        }
+        },
+        "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 50}}
@@ -118,14 +129,18 @@ def test_get_available_deployments():
     )
     ## DEPLOYMENT 2 ##
     deployment_id = "5678"
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = model_group
+    standard_logging_payload["model_id"] = deployment_id
     kwargs = {
         "litellm_params": {
             "metadata": {
-                "model_group": "gpt-3.5-turbo",
-                "deployment": "azure/chatgpt-v-2",
+                "model_group": model_group,
+                "deployment": deployment,
             },
             "model_info": {"id": deployment_id},
-        }
+        },
+        "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 20}}
@@ -187,13 +202,17 @@ def test_router_get_available_deployments():
     print(f"router id's: {router.get_model_ids()}")
     ## DEPLOYMENT 1 ##
     deployment_id = 1
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = "azure-model"
+    standard_logging_payload["model_id"] = str(deployment_id)
     kwargs = {
         "litellm_params": {
             "metadata": {
                 "model_group": "azure-model",
             },
             "model_info": {"id": 1},
-        }
+        },
+        "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 50}}
@@ -206,13 +225,17 @@ def test_router_get_available_deployments():
     )
     ## DEPLOYMENT 2 ##
     deployment_id = 2
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = "azure-model"
+    standard_logging_payload["model_id"] = str(deployment_id)
     kwargs = {
         "litellm_params": {
             "metadata": {
                 "model_group": "azure-model",
             },
             "model_info": {"id": 2},
-        }
+        },
+        "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 20}}
@@ -260,13 +283,17 @@ def test_router_skip_rate_limited_deployments():
 
     ## DEPLOYMENT 1 ##
     deployment_id = 1
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = "azure-model"
+    standard_logging_payload["model_id"] = str(deployment_id)
     kwargs = {
         "litellm_params": {
             "metadata": {
                 "model_group": "azure-model",
             },
             "model_info": {"id": deployment_id},
-        }
+        },
+        "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 1439}}
