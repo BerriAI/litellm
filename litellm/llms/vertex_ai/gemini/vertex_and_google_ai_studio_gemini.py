@@ -167,6 +167,8 @@ class VertexAIConfig:
             "n",
             "stop",
             "extra_headers",
+            "frequency_penalty",
+            "presence_penalty",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict):
