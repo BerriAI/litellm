@@ -784,6 +784,11 @@ def completion(  # type: ignore # noqa: PLR0915
         - It supports various optional parameters for customizing the completion behavior.
         - If 'mock_response' is provided, a mock completion response is returned for testing or debugging.
     """
+    ### VALIDATE Request ###
+    if model is None:
+        raise ValueError("model param not passed in.")
+    # validate messages
+    messages = validate_chat_completion_messages(messages=messages)
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)
@@ -953,9 +958,6 @@ def completion(  # type: ignore # noqa: PLR0915
             model_response._hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
-
-        ### VALIDATE USER MESSAGES ###
-        messages = validate_chat_completion_messages(messages=messages)
 
         ### TIMEOUT LOGIC ###
         timeout = timeout or kwargs.get("request_timeout", 600) or 600
