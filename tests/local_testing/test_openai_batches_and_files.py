@@ -125,6 +125,8 @@ async def test_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(result)
 
+    await asyncio.sleep(60)
+
     pass
 
 
@@ -222,6 +224,8 @@ async def test_async_create_batch(provider):
     )
 
     print("all_files_list = ", all_files_list)
+
+    await asyncio.sleep(10)
 
     # # write this file content to a file
     # with open("file_content.json", "w") as f:
