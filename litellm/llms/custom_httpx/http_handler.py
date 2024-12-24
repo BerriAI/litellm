@@ -643,7 +643,7 @@ def get_async_httpx_client(
 
     _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
     _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
-    if _cached_client and _is_active_async_httpx_client(_cached_client):
+    if _cached_client:
         return _cached_client
 
     if params is not None:
@@ -658,10 +658,6 @@ def get_async_httpx_client(
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     )
     return _new_client
-
-
-def _is_active_async_httpx_client(client: AsyncHTTPHandler) -> bool:
-    return isinstance(client, AsyncHTTPHandler) and client.client.is_closed is False
 
 
 def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
