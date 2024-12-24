@@ -280,6 +280,7 @@ def test_list_batch():
 @pytest.mark.asyncio
 async def test_avertex_batch_prediction():
     load_vertex_ai_credentials()
+    litellm.set_verbose = True
     file_name = "vertex_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
