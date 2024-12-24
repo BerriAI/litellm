@@ -275,6 +275,7 @@ const sidebars = {
         },
         "rerank",
         "assistants",
+        "files_endpoints",
         "batches",
         "realtime",
         "fine_tuning",
