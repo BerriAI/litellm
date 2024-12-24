@@ -353,9 +353,9 @@ def test_all_model_configs():
 
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexAIConfig,
-        GoogleAIStudioGeminiConfig,
         VertexGeminiConfig,
     )
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 
     assert "max_completion_tokens" in VertexAIConfig().get_supported_openai_params()
 
