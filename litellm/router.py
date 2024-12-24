@@ -801,9 +801,7 @@ class Router:
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-
             request_priority = kwargs.get("priority") or self.default_priority
-
             start_time = time.time()
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
@@ -1422,7 +1420,7 @@ class Router:
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1660,13 +1658,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
-                {
-                    "deployment": deployment["litellm_params"]["model"],
-                    "model_info": deployment.get("model_info", {}),
-                }
-            )
-            kwargs["model_info"] = deployment.get("model_info", {})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             data["model"]
             for k, v in self.default_litellm_params.items():
@@ -1777,7 +1769,7 @@ class Router:
         messages = [{"role": "user", "content": "dummy-text"}]
         try:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = await self.async_get_available_deployment(
@@ -2215,7 +2207,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2320,7 +2312,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
