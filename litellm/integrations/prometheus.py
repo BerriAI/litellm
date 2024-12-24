@@ -447,7 +447,20 @@ class PrometheusLogger(CustomLogger):
         self.set_llm_deployment_success_metrics(
             kwargs, start_time, end_time, output_tokens
         )
-        pass
+
+        if (
+            standard_logging_payload["stream"] is True
+        ):  # log successful streaming requests from logging event hook.
+            self.litellm_proxy_total_requests_metric.labels(
+                end_user=end_user_id,
+                hashed_api_key=user_api_key,
+                api_key_alias=user_api_key_alias,
+                requested_model=model,
+                team=user_api_team,
+                team_alias=user_api_team_alias,
+                user=user_id,
+                status_code="200",
+            ).inc()
 
     def _increment_token_metrics(
         self,
