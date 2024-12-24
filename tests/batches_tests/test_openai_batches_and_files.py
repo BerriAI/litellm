@@ -277,7 +277,7 @@ def test_list_batch():
     pass
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_avertex_batch_prediction():
     load_vertex_ai_credentials()
     file_name = "vertex_batch_completions.jsonl"
