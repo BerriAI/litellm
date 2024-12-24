@@ -559,7 +559,7 @@ litellm_settings:
 </Tabs>
 
 
-## **Azure Batches API** 
+## **Azure Batches API**
 
 Just add the azure env vars to your environment. 
 
@@ -568,40 +568,29 @@ export AZURE_API_KEY=""
 export AZURE_API_BASE=""
 ```
 
-AND use `/azure/*` for the Batches API calls
+<Tabs>
+<TabItem value="proxy" label="LiteLLM PROXY Server">
+
+**1. Upload a File**
 
 ```bash
-http://0.0.0.0:4000/azure/v1/batches
-```
-### Usage
-
-**Setup**
-
-- Add Azure API Keys to your environment
-
-#### 1. Upload a File
-
-```bash
-curl http://localhost:4000/azure/v1/files \
+curl http://localhost:4000/v1/files \
     -H "Authorization: Bearer sk-1234" \
     -F purpose="batch" \
     -F file="@mydata.jsonl"
 ```
 
-**Example File**
-
-Note: `model` should be your azure deployment name.
-
+**Example File Format**
 ```json
 {"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
 {"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
 {"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
 ```
 
-#### 2. Create a batch 
+**2. Create a Batch Request**
 
 ```bash
-curl http://0.0.0.0:4000/azure/v1/batches \
+curl http://localhost:4000/v1/batches \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -609,34 +598,99 @@ curl http://0.0.0.0:4000/azure/v1/batches \
     "endpoint": "/v1/chat/completions",
     "completion_window": "24h"
   }'
-
 ```
 
-#### 3. Retrieve batch
-
+**3. Retrieve a Batch**
 
 ```bash
-curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123 \
+curl http://localhost:4000/v1/batches/batch_abc123 \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
 ```
 
-#### 4. Cancel batch 
+**4. Cancel a Batch**
 
 ```bash
-curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123/cancel \
+curl http://localhost:4000/v1/batches/batch_abc123/cancel \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -X POST
 ```
 
-#### 5. List Batch
+**5. List Batches**
 
 ```bash
-curl http://0.0.0.0:4000/v1/batches?limit=2 \
+curl http://localhost:4000/v1/batches?limit=2 \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json"
 ```
+
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+**1. Create File for Batch Completion**
+
+```python
+from litellm
+import os 
+
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+
+file_name = "azure_batch_completions.jsonl"
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.join(_current_dir, file_name)
+file_obj = await litellm.acreate_file(
+    file=open(file_path, "rb"),
+    purpose="batch",
+    custom_llm_provider="azure",
+)
+print("Response from creating file=", file_obj)
+```
+
+**2. Create Batch Request**
+
+```python
+create_batch_response = await litellm.acreate_batch(
+    completion_window="24h",
+    endpoint="/v1/chat/completions",
+    input_file_id=batch_input_file_id,
+    custom_llm_provider="azure",
+    metadata={"key1": "value1", "key2": "value2"},
+)
+
+print("response from litellm.create_batch=", create_batch_response)
+```
+
+**3. Retrieve Batch and File Content**
+
+```python
+retrieved_batch = await litellm.aretrieve_batch(
+    batch_id=create_batch_response.id, 
+    custom_llm_provider="azure"
+)
+print("retrieved batch=", retrieved_batch)
+
+# Get file content
+file_content = await litellm.afile_content(
+    file_id=batch_input_file_id, 
+    custom_llm_provider="azure"
+)
+print("file content = ", file_content)
+```
+
+**4. List Batches**
+
+```python
+list_batches_response = litellm.list_batches(
+    custom_llm_provider="azure", 
+    limit=2
+)
+print("list_batches_response=", list_batches_response)
+```
+
+</TabItem>
+</Tabs>
 
 ### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
 
