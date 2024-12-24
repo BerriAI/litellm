@@ -10,11 +10,41 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
 
-from ..common_utils import VertexAIError, get_supports_system_message
+from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
     _gemini_convert_messages_with_history,
     _transform_system_message,
 )
+
+
+def get_first_continuous_block_idx(
+    filtered_messages: List[Tuple[int, AllMessageValues]]  # (idx, message)
+) -> int:
+    """
+    Find the array index that ends the first continuous sequence of message blocks.
+
+    Args:
+        filtered_messages: List of tuples containing (index, message) pairs
+
+    Returns:
+        int: The array index where the first continuous sequence ends
+    """
+    if not filtered_messages:
+        return -1
+
+    if len(filtered_messages) == 1:
+        return 0
+
+    current_value = filtered_messages[0][0]
+
+    # Search forward through the array indices
+    for i in range(1, len(filtered_messages)):
+        if filtered_messages[i][0] != current_value + 1:
+            return i - 1
+        current_value = filtered_messages[i][0]
+
+    # If we made it through the whole list, return the last index
+    return len(filtered_messages) - 1
 
 
 def separate_cached_messages(
@@ -41,22 +71,11 @@ def separate_cached_messages(
             filtered_messages.append((idx, message))
 
     # Validate only one block of continuous cached messages
-    if len(filtered_messages) > 1:
-        expected_idx = filtered_messages[0][0] + 1
-        for idx, _ in filtered_messages[1:]:
-            if idx != expected_idx:
-                raise VertexAIError(
-                    status_code=422,
-                    message="Gemini Context Caching only supports 1 message/block of continuous messages. Your idx, messages were - {}".format(
-                        filtered_messages
-                    ),
-                )
-            expected_idx += 1
-
+    last_continuous_block_idx = get_first_continuous_block_idx(filtered_messages)
     # Separate messages based on the block of cached messages
-    if filtered_messages:
+    if filtered_messages and last_continuous_block_idx is not None:
         first_cached_idx = filtered_messages[0][0]
-        last_cached_idx = filtered_messages[-1][0]
+        last_cached_idx = filtered_messages[last_continuous_block_idx][0]
 
         cached_messages = messages[first_cached_idx : last_cached_idx + 1]
         non_cached_messages = (
