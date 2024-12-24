@@ -3990,3 +3990,69 @@ def test_streaming_api_base():
         stream=True,
     )
     assert "https://api.openai.com" in stream._hidden_params["api_base"]
+
+
+def test_mock_response_iterator_tool_use():
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/7364
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Function,
+        Message,
+        Usage,
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+        Choices,
+    )
+
+    litellm.set_verbose = False
+    response = ModelResponse(
+        id="chatcmpl-Ai8KRI5vJPZXQ9SQvEJfTVuVqkyEZ",
+        created=1735081811,
+        model="o1-2024-12-17",
+        object="chat.completion",
+        system_fingerprint="fp_e6d02d4a78",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            function=Function(
+                                arguments='{"location":"San Francisco, CA","unit":"fahrenheit"}',
+                                name="get_current_weather",
+                            ),
+                            id="call_BfRX2S7YCKL0BtxbWMl89ZNk",
+                            type="function",
+                        )
+                    ],
+                    function_call=None,
+                ),
+            )
+        ],
+        usage=Usage(
+            completion_tokens=1955,
+            prompt_tokens=85,
+            total_tokens=2040,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                accepted_prediction_tokens=0,
+                audio_tokens=0,
+                reasoning_tokens=1920,
+                rejected_prediction_tokens=0,
+                text_tokens=None,
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                audio_tokens=0, cached_tokens=0, text_tokens=None, image_tokens=None
+            ),
+        ),
+        service_tier=None,
+    )
+    completion_stream = MockResponseIterator(model_response=response)
+    response_chunk = completion_stream._chunk_parser(chunk_data=response)
+
+    assert response_chunk["tool_use"] is not None
