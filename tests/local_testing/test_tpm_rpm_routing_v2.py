@@ -212,6 +212,8 @@ def test_router_get_available_deployments():
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = "azure-model"
     standard_logging_payload["model_id"] = str(deployment_id)
+    total_tokens = 50
+    standard_logging_payload["total_tokens"] = total_tokens
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -222,7 +224,7 @@ def test_router_get_available_deployments():
         "standard_logging_object": standard_logging_payload,
     }
     start_time = time.time()
-    response_obj = {"usage": {"total_tokens": 50}}
+    response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
     router.lowesttpm_logger_v2.log_success_event(
         response_obj=response_obj,
