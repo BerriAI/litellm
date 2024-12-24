@@ -27,6 +27,9 @@ from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    get_custom_llm_provider_from_request_body,
+)
 from litellm.router import Router
 
 router = APIRouter()
@@ -151,11 +154,14 @@ async def create_file(
 
     data: Dict = {}
     try:
-        if provider is not None:
-            custom_llm_provider = provider
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         # Read the file content
         file_content = await file.read()
+        custom_llm_provider = (
+            provider
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
         # Prepare the data for forwarding
 
         data = {"purpose": purpose}
@@ -322,10 +328,13 @@ async def get_file_content(
             proxy_config=proxy_config,
         )
 
-        if provider is None:
-            provider = "openai"
+        custom_llm_provider = (
+            provider
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
         response = await litellm.afile_content(
-            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
+            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -436,7 +445,11 @@ async def get_file(
 
     data: Dict = {}
     try:
-
+        custom_llm_provider = (
+            provider
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -446,11 +459,8 @@ async def get_file(
             version=version,
             proxy_config=proxy_config,
         )
-
-        if provider is None:  # default to openai
-            provider = "openai"
         response = await litellm.afile_retrieve(
-            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
+            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -552,7 +562,11 @@ async def delete_file(
 
     data: Dict = {}
     try:
-
+        custom_llm_provider = (
+            provider
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -563,10 +577,8 @@ async def delete_file(
             proxy_config=proxy_config,
         )
 
-        if provider is None:  # default to openai
-            provider = "openai"
         response = await litellm.afile_delete(
-            custom_llm_provider=provider, file_id=file_id, **data  # type: ignore
+            custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
         )
 
         ### ALERTING ###
@@ -667,7 +679,11 @@ async def list_files(
 
     data: Dict = {}
     try:
-
+        custom_llm_provider = (
+            provider
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -678,10 +694,8 @@ async def list_files(
             proxy_config=proxy_config,
         )
 
-        if provider is None:
-            provider = "openai"
         response = await litellm.afile_list(
-            custom_llm_provider=provider, purpose=purpose, **data  # type: ignore
+            custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
         )
 
         ### ALERTING ###
