@@ -774,19 +774,19 @@ class Router:
     @overload
     async def acompletion(
         self, model: str, messages: List[Dict[str, str]], stream: Literal[True], **kwargs
-    ) -> CustomStreamWrapper: 
+    ) -> CustomStreamWrapper:
         ...
 
     @overload
     async def acompletion(
         self, model: str, messages: List[Dict[str, str]], stream: Literal[False] = False, **kwargs
-    ) -> ModelResponse: 
+    ) -> ModelResponse:
         ...
 
     @overload
     async def acompletion(
         self, model: str, messages: List[Dict[str, str]], stream: Union[Literal[True], Literal[False]] = False, **kwargs
-    ) -> Union[CustomStreamWrapper, ModelResponse]: 
+    ) -> Union[CustomStreamWrapper, ModelResponse]:
         ...
 
     # fmt: on
@@ -1284,13 +1284,13 @@ class Router:
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[Dict[str, str]], priority: int, stream: Literal[False] = False, **kwargs
-    ) -> ModelResponse: 
+    ) -> ModelResponse:
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[Dict[str, str]], priority: int, stream: Literal[True], **kwargs
-    ) -> CustomStreamWrapper: 
+    ) -> CustomStreamWrapper:
         ...
 
     # fmt: on
@@ -3370,7 +3370,7 @@ class Router:
                     litellm_router_instance=self,
                     exception_status=exception_status,
                     original_exception=exception,
-                    deployment=deployment_id,
+                    deployment_id=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
                 )  # setting deployment_id in cooldown deployments
 
@@ -3691,7 +3691,7 @@ class Router:
                         litellm_router_instance=self,
                         exception_status=e.status_code,
                         original_exception=e,
-                        deployment=deployment["model_info"]["id"],
+                        deployment_id=deployment["model_info"]["id"],
                         time_to_cooldown=self.cooldown_time,
                     )
                     raise e
