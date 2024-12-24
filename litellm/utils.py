@@ -1927,7 +1927,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
 
 
 def get_litellm_params(
-    api_key=None,
+    api_key: Optional[str] = None,
     force_timeout=600,
     azure=False,
     logger_fn=None,
@@ -1935,12 +1935,12 @@ def get_litellm_params(
     hugging_face=False,
     replicate=False,
     together_ai=False,
-    custom_llm_provider=None,
-    api_base=None,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
     litellm_call_id=None,
     model_alias_map=None,
     completion_call_id=None,
-    metadata=None,
+    metadata: Optional[dict] = None,
     model_info=None,
     proxy_server_request=None,
     acompletion=None,
@@ -1954,10 +1954,11 @@ def get_litellm_params(
     text_completion=None,
     azure_ad_token_provider=None,
     user_continue_message=None,
-    base_model=None,
-    litellm_trace_id=None,
+    base_model: Optional[str] = None,
+    litellm_trace_id: Optional[str] = None,
     hf_model_name: Optional[str] = None,
     custom_prompt_dict: Optional[dict] = None,
+    litellm_metadata: Optional[dict] = None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -1989,8 +1990,8 @@ def get_litellm_params(
         "litellm_trace_id": litellm_trace_id,
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
+        "litellm_metadata": litellm_metadata,
     }
-
     return litellm_params
 
 
