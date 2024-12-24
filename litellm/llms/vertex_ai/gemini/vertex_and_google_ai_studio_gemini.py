@@ -57,6 +57,7 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     PromptTokensDetailsWrapper,
     TopLogprob,
+    Usage,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
@@ -675,7 +676,7 @@ class VertexGeminiConfig(BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
-        usage = litellm.Usage(
+        usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
@@ -713,7 +714,7 @@ class VertexGeminiConfig(BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
-        usage = litellm.Usage(
+        usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
@@ -730,7 +731,7 @@ class VertexGeminiConfig(BaseConfig):
     def _calculate_usage(
         self,
         completion_response: GenerateContentResponseBody,
-    ) -> litellm.Usage:
+    ) -> Usage:
         cached_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
@@ -743,7 +744,7 @@ class VertexGeminiConfig(BaseConfig):
                 cached_tokens=cached_tokens,
             )
         ## GET USAGE ##
-        usage = litellm.Usage(
+        usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
