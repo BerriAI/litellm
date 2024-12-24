@@ -5,8 +5,14 @@ from typing import Optional, Tuple
 
 import litellm
 from litellm import verbose_logger
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
+
+
+def _is_above_128k(tokens: float) -> bool:
+    if tokens > 128000:
+        return True
+    return False
 
 
 def _generic_cost_per_character(
@@ -84,6 +90,37 @@ def _generic_cost_per_character(
     return prompt_cost, completion_cost
 
 
+def _get_prompt_token_base_cost(model_info: ModelInfo, usage: Usage) -> float:
+    """
+    Return prompt cost for a given model and usage.
+
+    If input_tokens > 128k and `input_cost_per_token_above_128k_tokens` is set, then we use the `input_cost_per_token_above_128k_tokens` field.
+    """
+    input_cost_per_token_above_128k_tokens = model_info.get(
+        "input_cost_per_token_above_128k_tokens"
+    )
+    if _is_above_128k(usage.prompt_tokens) and input_cost_per_token_above_128k_tokens:
+        return input_cost_per_token_above_128k_tokens
+    return model_info["input_cost_per_token"]
+
+
+def _get_completion_token_base_cost(model_info: ModelInfo, usage: Usage) -> float:
+    """
+    Return prompt cost for a given model and usage.
+
+    If input_tokens > 128k and `input_cost_per_token_above_128k_tokens` is set, then we use the `input_cost_per_token_above_128k_tokens` field.
+    """
+    output_cost_per_token_above_128k_tokens = model_info.get(
+        "output_cost_per_token_above_128k_tokens"
+    )
+    if (
+        _is_above_128k(usage.completion_tokens)
+        and output_cost_per_token_above_128k_tokens
+    ):
+        return output_cost_per_token_above_128k_tokens
+    return model_info["output_cost_per_token"]
+
+
 def generic_cost_per_token(
     model: str, usage: Usage, custom_llm_provider: str
 ) -> Tuple[float, float]:
@@ -112,7 +149,9 @@ def generic_cost_per_token(
         cache_hit_tokens = usage.prompt_tokens_details.cached_tokens
         non_cache_hit_tokens = non_cache_hit_tokens - cache_hit_tokens
 
-    prompt_cost = float(non_cache_hit_tokens) * model_info["input_cost_per_token"]
+    prompt_base_cost = _get_prompt_token_base_cost(model_info=model_info, usage=usage)
+
+    prompt_cost = float(non_cache_hit_tokens) * prompt_base_cost
 
     _cache_read_input_token_cost = model_info.get("cache_read_input_token_cost")
     if (
@@ -133,6 +172,9 @@ def generic_cost_per_token(
         )
 
     ## CALCULATE OUTPUT COST
-    completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
+    completion_base_cost = _get_completion_token_base_cost(
+        model_info=model_info, usage=usage
+    )
+    completion_cost = usage["completion_tokens"] * completion_base_cost
 
     return prompt_cost, completion_cost

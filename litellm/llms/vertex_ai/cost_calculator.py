@@ -4,6 +4,7 @@ from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.llm_cost_calc.utils import _is_above_128k
 
 """
 Gemini pricing covers: 
@@ -20,12 +21,6 @@ Google AI Studio -> token based pricing
 """
 
 models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro"]
-
-
-def _is_above_128k(tokens: float) -> bool:
-    if tokens > 128000:
-        return True
-    return False
 
 
 def cost_router(
