@@ -791,7 +791,7 @@ class BedrockLLM(BaseAWSLLM):
             )
             raise BedrockError(
                 status_code=404,
-                message="Bedrock HTTPX: Unknown provider={}, model={}".format(
+                message="Bedrock Invoke HTTPX: Unknown provider={}, model={}. Try calling via converse route - `bedrock/converse/<model>`.".format(
                     provider, model
                 ),
             )
