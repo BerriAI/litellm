@@ -277,7 +277,9 @@ def _create_standard_logging_object_for_completed_batch(
     """
     Create a standard logging object for a completed batch
     """
-    standard_logging_object = kwargs.get("standard_logging_object", None)
+    standard_logging_object = logging_obj.model_call_details.get(
+        "standard_logging_object", None
+    )
 
     if standard_logging_object is None:
         raise ValueError("unable to create standard logging object for completed batch")
