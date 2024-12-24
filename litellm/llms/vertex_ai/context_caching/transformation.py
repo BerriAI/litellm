@@ -4,13 +4,13 @@ Transformation logic for context caching.
 Why separate file? Make it easy to see how transformation works
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
 
-from ..common_utils import VertexAIError, get_supports_system_message
+from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
     _gemini_convert_messages_with_history,
     _transform_system_message,

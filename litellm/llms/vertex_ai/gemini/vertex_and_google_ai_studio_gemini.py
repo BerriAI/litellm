@@ -727,6 +727,35 @@ class VertexGeminiConfig(BaseConfig):
 
         return model_response
 
+    def _calculate_usage(
+        self,
+        completion_response: GenerateContentResponseBody,
+    ) -> litellm.Usage:
+        cached_tokens: Optional[int] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        if "cachedContentTokenCount" in completion_response["usageMetadata"]:
+            cached_tokens = completion_response["usageMetadata"][
+                "cachedContentTokenCount"
+            ]
+
+        if cached_tokens is not None:
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                cached_tokens=cached_tokens,
+            )
+        ## GET USAGE ##
+        usage = litellm.Usage(
+            prompt_tokens=completion_response["usageMetadata"].get(
+                "promptTokenCount", 0
+            ),
+            completion_tokens=completion_response["usageMetadata"].get(
+                "candidatesTokenCount", 0
+            ),
+            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+            prompt_tokens_details=prompt_tokens_details,
+        )
+
+        return usage
+
     def transform_response(
         self,
         model: str,
@@ -850,31 +879,7 @@ class VertexGeminiConfig(BaseConfig):
 
                     model_response.choices.append(choice)
 
-            cached_tokens: Optional[int] = None
-            prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
-            if "cachedContentTokenCount" in completion_response["usageMetadata"]:
-                cached_tokens = completion_response["usageMetadata"][
-                    "cachedContentTokenCount"
-                ]
-
-            if cached_tokens is not None:
-                prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cached_tokens=cached_tokens,
-                )
-            ## GET USAGE ##
-            usage = litellm.Usage(
-                prompt_tokens=completion_response["usageMetadata"].get(
-                    "promptTokenCount", 0
-                ),
-                completion_tokens=completion_response["usageMetadata"].get(
-                    "candidatesTokenCount", 0
-                ),
-                total_tokens=completion_response["usageMetadata"].get(
-                    "totalTokenCount", 0
-                ),
-                prompt_tokens_details=prompt_tokens_details,
-            )
-
+            usage = self._calculate_usage(completion_response=completion_response)
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##
