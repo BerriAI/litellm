@@ -789,11 +789,15 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
             }
         except Exception as e:  # error creating kwargs for cost calculation
+            debug_info = StandardLoggingModelCostFailureDebugInformation(
+                error_str=str(e),
+                traceback_str=traceback.format_exc(),
+            )
+            verbose_logger.debug(
+                f"response_cost_failure_debug_information: {debug_info}"
+            )
             self.model_call_details["response_cost_failure_debug_information"] = (
-                StandardLoggingModelCostFailureDebugInformation(
-                    error_str=str(e),
-                    traceback_str=traceback.format_exc(),
-                )
+                debug_info
             )
             return None
 
@@ -803,19 +807,23 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return response_cost
         except Exception as e:  # error calculating cost
+            debug_info = StandardLoggingModelCostFailureDebugInformation(
+                error_str=str(e),
+                traceback_str=traceback.format_exc(),
+                model=response_cost_calculator_kwargs["model"],
+                cache_hit=response_cost_calculator_kwargs["cache_hit"],
+                custom_llm_provider=response_cost_calculator_kwargs[
+                    "custom_llm_provider"
+                ],
+                base_model=response_cost_calculator_kwargs["base_model"],
+                call_type=response_cost_calculator_kwargs["call_type"],
+                custom_pricing=response_cost_calculator_kwargs["custom_pricing"],
+            )
+            verbose_logger.debug(
+                f"response_cost_failure_debug_information: {debug_info}"
+            )
             self.model_call_details["response_cost_failure_debug_information"] = (
-                StandardLoggingModelCostFailureDebugInformation(
-                    error_str=str(e),
-                    traceback_str=traceback.format_exc(),
-                    model=response_cost_calculator_kwargs["model"],
-                    cache_hit=response_cost_calculator_kwargs["cache_hit"],
-                    custom_llm_provider=response_cost_calculator_kwargs[
-                        "custom_llm_provider"
-                    ],
-                    base_model=response_cost_calculator_kwargs["base_model"],
-                    call_type=response_cost_calculator_kwargs["call_type"],
-                    custom_pricing=response_cost_calculator_kwargs["custom_pricing"],
-                )
+                debug_info
             )
 
         return None

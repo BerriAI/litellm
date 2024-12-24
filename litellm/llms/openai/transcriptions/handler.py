@@ -8,7 +8,11 @@ import litellm
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.utils import FileTypes
-from litellm.utils import TranscriptionResponse, convert_to_model_response_object
+from litellm.utils import (
+    TranscriptionResponse,
+    convert_to_model_response_object,
+    extract_duration_from_srt_or_vtt,
+)
 
 from ..openai import OpenAIChatCompletion
 
@@ -27,18 +31,15 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
-            if litellm.return_response_headers is True:
-                raw_response = (
-                    await openai_aclient.audio.transcriptions.with_raw_response.create(
-                        **data, timeout=timeout
-                    )
-                )  # type: ignore
-                headers = dict(raw_response.headers)
-                response = raw_response.parse()
-                return headers, response
-            else:
-                response = await openai_aclient.audio.transcriptions.create(**data, timeout=timeout)  # type: ignore
-                return None, response
+            raw_response = (
+                await openai_aclient.audio.transcriptions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
+            )  # type: ignore
+            headers = dict(raw_response.headers)
+            response = raw_response.parse()
+
+            return headers, response
         except Exception as e:
             raise e
 
@@ -84,6 +85,14 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         atranscription: bool = False,
     ) -> TranscriptionResponse:
         data = {"model": model, "file": audio_file, **optional_params}
+
+        if "response_format" not in data or (
+            data["response_format"] == "text" or data["response_format"] == "json"
+        ):
+            data["response_format"] = (
+                "verbose_json"  # ensures 'duration' is received - used for cost calculation
+            )
+
         if atranscription is True:
             return self.async_audio_transcriptions(  # type: ignore
                 audio_file=audio_file,
@@ -178,7 +187,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()
             else:
+                duration = extract_duration_from_srt_or_vtt(response)
                 stringified_response = TranscriptionResponse(text=response).model_dump()
+                stringified_response["duration"] = duration
             ## LOGGING
             logging_obj.post_call(
                 input=get_audio_file_name(audio_file),
