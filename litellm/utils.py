@@ -1203,11 +1203,18 @@ def client(original_function):  # noqa: PLR0915
         return wrapper
 
 
-def _is_async_request(kwargs: Optional[dict]) -> bool:
+def _is_async_request(
+    kwargs: Optional[dict],
+    is_pass_through: bool = False,
+) -> bool:
     """
     Returns True if the call type is an internal async request.
 
     eg. litellm.acompletion, litellm.aimage_generation, litellm.acreate_batch, litellm._arealtime
+
+    Args:
+        kwargs (dict): The kwargs passed to the litellm function
+        is_pass_through (bool): Whether the call is a pass-through call. By default all pass through calls are async.
     """
     if kwargs is None:
         return False
@@ -1221,6 +1228,7 @@ def _is_async_request(kwargs: Optional[dict]) -> bool:
         or kwargs.get("arerank", False) is True
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True
+        or is_pass_through is True
     ):
         return True
     return False
