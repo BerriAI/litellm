@@ -512,6 +512,7 @@ def completion_cost(  # noqa: PLR0915
     """
     try:
         call_type = _infer_call_type(call_type, completion_response) or "completion"
+
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
             and model is not None

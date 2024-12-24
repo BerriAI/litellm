@@ -1,9 +1,10 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm import token_counter
@@ -278,13 +279,18 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                     "model_group", None
                 )
 
+                if isinstance(response_obj, BaseModel) and not hasattr(
+                    response_obj, "usage"
+                ):
+                    return
+
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
                     id = str(id)
 
-                total_tokens = response_obj["usage"]["total_tokens"]
+                total_tokens = cast(dict, response_obj)["usage"]["total_tokens"]
 
                 # ------------
                 # Setup values
