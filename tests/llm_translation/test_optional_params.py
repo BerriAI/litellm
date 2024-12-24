@@ -997,4 +997,5 @@ def test_gemini_frequency_penalty():
         custom_llm_provider="vertex_ai",
         request_type="chat_completion",
     )
+    assert optional_params is not None
     assert "frequency_penalty" in optional_params

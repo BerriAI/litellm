@@ -352,14 +352,13 @@ def test_all_model_configs():
     ) == {"max_tokens": 10}
 
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexAIConfig,
         VertexGeminiConfig,
     )
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 
-    assert "max_completion_tokens" in VertexAIConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()
 
-    assert VertexAIConfig().map_openai_params(
+    assert VertexGeminiConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
     ) == {"max_output_tokens": 10}
