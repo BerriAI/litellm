@@ -27,6 +27,9 @@ from litellm.llms.cohere.cost_calculator import (
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
 )
+from litellm.llms.deepseek.cost_calculator import (
+    cost_per_token as deepseek_cost_per_token,
+)
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
@@ -272,6 +275,8 @@ def cost_per_token(  # noqa: PLR0915
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "deepseek":
+        return deepseek_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider

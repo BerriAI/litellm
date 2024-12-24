@@ -1916,6 +1916,8 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000014,
         "input_cost_per_token_cache_hit": 0.000000014,
+        "cache_read_input_token_cost": 0.000000014,
+        "cache_creation_input_token_cost": 0.0,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "deepseek",
         "mode": "chat",
