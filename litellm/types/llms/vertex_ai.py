@@ -183,6 +183,7 @@ class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int
+    cachedContentTokenCount: int
 
 
 class CachedContent(TypedDict, total=False):

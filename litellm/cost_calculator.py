@@ -8,15 +8,6 @@ from pydantic import BaseModel
 import litellm
 import litellm._logging
 from litellm import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.google import (
-    cost_per_character as google_cost_per_character,
-)
-from litellm.litellm_core_utils.llm_cost_calc.google import (
-    cost_per_token as google_cost_per_token,
-)
-from litellm.litellm_core_utils.llm_cost_calc.google import (
-    cost_router as google_cost_router,
-)
 from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
@@ -36,14 +27,25 @@ from litellm.llms.cohere.cost_calculator import (
 from litellm.llms.databricks.cost_calculator import (
     cost_per_token as databricks_cost_per_token,
 )
+from litellm.llms.deepseek.cost_calculator import (
+    cost_per_token as deepseek_cost_per_token,
+)
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
+from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
 from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.llms.vertex_ai.cost_calculator import (
+    cost_per_character as google_cost_per_character,
+)
+from litellm.llms.vertex_ai.cost_calculator import (
+    cost_per_token as google_cost_per_token,
+)
+from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_ai_image_cost_calculator,
 )
@@ -272,12 +274,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     elif custom_llm_provider == "gemini":
-        return google_cost_per_token(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+        return gemini_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "deepseek":
+        return deepseek_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider

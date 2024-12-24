@@ -5,6 +5,7 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
+import uuid
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -45,6 +46,7 @@ def _usage_format_tests(usage: litellm.Usage):
     }
     ```
     """
+    print(f"usage={usage}")
     assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
     assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
@@ -342,54 +344,75 @@ class BaseLLMChatTest(ABC):
             print("Model does not support prompt caching")
             pytest.skip("Model does not support prompt caching")
 
-        try:
-            for _ in range(2):
-                response = self.completion_function(
-                    **base_completion_call_args,
-                    messages=[
-                        # System Message
-                        {
-                            "role": "system",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Here is the full text of a complex legal agreement"
-                                    * 400,
-                                    "cache_control": {"type": "ephemeral"},
-                                }
-                            ],
-                        },
-                        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "What are the key terms and conditions in this agreement?",
-                                    "cache_control": {"type": "ephemeral"},
-                                }
-                            ],
-                        },
-                        {
-                            "role": "assistant",
-                            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
-                        },
-                        # The final turn is marked with cache-control, for continuing in followups.
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "What are the key terms and conditions in this agreement?",
-                                    "cache_control": {"type": "ephemeral"},
-                                }
-                            ],
-                        },
-                    ],
-                    max_tokens=10,
-                )
+        uuid_str = str(uuid.uuid4())
+        messages = [
+            # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement {}".format(
+                            uuid_str
+                        )
+                        * 400,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            # The final turn is marked with cache-control, for continuing in followups.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ]
 
-                _usage_format_tests(response.usage)
+        try:
+            ## call 1
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                max_tokens=10,
+            )
+
+            initial_cost = response._hidden_params["response_cost"]
+            ## call 2
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                max_tokens=10,
+            )
+
+            cached_cost = response._hidden_params["response_cost"]
+
+            assert (
+                cached_cost <= initial_cost
+            ), "Cached cost={} should be less than initial cost={}".format(
+                cached_cost, initial_cost
+            )
+
+            _usage_format_tests(response.usage)
 
             print("response=", response)
             print("response.usage=", response.usage)

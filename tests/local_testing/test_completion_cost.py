@@ -1163,13 +1163,18 @@ def test_completion_cost_azure_common_deployment_name():
         assert "azure/gpt-4" == mock_client.call_args.kwargs["base_model"]
 
 
-def test_completion_cost_anthropic_prompt_caching():
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("claude-3-5-sonnet-20240620", "anthropic"),
+        ("gemini/gemini-1.5-flash-001", "gemini"),
+    ],
+)
+def test_completion_cost_prompt_caching(model, custom_llm_provider):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm.utils import Choices, Message, ModelResponse, Usage
-
-    model = "anthropic/claude-3-5-sonnet-20240620"
 
     ## WRITE TO CACHE ## (MORE EXPENSIVE)
     response_1 = ModelResponse(
@@ -1187,7 +1192,7 @@ def test_completion_cost_anthropic_prompt_caching():
             )
         ],
         created=1725036547,
-        model="claude-3-5-sonnet-20240620",
+        model=model,
         object="chat.completion",
         system_fingerprint=None,
         usage=Usage(
@@ -1203,7 +1208,7 @@ def test_completion_cost_anthropic_prompt_caching():
     cost_1 = completion_cost(model=model, completion_response=response_1)
 
     _model_info = litellm.get_model_info(
-        model="claude-3-5-sonnet-20240620", custom_llm_provider="anthropic"
+        model=model, custom_llm_provider=custom_llm_provider
     )
     expected_cost = (
         (
@@ -1211,11 +1216,12 @@ def test_completion_cost_anthropic_prompt_caching():
             - response_1.usage.prompt_tokens_details.cached_tokens
         )
         * _model_info["input_cost_per_token"]
-        + response_1.usage.prompt_tokens_details.cached_tokens
+        + (response_1.usage.prompt_tokens_details.cached_tokens or 0)
         * _model_info["cache_read_input_token_cost"]
-        + response_1.usage.cache_creation_input_tokens
+        + (response_1.usage.cache_creation_input_tokens or 0)
         * _model_info["cache_creation_input_token_cost"]
-        + response_1.usage.completion_tokens * _model_info["output_cost_per_token"]
+        + (response_1.usage.completion_tokens or 0)
+        * _model_info["output_cost_per_token"]
     )  # Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
 
     assert round(expected_cost, 5) == round(cost_1, 5)
@@ -1238,7 +1244,7 @@ def test_completion_cost_anthropic_prompt_caching():
             )
         ],
         created=1725036547,
-        model="claude-3-5-sonnet-20240620",
+        model=model,
         object="chat.completion",
         system_fingerprint=None,
         usage=Usage(
@@ -2437,7 +2443,7 @@ def test_completion_cost_params_2():
 def test_completion_cost_params_gemini_3():
     from litellm.utils import Choices, Message, ModelResponse, Usage
 
-    from litellm.litellm_core_utils.llm_cost_calc.google import cost_per_character
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
