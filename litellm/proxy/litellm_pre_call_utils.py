@@ -120,7 +120,7 @@ def convert_key_logging_metadata_to_callback(
 
 
 def _get_dynamic_logging_metadata(
-    user_api_key_dict: UserAPIKeyAuth,
+    user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
     if (
@@ -132,24 +132,31 @@ def _get_dynamic_logging_metadata(
                 data=AddTeamCallback(**item),
                 team_callback_settings_obj=callback_settings_obj,
             )
-    elif user_api_key_dict.team_metadata is not None:
+    elif (
+        user_api_key_dict.team_metadata is not None
+        and "callback_settings" in user_api_key_dict.team_metadata
+    ):
+        """
+        callback_settings = {
+            {
+            'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'},
+            'failure_callback': [],
+            'success_callback': ['langfuse', 'langfuse']
+        }
+        }
+        """
         team_metadata = user_api_key_dict.team_metadata
-        if "callback_settings" in team_metadata:
-            callback_settings = team_metadata.get("callback_settings", None) or {}
-            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
-            verbose_proxy_logger.debug(
-                "Team callback settings activated: %s", callback_settings_obj
+        callback_settings = team_metadata.get("callback_settings", None) or {}
+        callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+        verbose_proxy_logger.debug(
+            "Team callback settings activated: %s", callback_settings_obj
+        )
+    elif user_api_key_dict.team_id is not None:
+        callback_settings_obj = (
+            LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+                team_id=user_api_key_dict.team_id, proxy_config=proxy_config
             )
-            """
-            callback_settings = {
-              {
-                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
-                'failure_callback': [], 
-                'success_callback': ['langfuse', 'langfuse']
-            }
-            }
-            """
-
+        )
     return callback_settings_obj
 
 
@@ -342,6 +349,29 @@ class LiteLLMProxyRequestSetup:
                     final_tags.append(tag)
 
         return final_tags
+
+    @staticmethod
+    def add_team_based_callbacks_from_config(
+        team_id: str,
+        proxy_config: ProxyConfig,
+    ) -> Optional[TeamCallbackMetadata]:
+        """
+        Add team-based callbacks from the config
+        """
+        team_config = proxy_config.load_team_config(team_id=team_id)
+        if len(team_config.keys()) == 0:
+            return None
+
+        callback_vars_dict = {**team_config.get("callback_vars", team_config)}
+        callback_vars_dict.pop("team_id", None)
+        callback_vars_dict.pop("success_callback", None)
+        callback_vars_dict.pop("failure_callback", None)
+
+        return TeamCallbackMetadata(
+            success_callback=team_config.get("success_callback", None),
+            failure_callback=team_config.get("failure_callback", None),
+            callback_vars=callback_vars_dict,
+        )
 
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
@@ -551,24 +581,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "tags" in data:
             data[_metadata_variable_name]["tags"] = data["tags"]
 
-    ### TEAM-SPECIFIC PARAMS ###
-    if user_api_key_dict.team_id is not None:
-        team_config = await proxy_config.load_team_config(
-            team_id=user_api_key_dict.team_id
-        )
-        if len(team_config) == 0:
-            pass
-        else:
-            team_id = team_config.pop("team_id", None)
-            data[_metadata_variable_name]["team_id"] = team_id
-            data = {
-                **team_config,
-                **data,
-            }  # add the team-specific configs to the completion call
-
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
-        user_api_key_dict=user_api_key_dict
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:
         data["success_callback"] = callback_settings_obj.success_callback
