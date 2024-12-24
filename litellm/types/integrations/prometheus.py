@@ -1,3 +1,5 @@
+from enum import Enum
+
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
@@ -41,3 +43,14 @@ LATENCY_BUCKETS = (
     300.0,
     float("inf"),
 )
+
+
+class UserAPIKeyLabelNames(Enum):
+    END_USER = "end_user"
+    USER = "user"
+    API_KEY_HASH = "hashed_api_key"
+    API_KEY_ALIAS = "api_key_alias"
+    TEAM = "team"
+    TEAM_ALIAS = "team_alias"
+    REQUESTED_MODEL = REQUESTED_MODEL
+    LITELLM_MODEL = "model"
