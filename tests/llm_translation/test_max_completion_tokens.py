@@ -356,11 +356,15 @@ def test_all_model_configs():
     )
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 
-    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params()
+    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params(
+        model="gemini-1.0-pro"
+    )
 
     assert VertexGeminiConfig().map_openai_params(
+        model="gemini-1.0-pro",
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
+        drop_params=False,
     ) == {"max_output_tokens": 10}
 
     assert (
