@@ -100,13 +100,13 @@ def test_mock_request_with_mock_timeout():
     Allow user to set 'mock_timeout = True', this allows for testing if fallbacks/retries are working on timeouts.
     """
     start_time = time.time()
-    response = litellm.completion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
-        timeout=3,
-        mock_timeout=True,
-    )
-    print(response)
+    with pytest.raises(litellm.Timeout):
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
+            timeout=3,
+            mock_timeout=True,
+        )
     end_time = time.time()
     assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
 
