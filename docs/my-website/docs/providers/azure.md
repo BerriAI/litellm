@@ -561,6 +561,8 @@ litellm_settings:
 
 ## **Azure Batches API**
 
+### Quick Start
+
 Just add the azure env vars to your environment. 
 
 ```bash
