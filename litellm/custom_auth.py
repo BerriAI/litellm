@@ -13,7 +13,11 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 
 async def fetch_data(url: str):
     async with httpx.AsyncClient() as client:
-        response = await client.get(url)
+        response = await client.get(
+            url,
+            headers={"Content-Type": "application/json"},
+            follow_redirects=True
+        )
         return response
 
 
@@ -67,6 +71,7 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
             # getting token details from authentication service
             url = f"{budserve_app_baseurl}/credentials/details/{api_key.removeprefix('sk-')}"
             credential_details_response = await fetch_data(url)
+            verbose_proxy_logger.debug(f"Credential details response >>> {credential_details_response}")
             if credential_details_response.status_code != 200:
                 # No token was found when looking up in the DB
                 raise Exception("Invalid api key passed")

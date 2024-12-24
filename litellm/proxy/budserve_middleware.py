@@ -31,7 +31,7 @@ class BudServeMiddleware(BaseHTTPMiddleware):
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    url, 
+                    url,
                     params={"api_key": api_key, "endpoint_name": endpoint_name},
                     headers={"Content-Type": "application/json"},
                     follow_redirects=True
