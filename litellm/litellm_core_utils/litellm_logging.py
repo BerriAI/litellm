@@ -400,7 +400,8 @@ class Logging(LiteLLMLoggingBaseClass):
         **additional_params,
     ):
         self.optional_params = optional_params
-        self.model = model
+        if model is not None:
+            self.model = model
         self.user = user
         self.litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
         self.logger_fn = litellm_params.get("logger_fn", None)
