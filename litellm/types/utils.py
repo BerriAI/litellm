@@ -169,6 +169,8 @@ class CallTypes(Enum):
     rerank = "rerank"
     arerank = "arerank"
     arealtime = "_arealtime"
+    create_batch = "create_batch"
+    acreate_batch = "acreate_batch"
     pass_through = "pass_through_endpoint"
 
 
@@ -190,6 +192,9 @@ CallTypesLiteral = Literal[
     "rerank",
     "arerank",
     "_arealtime",
+    "create_batch",
+    "acreate_batch",
+    "pass_through_endpoint",
 ]
 
 
