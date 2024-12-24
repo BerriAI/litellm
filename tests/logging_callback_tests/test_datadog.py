@@ -498,3 +498,37 @@ def test_datadog_static_methods():
         expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
         print("DataDogLogger._get_datadog_tags()", DataDogLogger._get_datadog_tags())
         assert DataDogLogger._get_datadog_tags() == expected_custom_tags
+
+
+@pytest.mark.asyncio
+async def test_datadog_non_serializable_messages():
+    """Test logging events with non-JSON-serializable messages"""
+    dd_logger = DataDogLogger()
+
+    # Create payload with non-serializable content
+    standard_payload = create_standard_logging_payload()
+    non_serializable_obj = datetime.now()  # datetime objects aren't JSON serializable
+    standard_payload["messages"] = [{"role": "user", "content": non_serializable_obj}]
+    standard_payload["response"] = {
+        "choices": [{"message": {"content": non_serializable_obj}}]
+    }
+
+    kwargs = {"standard_logging_object": standard_payload}
+
+    # Test payload creation
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    # Verify payload can be serialized
+    assert dd_payload["status"] == DataDogStatus.INFO
+
+    # Verify the message can be parsed back to dict
+    dict_payload = json.loads(dd_payload["message"])
+
+    # Check that the non-serializable objects were converted to strings
+    assert isinstance(dict_payload["messages"][0]["content"], str)
+    assert isinstance(dict_payload["response"]["choices"][0]["message"]["content"], str)
