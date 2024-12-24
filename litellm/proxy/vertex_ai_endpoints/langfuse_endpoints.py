@@ -53,6 +53,8 @@ async def langfuse_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/langfuse)
     """
+    from litellm.proxy.proxy_server import proxy_config
+
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
     api_key = request.headers.get("Authorization") or ""
 
@@ -68,7 +70,9 @@ async def langfuse_proxy_route(
     )
 
     callback_settings_obj: Optional[TeamCallbackMetadata] = (
-        _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+        _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
     )
 
     dynamic_langfuse_public_key: Optional[str] = None
