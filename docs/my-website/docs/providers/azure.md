@@ -561,6 +561,15 @@ litellm_settings:
 
 ## **Azure Batches API**
 
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Batches API |
+| `custom_llm_provider` on LiteLLM | `azure/` |
+| Supported Operations | `/v1/batches`, `/v1/files` |
+| Azure OpenAI Batches API | [Azure OpenAI Batches API ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/batch) |
+| Cost Tracking, Logging Support | ✅ LiteLLM will log, track cost for Batch API Requests |
+
+
 ### Quick Start
 
 Just add the azure env vars to your environment. 
@@ -575,12 +584,38 @@ export AZURE_API_BASE=""
 
 **1. Upload a File**
 
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-api-key"
+)
+
+batch_input_file = client.files.create(
+    file=open("mydata.jsonl", "rb"),
+    purpose="batch",
+    extra_body={"custom_llm_provider": "azure"}
+)
+file_id = batch_input_file.id
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
 ```bash
 curl http://localhost:4000/v1/files \
     -H "Authorization: Bearer sk-1234" \
     -F purpose="batch" \
     -F file="@mydata.jsonl"
 ```
+
+</TabItem>
+</Tabs>
 
 **Example File Format**
 ```json
@@ -590,6 +625,22 @@ curl http://localhost:4000/v1/files \
 ```
 
 **2. Create a Batch Request**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+batch = client.batches.create( # re use client from above
+    input_file_id=file_id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+    metadata={"description": "My batch job"},
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
 curl http://localhost:4000/v1/batches \
@@ -601,8 +652,23 @@ curl http://localhost:4000/v1/batches \
     "completion_window": "24h"
   }'
 ```
+</TabItem>
+</Tabs>
 
 **3. Retrieve a Batch**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+retrieved_batch = client.batches.retrieve(
+    batch.id,
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
 curl http://localhost:4000/v1/batches/batch_abc123 \
@@ -610,7 +676,23 @@ curl http://localhost:4000/v1/batches/batch_abc123 \
   -H "Content-Type: application/json" \
 ```
 
+</TabItem>
+</Tabs>
+
 **4. Cancel a Batch**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+cancelled_batch = client.batches.cancel(
+    batch.id,
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
 curl http://localhost:4000/v1/batches/batch_abc123/cancel \
@@ -619,16 +701,30 @@ curl http://localhost:4000/v1/batches/batch_abc123/cancel \
   -X POST
 ```
 
+</TabItem>
+</Tabs>
+
 **5. List Batches**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+client.batches.list(extra_body={"custom_llm_provider": "azure"})
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
 curl http://localhost:4000/v1/batches?limit=2 \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json"
 ```
-
 </TabItem>
-<TabItem value="sdk" label="SDK">
+</Tabs>
+</TabItem>
+<TabItem value="sdk" label="LiteLLM SDK">
 
 **1. Create File for Batch Completion**
 
