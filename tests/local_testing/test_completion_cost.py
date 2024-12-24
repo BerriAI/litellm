@@ -2437,7 +2437,7 @@ def test_completion_cost_params_2():
 def test_completion_cost_params_gemini_3():
     from litellm.utils import Choices, Message, ModelResponse, Usage
 
-    from litellm.litellm_core_utils.llm_cost_calc.google import cost_per_character
+    from litellm.llms.vertex_ai.cost_calculator import cost_per_character
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
