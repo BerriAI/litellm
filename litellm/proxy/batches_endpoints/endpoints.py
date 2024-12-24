@@ -17,6 +17,9 @@ from litellm.batches.main import CreateBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    get_custom_llm_provider_from_request_body,
+)
 from litellm.proxy.openai_files_endpoints.files_endpoints import is_known_model
 
 router = APIRouter()
@@ -71,10 +74,8 @@ async def create_batch(
     )
 
     data: Dict = {}
-
     try:
-        body = await _read_request_body(request=request)
-
+        data = await _read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
@@ -96,9 +97,8 @@ async def create_batch(
             router_model = data.get("model", None)
             is_router_model = is_known_model(model=router_model, llm_router=llm_router)
 
+        custom_llm_provider = provider or data.pop("custom_llm_provider", None)
         _create_batch_data = CreateBatchRequest(**data)
-        custom_llm_provider = provider or _create_batch_data.pop("custom_llm_provider", None)  # type: ignore
-
         if (
             litellm.enable_loadbalancing_on_batch_endpoints is True
             and is_router_model
@@ -114,8 +114,6 @@ async def create_batch(
 
             response = await llm_router.acreate_batch(**_create_batch_data)  # type: ignore
         else:
-            if custom_llm_provider is None:
-                custom_llm_provider = "openai"
             response = await litellm.acreate_batch(
                 custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
             )
@@ -220,7 +218,6 @@ async def retrieve_batch(
     data: Dict = {}
     try:
         ## check if model is a loadbalanced model
-
         _retrieve_batch_request = RetrieveBatchRequest(
             batch_id=batch_id,
         )
@@ -236,10 +233,12 @@ async def retrieve_batch(
 
             response = await llm_router.aretrieve_batch(**_retrieve_batch_request)  # type: ignore
         else:
-            if provider is None:
-                provider = "openai"
+            custom_llm_provider = (
+                provider
+                or await get_custom_llm_provider_from_request_body(request=request)
+            )
             response = await litellm.aretrieve_batch(
-                custom_llm_provider=provider, **_retrieve_batch_request  # type: ignore
+                custom_llm_provider=custom_llm_provider, **_retrieve_batch_request  # type: ignore
             )
 
         ### ALERTING ###
@@ -312,6 +311,7 @@ async def retrieve_batch(
     tags=["batch"],
 )
 async def list_batches(
+    request: Request,
     fastapi_response: Response,
     provider: Optional[str] = None,
     limit: Optional[int] = None,
@@ -339,10 +339,13 @@ async def list_batches(
 
     verbose_proxy_logger.debug("GET /v1/batches after={} limit={}".format(after, limit))
     try:
-        if provider is None:
-            provider = "openai"
+        custom_llm_provider = (
+            provider
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
         response = await litellm.alist_batches(
-            custom_llm_provider=provider,  # type: ignore
+            custom_llm_provider=custom_llm_provider,  # type: ignore
             after=after,
             limit=limit,
         )
