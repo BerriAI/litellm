@@ -8,8 +8,8 @@ Covers Batches, Files
 | Feature | Supported | Notes | 
 |-------|-------|-------|
 | Supported Providers | OpenAI, Azure, Vertex | - |
-| ✨ Cost Tracking | ✅ | Enterprise only |
-| Logging | ✅ | works across all logging integrations |
+| ✨ Cost Tracking | ✅ | LiteLLM Enterprise only |
+| Logging | ✅ | Works across all logging integrations |
 
 ## Quick Start 
 
