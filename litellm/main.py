@@ -1140,6 +1140,7 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             hf_model_name=hf_model_name,
             custom_prompt_dict=custom_prompt_dict,
+            litellm_metadata=kwargs.get("litellm_metadata"),
         )
         logging.update_environment_variables(
             model=model,
