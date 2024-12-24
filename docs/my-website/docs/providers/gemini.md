@@ -717,6 +717,8 @@ in your message content block.
 
 **Notes:**
 
+- [Relevant code](https://github.com/BerriAI/litellm/blob/main/litellm/llms/vertex_ai/context_caching/vertex_ai_context_caching.py#L255)
+
 - Gemini Context Caching only allows 1 block of continuous messages to be cached. 
 
 - If multiple non-continuous blocks contain `cache_control` - the first continuous block will be used. (sent to `/cachedContent` in the [Gemini format](https://ai.google.dev/api/caching#cache_create-SHELL))
