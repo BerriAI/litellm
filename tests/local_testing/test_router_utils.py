@@ -344,10 +344,17 @@ async def test_get_remaining_model_group_usage():
         ]
     )
     for _ in range(2):
-        await router.acompletion(
+        resp = await router.acompletion(
             model="gemini/gemini-1.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
+        )
+        assert (
+            "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
+        )
+        assert (
+            "x-ratelimit-remaining-requests"
+            in resp._hidden_params["additional_headers"]
         )
         await asyncio.sleep(1)
 

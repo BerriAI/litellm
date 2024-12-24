@@ -813,6 +813,8 @@ class ModelResponseStream(ModelResponseBase):
     def __init__(
         self,
         choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
+        id: Optional[str] = None,
+        created: Optional[int] = None,
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
@@ -829,6 +831,20 @@ class ModelResponseStream(ModelResponseBase):
             kwargs["choices"] = new_choices
         else:
             kwargs["choices"] = [StreamingChoices()]
+
+        if id is None:
+            id = _generate_id()
+        else:
+            id = id
+        if created is None:
+            created = int(time.time())
+        else:
+            created = created
+
+        kwargs["id"] = id
+        kwargs["created"] = created
+        kwargs["object"] = "chat.completion.chunk"
+
         super().__init__(**kwargs)
 
     def __contains__(self, key):
@@ -1583,6 +1599,7 @@ all_litellm_params = [
     "text_completion",
     "caching",
     "mock_response",
+    "mock_timeout",
     "api_key",
     "api_version",
     "prompt_id",

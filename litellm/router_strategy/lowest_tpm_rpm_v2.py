@@ -12,7 +12,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
-from litellm.types.utils import LiteLLMPydanticObjectBase
+from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
 
 if TYPE_CHECKING:
@@ -222,45 +222,44 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
-                pass
-            else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
+            if standard_logging_object is None:
+                raise ValueError("standard_logging_object not passed in.")
+            model_group = standard_logging_object.get("model_group")
+            id = standard_logging_object.get("model_id")
+            if model_group is None or id is None:
+                return
+            elif isinstance(id, int):
+                id = str(id)
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                if model_group is None or id is None:
-                    return
-                elif isinstance(id, int):
-                    id = str(id)
+            total_tokens = standard_logging_object.get("total_tokens")
 
-                total_tokens = response_obj["usage"]["total_tokens"]
+            # ------------
+            # Setup values
+            # ------------
+            dt = get_utc_datetime()
+            current_minute = dt.strftime(
+                "%H-%M"
+            )  # use the same timezone regardless of system clock
 
-                # ------------
-                # Setup values
-                # ------------
-                dt = get_utc_datetime()
-                current_minute = dt.strftime(
-                    "%H-%M"
-                )  # use the same timezone regardless of system clock
+            tpm_key = f"{id}:tpm:{current_minute}"
+            # ------------
+            # Update usage
+            # ------------
+            # update cache
 
-                tpm_key = f"{id}:tpm:{current_minute}"
-                # ------------
-                # Update usage
-                # ------------
-                # update cache
-
-                ## TPM
-                self.router_cache.increment_cache(
-                    key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
-                )
-                ### TESTING ###
-                if self.test_flag:
-                    self.logged_success += 1
+            ## TPM
+            self.router_cache.increment_cache(
+                key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
+            )
+            ### TESTING ###
+            if self.test_flag:
+                self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {}".format(
                     str(e)
                 )
             )
@@ -271,49 +270,46 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             """
             Update TPM usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
-                pass
-            else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
+            if standard_logging_object is None:
+                raise ValueError("standard_logging_object not passed in.")
+            model_group = standard_logging_object.get("model_group")
+            id = standard_logging_object.get("model_id")
+            if model_group is None or id is None:
+                return
+            elif isinstance(id, int):
+                id = str(id)
+            total_tokens = standard_logging_object.get("total_tokens")
+            # ------------
+            # Setup values
+            # ------------
+            dt = get_utc_datetime()
+            current_minute = dt.strftime(
+                "%H-%M"
+            )  # use the same timezone regardless of system clock
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                if model_group is None or id is None:
-                    return
-                elif isinstance(id, int):
-                    id = str(id)
+            tpm_key = f"{id}:tpm:{current_minute}"
+            # ------------
+            # Update usage
+            # ------------
+            # update cache
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            ## TPM
+            await self.router_cache.async_increment_cache(
+                key=tpm_key,
+                value=total_tokens,
+                ttl=self.routing_args.ttl,
+                parent_otel_span=parent_otel_span,
+            )
 
-                total_tokens = response_obj["usage"]["total_tokens"]
-
-                # ------------
-                # Setup values
-                # ------------
-                dt = get_utc_datetime()
-                current_minute = dt.strftime(
-                    "%H-%M"
-                )  # use the same timezone regardless of system clock
-
-                tpm_key = f"{id}:tpm:{current_minute}"
-                # ------------
-                # Update usage
-                # ------------
-                # update cache
-                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-                ## TPM
-                await self.router_cache.async_increment_cache(
-                    key=tpm_key,
-                    value=total_tokens,
-                    ttl=self.routing_args.ttl,
-                    parent_otel_span=parent_otel_span,
-                )
-
-                ### TESTING ###
-                if self.test_flag:
-                    self.logged_success += 1
+            ### TESTING ###
+            if self.test_flag:
+                self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - {}".format(
                     str(e)
                 )
             )

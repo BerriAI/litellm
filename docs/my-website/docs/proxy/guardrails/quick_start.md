@@ -236,3 +236,20 @@ Expect to NOT see `+1 412-612-9992` in your server logs on your callback.
 The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"pii_masking": true}`
 :::
 
+
+
+### ✨ List guardrails
+
+Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
+
+```shell
+curl -X GET 'http://0.0.0.0:4000/guardrails/list'
+```
+
+Expected response
+
+```json
+{
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+}
+```

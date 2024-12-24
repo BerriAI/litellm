@@ -71,12 +71,16 @@ def load_vertex_ai_credentials():
 
 
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
-def test_create_batch(provider):
+@pytest.mark.asyncio
+async def test_create_batch(provider):
     """
     1. Create File for Batch completion
     2. Create Batch Request
     3. Retrieve the specific batch
     """
+    custom_logger = TestCustomLogger()
+    litellm.callbacks = [custom_logger, "datadog"]
+
     if provider == "azure":
         # Don't have anymore Azure Quota
         return
@@ -84,7 +88,7 @@ def test_create_batch(provider):
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
 
-    file_obj = litellm.create_file(
+    file_obj = await litellm.acreate_file(
         file=open(file_path, "rb"),
         purpose="batch",
         custom_llm_provider=provider,
@@ -96,8 +100,8 @@ def test_create_batch(provider):
         batch_input_file_id is not None
     ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
 
-    time.sleep(5)
-    create_batch_response = litellm.create_batch(
+    await asyncio.sleep(1)
+    create_batch_response = await litellm.acreate_batch(
         completion_window="24h",
         endpoint="/v1/chat/completions",
         input_file_id=batch_input_file_id,
@@ -106,7 +110,14 @@ def test_create_batch(provider):
     )
 
     print("response from litellm.create_batch=", create_batch_response)
+    await asyncio.sleep(6)
 
+    # Assert that the create batch event is logged on CustomLogger
+    assert custom_logger.standard_logging_object is not None
+    print(
+        "standard_logging_object=",
+        json.dumps(custom_logger.standard_logging_object, indent=4),
+    )
     assert (
         create_batch_response.id is not None
     ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
@@ -118,7 +129,7 @@ def test_create_batch(provider):
         create_batch_response.input_file_id == batch_input_file_id
     ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
-    retrieved_batch = litellm.retrieve_batch(
+    retrieved_batch = await litellm.aretrieve_batch(
         batch_id=create_batch_response.id, custom_llm_provider=provider
     )
     print("retrieved batch=", retrieved_batch)
@@ -127,10 +138,10 @@ def test_create_batch(provider):
     assert retrieved_batch.id == create_batch_response.id
 
     # list all batches
-    list_batches = litellm.list_batches(custom_llm_provider=provider, limit=2)
+    list_batches = await litellm.alist_batches(custom_llm_provider=provider, limit=2)
     print("list_batches=", list_batches)
 
-    file_content = litellm.file_content(
+    file_content = await litellm.afile_content(
         file_id=batch_input_file_id, custom_llm_provider=provider
     )
 

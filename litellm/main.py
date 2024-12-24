@@ -145,7 +145,7 @@ from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
-from .llms.watsonx.completion.handler import IBMWatsonXAI
+from .llms.watsonx.common_utils import IBMWatsonXMixin
 from .types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAudioParam,
@@ -205,7 +205,6 @@ google_batch_embeddings = GoogleBatchEmbeddings()
 vertex_partner_models_chat_completion = VertexAIPartnerModels()
 vertex_model_garden_chat_completion = VertexAIModelGardenModels()
 vertex_text_to_speech = VertexTextToSpeechAPI()
-watsonxai = IBMWatsonXAI()
 sagemaker_llm = SagemakerLLM()
 watsonx_chat_completion = WatsonXChatHandler()
 openai_like_embedding = OpenAILikeEmbeddingHandler()
@@ -528,6 +527,73 @@ async def _async_streaming(response, model, custom_llm_provider, args):
         )
 
 
+def _handle_mock_potential_exceptions(
+    mock_response: Union[str, Exception, dict],
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+):
+    if isinstance(mock_response, Exception):
+        if isinstance(mock_response, openai.APIError):
+            raise mock_response
+        raise litellm.MockException(
+            status_code=getattr(mock_response, "status_code", 500),  # type: ignore
+            message=getattr(mock_response, "text", str(mock_response)),
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,  # type: ignore
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+        )
+    elif isinstance(mock_response, str) and mock_response == "litellm.RateLimitError":
+        raise litellm.RateLimitError(
+            message="this is a mock rate limit error",
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,
+        )
+    elif (
+        isinstance(mock_response, str)
+        and mock_response == "litellm.InternalServerError"
+    ):
+        raise litellm.InternalServerError(
+            message="this is a mock internal server error",
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,
+        )
+    elif isinstance(mock_response, str) and mock_response.startswith(
+        "Exception: content_filter_policy"
+    ):
+        raise litellm.MockException(
+            status_code=400,
+            message=mock_response,
+            llm_provider="azure",
+            model=model,  # type: ignore
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+        )
+
+
+def _handle_mock_timeout(
+    mock_timeout: Optional[bool],
+    timeout: Optional[Union[float, str, httpx.Timeout]],
+    model: str,
+):
+    if mock_timeout is True and timeout is not None:
+        if isinstance(timeout, float):
+            time.sleep(timeout)
+        elif isinstance(timeout, str):
+            time.sleep(float(timeout))
+        elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+            time.sleep(timeout.connect)
+        raise litellm.Timeout(
+            message="This is a mock timeout error",
+            llm_provider="openai",
+            model=model,
+        )
+
+
 def mock_completion(
     model: str,
     messages: List,
@@ -535,8 +601,10 @@ def mock_completion(
     n: Optional[int] = None,
     mock_response: Union[str, Exception, dict] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
+    mock_timeout: Optional[bool] = False,
     logging=None,
     custom_llm_provider=None,
+    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     **kwargs,
 ):
     """
@@ -549,6 +617,8 @@ def mock_completion(
         messages (List): A list of message objects representing the conversation context.
         stream (bool, optional): If True, returns a mock streaming response (default is False).
         mock_response (str, optional): The content of the mock response (default is "This is a mock request").
+        mock_timeout (bool, optional): If True, the mock response will be a timeout error (default is False).
+        timeout (float, optional): The timeout value to use for the mock response (default is None).
         **kwargs: Additional keyword arguments that can be used but are not required.
 
     Returns:
@@ -561,56 +631,28 @@ def mock_completion(
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
     """
     try:
+        if mock_response is None:
+            mock_response = "This is a mock request"
+
+        _handle_mock_timeout(mock_timeout=mock_timeout, timeout=timeout, model=model)
+
         ## LOGGING
         if logging is not None:
             logging.pre_call(
                 input=messages,
                 api_key="mock-key",
             )
-        if isinstance(mock_response, Exception):
-            if isinstance(mock_response, openai.APIError):
-                raise mock_response
-            raise litellm.MockException(
-                status_code=getattr(mock_response, "status_code", 500),  # type: ignore
-                message=getattr(mock_response, "text", str(mock_response)),
-                llm_provider=getattr(
-                    mock_response, "llm_provider", custom_llm_provider or "openai"
-                ),  # type: ignore
-                model=model,  # type: ignore
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
-            )
-        elif (
-            isinstance(mock_response, str) and mock_response == "litellm.RateLimitError"
-        ):
-            raise litellm.RateLimitError(
-                message="this is a mock rate limit error",
-                llm_provider=getattr(
-                    mock_response, "llm_provider", custom_llm_provider or "openai"
-                ),  # type: ignore
-                model=model,
-            )
-        elif (
-            isinstance(mock_response, str)
-            and mock_response == "litellm.InternalServerError"
-        ):
-            raise litellm.InternalServerError(
-                message="this is a mock internal server error",
-                llm_provider=getattr(
-                    mock_response, "llm_provider", custom_llm_provider or "openai"
-                ),  # type: ignore
-                model=model,
-            )
-        elif isinstance(mock_response, str) and mock_response.startswith(
-            "Exception: content_filter_policy"
-        ):
-            raise litellm.MockException(
-                status_code=400,
-                message=mock_response,
-                llm_provider="azure",
-                model=model,  # type: ignore
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
-            )
-        elif isinstance(mock_response, str) and mock_response.startswith(
+
+        _handle_mock_potential_exceptions(
+            mock_response=mock_response,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        mock_response = cast(
+            Union[str, dict], mock_response
+        )  # after this point, mock_response is a string or dict
+        if isinstance(mock_response, str) and mock_response.startswith(
             "Exception: mock_streaming_error"
         ):
             mock_response = litellm.MockException(
@@ -794,6 +836,7 @@ def completion(  # type: ignore # noqa: PLR0915
     api_base = kwargs.get("api_base", None)
     mock_response = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
+    mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))
     force_timeout = kwargs.get("force_timeout", 600)  ## deprecated
     logger_fn = kwargs.get("logger_fn", None)
     verbose = kwargs.get("verbose", False)
@@ -1105,7 +1148,8 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
-        if mock_response or mock_tool_calls:
+        if mock_response or mock_tool_calls or mock_timeout:
+            kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             return mock_completion(
                 model,
                 messages,
@@ -1117,6 +1161,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 acompletion=acompletion,
                 mock_delay=kwargs.get("mock_delay", None),
                 custom_llm_provider=custom_llm_provider,
+                mock_timeout=mock_timeout,
+                timeout=timeout,
             )
 
         if custom_llm_provider == "azure":
@@ -2587,43 +2633,68 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="watsonx",
             )
         elif custom_llm_provider == "watsonx_text":
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            response = watsonxai.completion(
-                model=model,
-                messages=messages,
-                custom_prompt_dict=custom_prompt_dict,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,  # type: ignore
-                logger_fn=logger_fn,
-                encoding=encoding,
-                logging_obj=logging,
-                timeout=timeout,  # type: ignore
-                acompletion=acompletion,
+            api_key = (
+                api_key
+                or optional_params.pop("apikey", None)
+                or get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_API_KEY")
+                or get_secret_str("WX_API_KEY")
             )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] is True
-                and not isinstance(response, CustomStreamWrapper)
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    iter(response),
-                    model,
-                    custom_llm_provider="watsonx",
-                    logging_obj=logging,
+
+            api_base = (
+                api_base
+                or optional_params.pop(
+                    "url",
+                    optional_params.pop(
+                        "api_base", optional_params.pop("base_url", None)
+                    ),
+                )
+                or get_secret_str("WATSONX_API_BASE")
+                or get_secret_str("WATSONX_URL")
+                or get_secret_str("WX_URL")
+                or get_secret_str("WML_URL")
+            )
+
+            wx_credentials = optional_params.pop(
+                "wx_credentials",
+                optional_params.pop(
+                    "watsonx_credentials", None
+                ),  # follow {provider}_credentials, same as vertex ai
+            )
+
+            token: Optional[str] = None
+            if wx_credentials is not None:
+                api_base = wx_credentials.get("url", api_base)
+                api_key = wx_credentials.get(
+                    "apikey", wx_credentials.get("api_key", api_key)
+                )
+                token = wx_credentials.get(
+                    "token",
+                    wx_credentials.get(
+                        "watsonx_token", None
+                    ),  # follow format of {provider}_token, same as azure - e.g. 'azure_ad_token=..'
                 )
 
-            if optional_params.get("stream", False):
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=None,
-                    original_response=response,
-                )
-            ## RESPONSE OBJECT
-            response = response
+            if token is not None:
+                optional_params["token"] = token
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="watsonx_text",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
+            )
         elif custom_llm_provider == "vllm":
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             model_response = vllm_handler.completion(
@@ -3487,6 +3558,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params={},
             )
         elif custom_llm_provider == "gemini":
             gemini_api_key = (
@@ -3663,6 +3735,32 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params={},
+            )
+        elif custom_llm_provider == "watsonx":
+            credentials = IBMWatsonXMixin.get_watsonx_credentials(
+                optional_params=optional_params, api_key=api_key, api_base=api_base
+            )
+
+            api_key = credentials["api_key"]
+            api_base = credentials["api_base"]
+
+            if "token" in credentials:
+                optional_params["token"] = credentials["token"]
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
+                client=client,
+                aembedding=aembedding,
             )
         elif custom_llm_provider == "xinference":
             api_key = (
@@ -3688,17 +3786,6 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-            )
-        elif custom_llm_provider == "watsonx":
-            response = watsonxai.embedding(
-                model=model,
-                input=input,
-                encoding=encoding,
-                logging_obj=logging,
-                optional_params=optional_params,
-                model_response=EmbeddingResponse(),
-                aembedding=aembedding,
-                api_key=api_key,
             )
         elif custom_llm_provider == "azure_ai":
             api_base = (

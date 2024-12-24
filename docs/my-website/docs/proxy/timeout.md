@@ -176,3 +176,23 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+
+## Testing timeout handling 
+
+To test if your retry/fallback logic can handle timeouts, you can set `mock_timeout=True` for testing. 
+
+This is currently only supported on `/chat/completions` and `/completions` endpoints. Please [let us know](https://github.com/BerriAI/litellm/issues) if you need this for other endpoints. 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+    -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer sk-1234' \
+    --data-raw '{
+        "model": "gemini/gemini-1.5-flash",
+        "messages": [
+        {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+        ],
+        "mock_timeout": true # 👈 KEY CHANGE
+    }'
+```

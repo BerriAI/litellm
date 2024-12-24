@@ -168,7 +168,9 @@ def completion(
         time.time()
     )  # for pricing this must remain right before calling api
 
-    prediction_url = replicate_config.get_complete_url(api_base, model)
+    prediction_url = replicate_config.get_complete_url(
+        api_base=api_base, model=model, optional_params=optional_params
+    )
 
     ## COMPLETION CALL
     httpx_client = _get_httpx_client(
@@ -235,7 +237,9 @@ async def async_completion(
     headers: dict,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
 
-    prediction_url = replicate_config.get_complete_url(api_base=api_base, model=model)
+    prediction_url = replicate_config.get_complete_url(
+        api_base=api_base, model=model, optional_params=optional_params
+    )
     async_handler = get_async_httpx_client(
         llm_provider=litellm.LlmProviders.REPLICATE,
         params={"timeout": 600.0},
