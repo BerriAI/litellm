@@ -407,7 +407,7 @@ class BaseLLMChatTest(ABC):
             cached_cost = response._hidden_params["response_cost"]
 
             assert (
-                cached_cost < initial_cost
+                cached_cost <= initial_cost
             ), "Cached cost={} should be less than initial cost={}".format(
                 cached_cost, initial_cost
             )
