@@ -25,7 +25,7 @@ from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import Batch, CreateBatchRequest, RetrieveBatchRequest
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import supports_httpx_timeout
+from litellm.utils import client, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
@@ -34,6 +34,7 @@ vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
 #################################################
 
 
+@client
 async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
@@ -80,6 +81,7 @@ async def acreate_batch(
         raise e
 
 
+@client
 def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
