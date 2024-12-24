@@ -1008,3 +1008,52 @@ def test_get_complete_model_list(proxy_model_list, provider):
 
     for _model in complete_list:
         assert provider in _model
+
+
+def test_team_callback_metadata_all_none_values():
+    from litellm.proxy._types import TeamCallbackMetadata
+
+    resp = TeamCallbackMetadata(
+        success_callback=None,
+        failure_callback=None,
+        callback_vars=None,
+    )
+
+    assert resp.success_callback == []
+    assert resp.failure_callback == []
+    assert resp.callback_vars == {}
+
+
+@pytest.mark.parametrize(
+    "none_key",
+    [
+        "success_callback",
+        "failure_callback",
+        "callback_vars",
+    ],
+)
+def test_team_callback_metadata_none_values(none_key):
+    from litellm.proxy._types import TeamCallbackMetadata
+
+    if none_key == "success_callback":
+        args = {
+            "success_callback": None,
+            "failure_callback": ["test"],
+            "callback_vars": None,
+        }
+    elif none_key == "failure_callback":
+        args = {
+            "success_callback": ["test"],
+            "failure_callback": None,
+            "callback_vars": None,
+        }
+    elif none_key == "callback_vars":
+        args = {
+            "success_callback": ["test"],
+            "failure_callback": ["test"],
+            "callback_vars": None,
+        }
+
+    resp = TeamCallbackMetadata(**args)
+
+    assert none_key not in resp
