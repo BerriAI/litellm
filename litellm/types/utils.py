@@ -1594,6 +1594,7 @@ all_litellm_params = [
     "text_completion",
     "caching",
     "mock_response",
+    "mock_timeout",
     "api_key",
     "api_version",
     "prompt_id",
