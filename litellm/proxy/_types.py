@@ -1011,13 +1011,29 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def validate_callback_vars(cls, values):
+        success_callback = values.get("success_callback", [])
+        if success_callback is None:
+            values.pop("success_callback", None)
+        failure_callback = values.get("failure_callback", [])
+        if failure_callback is None:
+            values.pop("failure_callback", None)
+
         callback_vars = values.get("callback_vars", {})
+        if callback_vars is None:
+            values.pop("callback_vars", None)
+        if all(val is None for val in values.values()):
+            return {
+                "success_callback": [],
+                "failure_callback": [],
+                "callback_vars": {},
+            }
         valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
-        for key in callback_vars:
-            if key not in valid_keys:
-                raise ValueError(
-                    f"Invalid callback variable: {key}. Must be one of {valid_keys}"
-                )
+        if callback_vars is not None:
+            for key in callback_vars:
+                if key not in valid_keys:
+                    raise ValueError(
+                        f"Invalid callback variable: {key}. Must be one of {valid_keys}"
+                    )
         return values
 
 

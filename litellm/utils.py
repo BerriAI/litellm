@@ -1650,7 +1650,9 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
     )
 
 
-def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> bool:
+def supports_response_schema(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
     """
     Check if the given model + provider supports 'response_schema' as a param.
 
