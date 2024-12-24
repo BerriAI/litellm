@@ -85,11 +85,14 @@ class PrometheusLogger(CustomLogger):
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
-                    "model",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "team",
-                    "team_alias",
+                    UserAPIKeyLabelNames.LITELLM_MODEL.value,
+                    UserAPIKeyLabelNames.API_KEY_HASH.value,
+                    UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+                    UserAPIKeyLabelNames.TEAM.value,
+                    UserAPIKeyLabelNames.TEAM_ALIAS.value,
+                    UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+                    UserAPIKeyLabelNames.END_USER.value,
+                    UserAPIKeyLabelNames.USER.value,
                 ],
                 buckets=LATENCY_BUCKETS,
             )
@@ -647,11 +650,22 @@ class PrometheusLogger(CustomLogger):
             api_call_total_time: timedelta = end_time - api_call_start_time
             api_call_total_time_seconds = api_call_total_time.total_seconds()
             self.litellm_llm_api_latency_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
+                **{
+                    UserAPIKeyLabelNames.LITELLM_MODEL.value: model,
+                    UserAPIKeyLabelNames.API_KEY_HASH.value: user_api_key,
+                    UserAPIKeyLabelNames.API_KEY_ALIAS.value: user_api_key_alias,
+                    UserAPIKeyLabelNames.TEAM.value: user_api_team,
+                    UserAPIKeyLabelNames.TEAM_ALIAS.value: user_api_team_alias,
+                    UserAPIKeyLabelNames.USER.value: standard_logging_payload[
+                        "metadata"
+                    ]["user_api_key_user_id"],
+                    UserAPIKeyLabelNames.END_USER.value: standard_logging_payload[
+                        "metadata"
+                    ]["user_api_key_end_user_id"],
+                    UserAPIKeyLabelNames.REQUESTED_MODEL.value: standard_logging_payload[
+                        "model_group"
+                    ],
+                }
             ).observe(api_call_total_time_seconds)
 
         # total request latency
