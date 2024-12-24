@@ -7,6 +7,16 @@ import Image from '@theme/IdealImage';
 
 <Image img={require('../../img/batches_cost_tracking.png')} />
 
+<br/>
+
+:::info
+
+Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/#trial)
+
+**No call needed**
+
+:::
+
 ## ✨ Cost Tracking, Logging for Batches API (`/batches`)
 
 Track cost, usage for Batch Creation Jobs. [Start here](https://docs.litellm.ai/docs/batches)
