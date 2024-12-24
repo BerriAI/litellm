@@ -9,9 +9,9 @@ Deploy managed LiteLLM Proxy within your VPC.
 
 Includes all enterprise features.
 
-[**View AWS Marketplace Listing**](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
+[**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
 
-[**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[**Get 7 day trial key**](https://www.litellm.ai/#trial)
 
 
 This covers: 
@@ -44,6 +44,9 @@ This covers:
         - ✅ [Custom Branding + Routes on Swagger Docs](./proxy/enterprise#swagger-docs---custom-routes--branding)
         - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
         - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
+    - **Guardrails**
+        - ✅ [Setting team/key based guardrails](./proxy/guardrails/quick_start.md#-control-guardrails-per-project-api-key)
+        - ✅ [API endpoint listing available guardrails](./proxy/guardrails/bedrock.md#list-guardrails)
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
