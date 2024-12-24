@@ -16,6 +16,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
+from .langfuse import LangFuseLogger
+
 if TYPE_CHECKING:
     from langfuse import Langfuse
     from langfuse.client import ChatPromptClient, TextPromptClient
@@ -92,7 +94,7 @@ def langfuse_client_init(
     return client
 
 
-class LangfusePromptManagement(CustomLogger):
+class LangfusePromptManagement(LangFuseLogger, CustomLogger):
     def __init__(
         self,
         langfuse_public_key=None,
@@ -248,3 +250,13 @@ class LangfusePromptManagement(CustomLogger):
         model = self._get_model_from_prompt(langfuse_prompt_client, model)
 
         return model, messages, non_default_params
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._old_log_event(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+            user_id=kwargs.get("user", None),
+            print_verbose=None,
+        )
