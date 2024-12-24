@@ -30,6 +30,7 @@ from litellm.llms.databricks.cost_calculator import (
 from litellm.llms.fireworks_ai.cost_calculator import (
     cost_per_token as fireworks_ai_cost_per_token,
 )
+from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
 from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
@@ -270,12 +271,7 @@ def cost_per_token(  # noqa: PLR0915
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     elif custom_llm_provider == "gemini":
-        return google_cost_per_token(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+        return gemini_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider

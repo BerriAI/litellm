@@ -47,8 +47,6 @@ def cost_router(
         or "codestral" in model
     ):
         return "cost_per_token"
-    elif custom_llm_provider == "gemini":
-        return "cost_per_token"
     elif custom_llm_provider == "vertex_ai" and (
         call_type == "embedding" or call_type == "aembedding"
     ):
