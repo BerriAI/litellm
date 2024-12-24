@@ -2,14 +2,12 @@
 
 #                          /v1/batches Endpoints
 
-
 import asyncio
-import traceback
 
 ######################################################################
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
