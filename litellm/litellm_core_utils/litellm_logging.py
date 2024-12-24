@@ -61,11 +61,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import (
-    _get_base_model_from_metadata,
-    _is_async_request,
-    print_verbose,
-)
+from litellm.utils import _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
@@ -1333,9 +1329,24 @@ class Logging(LiteLLMLoggingBaseClass):
                                 print_verbose=print_verbose,
                             )
 
-                    if callback == "openmeter" and not _is_async_request(
-                        kwargs=self.model_call_details,
-                        is_pass_through=self.call_type == CallTypes.pass_through.value,
+                    if (
+                        callback == "openmeter"
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        is not True
                     ):
                         global openMeterLogger
                         if openMeterLogger is None:
@@ -1363,9 +1374,26 @@ class Logging(LiteLLMLoggingBaseClass):
                                 end_time=end_time,
                             )
 
-                    if isinstance(callback, CustomLogger) and not _is_async_request(
-                        kwargs=self.model_call_details,
-                        is_pass_through=self.call_type == CallTypes.pass_through.value,
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        is not True
+                        and self.call_type
+                        != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -1391,11 +1419,22 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         callable(callback) is True
-                        and not _is_async_request(
-                            kwargs=self.model_call_details,
-                            is_pass_through=self.call_type
-                            == CallTypes.pass_through.value,
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
                         )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aimage_generation", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "atranscription", False
+                        )
+                        is not True
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
@@ -1853,9 +1892,16 @@ class Logging(LiteLLMLoggingBaseClass):
                             print_verbose=print_verbose,
                             callback_func=callback,
                         )
-                    if isinstance(callback, CustomLogger) and not _is_async_request(
-                        kwargs=self.model_call_details,
-                        is_pass_through=self.call_type == CallTypes.pass_through.value,
+                    if (
+                        isinstance(callback, CustomLogger)
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        is not True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        is not True
                     ):  # custom logger class
 
                         callback.log_failure_event(
