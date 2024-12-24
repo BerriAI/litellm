@@ -272,7 +272,7 @@ class DataDogLogger(CustomBatchLogger):
 
         # Build the initial payload
         truncate_standard_logging_payload_content(standard_logging_object)
-        json_payload = json.dumps(standard_logging_object)
+        json_payload = json.dumps(standard_logging_object, default=str)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
@@ -298,7 +298,7 @@ class DataDogLogger(CustomBatchLogger):
         import gzip
         import json
 
-        compressed_data = gzip.compress(json.dumps(data).encode("utf-8"))
+        compressed_data = gzip.compress(json.dumps(data, default=str).encode("utf-8"))
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
@@ -329,7 +329,7 @@ class DataDogLogger(CustomBatchLogger):
             import json
 
             _payload_dict = payload.model_dump()
-            _dd_message_str = json.dumps(_payload_dict)
+            _dd_message_str = json.dumps(_payload_dict, default=str)
             _dd_payload = DatadogPayload(
                 ddsource="litellm",
                 ddtags="",
@@ -433,7 +433,7 @@ class DataDogLogger(CustomBatchLogger):
             "metadata": clean_metadata,
         }
 
-        json_payload = json.dumps(payload)
+        json_payload = json.dumps(payload, default=str)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
