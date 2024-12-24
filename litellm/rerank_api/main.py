@@ -138,7 +138,7 @@ def rerank(  # noqa: PLR0915
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
-            optional_params=optional_rerank_params,
+            optional_params=dict(optional_rerank_params),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
                 "proxy_server_request": proxy_server_request,
