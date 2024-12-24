@@ -7,8 +7,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType, PartType
 
-from ..vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
-from ..vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
+from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 
 class GoogleAIStudioGeminiConfig(
