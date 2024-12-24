@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import traceback
-
+import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,7 +20,6 @@ from typing import Optional
 import litellm
 from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
-from test_gcs_bucket import load_vertex_ai_credentials
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -28,19 +27,47 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
 
-class TestCustomLogger(CustomLogger):
-    def __init__(self):
-        super().__init__()
-        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+def load_vertex_ai_credentials():
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    os.environ["GCS_FLUSH_INTERVAL"] = "1"
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print(
-            "Success event logged with kwargs=",
-            kwargs,
-            "and response_obj=",
-            response_obj,
-        )
-        self.standard_logging_object = kwargs["standard_logging_object"]
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("GCS_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("GCS_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary files
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GCS_PATH_SERVICE_ACCOUNT"] = os.path.abspath(temp_file.name)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+    print("created gcs path service account=", os.environ["GCS_PATH_SERVICE_ACCOUNT"])
 
 
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
@@ -128,6 +155,21 @@ async def test_create_batch(provider):
     pass
 
 
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(
+            "Success event logged with kwargs=",
+            kwargs,
+            "and response_obj=",
+            response_obj,
+        )
+        self.standard_logging_object = kwargs["standard_logging_object"]
+
+
 @pytest.mark.parametrize("provider", ["openai"])  #  "azure"
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
@@ -141,6 +183,9 @@ async def test_async_create_batch(provider):
     if provider == "azure":
         # Don't have anymore Azure Quota
         return
+
+    custom_logger = TestCustomLogger()
+    litellm.callbacks = [custom_logger, "datadog"]
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -179,7 +224,9 @@ async def test_async_create_batch(provider):
         create_batch_response.input_file_id == batch_input_file_id
     ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(6)
+    # Assert that the create batch event is logged on CustomLogger
+    assert custom_logger.standard_logging_object is not None
 
     retrieved_batch = await litellm.aretrieve_batch(
         batch_id=create_batch_response.id, custom_llm_provider=provider
@@ -223,9 +270,10 @@ async def test_async_create_batch(provider):
 
     print("all_files_list = ", all_files_list)
 
-    # # write this file content to a file
-    # with open("file_content.json", "w") as f:
-    #     json.dump(file_content, f)
+    result_file_name = "batch_job_results_furniture.jsonl"
+
+    with open(result_file_name, "wb") as file:
+        file.write(file_content.content)
 
 
 def test_retrieve_batch():
@@ -241,8 +289,9 @@ def test_list_batch():
 
 
 @pytest.mark.asyncio
-async def test_vertex_batch_prediction():
+async def test_avertex_batch_prediction():
     load_vertex_ai_credentials()
+    litellm.set_verbose = True
     file_name = "vertex_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
