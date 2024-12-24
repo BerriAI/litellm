@@ -3730,6 +3730,8 @@
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
         "max_pdf_size_mb": 30, 
+        "cache_read_input_token_cost": 0.00000001875,
+        "cache_creation_input_token_cost": 0.000001,
         "input_cost_per_token": 0.000000075,
         "input_cost_per_token_above_128k_tokens": 0.00000015,
         "output_cost_per_token": 0.0000003,
