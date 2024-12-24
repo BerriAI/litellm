@@ -2,10 +2,12 @@ from typing import Any, Coroutine, Optional, Union
 
 import httpx
 
+from litellm import LlmProviders
 from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSBucketBase,
     GCSLoggingConfig,
 )
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import CreateFileRequest, FileObject
 
 from .transformation import VertexAIFilesTransformation
@@ -19,6 +21,12 @@ class VertexAIFilesHandler(GCSBucketBase):
 
     This implementation uploads files on GCS Buckets
     """
+
+    def __init__(self):
+        super().__init__()
+        self.async_httpx_client = get_async_httpx_client(
+            llm_provider=LlmProviders.VERTEX_AI,
+        )
 
     pass
 
