@@ -234,7 +234,7 @@ def create_batch(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support custom_llm_provider={} for 'create_batch'".format(
                     custom_llm_provider
                 ),
                 model="n/a",

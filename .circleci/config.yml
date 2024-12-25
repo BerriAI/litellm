@@ -1111,7 +1111,9 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
-              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_API_KEY=$AZURE_BATCHES_API_KEY \
+              -e AZURE_API_BASE=$AZURE_BATCHES_API_BASE \
+              -e AZURE_API_VERSION="2024-05-01-preview" \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
