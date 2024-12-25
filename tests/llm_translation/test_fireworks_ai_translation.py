@@ -10,13 +10,7 @@ import litellm
 from litellm import transcription
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from base_llm_unit_tests import BaseLLMChatTest
-
-pwd = os.path.dirname(os.path.realpath(__file__))
-print(pwd)
-
-file_path = os.path.join(pwd, "gettysburg.wav")
-
-audio_file = open(file_path, "rb")
+from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
 
@@ -100,17 +94,12 @@ class TestFireworksAIChatCompletion(BaseLLMChatTest):
         pass
 
 
-def test_fireworks_ai_audio_transcription():
-    """
-    Test that the audio transcription is translated correctly.
-    """
-    litellm.set_verbose = True
-    transcript = transcription(
-        model="fireworks_ai/whisper-v3",
-        file=audio_file,
-        api_base="https://audio-prod.us-virginia-1.direct.fireworks.ai",
-    )
-    print(f"transcript: {transcript.model_dump()}")
-    print(f"transcript hidden params: {transcript._hidden_params}")
+class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
+    def get_base_audio_transcription_call_args(self) -> dict:
+        return {
+            "model": "fireworks_ai/whisper-v3",
+            "api_base": "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1",
+        }
 
-    assert transcript.text is not None
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.FIREWORKS_AI

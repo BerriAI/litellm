@@ -113,11 +113,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, model: str, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[str, Optional[str], Optional[str]]:
-        if FireworksAIEmbeddingConfig().is_fireworks_embedding_model(model=model):
-            # fireworks embeddings models do not require accounts/fireworks prefix https://docs.fireworks.ai/api-reference/creates-an-embedding-vector-representing-the-input-text
-            pass
-        elif not model.startswith("accounts/"):
-            model = f"accounts/fireworks/models/{model}"
         api_base = (
             api_base
             or get_secret_str("FIREWORKS_API_BASE")
