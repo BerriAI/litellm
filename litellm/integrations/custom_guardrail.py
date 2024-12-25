@@ -77,6 +77,8 @@ class CustomGuardrail(CustomLogger):
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
+        Use this to pass dynamic params to the guardrail API call - eg. success_threshold, failure_threshold, etc.
+
         ```
         [{"lakera_guard": {"extra_body": {"foo": "bar"}}}]
         ```
