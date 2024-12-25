@@ -65,7 +65,11 @@ class CustomGuardrail(CustomLogger):
             return False
 
         # check if self.guardrail_name is in requested_guardrails for the request
-        if self._guardrail_is_in_requested_guardrails(requested_guardrails) is not True:
+        if (
+            self.event_hook
+            and self._guardrail_is_in_requested_guardrails(requested_guardrails)
+            is not True
+        ):
             return False
 
         if self.event_hook and self.event_hook != event_type.value:
