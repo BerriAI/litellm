@@ -1202,7 +1202,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
                         if langfuse_logger_to_use is not None:
-                            _response = langfuse_logger_to_use.log_event(
+                            _response = langfuse_logger_to_use._old_log_event(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,
@@ -1925,7 +1925,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
-                        _response = langfuse_logger_to_use.log_event(
+                        _response = langfuse_logger_to_use._old_log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
