@@ -76,7 +76,7 @@ class PrometheusLogger(CustomLogger):
                     UserAPIKeyLabelNames.TEAM.value,
                     UserAPIKeyLabelNames.TEAM_ALIAS.value,
                     UserAPIKeyLabelNames.USER.value,
-                    UserAPIKeyLabelNames.LITELLM_MODEL.value,
+                    UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
                 ],
                 buckets=LATENCY_BUCKETS,
             )
@@ -85,7 +85,7 @@ class PrometheusLogger(CustomLogger):
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
-                    UserAPIKeyLabelNames.LITELLM_MODEL.value,
+                    UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
                     UserAPIKeyLabelNames.API_KEY_HASH.value,
                     UserAPIKeyLabelNames.API_KEY_ALIAS.value,
                     UserAPIKeyLabelNames.TEAM.value,
@@ -264,10 +264,10 @@ class PrometheusLogger(CustomLogger):
 
             # Get all keys
             _logged_llm_labels = [
-                "litellm_model_name",
-                "model_id",
-                "api_base",
-                "api_provider",
+                UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+                UserAPIKeyLabelNames.MODEL_ID.value,
+                UserAPIKeyLabelNames.API_BASE.value,
+                UserAPIKeyLabelNames.API_PROVIDER.value,
             ]
             team_and_key_labels = [
                 "hashed_api_key",
@@ -301,6 +301,16 @@ class PrometheusLogger(CustomLogger):
                 + _logged_llm_labels
                 + EXCEPTION_LABELS
                 + team_and_key_labels,
+            )
+            self.litellm_deployment_failure_by_tag_responses = Counter(
+                "litellm_deployment_failure_by_tag_responses",
+                "Total number of failed LLM API calls for a specific LLM deploymeny by custom metadata tags",
+                labelnames=[
+                    UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+                    UserAPIKeyLabelNames.TAG.value,
+                ]
+                + _logged_llm_labels
+                + EXCEPTION_LABELS,
             )
             self.litellm_deployment_total_requests = Counter(
                 name="litellm_deployment_total_requests",
@@ -700,7 +710,7 @@ class PrometheusLogger(CustomLogger):
             api_call_total_time_seconds = api_call_total_time.total_seconds()
             self.litellm_llm_api_latency_metric.labels(
                 **{
-                    UserAPIKeyLabelNames.LITELLM_MODEL.value: model,
+                    UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value: model,
                     UserAPIKeyLabelNames.API_KEY_HASH.value: user_api_key,
                     UserAPIKeyLabelNames.API_KEY_ALIAS.value: user_api_key_alias,
                     UserAPIKeyLabelNames.TEAM.value: user_api_team,
@@ -735,7 +745,7 @@ class PrometheusLogger(CustomLogger):
                     UserAPIKeyLabelNames.USER.value: standard_logging_payload[
                         "metadata"
                     ]["user_api_key_user_id"],
-                    UserAPIKeyLabelNames.LITELLM_MODEL.value: model,
+                    UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value: model,
                 }
             ).observe(total_time_seconds)
 
@@ -911,6 +921,24 @@ class PrometheusLogger(CustomLogger):
                 ],
             ).inc()
 
+            # tag based tracking
+            _tags = standard_logging_payload["request_tags"]
+            for tag in _tags:
+                self.litellm_deployment_failure_by_tag_responses.labels(
+                    **{
+                        UserAPIKeyLabelNames.REQUESTED_MODEL.value: model_group,
+                        UserAPIKeyLabelNames.TAG.value: tag,
+                        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value: litellm_model_name,
+                        UserAPIKeyLabelNames.MODEL_ID.value: model_id,
+                        UserAPIKeyLabelNames.API_BASE.value: api_base,
+                        UserAPIKeyLabelNames.API_PROVIDER.value: llm_provider,
+                        UserAPIKeyLabelNames.EXCEPTION_CLASS.value: exception.__class__.__name__,
+                        UserAPIKeyLabelNames.EXCEPTION_STATUS.value: str(
+                            getattr(exception, "status_code", None)
+                        ),
+                    }
+                ).inc()
+
             self.litellm_deployment_total_requests.labels(
                 litellm_model_name=litellm_model_name,
                 model_id=model_id,
@@ -930,8 +958,12 @@ class PrometheusLogger(CustomLogger):
             ).inc()
 
             pass
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_logger.debug(
+                "Prometheus Error: set_llm_deployment_failure_metrics. Exception occured - {}".format(
+                    str(e)
+                )
+            )
 
     def set_llm_deployment_success_metrics(
         self,

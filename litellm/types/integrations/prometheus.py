@@ -53,5 +53,11 @@ class UserAPIKeyLabelNames(Enum):
     TEAM = "team"
     TEAM_ALIAS = "team_alias"
     REQUESTED_MODEL = REQUESTED_MODEL
-    LITELLM_MODEL = "model"
+    v1_LITELLM_MODEL_NAME = "model"
+    v2_LITELLM_MODEL_NAME = "litellm_model_name"
     TAG = "tag"
+    MODEL_ID = "model_id"
+    API_BASE = "api_base"
+    API_PROVIDER = "api_provider"
+    EXCEPTION_STATUS = EXCEPTION_STATUS
+    EXCEPTION_CLASS = EXCEPTION_CLASS
