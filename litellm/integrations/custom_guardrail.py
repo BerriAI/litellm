@@ -87,6 +87,9 @@ class CustomGuardrail(CustomLogger):
         {
             "foo": "bar"
         }
+
+        Args:
+            request_data: The original `request_data` passed to LiteLLM Proxy
         """
         requested_guardrails = self.get_guardrail_from_metadata(request_data)
 
