@@ -441,10 +441,13 @@ class OpenAIChatCompletion(BaseLLM):
                 "stream_options", None
             )
             stream: Optional[bool] = inference_params.pop("stream", False)
+            provider_config: Optional[BaseConfig] = None
             if custom_llm_provider is not None and model is not None:
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
+
+            if provider_config:
                 fake_stream = provider_config.should_fake_stream(
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
                 )
@@ -464,10 +467,7 @@ class OpenAIChatCompletion(BaseLLM):
             if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
 
-            if messages is not None and custom_llm_provider is not None:
-                provider_config = ProviderConfigManager.get_provider_chat_config(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
+            if messages is not None and provider_config is not None:
                 if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
                     provider_config, OpenAIConfig
                 ):
@@ -478,13 +478,22 @@ class OpenAIChatCompletion(BaseLLM):
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
-                data = OpenAIConfig().transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=inference_params,
-                    litellm_params=litellm_params,
-                    headers=headers or {},
-                )
+                if provider_config is not None:
+                    data = provider_config.transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=inference_params,
+                        litellm_params=litellm_params,
+                        headers=headers or {},
+                    )
+                else:
+                    data = OpenAIConfig().transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=inference_params,
+                        litellm_params=litellm_params,
+                        headers=headers or {},
+                    )
                 try:
                     max_retries = data.pop("max_retries", 2)
                     if acompletion is True:

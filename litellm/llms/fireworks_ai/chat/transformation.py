@@ -1,6 +1,7 @@
-from typing import Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig
@@ -109,6 +110,24 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        if not model.startswith("accounts/"):
+            model = f"accounts/fireworks/models/{model}"
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def _get_openai_compatible_provider_info(
         self, model: str, api_base: Optional[str], api_key: Optional[str]
