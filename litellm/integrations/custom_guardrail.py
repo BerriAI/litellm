@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import DynamicGuardrailParams, GuardrailEventHooks
 
 
 class CustomGuardrail(CustomLogger):
@@ -28,7 +28,7 @@ class CustomGuardrail(CustomLogger):
 
     def get_guardrail_from_metadata(
         self, data: dict
-    ) -> Union[List[str], List[Dict[str, Any]]]:
+    ) -> Union[List[str], List[Dict[str, DynamicGuardrailParams]]]:
         """
         Returns the guardrail(s) to be run from the metadata
         """
@@ -38,7 +38,7 @@ class CustomGuardrail(CustomLogger):
 
     def _guardrail_is_in_requested_guardrails(
         self,
-        requested_guardrails: Union[List[str], List[Dict[str, Any]]],
+        requested_guardrails: Union[List[str], List[Dict[str, DynamicGuardrailParams]]],
     ) -> bool:
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
@@ -101,7 +101,9 @@ class CustomGuardrail(CustomLogger):
         for guardrail in requested_guardrails:
             if isinstance(guardrail, dict) and self.guardrail_name in guardrail:
                 # Get the configuration for this guardrail
-                guardrail_config = guardrail[self.guardrail_name]
+                guardrail_config: DynamicGuardrailParams = DynamicGuardrailParams(
+                    **guardrail[self.guardrail_name]
+                )
                 if self._validate_premium_user() is not True:
                     return {}
 
