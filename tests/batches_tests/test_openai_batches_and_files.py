@@ -144,6 +144,13 @@ async def test_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(result)
 
+    # Cancel Batch
+    cancel_batch_response = await litellm.acancel_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider=provider,
+    )
+    print("cancel_batch_response=", cancel_batch_response)
+
     pass
 
 
@@ -282,6 +289,13 @@ async def test_async_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(file_content.content)
 
+    # Cancel Batch
+    cancel_batch_response = await litellm.acancel_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider=provider,
+    )
+    print("cancel_batch_response=", cancel_batch_response)
+
 
 def cleanup_azure_files():
     """
@@ -299,18 +313,6 @@ def cleanup_azure_files():
         )
         print("delete_file_response=", delete_file_response)
         assert delete_file_response.id == _file.id
-
-
-def test_retrieve_batch():
-    pass
-
-
-def test_cancel_batch():
-    pass
-
-
-def test_list_batch():
-    pass
 
 
 @pytest.mark.asyncio

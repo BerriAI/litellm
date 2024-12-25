@@ -14,85 +14,57 @@ import time
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
 API_KEY = "sk-1234"  # Replace with your actual API key
 
+from openai import OpenAI
 
-async def create_batch(session, input_file_id, endpoint, completion_window):
-    url = f"{BASE_URL}/v1/batches"
-    headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "input_file_id": input_file_id,
-        "endpoint": endpoint,
-        "completion_window": completion_window,
-    }
-
-    async with session.post(url, headers=headers, json=payload) as response:
-        assert response.status == 200, f"Expected status 200, got {response.status}"
-        result = await response.json()
-        print(f"Batch creation successful. Batch ID: {result.get('id', 'N/A')}")
-        return result
-
-
-async def get_batch_by_id(session, batch_id):
-    url = f"{BASE_URL}/v1/batches/{batch_id}"
-    headers = {"Authorization": f"Bearer {API_KEY}"}
-
-    async with session.get(url, headers=headers) as response:
-        if response.status == 200:
-            result = await response.json()
-            return result
-        else:
-            print(f"Error: Failed to get batch. Status code: {response.status}")
-            return None
-
-
-async def list_batches(session):
-    url = f"{BASE_URL}/v1/batches"
-    headers = {"Authorization": f"Bearer {API_KEY}"}
-
-    async with session.get(url, headers=headers) as response:
-        if response.status == 200:
-            result = await response.json()
-            return result
-        else:
-            print(f"Error: Failed to get batch. Status code: {response.status}")
-            return None
+client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 
 @pytest.mark.asyncio
 async def test_batches_operations():
-    async with aiohttp.ClientSession() as session:
-        # Test file upload and get file_id
-        file_id = await upload_file(session, purpose="batch")
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    input_file_path = os.path.join(_current_dir, "input.jsonl")
+    file_obj = client.files.create(
+        file=open(input_file_path, "rb"),
+        purpose="batch",
+    )
 
-        create_batch_response = await create_batch(
-            session, file_id, "/v1/chat/completions", "24h"
-        )
-        batch_id = create_batch_response.get("id")
-        assert batch_id is not None
+    batch = client.batches.create(
+        input_file_id=file_obj.id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
+    )
 
-        # Test get batch
-        get_batch_response = await get_batch_by_id(session, batch_id)
-        print("response from get batch", get_batch_response)
+    assert batch.id is not None
 
-        assert get_batch_response["id"] == batch_id
-        assert get_batch_response["input_file_id"] == file_id
+    # Test get batch
+    _retrieved_batch = client.batches.retrieve(batch_id=batch.id)
+    print("response from get batch", _retrieved_batch)
 
-        # test LIST Batches
-        list_batch_response = await list_batches(session)
-        print("response from list batch", list_batch_response)
+    assert _retrieved_batch.id == batch.id
+    assert _retrieved_batch.input_file_id == file_obj.id
 
-        assert list_batch_response is not None
-        assert len(list_batch_response["data"]) > 0
+    # Test list batches
+    _list_batches = client.batches.list()
+    print("response from list batches", _list_batches)
 
-        element_0 = list_batch_response["data"][0]
-        assert element_0["id"] is not None
+    assert _list_batches is not None
+    assert len(_list_batches.data) > 0
 
-        # Test delete file
-        await delete_file(session, file_id)
+    # Clean up
+    # Test cancel batch
+    _canceled_batch = client.batches.cancel(batch_id=batch.id)
+    print("response from cancel batch", _canceled_batch)
 
+    assert _canceled_batch.status is not None
+    assert (
+        _canceled_batch.status == "cancelling" or _canceled_batch.status == "cancelled"
+    )
 
-from openai import OpenAI
+    # finally delete the file
+    _deleted_file = client.files.delete(file_id=file_obj.id)
+    print("response from delete file", _deleted_file)
 
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+    assert _deleted_file.deleted is True
 
 
 def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
