@@ -2,7 +2,6 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
-import types
 import uuid
 from copy import deepcopy
 from functools import partial
