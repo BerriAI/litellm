@@ -95,10 +95,16 @@ from openai import OpenAI
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 
-def create_batch_oai_sdk(filepath) -> str:
-    batch_input_file = client.files.create(file=open(filepath, "rb"), purpose="batch")
+def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
+    batch_input_file = client.files.create(
+        file=open(filepath, "rb"),
+        purpose="batch",
+        extra_body={"custom_llm_provider": custom_llm_provider},
+    )
     batch_input_file_id = batch_input_file.id
 
+    print("waiting for file to be processed......")
+    time.sleep(5)
     rq = client.batches.create(
         input_file_id=batch_input_file_id,
         endpoint="/v1/chat/completions",
@@ -106,15 +112,18 @@ def create_batch_oai_sdk(filepath) -> str:
         metadata={
             "description": filepath,
         },
+        extra_body={"custom_llm_provider": custom_llm_provider},
     )
 
     print(f"Batch submitted. ID: {rq.id}")
     return rq.id
 
 
-def await_batch_completion(batch_id: str):
+def await_batch_completion(batch_id: str, custom_llm_provider: str):
     while True:
-        batch = client.batches.retrieve(batch_id)
+        batch = client.batches.retrieve(
+            batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
+        )
         if batch.status == "completed":
             print(f"Batch {batch_id} completed.")
             return
@@ -123,9 +132,16 @@ def await_batch_completion(batch_id: str):
         time.sleep(10)
 
 
-def write_content_to_file(batch_id: str, output_path: str) -> str:
-    batch = client.batches.retrieve(batch_id)
-    content = client.files.content(batch.output_file_id)
+def write_content_to_file(
+    batch_id: str, output_path: str, custom_llm_provider: str
+) -> str:
+    batch = client.batches.retrieve(
+        batch_id=batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
+    )
+    content = client.files.content(
+        file_id=batch.output_file_id,
+        extra_body={"custom_llm_provider": custom_llm_provider},
+    )
     print("content from files.content", content.content)
     content.write_to_file(output_path)
 
@@ -145,20 +161,47 @@ def read_jsonl(filepath: str):
         print(custom_id)
 
 
-def test_e2e_batches_files():
+def get_any_completed_batch_id_azure():
+    print("AZURE getting any completed batch id")
+    list_of_batches = client.batches.list(extra_body={"custom_llm_provider": "azure"})
+    print("list of batches", list_of_batches)
+    for batch in list_of_batches:
+        if batch.status == "completed":
+            return batch.id
+    return None
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["azure", "openai"])
+def test_e2e_batches_files(custom_llm_provider):
     """
     [PROD Test] Ensures OpenAI Batches + files work with OpenAI SDK
     """
-    input_path = "input.jsonl"
-    output_path = "out.jsonl"
+    input_path = (
+        "input.jsonl" if custom_llm_provider == "openai" else "input_azure.jsonl"
+    )
+    output_path = "out.jsonl" if custom_llm_provider == "openai" else "out_azure.jsonl"
 
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     input_file_path = os.path.join(_current_dir, input_path)
     output_file_path = os.path.join(_current_dir, output_path)
+    print("running e2e batches files with custom_llm_provider=", custom_llm_provider)
+    batch_id = create_batch_oai_sdk(
+        filepath=input_file_path, custom_llm_provider=custom_llm_provider
+    )
 
-    batch_id = create_batch_oai_sdk(input_file_path)
-    await_batch_completion(batch_id)
-    write_content_to_file(batch_id, output_file_path)
+    if custom_llm_provider == "azure":
+        # azure takes very long to complete a batch - randomly pick a completed batch
+        batch_id = get_any_completed_batch_id_azure()
+    else:
+        await_batch_completion(
+            batch_id=batch_id, custom_llm_provider=custom_llm_provider
+        )
+
+    write_content_to_file(
+        batch_id=batch_id,
+        output_path=output_file_path,
+        custom_llm_provider=custom_llm_provider,
+    )
     read_jsonl(output_file_path)
 
 
