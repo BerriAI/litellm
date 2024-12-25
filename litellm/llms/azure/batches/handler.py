@@ -154,21 +154,30 @@ class AzureBatchesAPI(BaseLLM):
         response = azure_client.batches.retrieve(**retrieve_batch_data)
         return response
 
+    async def acancel_batch(
+        self,
+        cancel_batch_data: CancelBatchRequest,
+        client: AsyncAzureOpenAI,
+    ) -> Batch:
+        response = await client.batches.cancel(**cancel_batch_data)
+        return response
+
     def cancel_batch(
         self,
         _is_async: bool,
         cancel_batch_data: CancelBatchRequest,
         api_key: Optional[str],
         api_base: Optional[str],
+        api_version: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-        organization: Optional[str],
         client: Optional[AzureOpenAI] = None,
     ):
         azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
             self.get_azure_openai_client(
                 api_key=api_key,
                 api_base=api_base,
+                api_version=api_version,
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
