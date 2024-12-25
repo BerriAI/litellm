@@ -14,7 +14,9 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+from .langfuse import LangFuseLogger
 
 if TYPE_CHECKING:
     from langfuse import Langfuse
@@ -92,7 +94,7 @@ def langfuse_client_init(
     return client
 
 
-class LangfusePromptManagement(CustomLogger):
+class LangfusePromptManagement(LangFuseLogger, CustomLogger):
     def __init__(
         self,
         langfuse_public_key=None,
@@ -248,3 +250,31 @@ class LangfusePromptManagement(CustomLogger):
         model = self._get_model_from_prompt(langfuse_prompt_client, model)
 
         return model, messages, non_default_params
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._old_log_event(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+            user_id=kwargs.get("user", None),
+            print_verbose=None,
+        )
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        standard_logging_object = cast(
+            Optional[StandardLoggingPayload],
+            kwargs.get("standard_logging_object", None),
+        )
+        if standard_logging_object is None:
+            return
+        self._old_log_event(
+            start_time=start_time,
+            end_time=end_time,
+            response_obj=None,
+            user_id=kwargs.get("user", None),
+            print_verbose=None,
+            status_message=standard_logging_object["error_str"],
+            level="ERROR",
+            kwargs=kwargs,
+        )

@@ -231,6 +231,9 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
     os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
     os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
     os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
     user_api_key_dict = UserAPIKeyAuth(
         token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
         key_name="sk-...63Fg",
@@ -288,7 +291,9 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
     assert callbacks is not None
 
@@ -308,6 +313,9 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
     ],
 )
 def test_dynamic_turn_off_message_logging(callback_vars):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
     user_api_key_dict = UserAPIKeyAuth(
         token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
         key_name="sk-...63Fg",
@@ -364,7 +372,9 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
     assert callbacks is not None
     assert (
@@ -1008,3 +1018,89 @@ def test_get_complete_model_list(proxy_model_list, provider):
 
     for _model in complete_list:
         assert provider in _model
+
+
+def test_team_callback_metadata_all_none_values():
+    from litellm.proxy._types import TeamCallbackMetadata
+
+    resp = TeamCallbackMetadata(
+        success_callback=None,
+        failure_callback=None,
+        callback_vars=None,
+    )
+
+    assert resp.success_callback == []
+    assert resp.failure_callback == []
+    assert resp.callback_vars == {}
+
+
+@pytest.mark.parametrize(
+    "none_key",
+    [
+        "success_callback",
+        "failure_callback",
+        "callback_vars",
+    ],
+)
+def test_team_callback_metadata_none_values(none_key):
+    from litellm.proxy._types import TeamCallbackMetadata
+
+    if none_key == "success_callback":
+        args = {
+            "success_callback": None,
+            "failure_callback": ["test"],
+            "callback_vars": None,
+        }
+    elif none_key == "failure_callback":
+        args = {
+            "success_callback": ["test"],
+            "failure_callback": None,
+            "callback_vars": None,
+        }
+    elif none_key == "callback_vars":
+        args = {
+            "success_callback": ["test"],
+            "failure_callback": ["test"],
+            "callback_vars": None,
+        }
+
+    resp = TeamCallbackMetadata(**args)
+
+    assert none_key not in resp
+
+
+def test_proxy_config_state_post_init_callback_call():
+    """
+    Ensures team_id is still in config, after callback is called
+
+    Addresses issue: https://github.com/BerriAI/litellm/issues/6787
+
+    Where team_id was being popped from config, after callback was called
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc = ProxyConfig()
+
+    pc.update_config_state(
+        config={
+            "litellm_settings": {
+                "default_team_settings": [
+                    {
+                        "team_id": "test",
+                        "success_callback": ["langfuse"],
+                        "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                        "langfuse_secret": "os.environ/LANGFUSE_SECRET_KEY",
+                    }
+                ]
+            }
+        }
+    )
+
+    LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+        team_id="test",
+        proxy_config=pc,
+    )
+
+    config = pc.get_config_state()
+    assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"

@@ -1362,14 +1362,14 @@ class ProxyConfig:
                 team_config[k] = get_secret(v)
         return team_config
 
-    async def load_team_config(self, team_id: str):
+    def load_team_config(self, team_id: str):
         """
         - for a given team id
         - return the relevant completion() call params
         """
 
         # load existing config
-        config = self.config
+        config = self.get_config_state()
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", {})
@@ -1458,6 +1458,14 @@ class ProxyConfig:
 
     def update_config_state(self, config: dict):
         self.config = config
+
+    def get_config_state(self):
+        """
+        Returns a deep copy of the config,
+
+        Do this, to avoid mutating the config state outside of allowed methods
+        """
+        return copy.deepcopy(self.config)
 
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
