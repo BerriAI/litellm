@@ -170,8 +170,6 @@ print(response)
 
 <TabItem value="Curl" label="Curl Request">
 
-Pass `metadata` as part of the request body
-
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
