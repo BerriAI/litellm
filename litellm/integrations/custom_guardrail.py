@@ -102,7 +102,23 @@ class CustomGuardrail(CustomLogger):
             if isinstance(guardrail, dict) and self.guardrail_name in guardrail:
                 # Get the configuration for this guardrail
                 guardrail_config = guardrail[self.guardrail_name]
+                if self._validate_premium_user() is not True:
+                    return {}
+
                 # Return the extra_body if it exists, otherwise empty dict
                 return guardrail_config.get("extra_body", {})
 
         return {}
+
+    def _validate_premium_user(self) -> bool:
+        """
+        Returns True if the user is a premium user
+        """
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+
+        if premium_user is not True:
+            verbose_logger.warning(
+                f"Trying to use premium guardrail without premium user {CommonProxyErrors.not_premium_user.value}"
+            )
+            return False
+        return True
