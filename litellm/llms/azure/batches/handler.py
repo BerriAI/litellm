@@ -15,10 +15,8 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 
-from ..base import BaseLLM
 
-
-class AzureBatchesAPI(BaseLLM):
+class AzureBatchesAPI:
     """
     Azure methods to support for batches
     - create_batch()
