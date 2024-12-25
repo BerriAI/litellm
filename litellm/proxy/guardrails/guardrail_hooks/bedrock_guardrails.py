@@ -149,7 +149,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _prepare_request(
         self,
         credentials,
-        data: BedrockRequest,
+        data: dict,
         optional_params: dict,
         aws_region_name: str,
         extra_headers: Optional[dict] = None,
@@ -186,8 +186,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ):
 
         credentials, aws_region_name = self._load_credentials()
-        bedrock_request_data: BedrockRequest = self.convert_to_bedrock_format(
-            messages=kwargs.get("messages"), response=response
+        bedrock_request_data: dict = dict(
+            self.convert_to_bedrock_format(
+                messages=kwargs.get("messages"), response=response
+            )
         )
         bedrock_request_data.update(
             self.get_guardrail_dynamic_request_body_params(request_data=kwargs)
