@@ -19,6 +19,7 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
@@ -30,7 +31,7 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import client, supports_httpx_timeout
+from litellm.utils import client, get_litellm_params, supports_httpx_timeout
 
 from .batch_utils import batches_async_logging
 
@@ -119,9 +120,22 @@ def create_batch(
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
         _is_async = kwargs.pop("acreate_batch", False) is True
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
+        litellm_params = get_litellm_params(
+            custom_llm_provider=custom_llm_provider,
+            litellm_call_id=kwargs.get("litellm_call_id", None),
+            litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_metadata=kwargs.get("litellm_metadata"),
+        )
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            user=None,
+            optional_params=optional_params.model_dump(),
+            litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         if (
             timeout is not None
