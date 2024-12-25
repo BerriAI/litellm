@@ -60,15 +60,10 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
         )
 
-        # logging only guards should not run here - there are run only in litellm_logging.py
-        if event_type.value == "logging_only":
-            return False
-
-        # check if self.guardrail_name is in requested_guardrails for the request
         if (
             self.event_hook
-            and self._guardrail_is_in_requested_guardrails(requested_guardrails)
-            is not True
+            and not self._guardrail_is_in_requested_guardrails(requested_guardrails)
+            and event_type.value != "logging_only"
         ):
             return False
 
