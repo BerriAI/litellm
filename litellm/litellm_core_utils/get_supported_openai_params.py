@@ -111,7 +111,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params(
             model=model
         )
-    elif custom_llm_provider == "vertex_ai":
+    elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
             if model.startswith("meta/"):
                 return litellm.VertexAILlama3Config().get_supported_openai_params()
@@ -127,11 +127,6 @@ def get_supported_openai_params(  # noqa: PLR0915
                 return litellm.VertexAIAnthropicConfig().get_supported_openai_params(
                     model=model
                 )
-            return litellm.VertexAIConfig().get_supported_openai_params()
-        elif request_type == "embeddings":
-            return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()
-    elif custom_llm_provider == "vertex_ai_beta":
-        if request_type == "chat_completion":
             return litellm.VertexGeminiConfig().get_supported_openai_params(model=model)
         elif request_type == "embeddings":
             return litellm.VertexAITextEmbeddingConfig().get_supported_openai_params()

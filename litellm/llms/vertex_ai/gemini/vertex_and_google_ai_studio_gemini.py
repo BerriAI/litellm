@@ -78,145 +78,7 @@ else:
     LoggingClass = Any
 
 
-class VertexAIConfig:
-    """
-    Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
-    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
-
-    The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
-
-    - `temperature` (float): This controls the degree of randomness in token selection.
-
-    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
-
-    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
-
-    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
-
-    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'.
-
-    - `candidate_count` (int): Number of generated responses to return.
-
-    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
-
-    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
-
-    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
-    frequency_penalty: Optional[float] = None
-    presence_penalty: Optional[float] = None
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "max_completion_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "n",
-            "stop",
-            "extra_headers",
-        ]
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if (
-                param == "stream" and value is True
-            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
-                optional_params["stream"] = value
-            if param == "n":
-                optional_params["candidate_count"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    optional_params["stop_sequences"] = [value]
-                elif isinstance(value, list):
-                    optional_params["stop_sequences"] = value
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_output_tokens"] = value
-            if (
-                param == "response_format"
-                and isinstance(value, dict)
-                and value["type"] == "json_object"
-            ):
-                optional_params["response_mime_type"] = "application/json"
-            if param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
-            if param == "presence_penalty":
-                optional_params["presence_penalty"] = value
-            if param == "tools" and isinstance(value, list):
-                from vertexai.preview import generative_models
-
-                gtool_func_declarations = []
-                for tool in value:
-                    gtool_func_declaration = generative_models.FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    generative_models.Tool(
-                        function_declarations=gtool_func_declarations
-                    )
-                ]
-            if param == "tool_choice" and (
-                isinstance(value, str) or isinstance(value, dict)
-            ):
-                pass
-        return optional_params
-
+class VertexAIBaseConfig:
     def get_mapped_special_auth_params(self) -> dict:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
@@ -264,7 +126,7 @@ class VertexAIConfig:
         ]
 
 
-class VertexGeminiConfig(BaseConfig):
+class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference

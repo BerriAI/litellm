@@ -132,6 +132,22 @@
         "supports_audio_output": true,
         "supports_system_messages": true
     },
+    "gpt-4o-audio-preview-2024-12-17": {
+        "max_tokens": 16384,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000025,
+        "input_cost_per_audio_token": 0.00004,
+        "output_cost_per_token": 0.000010,
+        "output_cost_per_audio_token": 0.00008,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_system_messages": true
+    },
     "gpt-4o-audio-preview-2024-10-01": {
         "max_tokens": 16384,
         "max_input_tokens": 128000,
@@ -6029,7 +6045,7 @@
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000072,
         "output_cost_per_token": 0.00000072,
-        "litellm_provider": "bedrock",
+        "litellm_provider": "bedrock_converse",
         "mode": "chat"
     },
     "meta.llama2-13b-chat-v1": {

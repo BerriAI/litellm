@@ -1049,7 +1049,7 @@ from .llms.petals.completion.transformation import PetalsConfig
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
-    VertexAIConfig,
+    VertexGeminiConfig as VertexAIConfig,
 )
 from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig,

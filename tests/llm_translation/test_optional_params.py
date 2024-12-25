@@ -987,3 +987,15 @@ def test_ollama_pydantic_obj():
         custom_llm_provider="ollama",
         response_format=ResponseFormat,
     )
+
+
+def test_gemini_frequency_penalty():
+    from litellm.utils import get_supported_openai_params
+
+    optional_params = get_supported_openai_params(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        request_type="chat_completion",
+    )
+    assert optional_params is not None
+    assert "frequency_penalty" in optional_params
