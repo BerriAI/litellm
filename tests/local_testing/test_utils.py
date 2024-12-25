@@ -1238,3 +1238,12 @@ def test_token_counter_with_image_url_with_detail_high():
     )
     print("tokens", _tokens)
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
+
+def test_map_finish_reason():
+    from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
+    assert map_finish_reason("STOP") == "stop"
+    assert map_finish_reason("RECITATION") == "content_filter"
+    assert map_finish_reason("tool_use") == "tool_calls"
+    assert map_finish_reason("reason_not_in_mapping") == "reason_not_in_mapping"
+    assert map_finish_reason("MALFORMED_FUNCTION_CALL") == "stop"

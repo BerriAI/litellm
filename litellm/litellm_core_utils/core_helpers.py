@@ -37,44 +37,40 @@ def map_finish_reason(finish_reason: str) -> str:
     finish_reason_mapping = {
         # Normal completion reasons
         "stop": "stop",
-        "COMPLETE": "stop",
-        "ERROR": "stop",
+        "complete": "stop",
         "eos_token": "stop",
         "stop_sequence": "stop",
-        "STOP_SEQUENCE": "stop",
-        "STOP": "stop",
         "end_turn": "stop",
-        "OTHER": "stop",
-        "FINISH_REASON_UNSPECIFIED": "stop",
+        "other": "stop",
+        "finish_reason_unspecified": "stop",
 
         # Error completions reasons
         # Mapping to stop since our set of finish reasons doesn't include error
-        "ERROR": "stop",
-        "MALFORMED_FUNCTION_CALL": "stop",
+        "error": "stop",
+        "malformed_function_call": "stop",
 
         # Length-related reasons
         "length": "length",
-        "MAX_TOKENS": "length",
         "max_tokens": "length",
         
         # Tool/function call reasons
         "tool_calls": "tool_calls",
         "tool_use": "tool_calls",
         "function_call": "tool_calls",
-        "TOOL_CALL": "tool_calls",
+        "tool_call": "tool_calls",
         
         # Content filtering/safety reasons
         "content_filter": "content_filter",
-        "ERROR_TOXIC": "content_filter",
-        "SAFETY": "content_filter",
-        "RECITATION": "content_filter",
+        "error_toxic": "content_filter",
+        "safety": "content_filter",
+        "recitation": "content_filter",
         "content_filtered": "content_filter",
-        "BLOCKLIST": "content_filter",
-        "PROHIBITED_CONTENT": "content_filter",
-        "SPII": "content_filter",
+        "blocklist": "content_filter",
+        "prohibited_content": "content_filter",
+        "spii": "content_filter",
     }
     
-    return finish_reason_mapping.get(finish_reason, finish_reason)
+    return finish_reason_mapping.get(finish_reason.lower(), finish_reason)
 
 
 def remove_index_from_tool_calls(messages, tool_calls):
