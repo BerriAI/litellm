@@ -1799,6 +1799,15 @@ class OpenAIBatchesAPI(BaseLLM):
         response = openai_client.batches.retrieve(**retrieve_batch_data)
         return response
 
+    async def acancel_batch(
+        self,
+        cancel_batch_data: CancelBatchRequest,
+        openai_client: AsyncOpenAI,
+    ) -> Batch:
+        verbose_logger.debug("async cancelling batch, args= %s", cancel_batch_data)
+        response = await openai_client.batches.cancel(**cancel_batch_data)
+        return response
+
     def cancel_batch(
         self,
         _is_async: bool,
@@ -1823,6 +1832,16 @@ class OpenAIBatchesAPI(BaseLLM):
             raise ValueError(
                 "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
             )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.acancel_batch(  # type: ignore
+                cancel_batch_data=cancel_batch_data, openai_client=openai_client
+            )
+
         response = openai_client.batches.cancel(**cancel_batch_data)
         return response
 
