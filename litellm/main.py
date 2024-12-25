@@ -1498,6 +1498,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model_response=model_response,
                     print_verbose=print_verbose,
                     api_key=api_key,
+                    custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
                     acompletion=acompletion,
                     client=client,  # pass AsyncOpenAI, OpenAI client
@@ -3885,7 +3886,6 @@ async def atext_completion(
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
-            or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"

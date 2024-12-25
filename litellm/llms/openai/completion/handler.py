@@ -8,7 +8,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base import BaseLLM
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
+from litellm.utils import ProviderConfigManager
 
 from ..common_utils import OpenAIError
 from .transformation import OpenAITextCompletionConfig
@@ -35,6 +36,7 @@ class OpenAITextCompletion(BaseLLM):
         model: str,
         messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
         timeout: float,
+        custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         print_verbose: Optional[Callable] = None,
@@ -54,11 +56,17 @@ class OpenAITextCompletion(BaseLLM):
 
             # don't send max retries to the api, if set
 
-            prompt = self.openai_text_completion_global_config._transform_prompt(
-                messages
+            provider_config = ProviderConfigManager.get_provider_text_completion_config(
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
             )
 
-            data = {"model": model, "prompt": prompt, **optional_params}
+            data = provider_config.transform_text_completion_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                headers=headers,
+            )
             max_retries = data.pop("max_retries", 2)
             ## LOGGING
             logging_obj.pre_call(
@@ -120,7 +128,6 @@ class OpenAITextCompletion(BaseLLM):
 
                 ## LOGGING
                 logging_obj.post_call(
-                    input=prompt,
                     api_key=api_key,
                     original_response=response_json,
                     additional_args={
