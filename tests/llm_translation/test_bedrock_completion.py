@@ -2238,6 +2238,32 @@ def test_bedrock_nova_topk(top_k_param):
         )
 
 
+def test_bedrock_cross_region_inference(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/us.meta.llama3-3-70b-instruct-v1:0",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1:0/converse"
+        )
+
+
 def test_bedrock_empty_content_real_call():
     completion(
         model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
