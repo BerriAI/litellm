@@ -1506,6 +1506,7 @@ class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
+    stream: Optional[bool]
     response_cost: float
     response_cost_failure_debug_info: Optional[
         StandardLoggingModelCostFailureDebugInformation

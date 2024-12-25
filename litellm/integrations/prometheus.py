@@ -69,11 +69,14 @@ class PrometheusLogger(CustomLogger):
                 "litellm_request_total_latency_metric",
                 "Total latency (seconds) for a request to LiteLLM",
                 labelnames=[
-                    "model",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "team",
-                    "team_alias",
+                    UserAPIKeyLabelNames.END_USER.value,
+                    UserAPIKeyLabelNames.API_KEY_HASH.value,
+                    UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+                    REQUESTED_MODEL,
+                    UserAPIKeyLabelNames.TEAM.value,
+                    UserAPIKeyLabelNames.TEAM_ALIAS.value,
+                    UserAPIKeyLabelNames.USER.value,
+                    UserAPIKeyLabelNames.LITELLM_MODEL.value,
                 ],
                 buckets=LATENCY_BUCKETS,
             )
@@ -82,11 +85,14 @@ class PrometheusLogger(CustomLogger):
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=[
-                    "model",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "team",
-                    "team_alias",
+                    UserAPIKeyLabelNames.LITELLM_MODEL.value,
+                    UserAPIKeyLabelNames.API_KEY_HASH.value,
+                    UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+                    UserAPIKeyLabelNames.TEAM.value,
+                    UserAPIKeyLabelNames.TEAM_ALIAS.value,
+                    UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+                    UserAPIKeyLabelNames.END_USER.value,
+                    UserAPIKeyLabelNames.USER.value,
                 ],
                 buckets=LATENCY_BUCKETS,
             )
@@ -447,7 +453,20 @@ class PrometheusLogger(CustomLogger):
         self.set_llm_deployment_success_metrics(
             kwargs, start_time, end_time, output_tokens
         )
-        pass
+
+        if (
+            standard_logging_payload["stream"] is True
+        ):  # log successful streaming requests from logging event hook.
+            self.litellm_proxy_total_requests_metric.labels(
+                end_user=end_user_id,
+                hashed_api_key=user_api_key,
+                api_key_alias=user_api_key_alias,
+                requested_model=model,
+                team=user_api_team,
+                team_alias=user_api_team_alias,
+                user=user_id,
+                status_code="200",
+            ).inc()
 
     def _increment_token_metrics(
         self,
@@ -631,23 +650,44 @@ class PrometheusLogger(CustomLogger):
             api_call_total_time: timedelta = end_time - api_call_start_time
             api_call_total_time_seconds = api_call_total_time.total_seconds()
             self.litellm_llm_api_latency_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
+                **{
+                    UserAPIKeyLabelNames.LITELLM_MODEL.value: model,
+                    UserAPIKeyLabelNames.API_KEY_HASH.value: user_api_key,
+                    UserAPIKeyLabelNames.API_KEY_ALIAS.value: user_api_key_alias,
+                    UserAPIKeyLabelNames.TEAM.value: user_api_team,
+                    UserAPIKeyLabelNames.TEAM_ALIAS.value: user_api_team_alias,
+                    UserAPIKeyLabelNames.USER.value: standard_logging_payload[
+                        "metadata"
+                    ]["user_api_key_user_id"],
+                    UserAPIKeyLabelNames.END_USER.value: standard_logging_payload[
+                        "metadata"
+                    ]["user_api_key_end_user_id"],
+                    UserAPIKeyLabelNames.REQUESTED_MODEL.value: standard_logging_payload[
+                        "model_group"
+                    ],
+                }
             ).observe(api_call_total_time_seconds)
 
         # total request latency
         if start_time is not None and isinstance(start_time, datetime):
             total_time: timedelta = end_time - start_time
             total_time_seconds = total_time.total_seconds()
+
             self.litellm_request_total_latency_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
+                **{
+                    UserAPIKeyLabelNames.END_USER.value: standard_logging_payload[
+                        "metadata"
+                    ]["user_api_key_end_user_id"],
+                    UserAPIKeyLabelNames.API_KEY_HASH.value: user_api_key,
+                    UserAPIKeyLabelNames.API_KEY_ALIAS.value: user_api_key_alias,
+                    REQUESTED_MODEL: standard_logging_payload["model_group"],
+                    UserAPIKeyLabelNames.TEAM.value: user_api_team,
+                    UserAPIKeyLabelNames.TEAM_ALIAS.value: user_api_team_alias,
+                    UserAPIKeyLabelNames.USER.value: standard_logging_payload[
+                        "metadata"
+                    ]["user_api_key_user_id"],
+                    UserAPIKeyLabelNames.LITELLM_MODEL.value: model,
+                }
             ).observe(total_time_seconds)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):

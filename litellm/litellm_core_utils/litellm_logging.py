@@ -2969,11 +2969,19 @@ def get_standard_logging_object_payload(
             kwargs=kwargs,
         )
 
+        stream: Optional[bool] = None
+        if (
+            kwargs.get("complete_streaming_response") is not None
+            or kwargs.get("async_complete_streaming_response") is not None
+        ):
+            stream = True
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
             call_type=call_type or "",
             cache_hit=cache_hit,
+            stream=stream,
             status=status,
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
