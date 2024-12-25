@@ -313,6 +313,9 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
     ],
 )
 def test_dynamic_turn_off_message_logging(callback_vars):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
     user_api_key_dict = UserAPIKeyAuth(
         token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
         key_name="sk-...63Fg",
@@ -369,7 +372,9 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
 
     assert callbacks is not None
     assert (
