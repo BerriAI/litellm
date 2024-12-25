@@ -9,6 +9,7 @@ import pytest
 from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from base_llm_unit_tests import BaseLLMChatTest
 
 
 def test_process_azure_headers_empty():
@@ -211,3 +212,30 @@ class TestAzureEmbedding(BaseLLMEmbeddingTest):
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.AZURE
+
+
+class TestAzureChat(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {
+            "model": "azure/gpt-4o-mini-json-mode",
+            "api_key": os.getenv("AZURE_JSON_MODE_API_KEY"),
+            "api_base": os.getenv("AZURE_JSON_MODE_API_BASE"),
+            "api_version": "2024-10-01-preview",
+            "base_model": "gpt-4o-mini",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    def test_prompt_caching(self):
+        """
+        We have no way to test prompt caching for Azure OpenAI.
+        "At this time, only the o1 model family supports the cached_tokens API response parameter." - Azure OpenAI
+        Ref: https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/prompt-caching
+
+
+        We need the `cached_tokens` in the response to test prompt caching.
+
+        """
+        pass

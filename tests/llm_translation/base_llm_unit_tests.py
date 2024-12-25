@@ -121,8 +121,11 @@ class BaseLLMChatTest(ABC):
         image_messages = [{"role": "user", "content": image_content}]
 
         base_completion_call_args = self.get_base_completion_call_args()
-
-        if not supports_pdf_input(base_completion_call_args["model"], None):
+        _model = (
+            base_completion_call_args.get("base_model")
+            or base_completion_call_args["model"]
+        )
+        if not supports_pdf_input(_model, None):
             pytest.skip("Model does not support image input")
 
         response = self.completion_function(
@@ -193,7 +196,11 @@ class BaseLLMChatTest(ABC):
             first_response: str
 
         base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_response_schema(base_completion_call_args["model"], None):
+        _model = (
+            base_completion_call_args.get("base_model")
+            or base_completion_call_args["model"]
+        )
+        if not supports_response_schema(_model, None):
             pytest.skip("Model does not support response schema")
 
         try:
@@ -292,7 +299,11 @@ class BaseLLMChatTest(ABC):
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_vision(base_completion_call_args["model"], None):
+        _model = (
+            base_completion_call_args.get("base_model")
+            or base_completion_call_args["model"]
+        )
+        if not supports_vision(_model, None):
             pytest.skip("Model does not support image input")
 
         messages = [
@@ -340,7 +351,11 @@ class BaseLLMChatTest(ABC):
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_prompt_caching(base_completion_call_args["model"], None):
+        _model = (
+            base_completion_call_args.get("base_model")
+            or base_completion_call_args["model"]
+        )
+        if not supports_prompt_caching(_model, None):
             print("Model does not support prompt caching")
             pytest.skip("Model does not support prompt caching")
 
