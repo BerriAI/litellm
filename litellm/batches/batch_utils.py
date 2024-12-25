@@ -277,17 +277,8 @@ def _create_standard_logging_object_for_completed_batch(
     """
     Create a standard logging object for a completed batch
     """
-    from litellm.litellm_core_utils.litellm_logging import (
-        get_standard_logging_object_payload,
-    )
-
-    standard_logging_object = get_standard_logging_object_payload(
-        kwargs=kwargs,
-        init_response_obj=None,
-        start_time=start_time,
-        end_time=end_time,
-        logging_obj=logging_obj,
-        status="success",
+    standard_logging_object = logging_obj.model_call_details.get(
+        "standard_logging_object", None
     )
 
     if standard_logging_object is None:
