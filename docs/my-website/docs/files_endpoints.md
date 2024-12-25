@@ -120,6 +120,8 @@ print("file content=", content)
 
 ### [OpenAI](#quick-start)
 
+## [Azure OpenAI](./providers/azure#azure-batches-api)
+
 ### [Vertex AI](./providers/vertex#batch-apis)
 
 ## [Swagger API Reference](https://litellm-api.up.railway.app/#/files)
