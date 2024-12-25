@@ -36,6 +36,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -2351,3 +2352,13 @@ def test_nova_optional_params_tool_choice():
         ],
         tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
     )
+
+
+class TestBedrockEmbedding(BaseLLMEmbeddingTest):
+    def get_base_embedding_call_args(self) -> dict:
+        return {
+            "model": "bedrock/amazon.titan-embed-image-v1",
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK

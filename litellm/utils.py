@@ -1825,6 +1825,19 @@ def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bo
         return False
 
 
+def supports_embedding_image_input(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports embedding image input and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_embedding_image_input",
+    )
+
+
 def supports_parallel_function_calling(model: str):
     """
     Check if the given model supports parallel function calling and return True if it does, False otherwise.
@@ -4432,6 +4445,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_audio_input=_model_info.get("supports_audio_input", False),
                 supports_audio_output=_model_info.get("supports_audio_output", False),
                 supports_pdf_input=_model_info.get("supports_pdf_input", False),
+                supports_embedding_image_input=_model_info.get(
+                    "supports_embedding_image_input", False
+                ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
             )

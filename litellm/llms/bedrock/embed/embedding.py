@@ -440,7 +440,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 logging_obj=logging_obj,
             )
         elif data is None:
-            raise Exception("Unable to map request to provider")
+            raise Exception("Unable to map Bedrock request to provider")
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
         headers = {"Content-Type": "application/json"}

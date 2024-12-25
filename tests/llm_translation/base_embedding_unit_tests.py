@@ -69,3 +69,17 @@ class BaseLLMEmbeddingTest(ABC):
             **embedding_call_args, max_retries=20
         )
         assert optional_params["max_retries"] == 20
+
+    def test_image_embedding(self):
+        litellm.set_verbose = True
+        from litellm.utils import supports_embedding_image_input
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_embedding_call_args = self.get_base_embedding_call_args()
+        if not supports_embedding_image_input(base_embedding_call_args["model"], None):
+            print("Model does not support embedding image input")
+            pytest.skip("Model does not support embedding image input")
+
+        raise NotImplementedError
