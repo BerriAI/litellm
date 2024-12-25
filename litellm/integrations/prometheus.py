@@ -140,6 +140,14 @@ class PrometheusLogger(CustomLogger):
                 ],
             )
 
+            # Counter for tokens by tag
+            self.litellm_tokens_by_tag_metric = Counter(
+                "litellm_total_tokens_by_tag",
+                "Total number of input + output tokens from LLM requests by custom metadata tags",
+                labelnames=[
+                    UserAPIKeyLabelNames.TAG.value,
+                ],
+            )
             self.litellm_input_tokens_metric = Counter(
                 "litellm_input_tokens",
                 "Total number of input tokens from LLM requests",
@@ -489,6 +497,14 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias,
             user_id,
         ).inc(standard_logging_payload["total_tokens"])
+
+        _tags = standard_logging_payload["request_tags"]
+        for tag in _tags:
+            self.litellm_tokens_by_tag_metric.labels(
+                **{
+                    UserAPIKeyLabelNames.TAG.value: tag,
+                }
+            ).inc(standard_logging_payload["total_tokens"])
 
         self.litellm_input_tokens_metric.labels(
             end_user_id,

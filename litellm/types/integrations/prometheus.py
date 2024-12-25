@@ -54,3 +54,4 @@ class UserAPIKeyLabelNames(Enum):
     TEAM_ALIAS = "team_alias"
     REQUESTED_MODEL = REQUESTED_MODEL
     LITELLM_MODEL = "model"
+    TAG = "tag"
