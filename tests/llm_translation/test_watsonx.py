@@ -12,9 +12,11 @@ from litellm import completion
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from unittest.mock import patch, MagicMock, AsyncMock, Mock
+import pytest
 
 
-def test_watsonx_custom_auth_header():
+@pytest.mark.parametrize("with_custom_auth_header", [True, False])
+def test_watsonx_custom_auth_header(with_custom_auth_header):
     client = HTTPHandler()
 
     mock_response = Mock()
@@ -32,12 +34,22 @@ def test_watsonx_custom_auth_header():
             model="watsonx/my-test-model",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             api_key="test_api_key",
-            headers={"Authorization": "Bearer my-custom-auth-header"},
+            headers=(
+                {"Authorization": "Bearer my-custom-auth-header"}
+                if with_custom_auth_header
+                else {}
+            ),
             client=client,
         )
 
     assert mock_post.call_count == 1
-    assert (
-        mock_post.call_args[1]["headers"]["Authorization"]
-        == "Bearer my-custom-auth-header"
-    )
+    if with_custom_auth_header:
+        assert (
+            mock_post.call_args[1]["headers"]["Authorization"]
+            == "Bearer my-custom-auth-header"
+        )
+    else:
+        assert (
+            mock_post.call_args[1]["headers"]["Authorization"]
+            == "Bearer mock_access_token"
+        )
