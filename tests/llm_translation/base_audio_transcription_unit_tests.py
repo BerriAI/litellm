@@ -15,6 +15,10 @@ from litellm import transcription
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    BaseAudioTranscriptionConfig,
+)
+from litellm.utils import ProviderConfigManager
 from abc import ABC, abstractmethod
 
 pwd = os.path.dirname(os.path.realpath(__file__))
@@ -65,3 +69,18 @@ class BaseLLMAudioTranscriptionTest(ABC):
         assert (
             "max_completion_tokens" not in optional_params
         )  # assert default chat completion response not returned
+
+    def test_audio_transcription_config(self):
+        """
+        Test that the audio transcription config is implemented and correctly instrumented.
+        """
+        transcription_args = self.get_base_audio_transcription_call_args()
+        model = transcription_args["model"]
+        custom_llm_provider = self.get_custom_llm_provider()
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model=model,
+            provider=custom_llm_provider,
+        )
+        print(f"config: {config}")
+        assert config is not None
+        assert isinstance(config, BaseAudioTranscriptionConfig)

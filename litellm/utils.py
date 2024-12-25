@@ -169,6 +169,9 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    BaseAudioTranscriptionConfig,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -6292,6 +6295,17 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    def get_provider_audio_transcription_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseAudioTranscriptionConfig:
+        if litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIAudioTranscriptionConfig()
+        raise NotImplementedError(
+            f"Provider {provider.value} does not support audio transcription config"
+        )
 
 
 def get_end_user_id_for_cost_tracking(
