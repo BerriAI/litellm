@@ -1592,6 +1592,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
 all_litellm_params = [
     "metadata",
+    "litellm_metadata",
     "litellm_trace_id",
     "tags",
     "acompletion",
