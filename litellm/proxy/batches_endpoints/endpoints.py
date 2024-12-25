@@ -353,6 +353,115 @@ async def list_batches(
         raise handle_exception_on_proxy(e)
 
 
+@router.post(
+    "/{provider}/v1/batches/{batch_id:path}/cancel",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["batch"],
+)
+@router.post(
+    "/v1/batches/{batch_id:path}/cancel",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["batch"],
+)
+@router.post(
+    "/batches/{batch_id:path}/cancel",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["batch"],
+)
+async def cancel_batch(
+    request: Request,
+    fastapi_response: Response,
+    provider: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Cancel a batch.
+    This is the equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
+
+    Supports Identical Params as: https://platform.openai.com/docs/api-reference/batch/cancel
+
+    Example Curl
+    ```
+    curl http://localhost:4000/v1/batches/batch_abc123/cancel \
+        -H "Authorization: Bearer sk-1234" \
+        -H "Content-Type: application/json" \
+        -X POST
+
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        get_custom_headers,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
+
+    data: Dict = {}
+    try:
+        data = await _read_request_body(request=request)
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
+        )
+
+        # Include original request and headers in the data
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        custom_llm_provider = (
+            provider or data.pop("custom_llm_provider", None) or "openai"
+        )
+        _create_batch_data = CreateBatchRequest(**data)
+        response = await litellm.acancel_batch(
+            custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
+        )
+
+        ### ALERTING ###
+        asyncio.create_task(
+            proxy_logging_obj.update_request_status(
+                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+            )
+        )
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers.update(
+            get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id=model_id,
+                cache_key=cache_key,
+                api_base=api_base,
+                version=version,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                request_data=data,
+            )
+        )
+
+        return response
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.create_batch(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        raise handle_exception_on_proxy(e)
+
+
 ######################################################################
 
 #            END OF  /v1/batches Endpoints Implementation
