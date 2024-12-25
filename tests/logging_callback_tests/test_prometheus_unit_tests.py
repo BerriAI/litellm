@@ -46,6 +46,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
     return StandardLoggingPayload(
         id="test_id",
         call_type="completion",
+        stream=False,
         response_cost=0.1,
         response_cost_failure_debug_info=None,
         status="success",
@@ -72,6 +73,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             spend_logs_metadata=None,
             requester_ip_address="127.0.0.1",
             requester_metadata=None,
+            user_api_key_end_user_id="test_end_user",
         ),
         cache_hit=False,
         cache_key=None,
@@ -110,6 +112,7 @@ async def test_async_log_success_event(prometheus_logger):
                 "user_api_key": "test_key",
                 "user_api_key_user_id": "test_user",
                 "user_api_key_team_id": "test_team",
+                "user_api_key_end_user_id": "test_end_user",
             }
         },
         "start_time": datetime.now(),
@@ -299,7 +302,14 @@ def test_set_latency_metrics(prometheus_logger):
 
     # end_time - api_call_start_time
     prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once_with(
-        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+        model="gpt-3.5-turbo",
+        hashed_api_key="key1",
+        api_key_alias="alias1",
+        team="team1",
+        team_alias="team_alias1",
+        user="test_user",
+        end_user="test_end_user",
+        requested_model="openai-gpt",
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -307,7 +317,14 @@ def test_set_latency_metrics(prometheus_logger):
 
     # total latency for the request
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once_with(
-        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+        end_user="test_end_user",
+        hashed_api_key="key1",
+        api_key_alias="alias1",
+        requested_model="openai-gpt",
+        team="team1",
+        team_alias="team_alias1",
+        user="test_user",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
