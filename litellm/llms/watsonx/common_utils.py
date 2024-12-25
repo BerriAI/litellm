@@ -53,7 +53,9 @@ def generate_iam_token(api_key=None, **params) -> str:
             headers,
             data,
         )
-        response = httpx.post(iam_token_url, data=data, headers=headers)
+        response = litellm.module_level_client.post(
+            url=iam_token_url, data=data, headers=headers
+        )
         response.raise_for_status()
         json_data = response.json()
 
