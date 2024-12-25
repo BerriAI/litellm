@@ -161,6 +161,16 @@ class PrometheusLogger(CustomLogger):
                     "user",
                 ],
             )
+
+            # Counter for input tokens by tag
+            self.litellm_input_tokens_by_tag_metric = Counter(
+                "litellm_input_tokens_by_tag",
+                "Total number of input tokens from LLM requests by custom metadata tags",
+                labelnames=[
+                    UserAPIKeyLabelNames.TAG.value,
+                ],
+            )
+
             self.litellm_output_tokens_metric = Counter(
                 "litellm_output_tokens",
                 "Total number of output tokens from LLM requests",
@@ -172,6 +182,15 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                     "user",
+                ],
+            )
+
+            # Counter for output tokens by tag
+            self.litellm_output_tokens_by_tag_metric = Counter(
+                "litellm_output_tokens_by_tag",
+                "Total number of output tokens from LLM requests by custom metadata tags",
+                labelnames=[
+                    UserAPIKeyLabelNames.TAG.value,
                 ],
             )
 
@@ -516,6 +535,13 @@ class PrometheusLogger(CustomLogger):
             user_id,
         ).inc(standard_logging_payload["prompt_tokens"])
 
+        for tag in _tags:
+            self.litellm_input_tokens_by_tag_metric.labels(
+                **{
+                    UserAPIKeyLabelNames.TAG.value: tag,
+                }
+            ).inc(standard_logging_payload["prompt_tokens"])
+
         self.litellm_output_tokens_metric.labels(
             end_user_id,
             user_api_key,
@@ -525,6 +551,13 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias,
             user_id,
         ).inc(standard_logging_payload["completion_tokens"])
+
+        for tag in _tags:
+            self.litellm_output_tokens_by_tag_metric.labels(
+                **{
+                    UserAPIKeyLabelNames.TAG.value: tag,
+                }
+            ).inc(standard_logging_payload["completion_tokens"])
 
     def _increment_remaining_budget_metrics(
         self,
