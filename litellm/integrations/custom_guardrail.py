@@ -73,7 +73,7 @@ class CustomGuardrail(CustomLogger):
 
         return True
 
-    def get_guardrail_dynamic_request_body_params(self, data: dict) -> dict:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
@@ -86,7 +86,7 @@ class CustomGuardrail(CustomLogger):
             "foo": "bar"
         }
         """
-        requested_guardrails = self.get_guardrail_from_metadata(data)
+        requested_guardrails = self.get_guardrail_from_metadata(request_data)
 
         # Look for the guardrail configuration matching self.guardrail_name
         for guardrail in requested_guardrails:
