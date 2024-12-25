@@ -21,8 +21,10 @@ client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 @pytest.mark.asyncio
 async def test_batches_operations():
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    input_file_path = os.path.join(_current_dir, "input.jsonl")
     file_obj = client.files.create(
-        file=open("input.jsonl", "rb"),
+        file=open(input_file_path, "rb"),
         purpose="batch",
     )
 
