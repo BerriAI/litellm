@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Callable, Coroutine, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union
 
 import httpx  # type: ignore
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -28,13 +28,7 @@ from litellm.utils import (
     modify_url,
 )
 
-from ...types.llms.openai import (
-    Batch,
-    CancelBatchRequest,
-    CreateBatchRequest,
-    HttpxBinaryResponseContent,
-    RetrieveBatchRequest,
-)
+from ...types.llms.openai import HttpxBinaryResponseContent
 from ..base import BaseLLM
 from .common_utils import AzureOpenAIError, process_azure_headers
 

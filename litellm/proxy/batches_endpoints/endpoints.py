@@ -393,7 +393,6 @@ async def cancel_batch(
         add_litellm_data_to_request,
         general_settings,
         get_custom_headers,
-        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
