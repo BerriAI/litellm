@@ -11,7 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import CreateBatchRequest, RetrieveBatchRequest
+from litellm.batches.main import (
+    CancelBatchRequest,
+    CreateBatchRequest,
+    RetrieveBatchRequest,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
@@ -370,6 +374,7 @@ async def list_batches(
 )
 async def cancel_batch(
     request: Request,
+    batch_id: str,
     fastapi_response: Response,
     provider: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -418,9 +423,10 @@ async def cancel_batch(
         custom_llm_provider = (
             provider or data.pop("custom_llm_provider", None) or "openai"
         )
-        _create_batch_data = CreateBatchRequest(**data)
+        _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
         response = await litellm.acancel_batch(
-            custom_llm_provider=custom_llm_provider, **_create_batch_data  # type: ignore
+            custom_llm_provider=custom_llm_provider,  # type: ignore
+            **_cancel_batch_data
         )
 
         ### ALERTING ###
