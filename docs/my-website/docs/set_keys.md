@@ -114,7 +114,7 @@ litellm.organization = "LiteLlmOrg"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```
 
-## Passing Args to completion()
+## Passing Args to completion() (or any litellm endpoint - `transcription`, `embedding`, `text_completion`, etc)
 
 You can pass the API key within `completion()` call:
 
