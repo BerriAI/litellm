@@ -4,7 +4,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig
 
 
 class FireworksAIConfig(OpenAIGPTConfig):

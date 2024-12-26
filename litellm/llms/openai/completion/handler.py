@@ -94,7 +94,7 @@ class OpenAITextCompletion(BaseLLM):
                         organization=organization,
                     )
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
+                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
@@ -156,7 +156,6 @@ class OpenAITextCompletion(BaseLLM):
         data: dict,
         headers: dict,
         model_response: ModelResponse,
-        prompt: str,
         api_key: str,
         model: str,
         timeout: float,
@@ -185,7 +184,6 @@ class OpenAITextCompletion(BaseLLM):
 
             ## LOGGING
             logging_obj.post_call(
-                input=prompt,
                 api_key=api_key,
                 original_response=response,
                 additional_args={
