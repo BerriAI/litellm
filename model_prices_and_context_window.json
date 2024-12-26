@@ -4485,7 +4485,7 @@
         "litellm_provider": "replicate",
         "mode": "chat"
     },
-    "openrouter/deepseek/deepseek-coder": {
+    "openrouter/deepseek/deepseek-chat": {
         "max_tokens": 4096,
         "max_input_tokens": 32000,
         "max_output_tokens": 4096,
