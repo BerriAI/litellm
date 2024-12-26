@@ -72,6 +72,12 @@ class PrometheusLogger(CustomLogger):
                 labelnames=PrometheusMetricLabels.litellm_llm_api_latency_metric.value,
                 buckets=LATENCY_BUCKETS,
             )
+            self.litellm_llm_api_latency_by_tag_metric = Histogram(
+                "litellm_llm_api_latency_by_tag_metric",
+                "Total latency (seconds) for a models LLM API call by custom metadata tags",
+                labelnames=PrometheusMetricLabels.litellm_llm_api_latency_by_tag_metric.value,
+                buckets=LATENCY_BUCKETS,
+            )
 
             self.litellm_llm_api_time_to_first_token_metric = Histogram(
                 "litellm_llm_api_time_to_first_token_metric",
@@ -715,6 +721,15 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_latency_metric.labels(**_labels).observe(
                 api_call_total_time_seconds
             )
+            for tag in enum_values.tags:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_llm_api_latency_by_tag_metric.value,
+                    enum_values=enum_values,
+                    tag=tag,
+                )
+                self.litellm_llm_api_latency_by_tag_metric.labels(**_labels).observe(
+                    api_call_total_time_seconds
+                )
 
         # total request latency
         if start_time is not None and isinstance(start_time, datetime):

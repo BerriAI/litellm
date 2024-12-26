@@ -127,6 +127,10 @@ class PrometheusMetricLabels(Enum):
         ]
     )
 
+    litellm_llm_api_latency_by_tag_metric = litellm_llm_api_latency_metric + [
+        UserAPIKeyLabelNames.TAG.value,
+    ]
+
 
 from typing import List, Optional
 
