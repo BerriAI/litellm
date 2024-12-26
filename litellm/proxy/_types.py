@@ -1426,6 +1426,19 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
+    def __init__(self, **kwargs):
+        # Handle litellm_budget_table_* keys
+        for key, value in list(kwargs.items()):
+            if key.startswith("litellm_budget_table_") and value is not None:
+                # Extract the corresponding attribute name
+                attr_name = key.replace("litellm_budget_table_", "")
+                # Check if the value is None and set the corresponding attribute
+                if getattr(self, attr_name, None) is None:
+                    kwargs[attr_name] = value
+
+        # Initialize the superclass
+        super().__init__(**kwargs)
+
 
 class UserAPIKeyAuth(
     LiteLLM_VerificationTokenView
