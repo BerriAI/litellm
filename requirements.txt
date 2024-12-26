@@ -2,7 +2,7 @@
 anyio==4.4.0 # openai + http req.
 httpx==0.27.0 # Pin Httpx dependency
 openai==1.55.3  # openai req. 
-fastapi==0.115.5 # server dep
+fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
@@ -13,9 +13,9 @@ numpy==2.1.1 # semantic caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
-google-cloud-aiplatform==1.75.0 # for vertex ai calls
+google-cloud-aiplatform==1.47.0 # for vertex ai calls
 anthropic[vertex]==0.21.3
-google-generativeai==0.8.3 # for vertex ai calls
+google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.45.0 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy

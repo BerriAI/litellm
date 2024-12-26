@@ -1197,6 +1197,26 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             python -m pip install -r requirements.txt
+            pip install mypy
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            pip install "openai==1.54.0 "
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
