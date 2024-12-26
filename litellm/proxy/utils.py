@@ -1503,25 +1503,31 @@ class PrismaClient:
                         )
 
                     sql_query = f"""
-                    SELECT 
-                    v.*,
-                    t.spend AS team_spend, 
-                    t.max_budget AS team_max_budget, 
-                    t.tpm_limit AS team_tpm_limit,
-                    t.rpm_limit AS team_rpm_limit,
-                    t.models AS team_models,
-                    t.metadata AS team_metadata,
-                    t.blocked AS team_blocked,
-                    t.team_alias AS team_alias,
-                    t.metadata AS team_metadata,
-                    t.members_with_roles AS team_members_with_roles,
-                    tm.spend AS team_member_spend,
-                    m.aliases as team_model_aliases
-                    FROM "LiteLLM_VerificationToken" AS v
-                    LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
-                    LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
-                    LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
-                    WHERE v.token = '{token}'
+                        SELECT 
+                            v.*,
+                            t.spend AS team_spend, 
+                            t.max_budget AS team_max_budget, 
+                            t.tpm_limit AS team_tpm_limit,
+                            t.rpm_limit AS team_rpm_limit,
+                            t.models AS team_models,
+                            t.metadata AS team_metadata,
+                            t.blocked AS team_blocked,
+                            t.team_alias AS team_alias,
+                            t.metadata AS team_metadata,
+                            t.members_with_roles AS team_members_with_roles,
+                            tm.spend AS team_member_spend,
+                            m.aliases AS team_model_aliases,
+                            -- Added comma to separate b.* columns
+                            b.max_budget AS litellm_budget_table_max_budget,
+                            b.tpm_limit AS litellm_budget_table_tpm_limit,
+                            b.rpm_limit AS litellm_budget_table_rpm_limit,
+                            b.model_max_budget as litellm_budget_table_model_max_budget
+                        FROM "LiteLLM_VerificationToken" AS v
+                        LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
+                        LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
+                        LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
+                        LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
+                        WHERE v.token = '{token}'
                     """
 
                     print_verbose("sql_query being made={}".format(sql_query))
@@ -1634,6 +1640,7 @@ class PrismaClient:
                         "create": {**db_data},  # type: ignore
                         "update": {},  # don't do anything if it already exists
                     },
+                    include={"litellm_budget_table": True},
                 )
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token

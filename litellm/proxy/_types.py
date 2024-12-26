@@ -630,6 +630,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
+    budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
 
@@ -645,6 +646,7 @@ class GenerateKeyResponse(KeyRequestBase):
     expires: Optional[datetime]
     user_id: Optional[str] = None
     token_id: Optional[str] = None
+    litellm_budget_table: Optional[Any] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -765,7 +767,7 @@ class DeleteUserRequest(LiteLLMPydanticObjectBase):
 AllowedModelRegion = Literal["eu", "us"]
 
 
-class BudgetNew(LiteLLMPydanticObjectBase):
+class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = Field(default=None, description="The unique budget id.")
     max_budget: Optional[float] = Field(
         default=None,
@@ -805,11 +807,11 @@ class CustomerBase(LiteLLMPydanticObjectBase):
     allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
     budget_id: Optional[str] = None
-    litellm_budget_table: Optional[BudgetNew] = None
+    litellm_budget_table: Optional[BudgetNewRequest] = None
     blocked: bool = False
 
 
-class NewCustomerRequest(BudgetNew):
+class NewCustomerRequest(BudgetNewRequest):
     """
     Create a new customer, allocate a budget to them
     """
@@ -1425,6 +1427,19 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
 
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
+
+    def __init__(self, **kwargs):
+        # Handle litellm_budget_table_* keys
+        for key, value in list(kwargs.items()):
+            if key.startswith("litellm_budget_table_") and value is not None:
+                # Extract the corresponding attribute name
+                attr_name = key.replace("litellm_budget_table_", "")
+                # Check if the value is None and set the corresponding attribute
+                if getattr(self, attr_name, None) is None:
+                    kwargs[attr_name] = value
+
+        # Initialize the superclass
+        super().__init__(**kwargs)
 
 
 class UserAPIKeyAuth(

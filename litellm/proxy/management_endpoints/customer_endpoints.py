@@ -131,11 +131,11 @@ async def unblock_user(data: BlockUsers):
     return {"blocked_users": litellm.blocked_user_list}
 
 
-def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNew]:
+def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
     """
     Return a new budget object if new budget params are passed.
     """
-    budget_params = BudgetNew.model_fields.keys()
+    budget_params = BudgetNewRequest.model_fields.keys()
     budget_kv_pairs = {}
 
     # Get the actual values from the data object using getattr
@@ -147,7 +147,7 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNew]:
             budget_kv_pairs[field_name] = value
 
     if budget_kv_pairs:
-        return BudgetNew(**budget_kv_pairs)
+        return BudgetNewRequest(**budget_kv_pairs)
     return None
 
 
@@ -271,7 +271,7 @@ async def new_end_user(
         _user_data = data.dict(exclude_none=True)
 
         for k, v in _user_data.items():
-            if k not in BudgetNew.model_fields.keys():
+            if k not in BudgetNewRequest.model_fields.keys():
                 new_end_user_obj[k] = v
 
         ## WRITE TO DB ##
