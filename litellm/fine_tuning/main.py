@@ -19,12 +19,16 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.azure.fine_tuning.handler import AzureOpenAIFineTuningAPI
-from litellm.llms.openai.fine_tuning.handler import FineTuningJob, OpenAIFineTuningAPI
+from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
 from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import FineTuningJobCreate, Hyperparameters
+from litellm.types.llms.openai import (
+    FineTuningJob,
+    FineTuningJobCreate,
+    Hyperparameters,
+)
 from litellm.types.router import *
-from litellm.utils import supports_httpx_timeout
+from litellm.utils import client, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_fine_tuning_apis_instance = OpenAIFineTuningAPI()
@@ -33,6 +37,7 @@ vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
 #################################################
 
 
+@client
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
@@ -86,6 +91,7 @@ async def acreate_fine_tuning_job(
         raise e
 
 
+@client
 def create_fine_tuning_job(
     model: str,
     training_file: str,
