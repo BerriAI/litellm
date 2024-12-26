@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-
+import json
 import pytest
 
 sys.path.insert(
@@ -14,7 +14,7 @@ import litellm
 litellm.num_retries = 0
 import asyncio
 import logging
-
+from typing import Optional
 import openai
 from test_openai_batches_and_files import load_vertex_ai_credentials
 
@@ -24,8 +24,25 @@ from litellm.llms.vertex_ai.fine_tuning.handler import (
     FineTuningJobCreate,
     VertexFineTuningAPI,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload
 
 vertex_finetune_api = VertexFineTuningAPI()
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(
+            "Success event logged with kwargs=",
+            kwargs,
+            "and response_obj=",
+            response_obj,
+        )
+        self.standard_logging_object = kwargs["standard_logging_object"]
 
 
 def test_create_fine_tune_job():
@@ -89,6 +106,8 @@ def test_create_fine_tune_job():
 @pytest.mark.asyncio
 async def test_create_fine_tune_jobs_async():
     try:
+        custom_logger = TestCustomLogger()
+        litellm.callbacks = ["datadog", custom_logger]
         verbose_logger.setLevel(logging.DEBUG)
         file_name = "openai_batch_completions.jsonl"
         _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -112,6 +131,16 @@ async def test_create_fine_tune_jobs_async():
 
         assert create_fine_tuning_response.id is not None
         assert create_fine_tuning_response.model == "gpt-3.5-turbo-0125"
+
+        await asyncio.sleep(2)
+        _logged_standard_logging_object = custom_logger.standard_logging_object
+        assert _logged_standard_logging_object is not None
+        print(
+            "custom_logger.standard_logging_object=",
+            json.dumps(_logged_standard_logging_object, indent=4),
+        )
+        assert _logged_standard_logging_object["model"] == "gpt-3.5-turbo-0125"
+        assert _logged_standard_logging_object["id"] == create_fine_tuning_response.id
 
         # list fine tuning jobs
         print("listing ft jobs")
