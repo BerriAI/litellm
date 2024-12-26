@@ -12,6 +12,14 @@ model_list:
       model: bedrock/*
 
 
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+
 # for /files endpoints
 # For /fine_tuning/jobs endpoints
 finetune_settings:

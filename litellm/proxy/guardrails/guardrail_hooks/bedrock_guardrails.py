@@ -149,7 +149,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _prepare_request(
         self,
         credentials,
-        data: BedrockRequest,
+        data: dict,
         optional_params: dict,
         aws_region_name: str,
         extra_headers: Optional[dict] = None,
@@ -186,18 +186,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ):
 
         credentials, aws_region_name = self._load_credentials()
-        request_data: BedrockRequest = self.convert_to_bedrock_format(
-            messages=kwargs.get("messages"), response=response
+        bedrock_request_data: dict = dict(
+            self.convert_to_bedrock_format(
+                messages=kwargs.get("messages"), response=response
+            )
+        )
+        bedrock_request_data.update(
+            self.get_guardrail_dynamic_request_body_params(request_data=kwargs)
         )
         prepared_request = self._prepare_request(
             credentials=credentials,
-            data=request_data,
+            data=bedrock_request_data,
             optional_params=self.optional_params,
             aws_region_name=aws_region_name,
         )
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
-            request_data,
+            bedrock_request_data,
             prepared_request.url,
             prepared_request.headers,
         )
