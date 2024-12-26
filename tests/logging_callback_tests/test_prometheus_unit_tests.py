@@ -796,13 +796,14 @@ def test_increment_deployment_cooled_down(prometheus_logger):
     prometheus_logger.litellm_deployment_cooled_down.labels().inc.assert_called_once()
 
 
-def test_prometheus_factory(monkeypatch):
+@pytest.mark.parametrize("disable_end_user_tracking", [True, False])
+def test_prometheus_factory(monkeypatch, disable_end_user_tracking):
     from litellm.integrations.prometheus import prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     monkeypatch.setattr(
         "litellm.disable_end_user_cost_tracking_prometheus_only",
-        True,
+        disable_end_user_tracking,
     )
 
     enum_values = UserAPIKeyLabelValues(
@@ -815,4 +816,7 @@ def test_prometheus_factory(monkeypatch):
         supported_enum_labels=supported_labels, enum_values=enum_values
     )
 
-    assert returned_dict["end_user"] == None
+    if disable_end_user_tracking:
+        assert returned_dict["end_user"] == None
+    else:
+        assert returned_dict["end_user"] == "test_end_user"
