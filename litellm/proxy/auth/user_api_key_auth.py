@@ -1014,7 +1014,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                     )
 
             # Check 5. Token Model Spend is under Model budget
-            max_budget_per_model = valid_token.model_max_budget
+            max_budget_per_model = (
+                valid_token.model_max_budget
+                or valid_token.litellm_budget_table_model_max_budget
+            )
             current_model = request_data.get("model", None)
 
             if (

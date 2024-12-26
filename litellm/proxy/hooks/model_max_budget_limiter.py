@@ -39,7 +39,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Raises:
             BudgetExceededError: If the user_api_key_dict has exceeded the model budget
         """
-        _model_max_budget = user_api_key_dict.model_max_budget
+        _model_max_budget = (
+            user_api_key_dict.model_max_budget
+            or user_api_key_dict.litellm_budget_table_model_max_budget
+            or {}
+        )
         internal_model_max_budget: GenericBudgetConfigType = {}
 
         # case each element in _model_max_budget to GenericBudgetInfo

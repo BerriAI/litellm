@@ -182,10 +182,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         global_max_parallel_requests = data.get("metadata", {}).get(
             "global_max_parallel_requests", None
         )
-        tpm_limit = getattr(user_api_key_dict, "tpm_limit", sys.maxsize)
+        tpm_limit = (
+            user_api_key_dict.tpm_limit
+            or user_api_key_dict.litellm_budget_table_tpm_limit
+        )
         if tpm_limit is None:
             tpm_limit = sys.maxsize
-        rpm_limit = getattr(user_api_key_dict, "rpm_limit", sys.maxsize)
+        rpm_limit = (
+            user_api_key_dict.rpm_limit
+            or user_api_key_dict.litellm_budget_table_rpm_limit
+        )
         if rpm_limit is None:
             rpm_limit = sys.maxsize
 

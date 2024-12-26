@@ -632,6 +632,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 
 class _GenerateKeyRequest(GenerateRequestBase):
     key: Optional[str] = None
+    budget_id: Optional[str] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
@@ -645,6 +646,7 @@ class GenerateKeyResponse(_GenerateKeyRequest):
     expires: Optional[datetime]
     user_id: Optional[str] = None
     token_id: Optional[str] = None
+    litellm_budget_table: Optional[Any] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1416,6 +1418,13 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_member_spend: Optional[float] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
+
+    # Budget Table Params
+    budget_id: Optional[str] = None
+    litellm_budget_table_max_budget: Optional[float] = None
+    litellm_budget_table_tpm_limit: Optional[int] = None
+    litellm_budget_table_rpm_limit: Optional[int] = None
+    litellm_budget_table_model_max_budget: Optional[Dict] = None
 
     # End User Params
     end_user_id: Optional[str] = None
