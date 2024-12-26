@@ -777,3 +777,55 @@ async def test_user_info_as_proxy_admin(prisma_client):
 
     assert user_info_response.keys is not None
     assert len(user_info_response.keys) > 0, "Expected at least one key in response"
+
+
+@pytest.mark.asyncio
+async def test_key_update_with_model_specific_params(prisma_client):
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+    from litellm.proxy._types import UpdateKeyRequest
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/update/key")
+
+    args = {
+        "key_alias": "test-key",
+        "duration": None,
+        "models": ["all-team-models"],
+        "spend": 0,
+        "max_budget": None,
+        "user_id": "default_user_id",
+        "team_id": None,
+        "max_parallel_requests": None,
+        "metadata": {
+            "model_tpm_limit": {"fake-openai-endpoint": 10},
+            "model_rpm_limit": {"fake-openai-endpoint": 0},
+        },
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "budget_duration": None,
+        "allowed_cache_controls": [],
+        "soft_budget": None,
+        "config": {},
+        "permissions": {},
+        "model_max_budget": {},
+        "send_invite_email": None,
+        "model_rpm_limit": None,
+        "model_tpm_limit": None,
+        "guardrails": None,
+        "blocked": None,
+        "aliases": {},
+        "key": "a4aec05513e35d8b006d46b045272c339c749b423a60c5688ffc8ce701540d06",
+        "budget_id": None,
+        "key_name": "sk-...2GWA",
+        "expires": None,
+        "token_id": "a4aec05513e35d8b006d46b045272c339c749b423a60c5688ffc8ce701540d06",
+        "litellm_budget_table": None,
+        "token": "a4aec05513e35d8b006d46b045272c339c749b423a60c5688ffc8ce701540d06",
+    }
+    await update_key_fn(request=request, data=UpdateKeyRequest(**args))
