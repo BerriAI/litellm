@@ -569,7 +569,7 @@ litellm_settings:
 </Tabs>
 
 
-# Batches API
+## **Azure Batches API**
 
 | Property | Details |
 |-------|-------|
