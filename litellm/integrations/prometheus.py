@@ -328,10 +328,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_successful_fallbacks = Counter(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                [REQUESTED_MODEL, "fallback_model"]
-                + team_and_key_labels
-                + EXCEPTION_LABELS,
+                PrometheusMetricLabels.litellm_deployment_successful_fallbacks.value,
             )
+            self.litellm_deployment_successful_fallbacks_by_tag = Counter(
+                "litellm_deployment_successful_fallbacks_by_tag",
+                "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model by custom metadata tags",
+                PrometheusMetricLabels.litellm_deployment_successful_fallbacks_by_tag.value,
+            )
+
             self.litellm_deployment_failed_fallbacks = Counter(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
@@ -1188,7 +1192,8 @@ class PrometheusLogger(CustomLogger):
             )
         )
         _new_model = kwargs.get("model")
-        self.litellm_deployment_successful_fallbacks.labels(
+        _tags = cast(List[str], kwargs.get("tags") or [])
+        enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
             fallback_model=_new_model,
             hashed_api_key=standard_metadata["user_api_key_hash"],
@@ -1197,7 +1202,21 @@ class PrometheusLogger(CustomLogger):
             team_alias=standard_metadata["user_api_key_team_alias"],
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=str(original_exception.__class__.__name__),
-        ).inc()
+            tags=_tags,
+        )
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.litellm_deployment_successful_fallbacks.value,
+            enum_values=enum_values,
+        )
+        self.litellm_deployment_successful_fallbacks.labels(**_labels).inc()
+
+        for tag in _tags:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.litellm_deployment_successful_fallbacks_by_tag.value,
+                enum_values=enum_values,
+                tag=tag,
+            )
+            self.litellm_deployment_successful_fallbacks_by_tag.labels(**_labels).inc()
 
     async def log_failure_fallback_event(
         self, original_model_group: str, kwargs: dict, original_exception: Exception

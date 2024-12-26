@@ -65,6 +65,7 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
     STATUS_CODE = "status_code"
+    FALLBACK_MODEL = "fallback_model"
 
 
 class PrometheusMetricLabels(Enum):
@@ -163,6 +164,24 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TAG.value,
     ]
 
+    litellm_deployment_successful_fallbacks = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.FALLBACK_MODEL.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+        UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+    ]
+
+    litellm_deployment_successful_fallbacks_by_tag = (
+        litellm_deployment_successful_fallbacks
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
 
 from typing import List, Optional
 
@@ -186,6 +205,7 @@ class UserAPIKeyLabelValues(BaseModel):
     exception_status: Optional[str] = None
     exception_class: Optional[str] = None
     status_code: Optional[str] = None
+    fallback_model: Optional[str] = None
 
     class Config:
         fields = {
@@ -204,4 +224,5 @@ class UserAPIKeyLabelValues(BaseModel):
             "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
             "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
             "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
+            "fallback_model": {"alias": UserAPIKeyLabelNames.FALLBACK_MODEL},
         }
