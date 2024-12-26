@@ -278,7 +278,7 @@ def test_completions_with_sync_http_handler(monkeypatch):
         assert response.to_dict() == expected_response_json
 
         mock_post.assert_called_once_with(
-            f"{base_url}/chat/completions",
+            url=f"{base_url}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
