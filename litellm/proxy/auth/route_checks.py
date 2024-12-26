@@ -192,6 +192,8 @@ class RouteChecks:
             return True
         if "/azure/" in route:
             return True
+        if "/openai/" in route:
+            return True
         return False
 
     @staticmethod
