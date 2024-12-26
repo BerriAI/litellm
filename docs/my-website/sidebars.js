@@ -99,8 +99,13 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Spend Tracking + Budgets",
-          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+          label: "Spend Tracking",
+          items: ["proxy/cost_tracking", "proxy/custom_pricing", "proxy/billing",],
+        },
+        {
+          type: "category",
+          label: "Budgets + Rate Limits",
+          items: ["proxy/users", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/customers"],
         },
         {
           type: "link",
@@ -135,9 +140,17 @@ const sidebars = {
             "oidc"
           ]
         },
+        {
+          type: "category",
+          label: "Create Custom Plugins",
+          description: "Modify requests, responses, and more",
+          items: [
+            "proxy/call_hooks",
+            "proxy/rules", 
+          ]
+        },
         "proxy/caching",
-        "proxy/call_hooks",
-        "proxy/rules", 
+        
       ]
     },
     {
