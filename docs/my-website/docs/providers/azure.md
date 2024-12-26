@@ -3,7 +3,17 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Quick Start
+# Azure OpenAI
+
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
+| Provider Route on LiteLLM | `azure/` |
+| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/completions`](#azure-instruct-models), [`/embeddings`](../embedding/supported_embedding#azure-openai-embedding-models), `/audio/speech`, [`/audio/transcriptions`](#azure-text-to-speech-tts), `/fine_tuning`, [`/batches`](#batches-api), `/files`, `/images` |
+| Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
+
 ## API Keys, Params
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
