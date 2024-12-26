@@ -790,6 +790,19 @@ async def test_key_update_with_model_specific_params(prisma_client):
     )
     from litellm.proxy._types import UpdateKeyRequest
 
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(models=["gpt-4"]),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+
+    generated_key = new_key.key
+    token_hash = new_key.token_id
+    print(generated_key)
+
     request = Request(scope={"type": "http"})
     request._url = URL(url="/update/key")
 
@@ -820,12 +833,12 @@ async def test_key_update_with_model_specific_params(prisma_client):
         "guardrails": None,
         "blocked": None,
         "aliases": {},
-        "key": "a4aec05513e35d8b006d46b045272c339c749b423a60c5688ffc8ce701540d06",
+        "key": token_hash,
         "budget_id": None,
         "key_name": "sk-...2GWA",
         "expires": None,
-        "token_id": "a4aec05513e35d8b006d46b045272c339c749b423a60c5688ffc8ce701540d06",
+        "token_id": token_hash,
         "litellm_budget_table": None,
-        "token": "a4aec05513e35d8b006d46b045272c339c749b423a60c5688ffc8ce701540d06",
+        "token": token_hash,
     }
     await update_key_fn(request=request, data=UpdateKeyRequest(**args))
