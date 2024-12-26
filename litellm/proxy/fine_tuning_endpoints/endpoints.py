@@ -9,7 +9,7 @@ import asyncio
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
