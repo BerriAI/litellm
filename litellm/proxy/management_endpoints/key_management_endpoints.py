@@ -238,6 +238,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
+    - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
