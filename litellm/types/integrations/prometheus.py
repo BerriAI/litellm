@@ -64,6 +64,7 @@ class UserAPIKeyLabelNames(Enum):
     API_PROVIDER = "api_provider"
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
+    STATUS_CODE = "status_code"
 
 
 class PrometheusMetricLabels(Enum):
@@ -89,6 +90,17 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
     ]
 
+    litellm_proxy_total_requests_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.STATUS_CODE.value,
+    ]
+
 
 from typing import List, Optional
 
@@ -111,6 +123,7 @@ class UserAPIKeyLabelValues(BaseModel):
     api_provider: Optional[str] = None
     exception_status: Optional[str] = None
     exception_class: Optional[str] = None
+    status_code: Optional[str] = None
 
     class Config:
         fields = {
@@ -128,4 +141,5 @@ class UserAPIKeyLabelValues(BaseModel):
             "api_provider": {"alias": UserAPIKeyLabelNames.API_PROVIDER},
             "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
             "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
+            "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
         }

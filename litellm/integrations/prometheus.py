@@ -52,16 +52,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_proxy_total_requests_metric = Counter(
                 name="litellm_proxy_total_requests_metric",
                 documentation="Total number of requests made to the proxy server - track number of client side requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    REQUESTED_MODEL,
-                    "team",
-                    "team_alias",
-                    "user",
-                    STATUS_CODE,
-                ],
+                labelnames=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
             )
 
             # request latency metrics
@@ -401,6 +392,17 @@ class PrometheusLogger(CustomLogger):
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
         )
 
+        enum_values = UserAPIKeyLabelValues(
+            end_user=end_user_id,
+            hashed_api_key=user_api_key,
+            api_key_alias=user_api_key_alias,
+            requested_model=model,
+            team=user_api_team,
+            team_alias=user_api_team_alias,
+            user=user_id,
+            status_code="200",
+        )
+
         if (
             user_api_key is not None
             and isinstance(user_api_key, str)
@@ -476,16 +478,11 @@ class PrometheusLogger(CustomLogger):
         if (
             standard_logging_payload["stream"] is True
         ):  # log successful streaming requests from logging event hook.
-            self.litellm_proxy_total_requests_metric.labels(
-                end_user=end_user_id,
-                hashed_api_key=user_api_key,
-                api_key_alias=user_api_key_alias,
-                requested_model=model,
-                team=user_api_team,
-                team_alias=user_api_team_alias,
-                user=user_id,
-                status_code="200",
-            ).inc()
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
+                enum_values=enum_values,
+            )
+            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
 
     def _increment_token_metrics(
         self,
@@ -792,6 +789,17 @@ class PrometheusLogger(CustomLogger):
                 ] + EXCEPTION_LABELS,
         """
         try:
+            enum_values = UserAPIKeyLabelValues(
+                end_user=user_api_key_dict.end_user_id,
+                user=user_api_key_dict.user_id,
+                hashed_api_key=user_api_key_dict.api_key,
+                api_key_alias=user_api_key_dict.key_alias,
+                team=user_api_key_dict.team_id,
+                team_alias=user_api_key_dict.team_alias,
+                requested_model=request_data.get("model", ""),
+                status_code=getattr(original_exception, "status_code", None),
+                exception_class=str(original_exception.__class__.__name__),
+            )
             self.litellm_proxy_failed_requests_metric.labels(
                 end_user=user_api_key_dict.end_user_id,
                 hashed_api_key=user_api_key_dict.api_key,
@@ -804,16 +812,11 @@ class PrometheusLogger(CustomLogger):
                 exception_class=str(original_exception.__class__.__name__),
             ).inc()
 
-            self.litellm_proxy_total_requests_metric.labels(
-                end_user=user_api_key_dict.end_user_id,
-                hashed_api_key=user_api_key_dict.api_key,
-                api_key_alias=user_api_key_dict.key_alias,
-                requested_model=request_data.get("model", ""),
-                team=user_api_key_dict.team_id,
-                team_alias=user_api_key_dict.team_alias,
-                user=user_api_key_dict.user_id,
-                status_code=str(getattr(original_exception, "status_code", None)),
-            ).inc()
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
+                enum_values=enum_values,
+            )
+            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
             pass
         except Exception as e:
             verbose_logger.exception(
@@ -828,7 +831,7 @@ class PrometheusLogger(CustomLogger):
         Proxy level tracking - triggered when the proxy responds with a success response to the client
         """
         try:
-            self.litellm_proxy_total_requests_metric.labels(
+            enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 hashed_api_key=user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
@@ -837,7 +840,12 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_key_dict.team_alias,
                 user=user_api_key_dict.user_id,
                 status_code="200",
-            ).inc()
+            )
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
+                enum_values=enum_values,
+            )
+            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
