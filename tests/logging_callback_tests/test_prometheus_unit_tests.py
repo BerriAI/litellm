@@ -496,7 +496,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         user="test_user",
-        exception_status=429,
+        exception_status="429",
         exception_class="RateLimitError",
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()

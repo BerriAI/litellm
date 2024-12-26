@@ -795,6 +795,7 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_key_dict.team_alias,
                 requested_model=request_data.get("model", ""),
                 status_code=str(getattr(original_exception, "status_code", None)),
+                exception_status=str(getattr(original_exception, "status_code", None)),
                 exception_class=str(original_exception.__class__.__name__),
                 tags=_tags,
             )
