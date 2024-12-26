@@ -419,8 +419,11 @@ def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]
         if "model_rpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_rpm_limit"]
     elif user_api_key_dict.model_max_budget:
-        if "rpm_limit" in user_api_key_dict.model_max_budget:
-            return user_api_key_dict.model_max_budget["rpm_limit"]
+        model_rpm_limit: Dict[str, Any] = {}
+        for model, budget in user_api_key_dict.model_max_budget.items():
+            if "rpm_limit" in budget and budget["rpm_limit"] is not None:
+                model_rpm_limit[model] = budget["rpm_limit"]
+        return model_rpm_limit
 
     return None
 
