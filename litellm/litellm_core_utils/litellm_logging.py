@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
+    FineTuningJob,
     HttpxBinaryResponseContent,
 )
 from litellm.types.rerank import RerankResponse
@@ -760,6 +761,7 @@ class Logging(LiteLLMLoggingBaseClass):
             HttpxBinaryResponseContent,
             RerankResponse,
             Batch,
+            FineTuningJob,
         ],
         cache_hit: Optional[bool] = None,
     ) -> Optional[float]:
@@ -877,6 +879,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
                     or isinstance(result, RerankResponse)
                     or isinstance(result, Batch)
+                    or isinstance(result, FineTuningJob)
                 ):
                     ## RESPONSE COST ##
                     self.model_call_details["response_cost"] = (
