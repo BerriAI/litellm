@@ -2,23 +2,17 @@
 Support for gpt model family 
 """
 
-from typing import List, Optional, Union, cast
+from typing import List, Optional, Union
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    convert_content_list_to_str,
-)
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    AllPromptValues,
-    OpenAITextCompletionUserMessage,
-)
+from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
-from .utils import is_tokens_or_list_of_tokens
+from .utils import _transform_prompt
 
 
-class OpenAITextCompletionConfig(OpenAIGPTConfig):
+class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/completions/create
 
@@ -84,35 +78,6 @@ class OpenAITextCompletionConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def _transform_prompt(
-        self,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
-    ) -> AllPromptValues:
-        if len(messages) == 1:  # base case
-            message_content = messages[0].get("content")
-            if (
-                message_content
-                and isinstance(message_content, list)
-                and is_tokens_or_list_of_tokens(message_content)
-            ):
-                openai_prompt: AllPromptValues = cast(AllPromptValues, message_content)
-            else:
-                openai_prompt = ""
-                content = convert_content_list_to_str(
-                    cast(AllMessageValues, messages[0])
-                )
-                openai_prompt += content
-        else:
-            prompt_str_list: List[str] = []
-            for m in messages:
-                try:  # expect list of int/list of list of int to be a 1 message array only.
-                    content = convert_content_list_to_str(cast(AllMessageValues, m))
-                    prompt_str_list.append(content)
-                except Exception as e:
-                    raise e
-            openai_prompt = prompt_str_list
-        return openai_prompt
-
     def convert_to_chat_model_response_object(
         self,
         response_object: Optional[TextCompletionResponse] = None,
@@ -174,3 +139,17 @@ class OpenAITextCompletionConfig(OpenAIGPTConfig):
             "top_logprobs",
             "extra_headers",
         ]
+
+    def transform_text_completion_request(
+        self,
+        model: str,
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        optional_params: dict,
+        headers: dict,
+    ) -> dict:
+        prompt = _transform_prompt(messages)
+        return {
+            "model": model,
+            "prompt": prompt,
+            **optional_params,
+        }
