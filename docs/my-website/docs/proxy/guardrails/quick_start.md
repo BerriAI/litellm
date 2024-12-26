@@ -114,6 +114,88 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 
 ## Advanced
+
+### ✨ Pass additional parameters to guardrail
+
+:::info
+
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+
+Use this to pass additional parameters to the guardrail API call. e.g. things like success threshold. **[See `guardrails` spec for more details](#spec-guardrails-parameter)**
+
+
+<Tabs>
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+Set `guardrails={"aporia-pre-guard": {"extra_body": {"success_threshold": 0.9}}}` to pass additional parameters to the guardrail
+
+In this example `success_threshold=0.9` is passed to the `aporia-pre-guard` guardrail request body
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+      "guardrails": [
+        "aporia-pre-guard": {
+          "extra_body": {
+            "success_threshold": 0.9
+          }
+        }
+      ]
+    }
+
+)
+
+print(response)
+```
+</TabItem>
+
+
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "guardrails": [
+      "aporia-pre-guard": {
+        "extra_body": {
+          "success_threshold": 0.9
+        }
+      }
+    ]
+}'
+```
+</TabItem>
+
+
+</Tabs>
+
+
 ### ✨ Control Guardrails per Project (API Key)
 
 :::info
@@ -252,4 +334,43 @@ Expected response
 {
     "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
 }
+```
+
+## Spec: `guardrails` Parameter
+
+The `guardrails` parameter can be passed to any LiteLLM Proxy endpoint (`/chat/completions`, `/completions`, `/embeddings`).
+
+### Format Options
+
+1. Simple List Format:
+```python
+"guardrails": [
+    "aporia-pre-guard",
+    "aporia-post-guard"
+]
+```
+
+2. Advanced Dictionary Format:
+
+In this format the dictionary key is `guardrail_name` you want to run
+```python
+"guardrails": {
+    "aporia-pre-guard": {
+        "extra_body": {
+            "success_threshold": 0.9,
+            "other_param": "value"
+        }
+    }
+}
+```
+
+### Type Definition
+```python
+guardrails: Union[
+    List[str],                              # Simple list of guardrail names
+    Dict[str, DynamicGuardrailParams]       # Advanced configuration
+]
+
+class DynamicGuardrailParams:
+    extra_body: Dict[str, Any]              # Additional parameters for the guardrail
 ```
