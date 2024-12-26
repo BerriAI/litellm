@@ -250,10 +250,13 @@ response = transcription(
 
 ```yaml
 model_list:
-  - model_name: fireworks-whisper-v3
+  - model_name: whisper-v3
     litellm_params:
       model: fireworks_ai/whisper-v3
-      api_key: "os.environ/FIREWORKS_AI_API_KEY"
+      api_base: https://audio-prod.us-virginia-1.direct.fireworks.ai/v1
+      api_key: os.environ/FIREWORKS_API_KEY
+    model_info:
+      mode: audio_transcription
 ```
 
 2. Start Proxy
