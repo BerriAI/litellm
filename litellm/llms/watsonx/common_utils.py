@@ -53,7 +53,9 @@ def generate_iam_token(api_key=None, **params) -> str:
             headers,
             data,
         )
-        response = httpx.post(iam_token_url, data=data, headers=headers)
+        response = litellm.module_level_client.post(
+            url=iam_token_url, data=data, headers=headers
+        )
         response.raise_for_status()
         json_data = response.json()
 
@@ -165,10 +167,13 @@ class IBMWatsonXMixin:
         optional_params: Dict,
         api_key: Optional[str] = None,
     ) -> Dict:
-        headers = {
+        default_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+        if "Authorization" in headers:
+            return {**default_headers, **headers}
         token = cast(Optional[str], optional_params.get("token"))
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -176,7 +181,7 @@ class IBMWatsonXMixin:
             token = _generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
-        return headers
+        return {**default_headers, **headers}
 
     def _get_base_url(self, api_base: Optional[str]) -> str:
         url = (
