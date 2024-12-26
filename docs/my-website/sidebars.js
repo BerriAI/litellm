@@ -154,7 +154,11 @@ const sidebars = {
         "providers/openai", 
         "providers/text_completion_openai",
         "providers/openai_compatible",
-        "providers/azure", 
+        {
+          type: "category",
+          label: "Azure",
+          items: ["providers/azure", "providers/azure_batch"]
+        },
         "providers/azure_ai", 
         "providers/vertex", 
         "providers/gemini", 
