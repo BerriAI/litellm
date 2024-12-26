@@ -150,4 +150,23 @@ print("list_batches_response=", list_batches_response)
 ### [Vertex AI](./providers/vertex#batch-apis)
 
 
+## How Cost Tracking for Batches API Works
+
+LiteLLM tracks batch processing costs by logging two key events:
+
+| Event Type | Description | When it's Logged |
+|------------|-------------|------------------|
+| `acreate_batch` | Initial batch creation | When batch request is submitted |
+| `batch_success` | Final usage and cost | When batch processing completes |
+
+Cost calculation:
+
+- LiteLLM polls the batch status until completion
+- Upon completion, it aggregates usage and costs from all responses in the output file
+- Total `token` and `response_cost` reflect the combined metrics across all batch responses
+
+
+
+
+
 ## [Swagger API Reference](https://litellm-api.up.railway.app/#/batch)
