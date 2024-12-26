@@ -171,6 +171,7 @@ def create_fine_tuning_job(
             response = openai_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
+                api_version=optional_params.api_version,
                 organization=organization,
                 create_fine_tuning_job_data=create_fine_tuning_job_data_dict,
                 timeout=timeout,
@@ -223,6 +224,7 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                organization=optional_params.organization,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
@@ -374,6 +376,7 @@ def cancel_fine_tuning_job(
             response = openai_fine_tuning_apis_instance.cancel_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
+                api_version=optional_params.api_version,
                 organization=organization,
                 fine_tuning_job_id=fine_tuning_job_id,
                 timeout=timeout,
@@ -412,6 +415,7 @@ def cancel_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                organization=optional_params.organization,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -533,6 +537,7 @@ def list_fine_tuning_jobs(
             response = openai_fine_tuning_apis_instance.list_fine_tuning_jobs(
                 api_base=api_base,
                 api_key=api_key,
+                api_version=optional_params.api_version,
                 organization=organization,
                 after=after,
                 limit=limit,
@@ -573,6 +578,7 @@ def list_fine_tuning_jobs(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                organization=optional_params.organization,
             )
         else:
             raise litellm.exceptions.BadRequestError(
