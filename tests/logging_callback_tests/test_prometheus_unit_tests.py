@@ -794,3 +794,25 @@ def test_increment_deployment_cooled_down(prometheus_logger):
         "gpt-3.5-turbo", "model-123", "https://api.openai.com", "openai", "429"
     )
     prometheus_logger.litellm_deployment_cooled_down.labels().inc.assert_called_once()
+
+
+def test_prometheus_factory(monkeypatch):
+    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    monkeypatch.setattr(
+        "litellm.disable_end_user_cost_tracking_prometheus_only",
+        True,
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        end_user="test_end_user",
+        api_key_hash="test_hash",
+        api_key_alias="test_alias",
+    )
+    supported_labels = ["end_user", "api_key_hash", "api_key_alias"]
+    returned_dict = prometheus_label_factory(
+        supported_enum_labels=supported_labels, enum_values=enum_values
+    )
+
+    assert returned_dict["end_user"] == None
