@@ -281,7 +281,7 @@ def create_fine_tuning_job(
 
 async def acancel_fine_tuning_job(
     fine_tuning_job_id: str,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -438,7 +438,7 @@ def cancel_fine_tuning_job(
 async def alist_fine_tuning_jobs(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
