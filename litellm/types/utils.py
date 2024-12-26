@@ -1512,6 +1512,7 @@ class StandardLoggingPayload(TypedDict):
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int

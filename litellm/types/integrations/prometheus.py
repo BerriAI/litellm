@@ -1,4 +1,7 @@
 from enum import Enum
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
@@ -61,3 +64,61 @@ class UserAPIKeyLabelNames(Enum):
     API_PROVIDER = "api_provider"
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
+
+
+class PrometheusMetricLabels(Enum):
+    litellm_llm_api_latency_metric = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_request_total_latency_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+
+class UserAPIKeyLabelValues(BaseModel):
+    end_user: Optional[str] = Field(None, alias=UserAPIKeyLabelNames.END_USER.value)
+    user: Optional[str] = Field(None, alias=UserAPIKeyLabelNames.USER.value)
+    hashed_api_key: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.API_KEY_HASH.value
+    )
+    api_key_alias: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.API_KEY_ALIAS.value
+    )
+    team: Optional[str] = Field(None, alias=UserAPIKeyLabelNames.TEAM.value)
+    team_alias: Optional[str] = Field(None, alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)
+    requested_model: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value
+    )
+    model: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value
+    )
+    litellm_model_name: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value
+    )
+    tags: List[str] = []
+    model_id: Optional[str] = Field(None, alias=UserAPIKeyLabelNames.MODEL_ID.value)
+    api_base: Optional[str] = Field(None, alias=UserAPIKeyLabelNames.API_BASE.value)
+    api_provider: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.API_PROVIDER.value
+    )
+    exception_status: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.EXCEPTION_STATUS.value
+    )
+    exception_class: Optional[str] = Field(
+        None, alias=UserAPIKeyLabelNames.EXCEPTION_CLASS.value
+    )
