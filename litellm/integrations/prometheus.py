@@ -37,16 +37,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_proxy_failed_requests_metric = Counter(
                 name="litellm_proxy_failed_requests_metric",
                 documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    REQUESTED_MODEL,
-                    "team",
-                    "team_alias",
-                    "user",
-                ]
-                + EXCEPTION_LABELS,
+                labelnames=PrometheusMetricLabels.litellm_proxy_failed_requests_metric.value,
             )
 
             self.litellm_proxy_total_requests_metric = Counter(
@@ -800,18 +791,11 @@ class PrometheusLogger(CustomLogger):
                 status_code=str(getattr(original_exception, "status_code", None)),
                 exception_class=str(original_exception.__class__.__name__),
             )
-
-            self.litellm_proxy_failed_requests_metric.labels(
-                end_user=user_api_key_dict.end_user_id,
-                hashed_api_key=user_api_key_dict.api_key,
-                api_key_alias=user_api_key_dict.key_alias,
-                requested_model=request_data.get("model", ""),
-                team=user_api_key_dict.team_id,
-                team_alias=user_api_key_dict.team_alias,
-                user=user_api_key_dict.user_id,
-                exception_status=getattr(original_exception, "status_code", None),
-                exception_class=str(original_exception.__class__.__name__),
-            ).inc()
+            _labels = prometheus_label_factory(
+                supported_enum_labels=PrometheusMetricLabels.litellm_proxy_failed_requests_metric.value,
+                enum_values=enum_values,
+            )
+            self.litellm_proxy_failed_requests_metric.labels(**_labels).inc()
 
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
