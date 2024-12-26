@@ -288,7 +288,7 @@ async def list_fine_tuning_jobs(
     tags=["fine-tuning"],
     summary="✨ (Enterprise) Cancel Fine-Tuning Jobs",
 )
-async def retrieve_fine_tuning_job(
+async def cancel_fine_tuning_job(
     request: Request,
     fastapi_response: Response,
     fine_tuning_job_id: str,
