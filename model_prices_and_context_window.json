@@ -4486,8 +4486,8 @@
         "mode": "chat"
     },
     "openrouter/deepseek/deepseek-chat": {
-        "max_tokens": 4096,
-        "max_input_tokens": 32000,
+        "max_tokens": 8192,
+        "max_input_tokens": 66000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000014,
         "output_cost_per_token": 0.00000028,
