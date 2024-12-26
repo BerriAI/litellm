@@ -376,7 +376,7 @@ async def generate_key_fn(  # noqa: PLR0915
                                 )
 
         # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
-        _budget_id = None
+        _budget_id = data.budget_id
         if prisma_client is not None and data.soft_budget is not None:
             # create the Budget Row for the LiteLLM Verification Token
             budget_row = LiteLLM_BudgetTable(
@@ -1135,6 +1135,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                 data=key_data, table_name="key"
             )
             key_data["token_id"] = getattr(create_key_response, "token", None)
+            key_data["litellm_budget_table"] = getattr(
+                create_key_response, "litellm_budget_table", None
+            )
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(

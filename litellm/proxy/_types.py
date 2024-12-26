@@ -632,6 +632,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 
 class _GenerateKeyRequest(GenerateRequestBase):
     key: Optional[str] = None
+    budget_id: Optional[str] = None
 
 
 class GenerateKeyRequest(_GenerateKeyRequest):
@@ -645,6 +646,7 @@ class GenerateKeyResponse(_GenerateKeyRequest):
     expires: Optional[datetime]
     user_id: Optional[str] = None
     token_id: Optional[str] = None
+    litellm_budget_table: Optional[Any] = None
 
     @model_validator(mode="before")
     @classmethod
