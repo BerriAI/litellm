@@ -351,15 +351,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_requests_metric = Counter(
                 name="litellm_requests_metric",
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=PrometheusMetricLabels.litellm_requests_metric.value,
             )
 
         except Exception as e:
@@ -437,6 +429,7 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias=user_api_team_alias,
             user_id=user_id,
             response_cost=response_cost,
+            enum_values=enum_values,
         )
 
         # input, output, total token metrics
@@ -609,16 +602,14 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias: Optional[str],
         user_id: Optional[str],
         response_cost: float,
+        enum_values: UserAPIKeyLabelValues,
     ):
-        self.litellm_requests_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc()
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.litellm_requests_metric.value,
+            enum_values=enum_values,
+        )
+        self.litellm_requests_metric.labels(**_labels).inc()
+
         self.litellm_spend_metric.labels(
             end_user_id,
             user_api_key,
