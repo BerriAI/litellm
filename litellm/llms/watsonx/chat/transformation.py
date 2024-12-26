@@ -102,9 +102,9 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
             endpoint = (
-                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value
+                WatsonXAIEndpoint.CHAT_STREAM.value
                 if stream
-                else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
+                else WatsonXAIEndpoint.CHAT.value
             )
         url = url.rstrip("/") + endpoint
 
