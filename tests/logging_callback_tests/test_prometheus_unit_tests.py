@@ -62,6 +62,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         model="gpt-3.5-turbo",
         model_id="model-123",
         model_group="openai-gpt",
+        custom_llm_provider="openai",
         api_base="https://api.openai.com",
         metadata=StandardLoggingMetadata(
             user_api_key_hash="test_hash",
@@ -793,3 +794,29 @@ def test_increment_deployment_cooled_down(prometheus_logger):
         "gpt-3.5-turbo", "model-123", "https://api.openai.com", "openai", "429"
     )
     prometheus_logger.litellm_deployment_cooled_down.labels().inc.assert_called_once()
+
+
+@pytest.mark.parametrize("disable_end_user_tracking", [True, False])
+def test_prometheus_factory(monkeypatch, disable_end_user_tracking):
+    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    monkeypatch.setattr(
+        "litellm.disable_end_user_cost_tracking_prometheus_only",
+        disable_end_user_tracking,
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        end_user="test_end_user",
+        api_key_hash="test_hash",
+        api_key_alias="test_alias",
+    )
+    supported_labels = ["end_user", "api_key_hash", "api_key_alias"]
+    returned_dict = prometheus_label_factory(
+        supported_enum_labels=supported_labels, enum_values=enum_values
+    )
+
+    if disable_end_user_tracking:
+        assert returned_dict["end_user"] == None
+    else:
+        assert returned_dict["end_user"] == "test_end_user"

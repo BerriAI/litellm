@@ -1,4 +1,7 @@
 from enum import Enum
+from typing import List, Optional, Union
+
+from pydantic import BaseModel, Field
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
@@ -61,3 +64,82 @@ class UserAPIKeyLabelNames(Enum):
     API_PROVIDER = "api_provider"
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
+    STATUS_CODE = "status_code"
+
+
+class PrometheusMetricLabels(Enum):
+    litellm_llm_api_latency_metric = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_request_total_latency_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_proxy_total_requests_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.STATUS_CODE.value,
+    ]
+
+
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class UserAPIKeyLabelValues(BaseModel):
+    end_user: Optional[str] = None
+    user: Optional[str] = None
+    hashed_api_key: Optional[str] = None
+    api_key_alias: Optional[str] = None
+    team: Optional[str] = None
+    team_alias: Optional[str] = None
+    requested_model: Optional[str] = None
+    model: Optional[str] = None
+    litellm_model_name: Optional[str] = None
+    tags: List[str] = []
+    model_id: Optional[str] = None
+    api_base: Optional[str] = None
+    api_provider: Optional[str] = None
+    exception_status: Optional[str] = None
+    exception_class: Optional[str] = None
+    status_code: Optional[str] = None
+
+    class Config:
+        fields = {
+            "end_user": {"alias": UserAPIKeyLabelNames.END_USER},
+            "user": {"alias": UserAPIKeyLabelNames.USER},
+            "hashed_api_key": {"alias": UserAPIKeyLabelNames.API_KEY_HASH},
+            "api_key_alias": {"alias": UserAPIKeyLabelNames.API_KEY_ALIAS},
+            "team": {"alias": UserAPIKeyLabelNames.TEAM},
+            "team_alias": {"alias": UserAPIKeyLabelNames.TEAM_ALIAS},
+            "requested_model": {"alias": UserAPIKeyLabelNames.REQUESTED_MODEL},
+            "model": {"alias": UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME},
+            "litellm_model_name": {"alias": UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME},
+            "model_id": {"alias": UserAPIKeyLabelNames.MODEL_ID},
+            "api_base": {"alias": UserAPIKeyLabelNames.API_BASE},
+            "api_provider": {"alias": UserAPIKeyLabelNames.API_PROVIDER},
+            "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
+            "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
+            "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
+        }

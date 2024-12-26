@@ -13,6 +13,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+END_USER_ID = "my-test-user-34"
+
 
 async def make_bad_chat_completion_request(session, key):
     url = "http://0.0.0.0:4000/chat/completions"
@@ -41,6 +43,7 @@ async def make_good_chat_completion_request(session, key):
         "model": "fake-openai-endpoint",
         "messages": [{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
         "tags": ["teamB"],
+        "user": END_USER_ID,  # test if disable end user tracking for prometheus works
     }
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -142,6 +145,8 @@ async def test_proxy_success_metrics():
             metrics = await response.text()
 
         print("/metrics", metrics)
+
+        assert END_USER_ID not in metrics
 
         # Check if the success metric is present and correct
         assert (
