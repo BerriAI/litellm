@@ -797,9 +797,10 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 requested_model=request_data.get("model", ""),
-                status_code=getattr(original_exception, "status_code", None),
+                status_code=str(getattr(original_exception, "status_code", None)),
                 exception_class=str(original_exception.__class__.__name__),
             )
+
             self.litellm_proxy_failed_requests_metric.labels(
                 end_user=user_api_key_dict.end_user_id,
                 hashed_api_key=user_api_key_dict.api_key,
