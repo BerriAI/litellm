@@ -6329,8 +6329,10 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseTextCompletionConfig:
-        if litellm.LlmProviders.FIREWORKS_AI == provider:
+        if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAITextCompletionConfig()
+        elif LlmProviders.TOGETHER_AI == provider:
+            return litellm.TogetherAITextCompletionConfig()
         return litellm.OpenAITextCompletionConfig()
 
 

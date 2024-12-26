@@ -1040,6 +1040,7 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.together_ai.chat import TogetherAIConfig
+from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
