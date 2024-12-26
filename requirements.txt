@@ -21,9 +21,9 @@ langfuse==2.45.0 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 orjson==3.10.12 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
-fastapi-sso==0.10.0 # admin UI, SSO
+fastapi-sso==0.16.0 # admin UI, SSO
 pyjwt[crypto]==2.9.0
-python-multipart==0.0.9 # admin UI
+python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 # for azure content safety
@@ -33,7 +33,7 @@ opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 sentry_sdk==2.2.1 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
-cryptography==42.0.7
+cryptography==43.0.1
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
