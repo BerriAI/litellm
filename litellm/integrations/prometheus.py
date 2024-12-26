@@ -310,7 +310,13 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_latency_per_output_token = Histogram(
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
-                labelnames=_logged_llm_labels + team_and_key_labels,
+                labelnames=PrometheusMetricLabels.litellm_deployment_latency_per_output_token.value,
+            )
+
+            self.litellm_deployment_latency_per_output_token_by_tag = Histogram(
+                name="litellm_deployment_latency_per_output_token_by_tag",
+                documentation="LLM Deployment Analytics - Latency per output token by custom metadata tags",
+                labelnames=PrometheusMetricLabels.litellm_deployment_latency_per_output_token_by_tag.value,
             )
 
             self.litellm_deployment_successful_fallbacks = Counter(
@@ -481,7 +487,7 @@ class PrometheusLogger(CustomLogger):
 
         # set x-ratelimit headers
         self.set_llm_deployment_success_metrics(
-            kwargs, start_time, end_time, output_tokens
+            kwargs, start_time, end_time, enum_values, output_tokens
         )
 
         if (
@@ -989,6 +995,7 @@ class PrometheusLogger(CustomLogger):
         request_kwargs: dict,
         start_time,
         end_time,
+        enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
     ):
         try:
@@ -1119,21 +1126,12 @@ class PrometheusLogger(CustomLogger):
             latency_per_token = None
             if output_tokens is not None and output_tokens > 0:
                 latency_per_token = _latency_seconds / output_tokens
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_deployment_latency_per_output_token.value,
+                    enum_values=enum_values,
+                )
                 self.litellm_deployment_latency_per_output_token.labels(
-                    litellm_model_name=litellm_model_name,
-                    model_id=model_id,
-                    api_base=api_base,
-                    api_provider=llm_provider,
-                    hashed_api_key=standard_logging_payload["metadata"][
-                        "user_api_key_hash"
-                    ],
-                    api_key_alias=standard_logging_payload["metadata"][
-                        "user_api_key_alias"
-                    ],
-                    team=standard_logging_payload["metadata"]["user_api_key_team_id"],
-                    team_alias=standard_logging_payload["metadata"][
-                        "user_api_key_team_alias"
-                    ],
+                    **_labels
                 ).observe(latency_per_token)
 
         except Exception as e:

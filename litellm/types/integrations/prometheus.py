@@ -131,6 +131,24 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TAG.value,
     ]
 
+    litellm_deployment_latency_per_output_token = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_latency_per_output_token_by_tag = (
+        litellm_deployment_latency_per_output_token
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
 
 from typing import List, Optional
 

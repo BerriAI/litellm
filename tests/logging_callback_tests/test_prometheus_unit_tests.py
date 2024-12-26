@@ -14,7 +14,7 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -584,6 +584,16 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         "standard_logging_object": standard_logging_payload,
     }
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
+
     start_time = datetime.now()
     end_time = start_time + timedelta(seconds=1)
     output_tokens = 10
@@ -594,6 +604,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         start_time=start_time,
         end_time=end_time,
         output_tokens=output_tokens,
+        enum_values=enum_values,
     )
 
     # Verify remaining requests metric
