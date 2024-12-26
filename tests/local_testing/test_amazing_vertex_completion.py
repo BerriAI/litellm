@@ -2210,7 +2210,7 @@ def test_vertexai_embedding_embedding_latest_input_type():
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_vertexai_aembedding():
+async def test_avertexai_aembedding():
     try:
         load_vertex_ai_credentials()
         # litellm.set_verbose=True
@@ -3048,7 +3048,7 @@ def test_custom_api_base(api_base):
 
 @pytest.mark.asyncio
 @pytest.mark.respx
-async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
+async def test_avertexai_embedding_finetuned(respx_mock: MockRouter):
     """
     Tests that:
     - Request URL and body are correctly formatted for Vertex AI embeddings
@@ -3116,7 +3116,7 @@ async def test_vertexai_embedding_finetuned(respx_mock: MockRouter):
 @pytest.mark.parametrize("max_retries", [None, 3])
 @pytest.mark.asyncio
 @pytest.mark.respx
-async def test_vertexai_model_garden_model_completion(
+async def test_avertexai_model_garden_model_completion(
     respx_mock: MockRouter, max_retries
 ):
     """
