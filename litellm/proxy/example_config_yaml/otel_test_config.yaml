@@ -36,7 +36,7 @@ model_list:
 
 litellm_settings:
   cache: true
-  callbacks: ["otel", "prometheus"]
+  callbacks: ["otel", "prometheus", "datadog"]
   disable_end_user_cost_tracking_prometheus_only: True
 
 guardrails:
