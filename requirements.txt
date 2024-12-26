@@ -2,7 +2,6 @@
 anyio==4.4.0 # openai + http req.
 httpx==0.27.0 # Pin Httpx dependency
 openai==1.55.3  # openai req. 
-fastapi==0.115.5 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
@@ -31,6 +30,7 @@ azure-storage-file-datalake==12.15.0 # for azure bucket storage logging
 opentelemetry-api==1.29.0
 opentelemetry-sdk==1.29.0
 opentelemetry-exporter-otlp==1.29.0
+fastapi==0.115.5 # server dep
 sentry_sdk==2.2.1 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==43.0.1
