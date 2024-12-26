@@ -614,7 +614,6 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
-    soft_budget: Optional[float] = None
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
     model_max_budget: Optional[dict] = (
@@ -622,7 +621,6 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
-    send_invite_email: Optional[bool] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
@@ -630,16 +628,17 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     aliases: Optional[dict] = {}
 
 
-class _GenerateKeyRequest(GenerateRequestBase):
+class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
-
-
-class GenerateKeyRequest(_GenerateKeyRequest):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
 
 
-class GenerateKeyResponse(_GenerateKeyRequest):
+class GenerateKeyRequest(KeyRequestBase):
+    soft_budget: Optional[float] = None
+
+
+class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
     expires: Optional[datetime]
@@ -669,7 +668,7 @@ class GenerateKeyResponse(_GenerateKeyRequest):
         return values
 
 
-class UpdateKeyRequest(GenerateKeyRequest):
+class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     key: str  # type: ignore

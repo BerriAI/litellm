@@ -554,7 +554,7 @@ async def update_key_fn(
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -592,7 +592,7 @@ async def update_key_fn(
     )
 
     try:
-        data_json: dict = data.model_dump(exclude_unset=True)
+        data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
         # get the row from db
         if prisma_client is None:
