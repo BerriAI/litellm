@@ -113,6 +113,13 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
     ]
 
+    litellm_proxy_failed_requests_by_tag_metric = (
+        litellm_proxy_failed_requests_metric
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
 
 from typing import List, Optional
 

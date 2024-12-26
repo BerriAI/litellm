@@ -3,7 +3,7 @@
 #    On success, log events to Prometheus
 import sys
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -38,6 +38,11 @@ class PrometheusLogger(CustomLogger):
                 name="litellm_proxy_failed_requests_metric",
                 documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
                 labelnames=PrometheusMetricLabels.litellm_proxy_failed_requests_metric.value,
+            )
+            self.litellm_proxy_failed_requests_by_tag_metric = Counter(
+                name="litellm_proxy_failed_requests_by_tag_metric",
+                documentation="Total number of failed responses from proxy - the client did not get a success response from litellm proxy",
+                labelnames=PrometheusMetricLabels.litellm_proxy_failed_requests_by_tag_metric.value,
             )
 
             self.litellm_proxy_total_requests_metric = Counter(
@@ -780,6 +785,7 @@ class PrometheusLogger(CustomLogger):
                 ] + EXCEPTION_LABELS,
         """
         try:
+            _tags = cast(List[str], request_data.get("tags") or [])
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -790,6 +796,7 @@ class PrometheusLogger(CustomLogger):
                 requested_model=request_data.get("model", ""),
                 status_code=str(getattr(original_exception, "status_code", None)),
                 exception_class=str(original_exception.__class__.__name__),
+                tags=_tags,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.litellm_proxy_failed_requests_metric.value,
@@ -797,12 +804,19 @@ class PrometheusLogger(CustomLogger):
             )
             self.litellm_proxy_failed_requests_metric.labels(**_labels).inc()
 
+            for tag in _tags:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_proxy_failed_requests_by_tag_metric.value,
+                    enum_values=enum_values,
+                    tag=tag,
+                )
+                self.litellm_proxy_failed_requests_by_tag_metric.labels(**_labels).inc()
+
             _labels = prometheus_label_factory(
                 supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
                 enum_values=enum_values,
             )
             self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
-            pass
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
@@ -1253,7 +1267,9 @@ class PrometheusLogger(CustomLogger):
 
 
 def prometheus_label_factory(
-    supported_enum_labels: List[str], enum_values: UserAPIKeyLabelValues
+    supported_enum_labels: List[str],
+    enum_values: UserAPIKeyLabelValues,
+    tag: Optional[str] = None,
 ) -> dict:
     """
     Returns a dictionary of label + values for prometheus.
@@ -1269,6 +1285,9 @@ def prometheus_label_factory(
         for label, value in enum_dict.items()
         if label in supported_enum_labels
     }
+
+    if tag and "tag" in supported_enum_labels:
+        filtered_labels["tag"] = tag
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
         filtered_labels["end_user"] = get_end_user_id_for_cost_tracking(
