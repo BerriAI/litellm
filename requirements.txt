@@ -2,6 +2,7 @@
 anyio==4.4.0 # openai + http req.
 httpx==0.27.0 # Pin Httpx dependency
 openai==1.55.3  # openai req. 
+starlette==0.40.0 # server dep
 fastapi==0.111.0 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
