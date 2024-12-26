@@ -548,6 +548,7 @@ async def update_key_fn(
     - key_alias: Optional[str] - User-friendly key alias
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
+    - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
