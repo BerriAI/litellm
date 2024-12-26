@@ -59,6 +59,13 @@ class PrometheusLogger(CustomLogger):
                 buckets=LATENCY_BUCKETS,
             )
 
+            self.litellm_request_total_latency_by_tag_metric = Histogram(
+                "litellm_request_total_latency_by_tag_metric",
+                "Total latency (seconds) for a request to LiteLLM by custom metadata tags",
+                labelnames=PrometheusMetricLabels.litellm_request_total_latency_by_tag_metric.value,
+                buckets=LATENCY_BUCKETS,
+            )
+
             self.litellm_llm_api_latency_metric = Histogram(
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
@@ -720,6 +727,16 @@ class PrometheusLogger(CustomLogger):
             self.litellm_request_total_latency_metric.labels(**_labels).observe(
                 total_time_seconds
             )
+
+            for tag in enum_values.tags:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_request_total_latency_by_tag_metric.value,
+                    enum_values=enum_values,
+                    tag=tag,
+                )
+                self.litellm_request_total_latency_by_tag_metric.labels(
+                    **_labels
+                ).observe(total_time_seconds)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload

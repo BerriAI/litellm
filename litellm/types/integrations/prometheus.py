@@ -120,6 +120,13 @@ class PrometheusMetricLabels(Enum):
         ]
     )
 
+    litellm_request_total_latency_by_tag_metric = (
+        litellm_request_total_latency_metric
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
 
 from typing import List, Optional
 
