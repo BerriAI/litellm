@@ -9,6 +9,7 @@ Docs: https://docs.together.ai/reference/completions-1
 from typing import Any, Callable, List, Optional, Union
 
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.utils import ModelResponse
 
@@ -27,16 +28,17 @@ class TogetherAITextCompletion(OpenAITextCompletion):
         model: str,
         messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
         timeout: float,
+        custom_llm_provider: str,
         logging_obj: Logging,
         optional_params: dict,
-        print_verbose: Optional[Callable[..., Any]] = None,
-        api_base: Optional[str] = None,
+        print_verbose: Callable[..., Any] | None = None,
+        api_base: str | None = None,
         acompletion: bool = False,
         litellm_params=None,
         logger_fn=None,
         client=None,
-        organization: Optional[str] = None,
-        headers: Optional[dict] = None,
+        organization: str | None = None,
+        headers: dict | None = None,
     ):
         prompt = together_ai_text_completion_global_config._transform_prompt(messages)
 
@@ -58,4 +60,5 @@ class TogetherAITextCompletion(OpenAITextCompletion):
             client=client,
             organization=organization,
             headers=headers,
+            custom_llm_provider=custom_llm_provider,
         )
