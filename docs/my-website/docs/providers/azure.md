@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 |-------|-------|
 | Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
 | Provider Route on LiteLLM | `azure/` |
-| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/completions`](#azure-instruct-models), [`/embeddings`](../embedding/supported_embedding#azure-openai-embedding-models), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
+| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/completions`](#azure-instruct-models), [`/embeddings`](../embedding/supported_embedding#azure-openai-embedding-models), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
 | Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
 
 ## API Keys, Params
