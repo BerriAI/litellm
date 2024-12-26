@@ -7,7 +7,9 @@ from litellm.exceptions import BadRequestError
 def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
-    request_type: Literal["chat_completion", "embeddings"] = "chat_completion",
+    request_type: Literal[
+        "chat_completion", "embeddings", "transcription"
+    ] = "chat_completion",
 ) -> Optional[list]:
     """
     Returns the supported openai params for a given model + provider
@@ -26,6 +28,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
         except BadRequestError:
             return None
+
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ollama":
@@ -39,6 +42,10 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "fireworks_ai":
         if request_type == "embeddings":
             return litellm.FireworksAIEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
+        elif request_type == "transcription":
+            return litellm.FireworksAIAudioTranscriptionConfig().get_supported_openai_params(
                 model=model
             )
         else:

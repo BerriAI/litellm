@@ -37,12 +37,15 @@ class OpenAIO1Config(OpenAIGPTConfig):
 
     def should_fake_stream(
         self,
-        model: str,
+        model: Optional[str],
         stream: Optional[bool],
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         if stream is not True:
             return False
+
+        if model is None:
+            return True
         supported_stream_models = ["o1-mini", "o1-preview"]
         for supported_model in supported_stream_models:
             if supported_model in model:

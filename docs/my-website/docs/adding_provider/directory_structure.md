@@ -14,6 +14,9 @@ litellm/llms/
     ├── embed/ # use when endpoint is equivalent to openai's `/v1/embeddings`
     │   ├── handler.py
     │   └── transformation.py
+    ├── audio_transcription/ # use when endpoint is equivalent to openai's `/v1/audio/transcriptions`
+    │   ├── handler.py
+    │   └── transformation.py
     └── rerank/ # use when endpoint is equivalent to cohere's `/rerank` endpoint.
         ├── handler.py
         └── transformation.py
