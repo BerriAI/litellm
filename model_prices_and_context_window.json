@@ -4362,7 +4362,11 @@
         "output_cost_per_token": 0.00000,
         "litellm_provider": "cohere",
         "mode": "embedding",
-        "supports_image_input": true
+        "supports_image_input": true,
+        "supports_embedding_image_input": true,
+        "metadata": {
+            "notes": "'supports_image_input' is a deprecated field. Use 'supports_embedding_image_input' instead."
+        }
     },
     "replicate/meta/llama-2-13b": {
         "max_tokens": 4096,
@@ -5110,8 +5114,12 @@
         "output_cost_per_token": 0.0,
         "litellm_provider": "bedrock", 
         "supports_image_input": true,
+        "supports_embedding_image_input": true,
         "mode": "embedding",
-        "source": "https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers?model=amazon.titan-image-generator-v1"
+        "source": "https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers?model=amazon.titan-image-generator-v1",
+        "metadata": {
+            "notes": "'supports_image_input' is a deprecated field. Use 'supports_embedding_image_input' instead."
+        }
     },
     "mistral.mistral-7b-instruct-v0:2": {
         "max_tokens": 8191,

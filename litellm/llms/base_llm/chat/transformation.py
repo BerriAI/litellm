@@ -73,7 +73,7 @@ class BaseConfig(ABC):
 
     def should_fake_stream(
         self,
-        model: str,
+        model: Optional[str],
         stream: Optional[bool],
         custom_llm_provider: Optional[str] = None,
     ) -> bool:

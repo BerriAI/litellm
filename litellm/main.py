@@ -127,7 +127,6 @@ from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
-from .llms.together_ai.completion.handler import TogetherAITextCompletion
 from .llms.vertex_ai import vertex_ai_non_gemini
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
@@ -183,7 +182,6 @@ openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
-together_ai_text_completions = TogetherAITextCompletion()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -1475,38 +1473,22 @@ def completion(  # type: ignore # noqa: PLR0915
                 prompt = " ".join([message["content"] for message in messages])  # type: ignore
 
             ## COMPLETION CALL
-            if custom_llm_provider == "together_ai":
-                _response = together_ai_text_completions.completion(
-                    model=model,
-                    messages=messages,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=api_key,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    client=client,  # pass AsyncOpenAI, OpenAI client
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    timeout=timeout,  # type: ignore
-                )
-            else:
-                _response = openai_text_completions.completion(
-                    model=model,
-                    messages=messages,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=api_key,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    client=client,  # pass AsyncOpenAI, OpenAI client
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    timeout=timeout,  # type: ignore
-                )
+            _response = openai_text_completions.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                acompletion=acompletion,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+            )
 
             if (
                 optional_params.get("stream", False) is False
@@ -3885,7 +3867,6 @@ async def atext_completion(
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "deepseek"
-            or custom_llm_provider == "fireworks_ai"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
@@ -4838,7 +4819,11 @@ def transcription(
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
         )
-    elif custom_llm_provider == "openai" or custom_llm_provider == "groq":
+    elif (
+        custom_llm_provider == "openai"
+        or custom_llm_provider == "groq"
+        or custom_llm_provider == "fireworks_ai"
+    ):
         api_base = (
             api_base
             or litellm.api_base

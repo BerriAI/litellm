@@ -16,7 +16,7 @@ import asyncio
 import logging
 
 import openai
-from test_gcs_bucket import load_vertex_ai_credentials
+from test_openai_batches_and_files import load_vertex_ai_credentials
 
 from litellm import create_fine_tuning_job
 from litellm._logging import verbose_logger

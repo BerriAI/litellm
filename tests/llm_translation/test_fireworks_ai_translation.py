@@ -6,9 +6,11 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-
+import litellm
+from litellm import transcription
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from base_llm_unit_tests import BaseLLMChatTest
+from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
 
@@ -90,3 +92,14 @@ class TestFireworksAIChatCompletion(BaseLLMChatTest):
         Fireworks AI raises a 500 BadRequest error when the request contains invalid utf-8 sequences.
         """
         pass
+
+
+class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
+    def get_base_audio_transcription_call_args(self) -> dict:
+        return {
+            "model": "fireworks_ai/whisper-v3",
+            "api_base": "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1",
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.FIREWORKS_AI

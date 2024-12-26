@@ -614,3 +614,7 @@ class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
+
+OpenAIAudioTranscriptionOptionalParams = Literal[
+    "language", "prompt", "temperature", "response_format", "timestamp_granularities"
+]
