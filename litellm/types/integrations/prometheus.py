@@ -159,6 +159,10 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.USER.value,
     ]
 
+    litellm_proxy_total_requests_by_tag_metric = litellm_proxy_total_requests_metric + [
+        UserAPIKeyLabelNames.TAG.value,
+    ]
+
 
 from typing import List, Optional
 

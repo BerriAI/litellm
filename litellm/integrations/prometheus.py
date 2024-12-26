@@ -51,6 +51,12 @@ class PrometheusLogger(CustomLogger):
                 labelnames=PrometheusMetricLabels.litellm_proxy_total_requests_metric.value,
             )
 
+            self.litellm_proxy_total_requests_by_tag_metric = Counter(
+                name="litellm_proxy_total_requests_by_tag_metric",
+                documentation="Total number of requests made to the proxy server - track number of client side requests by custom metadata tags",
+                labelnames=PrometheusMetricLabels.litellm_proxy_total_requests_by_tag_metric.value,
+            )
+
             # request latency metrics
             self.litellm_request_total_latency_metric = Histogram(
                 "litellm_request_total_latency_metric",
@@ -492,6 +498,14 @@ class PrometheusLogger(CustomLogger):
             )
             self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
 
+            for tag in enum_values.tags:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_by_tag_metric.value,
+                    enum_values=enum_values,
+                    tag=tag,
+                )
+                self.litellm_proxy_total_requests_by_tag_metric.labels(**_labels).inc()
+
     def _increment_token_metrics(
         self,
         standard_logging_payload: StandardLoggingPayload,
@@ -847,6 +861,14 @@ class PrometheusLogger(CustomLogger):
                 enum_values=enum_values,
             )
             self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
+
+            for tag in enum_values.tags:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_by_tag_metric.value,
+                    enum_values=enum_values,
+                    tag=tag,
+                )
+                self.litellm_proxy_total_requests_by_tag_metric.labels(**_labels).inc()
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
@@ -875,6 +897,14 @@ class PrometheusLogger(CustomLogger):
                 enum_values=enum_values,
             )
             self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
+
+            for tag in enum_values.tags:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=PrometheusMetricLabels.litellm_proxy_total_requests_by_tag_metric.value,
+                    enum_values=enum_values,
+                    tag=tag,
+                )
+                self.litellm_proxy_total_requests_by_tag_metric.labels(**_labels).inc()
         except Exception as e:
             verbose_logger.exception(
                 "prometheus Layer Error(): Exception occured - {}".format(str(e))
