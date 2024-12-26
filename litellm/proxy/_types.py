@@ -767,7 +767,7 @@ class DeleteUserRequest(LiteLLMPydanticObjectBase):
 AllowedModelRegion = Literal["eu", "us"]
 
 
-class BudgetNew(LiteLLMPydanticObjectBase):
+class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = Field(default=None, description="The unique budget id.")
     max_budget: Optional[float] = Field(
         default=None,
@@ -807,11 +807,11 @@ class CustomerBase(LiteLLMPydanticObjectBase):
     allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
     budget_id: Optional[str] = None
-    litellm_budget_table: Optional[BudgetNew] = None
+    litellm_budget_table: Optional[BudgetNewRequest] = None
     blocked: bool = False
 
 
-class NewCustomerRequest(BudgetNew):
+class NewCustomerRequest(BudgetNewRequest):
     """
     Create a new customer, allocate a budget to them
     """

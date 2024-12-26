@@ -26,11 +26,20 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
 )
 async def new_budget(
-    budget_obj: BudgetNew,
+    budget_obj: BudgetNewRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Create a new budget object. Can apply this to teams, orgs, end-users, keys.
+
+    Parameters:
+    - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+    - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
+    - max_budget: Optional[float] - The max budget for the budget.
+    - soft_budget: Optional[float] - The soft budget for the budget.
+    - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
+    - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
+    - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
@@ -57,11 +66,20 @@ async def new_budget(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_budget(
-    budget_obj: BudgetNew,
+    budget_obj: BudgetNewRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Create a new budget object. Can apply this to teams, orgs, end-users, keys.
+    Update an existing budget object.
+
+    Parameters:
+    - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
+    - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
+    - max_budget: Optional[float] - The max budget for the budget.
+    - soft_budget: Optional[float] - The soft budget for the budget.
+    - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
+    - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
+    - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
@@ -92,6 +110,9 @@ async def update_budget(
 async def info_budget(data: BudgetRequest):
     """
     Get the budget id specific information
+
+    Parameters:
+    - budgets: List[str] - The list of budget ids to get information for
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -125,6 +146,9 @@ async def budget_settings(
     Get list of configurable params + current value for a budget item + description of each field
 
     Used on Admin UI.
+
+    Query Parameters:
+    - budget_id: str - The budget id to get information for
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -166,7 +190,7 @@ async def budget_settings(
 
     return_val = []
 
-    for field_name, field_info in BudgetNew.model_fields.items():
+    for field_name, field_info in BudgetNewRequest.model_fields.items():
         if field_name in allowed_args:
 
             _stored_in_db = True
@@ -226,7 +250,12 @@ async def delete_budget(
     data: BudgetDeleteRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Delete budget"""
+    """
+    Delete budget
+
+    Parameters:
+    - id: str - The budget id to delete
+    """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
