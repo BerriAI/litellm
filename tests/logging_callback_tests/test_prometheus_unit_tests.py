@@ -62,6 +62,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         model="gpt-3.5-turbo",
         model_id="model-123",
         model_group="openai-gpt",
+        custom_llm_provider="openai",
         api_base="https://api.openai.com",
         metadata=StandardLoggingMetadata(
             user_api_key_hash="test_hash",
