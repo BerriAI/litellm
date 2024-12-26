@@ -182,6 +182,12 @@ class PrometheusMetricLabels(Enum):
         ]
     )
 
+    litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
+
+    litellm_deployment_failed_fallbacks_by_tag = (
+        litellm_deployment_successful_fallbacks_by_tag
+    )
+
 
 from typing import List, Optional
 
