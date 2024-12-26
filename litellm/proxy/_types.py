@@ -11,7 +11,9 @@ from typing_extensions import TypedDict
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
+    BudgetConfig,
     EmbeddingResponse,
+    GenericBudgetConfigType,
     ImageResponse,
     LiteLLMPydanticObjectBase,
     ModelResponse,
@@ -789,6 +791,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = Field(
         default=None,
         description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
+    )
+    model_max_budget: Optional[GenericBudgetConfigType] = Field(
+        default=None,
+        description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
 
 

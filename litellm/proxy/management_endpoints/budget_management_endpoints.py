@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import jsonify_object
 
 router = APIRouter()
 
@@ -49,9 +50,11 @@ async def new_budget(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    budget_obj_json = budget_obj.model_dump(exclude_none=True)
+    budget_obj_jsonified = jsonify_object(budget_obj_json)  # json dump any dictionaries
     response = await prisma_client.db.litellm_budgettable.create(
         data={
-            **budget_obj.model_dump(exclude_none=True),  # type: ignore
+            **budget_obj_jsonified,  # type: ignore
             "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         }  # type: ignore

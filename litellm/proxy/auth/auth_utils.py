@@ -418,6 +418,9 @@ def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]
     if user_api_key_dict.metadata:
         if "model_rpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_rpm_limit"]
+    elif user_api_key_dict.model_max_budget:
+        if "rpm_limit" in user_api_key_dict.model_max_budget:
+            return user_api_key_dict.model_max_budget["rpm_limit"]
 
     return None
 
@@ -426,6 +429,9 @@ def get_key_model_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]
     if user_api_key_dict.metadata:
         if "model_tpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_tpm_limit"]
+    elif user_api_key_dict.model_max_budget:
+        if "tpm_limit" in user_api_key_dict.model_max_budget:
+            return user_api_key_dict.model_max_budget["tpm_limit"]
 
     return None
 

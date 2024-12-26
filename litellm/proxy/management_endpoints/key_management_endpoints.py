@@ -40,7 +40,7 @@ from litellm.proxy.utils import (
 )
 from litellm.secret_managers.main import get_secret
 from litellm.types.utils import (
-    GenericBudgetInfo,
+    BudgetConfig,
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
@@ -250,7 +250,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-    - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -554,7 +554,7 @@ async def update_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
-    - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -1252,7 +1252,7 @@ async def regenerate_key_fn(
         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
-        - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -1961,7 +1961,7 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
                 # /CRUD endpoints can pass budget_limit as a string, so we need to convert it to a float
                 if "budget_limit" in _budget_info:
                     _budget_info["budget_limit"] = float(_budget_info["budget_limit"])
-                GenericBudgetInfo(**_budget_info)
+                BudgetConfig(**_budget_info)
     except Exception as e:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
