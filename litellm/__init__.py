@@ -59,6 +59,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "dynamic_rate_limiter",
     "langsmith",
     "prometheus",
+    "otel",
     "datadog",
     "datadog_llm_observability",
     "galileo",
