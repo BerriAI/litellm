@@ -61,6 +61,38 @@ def _get_user_in_team(
     return None
 
 
+def _is_allowed_to_create_key(
+    user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
+) -> bool:
+    """
+    Assert user only creates keys for themselves
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/7336
+    """
+    ## BASE CASE - PROXY ADMIN
+    if (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
+
+    if user_id is not None:
+        assert (
+            user_id == user_api_key_dict.user_id
+        ), "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
+            user_id, user_api_key_dict.user_id
+        )
+
+    if team_id is not None:
+        assert (
+            user_api_key_dict.team_id == team_id
+        ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
+            team_id, user_api_key_dict.team_id
+        )
+
+    return True
+
+
 def _team_key_generation_team_member_check(
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_dict: UserAPIKeyAuth,
@@ -315,6 +347,24 @@ async def generate_key_fn(  # noqa: PLR0915
                 user_api_key_dict=user_api_key_dict,
                 data=data,
             )
+
+        try:
+            _is_allowed_to_create_key(
+                user_api_key_dict=user_api_key_dict,
+                user_id=data.user_id,
+                team_id=data.team_id,
+            )
+        except AssertionError as e:
+            raise HTTPException(
+                status_code=403,
+                detail=str(e),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=str(e),
+            )
+
         # check if user set default key/generate params on config.yaml
         if litellm.default_key_generate_params is not None:
             for elem in data:
