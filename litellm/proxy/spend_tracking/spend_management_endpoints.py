@@ -2533,8 +2533,8 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 _provider
             )
             provider_budget_response_object = ProviderBudgetResponseObject(
-                budget_limit=_budget_info.budget_limit,
-                time_period=_budget_info.time_period,
+                budget_limit=_budget_info.max_budget,
+                time_period=_budget_info.budget_duration,
                 spend=_provider_spend,
                 budget_reset_at=_provider_budget_ttl,
             )

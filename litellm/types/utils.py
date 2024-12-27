@@ -1694,17 +1694,25 @@ class StandardKeyGenerationConfig(TypedDict, total=False):
     personal_key_generation: PersonalUIKeyGenerationConfig
 
 
-class GenericBudgetInfo(BaseModel):
-    time_period: str  # e.g., '1d', '30d'
-    budget_limit: float
-
-
-GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
-
-
 class BudgetConfig(BaseModel):
-    max_budget: float
-    budget_duration: str
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+    def __init__(self, **data: Any) -> None:
+        # Map time_period to budget_duration if present
+        if "time_period" in data:
+            data["budget_duration"] = data.pop("time_period")
+
+        # Map budget_limit to max_budget if present
+        if "budget_limit" in data:
+            data["max_budget"] = data.pop("budget_limit")
+
+        super().__init__(**data)
+
+
+GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):

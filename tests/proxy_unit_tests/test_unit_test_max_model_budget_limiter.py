@@ -13,7 +13,7 @@ import pytest
 import litellm
 
 import json
-from litellm.types.utils import GenericBudgetInfo
+from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 import os
 import sys
 from datetime import datetime
@@ -56,13 +56,13 @@ def test_get_request_model_budget_config(budget_limiter):
     config = budget_limiter._get_request_model_budget_config(
         model="gpt-4", internal_model_max_budget=internal_budget
     )
-    assert config.budget_limit == 100.0
+    assert config.max_budget == 100.0
 
     # Test model with provider
     config = budget_limiter._get_request_model_budget_config(
         model="openai/gpt-4", internal_model_max_budget=internal_budget
     )
-    assert config.budget_limit == 100.0
+    assert config.max_budget == 100.0
 
     # Test non-existent model
     config = budget_limiter._get_request_model_budget_config(
