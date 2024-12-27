@@ -630,7 +630,6 @@ openai_compatible_providers: List = [
     "fireworks_ai",
     "empower",
     "friendliai",
-    "azure_ai",
     "github",
     "litellm_proxy",
     "hosted_vllm",
@@ -648,6 +647,7 @@ _openai_like_providers: List = [
     "predibase",
     "databricks",
     "watsonx",
+    "azure_ai",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
 replicate_models: List = [

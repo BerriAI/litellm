@@ -18,6 +18,25 @@ class OpenAILikeBase:
     def __init__(self, **kwargs):
         pass
 
+    def _add_endpoint_to_api_base(
+        self, api_base: str, endpoint_type: Literal["chat_completions", "embeddings"]
+    ) -> str:
+        original_url = httpx.URL(api_base)
+        base_url = original_url.copy_with(params={})
+        path = original_url.path
+
+        if endpoint_type == "chat_completions" and "/chat/completions" not in path:
+            modified_url = base_url.join("chat/completions")
+        elif endpoint_type == "embeddings" and "/embeddings" not in path:
+            modified_url = base_url.join("/embeddings")
+        else:
+            modified_url = base_url  # Handle other cases if needed
+
+        # Re-add the original query parameters
+        api_base = str(modified_url.copy_with(params=original_url.params))
+
+        return api_base
+
     def _validate_environment(
         self,
         api_key: Optional[str],
@@ -49,8 +68,7 @@ class OpenAILikeBase:
             headers.update({"Authorization": "Bearer {}".format(api_key)})
 
         if not custom_endpoint:
-            if endpoint_type == "chat_completions":
-                api_base = "{}/chat/completions".format(api_base)
-            elif endpoint_type == "embeddings":
-                api_base = "{}/embeddings".format(api_base)
+            api_base = self._add_endpoint_to_api_base(
+                api_base=api_base, endpoint_type=endpoint_type
+            )
         return api_base, headers

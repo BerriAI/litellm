@@ -6,6 +6,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    stringify_json_tool_call_content,
+)
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -40,6 +43,10 @@ class AzureAIStudioConfig(OpenAIConfig):
             1. Transforms list content to a string.
             2. If message contains an image or audio, send as is (user-intended)
         """
+        ## FOR COHERE
+        if "command-r" in model:  # make sure tool call in messages are str
+            messages = stringify_json_tool_call_content(messages=messages)
+
         for message in messages:
 
             # Do nothing if the message contains an image or audio
