@@ -1,8 +1,9 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import DynamicGuardrailParams, GuardrailEventHooks
+from litellm.types.utils import StandardLoggingGuardrailInformation
 
 
 class CustomGuardrail(CustomLogger):
@@ -119,3 +120,71 @@ class CustomGuardrail(CustomLogger):
             )
             return False
         return True
+
+    def add_standard_logging_guardrail_information_to_request_data(
+        self,
+        guardrail_json_response: Union[Exception, str, dict],
+        request_data: dict,
+        guardrail_status: Literal["success", "failure"],
+    ) -> None:
+        """
+        Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
+        """
+        if isinstance(guardrail_json_response, Exception):
+            guardrail_json_response = str(guardrail_json_response)
+        slg = StandardLoggingGuardrailInformation(
+            guardrail_name=self.guardrail_name,
+            guardrail_mode=self.event_hook,
+            guardrail_response=guardrail_json_response,
+            guardrail_status=guardrail_status,
+        )
+        if "metadata" in request_data:
+            request_data["metadata"]["standard_logging_guardrail_information"] = slg
+        elif "litellm_metadata" in request_data:
+            request_data["litellm_metadata"][
+                "standard_logging_guardrail_information"
+            ] = slg
+        else:
+            verbose_logger.warning(
+                "unable to log guardrail information. No metadata found in request_data"
+            )
+
+
+def log_guardrail_information(func):
+    """
+    Decorator to add standard logging guardrail information to any function
+
+    Add this decorator to ensure your guardrail response is logged to DataDog, OTEL, s3, GCS etc.
+
+    Logs for:
+        - pre_call
+        - during_call
+        - TODO: log post_call. This is more involved since the logs are sent to DD, s3 before the guardrail is even run
+    """
+
+    async def wrapper(
+        *args, **kwargs
+    ):  # Make async since we're decorating async functions
+        # this wraps methods, so .self is the first arg
+        self: CustomGuardrail = args[0]
+        request_data: Optional[dict] = (
+            kwargs.get("data") or kwargs.get("request_data") or {}
+        )
+        try:
+            # Extract request_data from args or kwargs
+            response = await func(*args, **kwargs)  # Add await
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=response,
+                request_data=request_data,
+                guardrail_status="success",
+            )
+            return response
+        except Exception as e:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=e,
+                request_data=request_data,
+                guardrail_status="failure",
+            )
+            raise e
+
+    return wrapper
