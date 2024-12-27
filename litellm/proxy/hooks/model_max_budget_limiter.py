@@ -9,8 +9,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
+    BudgetConfig,
     GenericBudgetConfigType,
-    GenericBudgetInfo,
     StandardLoggingPayload,
 )
 
@@ -42,12 +42,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         _model_max_budget = user_api_key_dict.model_max_budget
         internal_model_max_budget: GenericBudgetConfigType = {}
 
-        # case each element in _model_max_budget to GenericBudgetInfo
         for _model, _budget_info in _model_max_budget.items():
-            internal_model_max_budget[_model] = GenericBudgetInfo(
-                time_period=_budget_info.get("time_period"),
-                budget_limit=float(_budget_info.get("budget_limit")),
-            )
+            internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
 
         verbose_proxy_logger.debug(
             "internal_model_max_budget %s",
@@ -65,7 +61,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return True
 
         # check if current model is within budget
-        if _current_model_budget_info.budget_limit > 0:
+        if (
+            _current_model_budget_info.max_budget
+            and _current_model_budget_info.max_budget > 0
+        ):
             _current_spend = await self._get_virtual_key_spend_for_model(
                 user_api_key_hash=user_api_key_dict.token,
                 model=model,
@@ -73,12 +72,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             if (
                 _current_spend is not None
-                and _current_spend > _current_model_budget_info.budget_limit
+                and _current_model_budget_info.max_budget is not None
+                and _current_spend > _current_model_budget_info.max_budget
             ):
                 raise litellm.BudgetExceededError(
                     message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
                     current_cost=_current_spend,
-                    max_budget=_current_model_budget_info.budget_limit,
+                    max_budget=_current_model_budget_info.max_budget,
                 )
 
         return True
@@ -87,7 +87,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self,
         user_api_key_hash: Optional[str],
         model: str,
-        key_budget_config: GenericBudgetInfo,
+        key_budget_config: BudgetConfig,
     ) -> Optional[float]:
         """
         Get the current spend for a virtual key for a model
@@ -98,7 +98,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """
 
         # 1. model: directly look up `model`
-        virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.time_period}"
+        virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model}:{key_budget_config.budget_duration}"
         _current_spend = await self.dual_cache.async_get_cache(
             key=virtual_key_model_spend_cache_key,
         )
@@ -106,7 +106,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if _current_spend is None:
             # 2. If 1, does not exist, check if passed as {custom_llm_provider}/model
             # if "/" in model, remove first part before "/" - eg. openai/o1-preview -> o1-preview
-            virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.time_period}"
+            virtual_key_model_spend_cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{self._get_model_without_custom_llm_provider(model)}:{key_budget_config.budget_duration}"
             _current_spend = await self.dual_cache.async_get_cache(
                 key=virtual_key_model_spend_cache_key,
             )
@@ -114,7 +114,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
     def _get_request_model_budget_config(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
-    ) -> Optional[GenericBudgetInfo]:
+    ) -> Optional[BudgetConfig]:
         """
         Get the budget config for the request model
 
@@ -175,8 +175,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         virtual_key = standard_logging_payload.get("metadata").get("user_api_key_hash")
         model = standard_logging_payload.get("model")
         if virtual_key is not None:
-            budget_config = GenericBudgetInfo(time_period="1d", budget_limit=0.1)
-            virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_config.time_period}"
+            budget_config = BudgetConfig(time_period="1d", budget_limit=0.1)
+            virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_config.budget_duration}"
             virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
             await self._increment_spend_for_key(
                 budget_config=budget_config,

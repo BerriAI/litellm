@@ -98,7 +98,6 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
-    GenericBudgetConfigType,
     LiteLLM_Params,
     ModelGroupInfo,
     OptionalPreCallChecks,
@@ -111,6 +110,7 @@ from litellm.types.router import (
     RoutingStrategy,
 )
 from litellm.types.services import ServiceTypes
+from litellm.types.utils import GenericBudgetConfigType
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import (

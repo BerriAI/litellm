@@ -11,8 +11,6 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.utils import GenericBudgetConfigType, GenericBudgetInfo
-
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
