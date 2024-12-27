@@ -112,14 +112,49 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
+## **Using Guardrails client side**
 
-## Advanced
+
+### ✨ View available guardrails (/guardrails/list)
+
+Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
+
+```shell
+curl -X GET 'http://0.0.0.0:4000/guardrails/list'
+```
+
+Expected response
+
+```json
+{
+    "guardrails": [
+        {
+        "guardrail_name": "bedrock-pre-guard",
+        "guardrail_info": {
+            "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1 indicating content toxicity level"
+            },
+            {
+                "name": "pii_detection",
+                "type": "boolean"
+            }
+            ]
+        }
+        }
+    ]
+}
+```
+
+
 
 ### ✨ Pass additional parameters to guardrail
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -196,11 +231,40 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
+## **Proxy Admin Controls**
+
+### ✨ Monitoring Guardrails
+
+Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
+
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+
+:::
+
+### Setup
+
+1. Connect LiteLLM to a [supported logging provider](../logging)
+2. Make a request with a `guardrails` parameter
+3. Check your logging provider for the guardrail trace
+
+#### Traced Guardrail Success
+
+<Image img={require('../../../img/gd_success.png')} />
+
+#### Traced Guardrail Failure
+
+<Image img={require('../../../img/gd_fail.png')} />
+
+
+
+
 ### ✨ Control Guardrails per Project (API Key)
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -262,7 +326,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -319,22 +383,6 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 :::
 
 
-
-### ✨ List guardrails
-
-Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
-
-```shell
-curl -X GET 'http://0.0.0.0:4000/guardrails/list'
-```
-
-Expected response
-
-```json
-{
-    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
-}
-```
 
 ## Spec: `guardrails` Parameter
 
