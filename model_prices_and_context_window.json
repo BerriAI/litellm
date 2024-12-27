@@ -7566,6 +7566,30 @@
         "litellm_provider": "cloudflare", 
         "mode": "chat"
       },
+      "voyage/voyage-01": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-lite-01": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-large-2": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
     "voyage/voyage-law-2": {
         "max_tokens": 16000,
         "max_input_tokens": 16000,
@@ -7590,6 +7614,14 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
+    "voyage/voyage-lite-02-instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
     "voyage/voyage-finance-2": {
         "max_tokens": 4000,
         "max_input_tokens": 4000,
@@ -7597,68 +7629,6 @@
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",
         "mode": "embedding"
-    },
-    "voyage/voyage-3-large": {
-        "max_tokens": 32000,
-        "max_input_tokens": 32000,
-        "input_cost_per_token": 0.00000018,
-        "output_cost_per_token": 0.000000,
-        "litellm_provider": "voyage",
-        "mode": "embedding"
-    },
-    "voyage/voyage-3": {
-        "max_tokens": 32000,
-        "max_input_tokens": 32000,
-        "input_cost_per_token": 0.00000006,
-        "output_cost_per_token": 0.000000,
-        "litellm_provider": "voyage",
-        "mode": "embedding"
-    },
-    "voyage/voyage-3-lite": {
-        "max_tokens": 32000,
-        "max_input_tokens": 32000,
-        "input_cost_per_token": 0.00000002,
-        "output_cost_per_token": 0.000000,
-        "litellm_provider": "voyage",
-        "mode": "embedding"
-    },
-    "voyage/voyage-code-3": {
-        "max_tokens": 32000,
-        "max_input_tokens": 32000,
-        "input_cost_per_token": 0.00000018,
-        "output_cost_per_token": 0.000000,
-        "litellm_provider": "voyage",
-        "mode": "embedding"
-    },
-    "voyage/voyage-multimodal-3": {
-        "max_tokens": 32000,
-        "max_input_tokens": 32000,
-        "input_cost_per_token": 0.00000012,
-        "output_cost_per_token": 0.000000,
-        "litellm_provider": "voyage",
-        "mode": "embedding"
-    },
-    "voyage/rerank-2": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000,
-        "max_query_tokens": 16000,
-        "input_cost_per_token": 0.00000005,
-        "input_cost_per_query": 0.00000005,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "voyage",
-        "mode": "rerank"
-    },
-    "voyage/rerank-2-lite": {
-        "max_tokens": 8000,
-        "max_input_tokens": 8000,
-        "max_output_tokens": 8000,
-        "max_query_tokens": 8000,
-        "input_cost_per_token": 0.00000002,
-        "input_cost_per_query": 0.00000002,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "voyage",
-        "mode": "rerank"
     },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
         "max_tokens": 128000,
