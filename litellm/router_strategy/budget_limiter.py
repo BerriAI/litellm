@@ -200,7 +200,6 @@ class RouterBudgetLimiting(CustomLogger):
                         deployment_above_budget_info += f"{debug_msg}\n"
                         is_within_budget = False
                         continue
-
             # Check tag budget
             if self.tag_budget_config and is_within_budget:
                 for _tag in request_tags:
@@ -219,7 +218,6 @@ class RouterBudgetLimiting(CustomLogger):
                             deployment_above_budget_info += f"{debug_msg}\n"
                             is_within_budget = False
                             continue
-
             if is_within_budget:
                 potential_deployments.append(deployment)
 
