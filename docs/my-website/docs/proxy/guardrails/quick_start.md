@@ -29,6 +29,14 @@ guardrails:
       mode: "post_call"
       api_key: os.environ/APORIA_API_KEY_2
       api_base: os.environ/APORIA_API_BASE_2
+    guardrail_info: # Optional field, info is returned on GET /guardrails/list
+      # you can enter any fields under info for consumers of your guardrail
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
 ```
 
 
@@ -383,12 +391,27 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 :::
 
 
+## Specification 
 
-## Spec: `guardrails` Parameter
+### `guardrails` Configuration on YAML
+
+```yaml
+guardrails:
+  - guardrail_name: string     # Required: Name of the guardrail
+    litellm_params:            # Required: Configuration parameters
+      guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
+      mode: string             # Required: One of "pre_call", "post_call", "during_call", "logging_only"
+      api_key: string          # Required: API key for the guardrail service
+      api_base: string         # Optional: Base URL for the guardrail service
+    guardrail_info:            # Optional[Dict]: Additional information about the guardrail
+      
+```
+
+### `guardrails` Request Parameter
 
 The `guardrails` parameter can be passed to any LiteLLM Proxy endpoint (`/chat/completions`, `/completions`, `/embeddings`).
 
-### Format Options
+#### Format Options
 
 1. Simple List Format:
 ```python
@@ -412,7 +435,7 @@ In this format the dictionary key is `guardrail_name` you want to run
 }
 ```
 
-### Type Definition
+#### Type Definition
 ```python
 guardrails: Union[
     List[str],                              # Simple list of guardrail names
