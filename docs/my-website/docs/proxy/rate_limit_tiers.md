@@ -1,6 +1,8 @@
 # ✨ Budget / Rate Limit Tiers
 
-Create tiers with different budgets and rate limits. Making it easy to manage different users and their usage.
+Define tiers with rate limits. Assign them to keys. 
+
+Use this to control access and budgets across a lot of keys.
 
 :::info 
 
