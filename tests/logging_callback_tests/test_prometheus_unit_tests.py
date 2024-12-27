@@ -339,6 +339,16 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     - litellm_requests_metric is incremented by 1
     - litellm_spend_metric is incremented by the response cost in the standard logging payload
     """
+    standard_logging_payload = create_standard_logging_payload()
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
     prometheus_logger.litellm_requests_metric = MagicMock()
     prometheus_logger.litellm_spend_metric = MagicMock()
 
@@ -351,10 +361,17 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         user_api_team_alias="team_alias1",
         user_id="user1",
         response_cost=0.1,
+        enum_values=enum_values,
     )
 
     prometheus_logger.litellm_requests_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
@@ -791,6 +808,7 @@ def test_deployment_state_management(prometheus_logger):
 
 
 def test_increment_deployment_cooled_down(prometheus_logger):
+
     prometheus_logger.litellm_deployment_cooled_down = MagicMock()
 
     prometheus_logger.increment_deployment_cooled_down(
