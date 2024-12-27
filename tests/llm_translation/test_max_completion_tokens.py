@@ -143,15 +143,18 @@ def test_all_model_configs():
     )
 
     assert (
-        "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params()
+        "max_completion_tokens"
+        in VertexAILlama3Config().get_supported_openai_params(model="llama3")
     )
     assert VertexAILlama3Config().map_openai_params(
         {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
     ) == {"max_tokens": 10}
 
-    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params()
+    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params(
+        model="jamba-1.5-mini@001"
+    )
     assert VertexAIAi21Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
+        {"max_completion_tokens": 10}, {}, "jamba-1.5-mini@001", drop_params=False
     ) == {"max_tokens": 10}
 
     from litellm.llms.fireworks_ai.chat.transformation import (

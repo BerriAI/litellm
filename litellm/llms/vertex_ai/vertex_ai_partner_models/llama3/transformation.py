@@ -1,7 +1,6 @@
 import types
 from typing import Optional
 
-import litellm
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
