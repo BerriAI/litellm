@@ -536,8 +536,8 @@ async def test_get_current_provider_budget_reset_at():
             )
         ),
         provider_budget_config={
-            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
-            "vertex_ai": GenericBudgetInfo(time_period="1h", budget_limit=100),
+            "openai": BudgetConfig(budget_duration="1d", max_budget=100),
+            "vertex_ai": BudgetConfig(budget_duration="1h", max_budget=100),
         },
     )
 
