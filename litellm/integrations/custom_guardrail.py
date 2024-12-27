@@ -161,30 +161,53 @@ def log_guardrail_information(func):
         - during_call
         - TODO: log post_call. This is more involved since the logs are sent to DD, s3 before the guardrail is even run
     """
+    import asyncio
+    import functools
 
-    async def wrapper(
-        *args, **kwargs
-    ):  # Make async since we're decorating async functions
-        # this wraps methods, so .self is the first arg
+    def process_response(self, response, request_data):
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=response,
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        return response
+
+    def process_error(self, e, request_data):
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=e,
+            request_data=request_data,
+            guardrail_status="failure",
+        )
+        raise e
+
+    @functools.wraps(func)
+    async def async_wrapper(*args, **kwargs):
         self: CustomGuardrail = args[0]
         request_data: Optional[dict] = (
             kwargs.get("data") or kwargs.get("request_data") or {}
         )
         try:
-            # Extract request_data from args or kwargs
-            response = await func(*args, **kwargs)  # Add await
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=response,
-                request_data=request_data,
-                guardrail_status="success",
-            )
-            return response
+            response = await func(*args, **kwargs)
+            return process_response(self, response, request_data)
         except Exception as e:
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=e,
-                request_data=request_data,
-                guardrail_status="failure",
-            )
-            raise e
+            return process_error(self, e, request_data)
+
+    @functools.wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        self: CustomGuardrail = args[0]
+        request_data: Optional[dict] = (
+            kwargs.get("data") or kwargs.get("request_data") or {}
+        )
+        try:
+            response = func(*args, **kwargs)
+            return process_response(self, response, request_data)
+        except Exception as e:
+            return process_error(self, e, request_data)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper(*args, **kwargs)
+        return sync_wrapper(*args, **kwargs)
 
     return wrapper
