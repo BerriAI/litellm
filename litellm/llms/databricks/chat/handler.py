@@ -44,16 +44,6 @@ class DatabricksChatCompletion(OpenAILikeChatHandler, DatabricksBase):
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        messages = DatabricksConfig()._transform_messages(
-            messages=cast(List[AllMessageValues], messages), model=model
-        )
-        api_base, headers = self.databricks_validate_environment(
-            api_base=api_base,
-            api_key=api_key,
-            endpoint_type="chat_completions",
-            custom_endpoint=custom_endpoint,
-            headers=headers,
-        )
 
         if optional_params.get("stream") is True:
             fake_stream = DatabricksConfig()._should_fake_stream(optional_params)
@@ -78,7 +68,6 @@ class DatabricksChatCompletion(OpenAILikeChatHandler, DatabricksBase):
             headers=headers,
             timeout=timeout,
             client=client,
-            custom_endpoint=True,
             streaming_decoder=streaming_decoder,
             fake_stream=fake_stream,
         )
