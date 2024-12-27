@@ -334,11 +334,11 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
 
         tpm_dict = {}  # {model_id: 1, ..}
         for idx, key in enumerate(tpm_keys):
-            tpm_dict[tpm_keys[idx]] = tpm_values[idx]
+            tpm_dict[tpm_keys[idx].split(":")[0]] = tpm_values[idx]
 
         rpm_dict = {}  # {model_id: 1, ..}
         for idx, key in enumerate(rpm_keys):
-            rpm_dict[rpm_keys[idx]] = rpm_values[idx]
+            rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
 
         try:
             input_tokens = token_counter(messages=messages, text=input)
@@ -402,8 +402,10 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 _deployment_rpm = float("inf")
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
-            elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 >= _deployment_rpm
+            elif (
+                (rpm_dict is not None and item in rpm_dict)
+                and rpm_dict[item] is not None
+                and (rpm_dict[item] + 1 >= _deployment_rpm)
             ):
                 continue
             elif item_tpm == lowest_tpm:
