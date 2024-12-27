@@ -315,59 +315,14 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             )
             pass
 
-    def _common_checks_available_deployment(  # noqa: PLR0915
+    def _return_potential_deployments(
         self,
-        model_group: str,
-        healthy_deployments: list,
-        tpm_keys: list,
-        tpm_values: Optional[list],
-        rpm_keys: list,
-        rpm_values: Optional[list],
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-    ) -> Optional[dict]:
-        """
-        Common checks for get available deployment, across sync + async implementations
-        """
-        if tpm_values is None or rpm_values is None:
-            return None
-
-        tpm_dict = {}  # {model_id: 1, ..}
-        for idx, key in enumerate(tpm_keys):
-            tpm_dict[tpm_keys[idx]] = tpm_values[idx]
-
-        rpm_dict = {}  # {model_id: 1, ..}
-        for idx, key in enumerate(rpm_keys):
-            rpm_dict[rpm_keys[idx]] = rpm_values[idx]
-
-        try:
-            input_tokens = token_counter(messages=messages, text=input)
-        except Exception:
-            input_tokens = 0
-        verbose_router_logger.debug(f"input_tokens={input_tokens}")
-        # -----------------------
-        # Find lowest used model
-        # ----------------------
+        healthy_deployments: List[Dict],
+        all_deployments: Dict,
+        input_tokens: int,
+        rpm_dict: Dict,
+    ):
         lowest_tpm = float("inf")
-
-        if tpm_dict is None:  # base case - none of the deployments have been used
-            # initialize a tpm dict with {model_id: 0}
-            tpm_dict = {}
-            for deployment in healthy_deployments:
-                tpm_dict[deployment["model_info"]["id"]] = 0
-        else:
-            dt = get_utc_datetime()
-            current_minute = dt.strftime(
-                "%H-%M"
-            )  # use the same timezone regardless of system clock
-
-            for d in healthy_deployments:
-                ## if healthy deployment not yet used
-                tpm_key = f"{d['model_info']['id']}:tpm:{current_minute}"
-                if tpm_key not in tpm_dict or tpm_dict[tpm_key] is None:
-                    tpm_dict[tpm_key] = 0
-
-        all_deployments = tpm_dict
         potential_deployments = []  # if multiple deployments have the same low value
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
@@ -402,8 +357,10 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 _deployment_rpm = float("inf")
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
-            elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 >= _deployment_rpm
+            elif (
+                (rpm_dict is not None and item in rpm_dict)
+                and rpm_dict[item] is not None
+                and (rpm_dict[item] + 1 >= _deployment_rpm)
             ):
                 continue
             elif item_tpm == lowest_tpm:
@@ -411,6 +368,62 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 potential_deployments = [_deployment]
+        return potential_deployments
+
+    def _common_checks_available_deployment(  # noqa: PLR0915
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        tpm_keys: list,
+        tpm_values: Optional[list],
+        rpm_keys: list,
+        rpm_values: Optional[list],
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+    ) -> Optional[dict]:
+        """
+        Common checks for get available deployment, across sync + async implementations
+        """
+
+        if tpm_values is None or rpm_values is None:
+            return None
+
+        tpm_dict = {}  # {model_id: 1, ..}
+        for idx, key in enumerate(tpm_keys):
+            tpm_dict[tpm_keys[idx].split(":")[0]] = tpm_values[idx]
+
+        rpm_dict = {}  # {model_id: 1, ..}
+        for idx, key in enumerate(rpm_keys):
+            rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
+
+        try:
+            input_tokens = token_counter(messages=messages, text=input)
+        except Exception:
+            input_tokens = 0
+        verbose_router_logger.debug(f"input_tokens={input_tokens}")
+        # -----------------------
+        # Find lowest used model
+        # ----------------------
+
+        if tpm_dict is None:  # base case - none of the deployments have been used
+            # initialize a tpm dict with {model_id: 0}
+            tpm_dict = {}
+            for deployment in healthy_deployments:
+                tpm_dict[deployment["model_info"]["id"]] = 0
+        else:
+            for d in healthy_deployments:
+                ## if healthy deployment not yet used
+                tpm_key = d["model_info"]["id"]
+                if tpm_key not in tpm_dict or tpm_dict[tpm_key] is None:
+                    tpm_dict[tpm_key] = 0
+
+        all_deployments = tpm_dict
+        potential_deployments = self._return_potential_deployments(
+            healthy_deployments=healthy_deployments,
+            all_deployments=all_deployments,
+            input_tokens=input_tokens,
+            rpm_dict=rpm_dict,
+        )
         print_verbose("returning picked lowest tpm/rpm deployment.")
 
         if len(potential_deployments) > 0:
