@@ -65,6 +65,7 @@ callback_class_str_to_classType = {
     "langtrace": OpenTelemetry,
     "mlflow": MlflowLogger,
     "langfuse": LangfusePromptManagement,
+    "otel": OpenTelemetry,
 }
 
 expected_env_vars = {

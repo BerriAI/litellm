@@ -14,15 +14,13 @@ from litellm import Router
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.router import (
     RoutingStrategy,
-    GenericBudgetConfigType,
-    GenericBudgetInfo,
 )
+from litellm.types.utils import GenericBudgetConfigType, BudgetConfig
 from litellm.caching.caching import DualCache, RedisCache
 import logging
 from litellm._logging import verbose_router_logger
 import litellm
 from datetime import timezone, timedelta
-from litellm.types.utils import BudgetConfig
 
 verbose_router_logger.setLevel(logging.DEBUG)
 
@@ -67,8 +65,8 @@ async def test_provider_budgets_e2e_test():
     cleanup_redis()
     # Modify for test
     provider_budget_config: GenericBudgetConfigType = {
-        "openai": GenericBudgetInfo(time_period="1d", budget_limit=0.000000000001),
-        "azure": GenericBudgetInfo(time_period="1d", budget_limit=100),
+        "openai": BudgetConfig(time_period="1d", budget_limit=0.000000000001),
+        "azure": BudgetConfig(time_period="1d", budget_limit=100),
     }
 
     router = Router(
@@ -215,8 +213,8 @@ async def test_get_budget_config_for_provider():
     """
     cleanup_redis()
     config = {
-        "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
-        "anthropic": GenericBudgetInfo(time_period="7d", budget_limit=500),
+        "openai": BudgetConfig(budget_duration="1d", max_budget=100),
+        "anthropic": BudgetConfig(budget_duration="7d", max_budget=500),
     }
 
     provider_budget = RouterBudgetLimiting(
@@ -226,13 +224,13 @@ async def test_get_budget_config_for_provider():
     # Test existing providers
     openai_config = provider_budget._get_budget_config_for_provider("openai")
     assert openai_config is not None
-    assert openai_config.time_period == "1d"
-    assert openai_config.budget_limit == 100
+    assert openai_config.budget_duration == "1d"
+    assert openai_config.max_budget == 100
 
     anthropic_config = provider_budget._get_budget_config_for_provider("anthropic")
     assert anthropic_config is not None
-    assert anthropic_config.time_period == "7d"
-    assert anthropic_config.budget_limit == 500
+    assert anthropic_config.budget_duration == "7d"
+    assert anthropic_config.max_budget == 500
 
     # Test non-existent provider
     assert provider_budget._get_budget_config_for_provider("unknown") is None
@@ -254,15 +252,15 @@ async def test_prometheus_metric_tracking():
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={
-            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100)
+            "openai": BudgetConfig(budget_duration="1d", max_budget=100)
         },
     )
 
     litellm._async_success_callback = [mock_prometheus]
 
     provider_budget_config: GenericBudgetConfigType = {
-        "openai": GenericBudgetInfo(time_period="1d", budget_limit=0.000000000001),
-        "azure": GenericBudgetInfo(time_period="1d", budget_limit=100),
+        "openai": BudgetConfig(budget_duration="1d", max_budget=0.000000000001),
+        "azure": BudgetConfig(budget_duration="1d", max_budget=100),
     }
 
     router = Router(
@@ -442,8 +440,8 @@ async def test_sync_in_memory_spend_with_redis():
     """
     cleanup_redis()
     provider_budget_config = {
-        "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
-        "anthropic": GenericBudgetInfo(time_period="1d", budget_limit=200),
+        "openai": BudgetConfig(time_period="1d", budget_limit=100),
+        "anthropic": BudgetConfig(time_period="1d", budget_limit=200),
     }
 
     provider_budget = RouterBudgetLimiting(
@@ -497,7 +495,7 @@ async def test_get_current_provider_spend():
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={
-            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
+            "openai": BudgetConfig(time_period="1d", budget_limit=100),
         },
     )
 
@@ -538,8 +536,8 @@ async def test_get_current_provider_budget_reset_at():
             )
         ),
         provider_budget_config={
-            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
-            "vertex_ai": GenericBudgetInfo(time_period="1h", budget_limit=100),
+            "openai": BudgetConfig(budget_duration="1d", max_budget=100),
+            "vertex_ai": BudgetConfig(budget_duration="1h", max_budget=100),
         },
     )
 

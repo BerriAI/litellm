@@ -40,7 +40,7 @@ from litellm.proxy.utils import (
 )
 from litellm.secret_managers.main import get_secret
 from litellm.types.utils import (
-    GenericBudgetInfo,
+    BudgetConfig,
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
@@ -59,6 +59,38 @@ def _get_user_in_team(
         if member.user_id is not None and member.user_id == user_id:
             return member
     return None
+
+
+def _is_allowed_to_create_key(
+    user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
+) -> bool:
+    """
+    Assert user only creates keys for themselves
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/7336
+    """
+    ## BASE CASE - PROXY ADMIN
+    if (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return True
+
+    if user_id is not None:
+        assert (
+            user_id == user_api_key_dict.user_id
+        ), "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
+            user_id, user_api_key_dict.user_id
+        )
+
+    if team_id is not None:
+        assert (
+            user_api_key_dict.team_id == team_id
+        ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
+            team_id, user_api_key_dict.team_id
+        )
+
+    return True
 
 
 def _team_key_generation_team_member_check(
@@ -238,6 +270,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
+    - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -249,7 +282,7 @@ async def generate_key_fn(  # noqa: PLR0915
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
-    - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -314,6 +347,24 @@ async def generate_key_fn(  # noqa: PLR0915
                 user_api_key_dict=user_api_key_dict,
                 data=data,
             )
+
+        try:
+            _is_allowed_to_create_key(
+                user_api_key_dict=user_api_key_dict,
+                user_id=data.user_id,
+                team_id=data.team_id,
+            )
+        except AssertionError as e:
+            raise HTTPException(
+                status_code=403,
+                detail=str(e),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=str(e),
+            )
+
         # check if user set default key/generate params on config.yaml
         if litellm.default_key_generate_params is not None:
             for elem in data:
@@ -376,7 +427,7 @@ async def generate_key_fn(  # noqa: PLR0915
                                 )
 
         # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
-        _budget_id = None
+        _budget_id = data.budget_id
         if prisma_client is not None and data.soft_budget is not None:
             # create the Budget Row for the LiteLLM Verification Token
             budget_row = LiteLLM_BudgetTable(
@@ -547,14 +598,15 @@ async def update_key_fn(
     - key_alias: Optional[str] - User-friendly key alias
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
+    - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
-    - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -592,7 +644,7 @@ async def update_key_fn(
     )
 
     try:
-        data_json: dict = data.model_dump(exclude_unset=True)
+        data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
         # get the row from db
         if prisma_client is None:
@@ -1135,6 +1187,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                 data=key_data, table_name="key"
             )
             key_data["token_id"] = getattr(create_key_response, "token", None)
+            key_data["litellm_budget_table"] = getattr(
+                create_key_response, "litellm_budget_table", None
+            )
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
@@ -1247,7 +1302,7 @@ async def regenerate_key_fn(
         - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
-        - model_max_budget: Optional[Dict[str, GenericBudgetInfo]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -1956,7 +2011,7 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
                 # /CRUD endpoints can pass budget_limit as a string, so we need to convert it to a float
                 if "budget_limit" in _budget_info:
                     _budget_info["budget_limit"] = float(_budget_info["budget_limit"])
-                GenericBudgetInfo(**_budget_info)
+                BudgetConfig(**_budget_info)
     except Exception as e:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
