@@ -2559,7 +2559,9 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
     """
     from litellm.proxy.proxy_server import callback_settings
 
-    return dict(callback_settings.get(callback_name, {}))
+    if callback_settings:
+        return dict(callback_settings.get(callback_name, {}))
+    return {}
 
 
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
