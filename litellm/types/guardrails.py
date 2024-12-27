@@ -105,7 +105,7 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
 
 
-class Guardrail(TypedDict):
+class Guardrail(TypedDict, total=False):
     guardrail_name: str
     litellm_params: LitellmParams
     guardrail_info: Optional[Dict]
