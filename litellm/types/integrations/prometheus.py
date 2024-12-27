@@ -65,6 +65,7 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
     STATUS_CODE = "status_code"
+    FALLBACK_MODEL = "fallback_model"
 
 
 class PrometheusMetricLabels(Enum):
@@ -101,6 +102,92 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.STATUS_CODE.value,
     ]
 
+    litellm_proxy_failed_requests_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+        UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+    ]
+
+    litellm_proxy_failed_requests_by_tag_metric = (
+        litellm_proxy_failed_requests_metric
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
+    litellm_request_total_latency_by_tag_metric = (
+        litellm_request_total_latency_metric
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
+    litellm_llm_api_latency_by_tag_metric = litellm_llm_api_latency_metric + [
+        UserAPIKeyLabelNames.TAG.value,
+    ]
+
+    litellm_deployment_latency_per_output_token = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_latency_per_output_token_by_tag = (
+        litellm_deployment_latency_per_output_token
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
+    litellm_requests_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_proxy_total_requests_by_tag_metric = litellm_proxy_total_requests_metric + [
+        UserAPIKeyLabelNames.TAG.value,
+    ]
+
+    litellm_deployment_successful_fallbacks = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.FALLBACK_MODEL.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+        UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+    ]
+
+    litellm_deployment_successful_fallbacks_by_tag = (
+        litellm_deployment_successful_fallbacks
+        + [
+            UserAPIKeyLabelNames.TAG.value,
+        ]
+    )
+
+    litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
+
+    litellm_deployment_failed_fallbacks_by_tag = (
+        litellm_deployment_successful_fallbacks_by_tag
+    )
+
 
 from typing import List, Optional
 
@@ -124,6 +211,7 @@ class UserAPIKeyLabelValues(BaseModel):
     exception_status: Optional[str] = None
     exception_class: Optional[str] = None
     status_code: Optional[str] = None
+    fallback_model: Optional[str] = None
 
     class Config:
         fields = {
@@ -142,4 +230,5 @@ class UserAPIKeyLabelValues(BaseModel):
             "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
             "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
             "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
+            "fallback_model": {"alias": UserAPIKeyLabelNames.FALLBACK_MODEL},
         }
