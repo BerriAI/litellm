@@ -9,7 +9,7 @@ from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
 
 class AzureOpenAIFineTuningAPI(OpenAIFineTuningAPI):
     """
-    AzureOpenAI methods to support fine tuning, inherits from OpenAIFineTuningAPI
+    AzureOpenAI methods to support fine tuning, inherits from OpenAIFineTuningAPI.
     """
 
     def get_openai_client(
