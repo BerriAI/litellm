@@ -440,8 +440,8 @@ async def test_sync_in_memory_spend_with_redis():
     """
     cleanup_redis()
     provider_budget_config = {
-        "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
-        "anthropic": GenericBudgetInfo(time_period="1d", budget_limit=200),
+        "openai": BudgetConfig(time_period="1d", budget_limit=100),
+        "anthropic": BudgetConfig(time_period="1d", budget_limit=200),
     }
 
     provider_budget = RouterBudgetLimiting(
@@ -495,7 +495,7 @@ async def test_get_current_provider_spend():
     provider_budget = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={
-            "openai": GenericBudgetInfo(time_period="1d", budget_limit=100),
+            "openai": BudgetConfig(time_period="1d", budget_limit=100),
         },
     )
 
