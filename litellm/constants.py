@@ -92,3 +92,6 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+
+BATCH_STATUS_POLL_INTERVAL_SECONDS = 3600  # 1 hour
+BATCH_STATUS_POLL_MAX_ATTEMPTS = 24  # for 24 hours

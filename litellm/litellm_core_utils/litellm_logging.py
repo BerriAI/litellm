@@ -12,7 +12,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime as dt_object
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -34,7 +34,12 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
 )
-from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    Batch,
+    FineTuningJob,
+    HttpxBinaryResponseContent,
+)
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import SPECIAL_MODEL_INFO_PARAMS
 from litellm.types.utils import (
@@ -384,10 +389,16 @@ class Logging(LiteLLMLoggingBaseClass):
         return standard_callback_dynamic_params
 
     def update_environment_variables(
-        self, model, user, optional_params, litellm_params, **additional_params
+        self,
+        litellm_params: Dict,
+        optional_params: Dict,
+        model: Optional[str] = None,
+        user: Optional[str] = None,
+        **additional_params,
     ):
         self.optional_params = optional_params
-        self.model = model
+        if model is not None:
+            self.model = model
         self.user = user
         self.litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
         self.logger_fn = litellm_params.get("logger_fn", None)
@@ -749,6 +760,8 @@ class Logging(LiteLLMLoggingBaseClass):
             TextCompletionResponse,
             HttpxBinaryResponseContent,
             RerankResponse,
+            Batch,
+            FineTuningJob,
         ],
         cache_hit: Optional[bool] = None,
     ) -> Optional[float]:
@@ -789,11 +802,15 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
             }
         except Exception as e:  # error creating kwargs for cost calculation
+            debug_info = StandardLoggingModelCostFailureDebugInformation(
+                error_str=str(e),
+                traceback_str=traceback.format_exc(),
+            )
+            verbose_logger.debug(
+                f"response_cost_failure_debug_information: {debug_info}"
+            )
             self.model_call_details["response_cost_failure_debug_information"] = (
-                StandardLoggingModelCostFailureDebugInformation(
-                    error_str=str(e),
-                    traceback_str=traceback.format_exc(),
-                )
+                debug_info
             )
             return None
 
@@ -803,19 +820,23 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return response_cost
         except Exception as e:  # error calculating cost
+            debug_info = StandardLoggingModelCostFailureDebugInformation(
+                error_str=str(e),
+                traceback_str=traceback.format_exc(),
+                model=response_cost_calculator_kwargs["model"],
+                cache_hit=response_cost_calculator_kwargs["cache_hit"],
+                custom_llm_provider=response_cost_calculator_kwargs[
+                    "custom_llm_provider"
+                ],
+                base_model=response_cost_calculator_kwargs["base_model"],
+                call_type=response_cost_calculator_kwargs["call_type"],
+                custom_pricing=response_cost_calculator_kwargs["custom_pricing"],
+            )
+            verbose_logger.debug(
+                f"response_cost_failure_debug_information: {debug_info}"
+            )
             self.model_call_details["response_cost_failure_debug_information"] = (
-                StandardLoggingModelCostFailureDebugInformation(
-                    error_str=str(e),
-                    traceback_str=traceback.format_exc(),
-                    model=response_cost_calculator_kwargs["model"],
-                    cache_hit=response_cost_calculator_kwargs["cache_hit"],
-                    custom_llm_provider=response_cost_calculator_kwargs[
-                        "custom_llm_provider"
-                    ],
-                    base_model=response_cost_calculator_kwargs["base_model"],
-                    call_type=response_cost_calculator_kwargs["call_type"],
-                    custom_pricing=response_cost_calculator_kwargs["custom_pricing"],
-                )
+                debug_info
             )
 
         return None
@@ -857,6 +878,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, TextCompletionResponse)
                     or isinstance(result, HttpxBinaryResponseContent)  # tts
                     or isinstance(result, RerankResponse)
+                    or isinstance(result, Batch)
+                    or isinstance(result, FineTuningJob)
                 ):
                     ## RESPONSE COST ##
                     self.model_call_details["response_cost"] = (
@@ -1182,7 +1205,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
                         if langfuse_logger_to_use is not None:
-                            _response = langfuse_logger_to_use.log_event(
+                            _response = langfuse_logger_to_use._old_log_event(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,
@@ -1905,7 +1928,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
-                        _response = langfuse_logger_to_use.log_event(
+                        _response = langfuse_logger_to_use._old_log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
@@ -2304,8 +2327,11 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         for callback in _in_memory_loggers:
             if isinstance(callback, OpenTelemetry):
                 return callback  # type: ignore
-
-        otel_logger = OpenTelemetry()
+        otel_logger = OpenTelemetry(
+            **_get_custom_logger_settings_from_proxy_server(
+                callback_name=logging_integration
+            )
+        )
         _in_memory_loggers.append(otel_logger)
         return otel_logger  # type: ignore
 
@@ -2519,6 +2545,23 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 return callback
 
     return None
+
+
+def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
+    """
+    Get the settings for a custom logger from the proxy server config.yaml
+
+    Proxy server config.yaml defines callback_settings as:
+
+    callback_settings:
+        otel:
+            message_logging: False
+    """
+    from litellm.proxy.proxy_server import callback_settings
+
+    if callback_settings:
+        return dict(callback_settings.get(callback_name, {}))
+    return {}
 
 
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
@@ -2871,9 +2914,11 @@ def get_standard_logging_object_payload(
         litellm_params = kwargs.get("litellm_params", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         end_user_id = proxy_server_request.get("body", {}).get("user", None)
-        metadata = (
-            litellm_params.get("metadata", {}) or {}
-        )  # if litellm_params['metadata'] == None
+        metadata: dict = (
+            litellm_params.get("litellm_metadata")
+            or litellm_params.get("metadata", None)
+            or {}
+        )
         completion_start_time = kwargs.get("completion_start_time", end_time)
         call_type = kwargs.get("call_type")
         cache_hit = kwargs.get("cache_hit", False)
@@ -2947,12 +2992,21 @@ def get_standard_logging_object_payload(
             kwargs=kwargs,
         )
 
+        stream: Optional[bool] = None
+        if (
+            kwargs.get("complete_streaming_response") is not None
+            or kwargs.get("async_complete_streaming_response") is not None
+        ):
+            stream = True
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=kwargs.get("litellm_trace_id"),  # type: ignore
             call_type=call_type or "",
             cache_hit=cache_hit,
+            stream=stream,
             status=status,
+            custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
             endTime=end_time_float,

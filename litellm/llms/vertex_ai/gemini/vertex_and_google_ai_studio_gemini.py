@@ -2,7 +2,6 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
-import types
 import uuid
 from copy import deepcopy
 from functools import partial
@@ -26,10 +25,6 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_generic_image_chunk_to_openai_image_obj,
-    convert_to_anthropic_image_obj,
-)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -52,7 +47,6 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
-    PartType,
     ToolConfig,
     Tools,
 )
@@ -60,7 +54,9 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     GenericStreamingChunk,
+    PromptTokensDetailsWrapper,
     TopLogprob,
+    Usage,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
@@ -81,145 +77,7 @@ else:
     LoggingClass = Any
 
 
-class VertexAIConfig:
-    """
-    Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
-    Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
-
-    The class `VertexAIConfig` provides configuration for the VertexAI's API interface. Below are the parameters:
-
-    - `temperature` (float): This controls the degree of randomness in token selection.
-
-    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
-
-    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
-
-    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
-
-    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'.
-
-    - `candidate_count` (int): Number of generated responses to return.
-
-    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
-
-    - `frequency_penalty` (float): This parameter is used to penalize the model from repeating the same output. The default value is 0.0.
-
-    - `presence_penalty` (float): This parameter is used to penalize the model from generating the same output as the input. The default value is 0.0.
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
-    frequency_penalty: Optional[float] = None
-    presence_penalty: Optional[float] = None
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-        frequency_penalty: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "max_completion_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "n",
-            "stop",
-            "extra_headers",
-        ]
-
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if (
-                param == "stream" and value is True
-            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
-                optional_params["stream"] = value
-            if param == "n":
-                optional_params["candidate_count"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    optional_params["stop_sequences"] = [value]
-                elif isinstance(value, list):
-                    optional_params["stop_sequences"] = value
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_output_tokens"] = value
-            if (
-                param == "response_format"
-                and isinstance(value, dict)
-                and value["type"] == "json_object"
-            ):
-                optional_params["response_mime_type"] = "application/json"
-            if param == "frequency_penalty":
-                optional_params["frequency_penalty"] = value
-            if param == "presence_penalty":
-                optional_params["presence_penalty"] = value
-            if param == "tools" and isinstance(value, list):
-                from vertexai.preview import generative_models
-
-                gtool_func_declarations = []
-                for tool in value:
-                    gtool_func_declaration = generative_models.FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    generative_models.Tool(
-                        function_declarations=gtool_func_declarations
-                    )
-                ]
-            if param == "tool_choice" and (
-                isinstance(value, str) or isinstance(value, dict)
-            ):
-                pass
-        return optional_params
-
+class VertexAIBaseConfig:
     def get_mapped_special_auth_params(self) -> dict:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
@@ -267,7 +125,7 @@ class VertexAIConfig:
         ]
 
 
-class VertexGeminiConfig(BaseConfig):
+class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
@@ -679,7 +537,7 @@ class VertexGeminiConfig(BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
-        usage = litellm.Usage(
+        usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
@@ -717,7 +575,7 @@ class VertexGeminiConfig(BaseConfig):
         model_response.choices = [choice]
 
         ## GET USAGE ##
-        usage = litellm.Usage(
+        usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
                 "promptTokenCount", 0
             ),
@@ -730,6 +588,35 @@ class VertexGeminiConfig(BaseConfig):
         setattr(model_response, "usage", usage)
 
         return model_response
+
+    def _calculate_usage(
+        self,
+        completion_response: GenerateContentResponseBody,
+    ) -> Usage:
+        cached_tokens: Optional[int] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        if "cachedContentTokenCount" in completion_response["usageMetadata"]:
+            cached_tokens = completion_response["usageMetadata"][
+                "cachedContentTokenCount"
+            ]
+
+        if cached_tokens is not None:
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                cached_tokens=cached_tokens,
+            )
+        ## GET USAGE ##
+        usage = Usage(
+            prompt_tokens=completion_response["usageMetadata"].get(
+                "promptTokenCount", 0
+            ),
+            completion_tokens=completion_response["usageMetadata"].get(
+                "candidatesTokenCount", 0
+            ),
+            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
+            prompt_tokens_details=prompt_tokens_details,
+        )
+
+        return usage
 
     def transform_response(
         self,
@@ -854,19 +741,7 @@ class VertexGeminiConfig(BaseConfig):
 
                     model_response.choices.append(choice)
 
-            ## GET USAGE ##
-            usage = litellm.Usage(
-                prompt_tokens=completion_response["usageMetadata"].get(
-                    "promptTokenCount", 0
-                ),
-                completion_tokens=completion_response["usageMetadata"].get(
-                    "candidatesTokenCount", 0
-                ),
-                total_tokens=completion_response["usageMetadata"].get(
-                    "totalTokenCount", 0
-                ),
-            )
-
+            usage = self._calculate_usage(completion_response=completion_response)
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##
@@ -941,126 +816,6 @@ class VertexGeminiConfig(BaseConfig):
             default_headers.update(headers)
 
         return default_headers
-
-
-class GoogleAIStudioGeminiConfig(
-    VertexGeminiConfig
-):  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
-    """
-    Reference: https://ai.google.dev/api/rest/v1beta/GenerationConfig
-
-    The class `GoogleAIStudioGeminiConfig` provides configuration for the Google AI Studio's Gemini API interface. Below are the parameters:
-
-    - `temperature` (float): This controls the degree of randomness in token selection.
-
-    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
-
-    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
-
-    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
-
-    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'. Other values - `application/json`.
-
-    - `response_schema` (dict): Optional. Output response schema of the generated candidate text when response mime type can have schema. Schema can be objects, primitives or arrays and is a subset of OpenAPI schema. If set, a compatible response_mime_type must also be set. Compatible mimetypes: application/json: Schema for JSON response.
-
-    - `candidate_count` (int): Number of generated responses to return.
-
-    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    response_schema: Optional[dict] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        response_schema: Optional[dict] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return super().get_config()
-
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "max_completion_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-            "functions",
-            "response_format",
-            "n",
-            "stop",
-            "logprobs",
-        ]
-
-    def map_openai_params(
-        self,
-        non_default_params: Dict,
-        optional_params: Dict,
-        model: str,
-        drop_params: bool,
-    ) -> Dict:
-
-        # drop frequency_penalty and presence_penalty
-        if "frequency_penalty" in non_default_params:
-            del non_default_params["frequency_penalty"]
-        if "presence_penalty" in non_default_params:
-            del non_default_params["presence_penalty"]
-        return super().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=drop_params,
-        )
-
-    def _transform_messages(
-        self, messages: List[AllMessageValues]
-    ) -> List[ContentType]:
-        """
-        Google AI Studio Gemini does not support image urls in messages.
-        """
-        for message in messages:
-            _message_content = message.get("content")
-            if _message_content is not None and isinstance(_message_content, list):
-                _parts: List[PartType] = []
-                for element in _message_content:
-                    if element.get("type") == "image_url":
-                        img_element = element
-                        _image_url: Optional[str] = None
-                        if isinstance(img_element.get("image_url"), dict):
-                            _image_url = img_element["image_url"].get("url")  # type: ignore
-                        else:
-                            _image_url = img_element.get("image_url")  # type: ignore
-                        if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(_image_url)
-                            img_element["image_url"] = (  # type: ignore
-                                convert_generic_image_chunk_to_openai_image_obj(
-                                    image_obj
-                                )
-                            )
-        return _gemini_convert_messages_with_history(messages=messages)
 
 
 async def make_call(

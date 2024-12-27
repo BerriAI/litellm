@@ -148,12 +148,7 @@ class LangFuseLogger:
 
         return metadata
 
-    # def log_error(kwargs, response_obj, start_time, end_time):
-    #     generation = trace.generation(
-    #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
-    #         status_message='error' # can be any string (e.g. stringified stack trace or error body)
-    #     )
-    def log_event(  # noqa: PLR0915
+    def _old_log_event(  # noqa: PLR0915
         self,
         kwargs,
         response_obj,
@@ -167,7 +162,7 @@ class LangFuseLogger:
         # Method definition
 
         try:
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
@@ -260,7 +255,9 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj.get("response", "")
-            print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            verbose_logger.debug(
+                f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}"
+            )
             trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
@@ -291,7 +288,7 @@ class LangFuseLogger:
                     input,
                     response_obj,
                 )
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
             verbose_logger.info("Langfuse Layer Logging - logging success")
@@ -444,7 +441,7 @@ class LangFuseLogger:
     ) -> tuple:
         import langfuse
 
-        print_verbose("Langfuse Layer Logging - logging to langfuse v2")
+        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
             metadata = self._prepare_metadata(metadata)
@@ -577,7 +574,7 @@ class LangFuseLogger:
                     trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
 
             cost = kwargs.get("response_cost", None)
-            print_verbose(f"trace: {cost}")
+            verbose_logger.debug(f"trace: {cost}")
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:

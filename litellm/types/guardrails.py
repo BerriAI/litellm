@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -132,3 +132,7 @@ class BedrockContentItem(TypedDict, total=False):
 class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
     content: List[BedrockContentItem]
+
+
+class DynamicGuardrailParams(TypedDict):
+    extra_body: Dict[str, Any]

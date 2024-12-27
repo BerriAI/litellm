@@ -1440,7 +1440,7 @@ def test_completion_fireworks_ai():
             },
         ]
         response = completion(
-            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            model="fireworks_ai/mixtral-8x7b-instruct",
             messages=messages,
         )
         print(response)

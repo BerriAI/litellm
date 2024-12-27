@@ -365,7 +365,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
                     response = client.post(
-                        api_base, headers=headers, data=json.dumps(data)
+                        url=api_base, headers=headers, data=json.dumps(data)
                     )
                     response.raise_for_status()
 

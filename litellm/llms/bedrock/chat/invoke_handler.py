@@ -9,7 +9,17 @@ import types
 import urllib.parse
 import uuid
 from functools import partial
-from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -36,8 +46,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, get_secret
@@ -791,7 +803,7 @@ class BedrockLLM(BaseAWSLLM):
             )
             raise BedrockError(
                 status_code=404,
-                message="Bedrock HTTPX: Unknown provider={}, model={}".format(
+                message="Bedrock Invoke HTTPX: Unknown provider={}, model={}. Try calling via converse route - `bedrock/converse/<model>`.".format(
                     provider, model
                 ),
             )
@@ -1294,10 +1306,24 @@ class MockResponseIterator:  # for returning ai21 streaming responses
             chunk_usage: Usage = getattr(chunk_data, "usage")
             text = chunk_data.choices[0].message.content or ""  # type: ignore
             tool_use = None
+            _model_response_tool_call = cast(
+                Optional[List[ChatCompletionMessageToolCall]],
+                cast(Choices, chunk_data.choices[0]).message.tool_calls,
+            )
             if self.json_mode is True:
                 text, tool_use = self._handle_json_mode_chunk(
                     text=text,
                     tool_calls=chunk_data.choices[0].message.tool_calls,  # type: ignore
+                )
+            elif _model_response_tool_call is not None:
+                tool_use = ChatCompletionToolCallChunk(
+                    id=_model_response_tool_call[0].id,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=_model_response_tool_call[0].function.name,
+                        arguments=_model_response_tool_call[0].function.arguments,
+                    ),
+                    index=0,
                 )
             processed_chunk = GChunk(
                 text=text,

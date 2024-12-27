@@ -122,6 +122,7 @@ class ModelInfoBase(TypedDict, total=False):
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
+    supports_embedding_image_input: Optional[bool]
     supports_audio_output: Optional[bool]
     supports_pdf_input: Optional[bool]
     tpm: Optional[int]
@@ -169,6 +170,8 @@ class CallTypes(Enum):
     rerank = "rerank"
     arerank = "arerank"
     arealtime = "_arealtime"
+    create_batch = "create_batch"
+    acreate_batch = "acreate_batch"
     pass_through = "pass_through_endpoint"
 
 
@@ -190,6 +193,9 @@ CallTypesLiteral = Literal[
     "rerank",
     "arerank",
     "_arealtime",
+    "create_batch",
+    "acreate_batch",
+    "pass_through_endpoint",
 ]
 
 
@@ -1501,11 +1507,13 @@ class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
+    stream: Optional[bool]
     response_cost: float
     response_cost_failure_debug_info: Optional[
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
@@ -1586,6 +1594,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
 all_litellm_params = [
     "metadata",
+    "litellm_metadata",
     "litellm_trace_id",
     "tags",
     "acompletion",
@@ -1594,6 +1603,7 @@ all_litellm_params = [
     "text_completion",
     "caching",
     "mock_response",
+    "mock_timeout",
     "api_key",
     "api_version",
     "prompt_id",
@@ -1684,17 +1694,25 @@ class StandardKeyGenerationConfig(TypedDict, total=False):
     personal_key_generation: PersonalUIKeyGenerationConfig
 
 
-class GenericBudgetInfo(BaseModel):
-    time_period: str  # e.g., '1d', '30d'
-    budget_limit: float
-
-
-GenericBudgetConfigType = Dict[str, GenericBudgetInfo]
-
-
 class BudgetConfig(BaseModel):
-    max_budget: float
-    budget_duration: str
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+    def __init__(self, **data: Any) -> None:
+        # Map time_period to budget_duration if present
+        if "time_period" in data:
+            data["budget_duration"] = data.pop("time_period")
+
+        # Map budget_limit to max_budget if present
+        if "budget_limit" in data:
+            data["max_budget"] = data.pop("budget_limit")
+
+        super().__init__(**data)
+
+
+GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):

@@ -2,11 +2,19 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Fireworks AI
-https://fireworks.ai/
+
 
 :::info
 **We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when sending completion requests**
 :::
+
+| Property | Details |
+|-------|-------|
+| Description | The fastest and most efficient inference engine to build production-ready, compound AI systems. |
+| Provider Route on LiteLLM | `fireworks_ai/` |
+| Provider Doc | [Fireworks AI ↗](https://docs.fireworks.ai/getting-started/introduction) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/audio/transcriptions` |
+
 
 ## Overview
 
@@ -211,3 +219,61 @@ We support ALL Fireworks AI models, just set `fireworks_ai/` as a prefix when se
 | fireworks_ai/WhereIsAI/UAE-Large-V1 | `response = litellm.embedding(model="fireworks_ai/WhereIsAI/UAE-Large-V1", input=input_text)` |
 | fireworks_ai/thenlper/gte-large | `response = litellm.embedding(model="fireworks_ai/thenlper/gte-large", input=input_text)` |
 | fireworks_ai/thenlper/gte-base | `response = litellm.embedding(model="fireworks_ai/thenlper/gte-base", input=input_text)` |
+
+
+## Audio Transcription
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import transcription
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
+
+response = transcription(
+    model="fireworks_ai/whisper-v3",
+    audio=audio_file,
+)
+```
+
+[Pass API Key/API Base in `.transcription`](../set_keys.md#passing-args-to-completion)
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: whisper-v3
+    litellm_params:
+      model: fireworks_ai/whisper-v3
+      api_base: https://audio-prod.us-virginia-1.direct.fireworks.ai/v1
+      api_key: os.environ/FIREWORKS_API_KEY
+    model_info:
+      mode: audio_transcription
+```
+
+2. Start Proxy
+
+```
+litellm --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/audio/transcriptions' \
+-H 'Authorization: Bearer sk-1234' \
+-F 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
+-F 'model="whisper-v3"' \
+-F 'response_format="verbose_json"' \
+```
+
+</TabItem>
+</Tabs>

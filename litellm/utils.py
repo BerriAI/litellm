@@ -110,10 +110,12 @@ from litellm.router_utils.get_retry_from_policy import (
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.openai import (
     AllMessageValues,
+    AllPromptValues,
     ChatCompletionAssistantToolCall,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    OpenAITextCompletionUserMessage,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import FileTypes  # type: ignore
@@ -169,7 +171,11 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    BaseAudioTranscriptionConfig,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
@@ -712,16 +718,8 @@ def client(original_function):  # noqa: PLR0915
     def wrapper(*args, **kwargs):  # noqa: PLR0915
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
-        if (
-            kwargs.get("acompletion", False) is True
-            or kwargs.get("aembedding", False) is True
-            or kwargs.get("aimg_generation", False) is True
-            or kwargs.get("amoderation", False) is True
-            or kwargs.get("atext_completion", False) is True
-            or kwargs.get("atranscription", False) is True
-            or kwargs.get("arerank", False) is True
-            or kwargs.get("_arealtime", False) is True
-        ):
+        call_type = original_function.__name__
+        if _is_async_request(kwargs):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
                 # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
@@ -759,20 +757,10 @@ def client(original_function):  # noqa: PLR0915
         )
 
         # only set litellm_call_id if its not in kwargs
-        call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
-        model: Optional[str] = None
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except Exception:
-            model = None
-            if (
-                call_type != CallTypes.image_generation.value
-                and call_type != CallTypes.text_completion.value
-            ):
-                raise ValueError("model param not passed in.")
+        model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
 
         try:
             if logging_obj is None:
@@ -1022,16 +1010,7 @@ def client(original_function):  # noqa: PLR0915
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
-        model = ""
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except Exception:
-            if (
-                call_type != CallTypes.aimage_generation.value  # model optional
-                and call_type != CallTypes.atext_completion.value  # can also be engine
-                and call_type != CallTypes.amoderation.value
-            ):
-                raise ValueError("model param not passed in.")
+        model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
 
         try:
             if logging_obj is None:
@@ -1054,7 +1033,7 @@ def client(original_function):  # noqa: PLR0915
             )
             _caching_handler_response: CachingHandlerResponse = (
                 await _llm_caching_handler._async_get_cache(
-                    model=model,
+                    model=model or "",
                     original_function=original_function,
                     logging_obj=logging_obj,
                     start_time=start_time,
@@ -1100,7 +1079,7 @@ def client(original_function):  # noqa: PLR0915
                     "id", None
                 )
                 result._hidden_params["api_base"] = get_api_base(
-                    model=model,
+                    model=model or "",
                     optional_params=kwargs,
                 )
                 result._hidden_params["response_cost"] = (
@@ -1228,6 +1207,38 @@ def client(original_function):  # noqa: PLR0915
         return wrapper_async
     else:
         return wrapper
+
+
+def _is_async_request(
+    kwargs: Optional[dict],
+    is_pass_through: bool = False,
+) -> bool:
+    """
+    Returns True if the call type is an internal async request.
+
+    eg. litellm.acompletion, litellm.aimage_generation, litellm.acreate_batch, litellm._arealtime
+
+    Args:
+        kwargs (dict): The kwargs passed to the litellm function
+        is_pass_through (bool): Whether the call is a pass-through call. By default all pass through calls are async.
+    """
+    if kwargs is None:
+        return False
+    if (
+        kwargs.get("acompletion", False) is True
+        or kwargs.get("aembedding", False) is True
+        or kwargs.get("aimg_generation", False) is True
+        or kwargs.get("amoderation", False) is True
+        or kwargs.get("atext_completion", False) is True
+        or kwargs.get("atranscription", False) is True
+        or kwargs.get("arerank", False) is True
+        or kwargs.get("_arealtime", False) is True
+        or kwargs.get("acreate_batch", False) is True
+        or kwargs.get("acreate_fine_tuning_job", False) is True
+        or is_pass_through is True
+    ):
+        return True
+    return False
 
 
 @lru_cache(maxsize=128)
@@ -1654,7 +1665,9 @@ def supports_system_messages(model: str, custom_llm_provider: Optional[str]) -> 
     )
 
 
-def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> bool:
+def supports_response_schema(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
     """
     Check if the given model + provider supports 'response_schema' as a param.
 
@@ -1819,6 +1832,19 @@ def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bo
         return False
 
 
+def supports_embedding_image_input(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports embedding image input and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_embedding_image_input",
+    )
+
+
 def supports_parallel_function_calling(model: str):
     """
     Check if the given model supports parallel function calling and return True if it does, False otherwise.
@@ -1931,7 +1957,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
 
 
 def get_litellm_params(
-    api_key=None,
+    api_key: Optional[str] = None,
     force_timeout=600,
     azure=False,
     logger_fn=None,
@@ -1939,12 +1965,12 @@ def get_litellm_params(
     hugging_face=False,
     replicate=False,
     together_ai=False,
-    custom_llm_provider=None,
-    api_base=None,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
     litellm_call_id=None,
     model_alias_map=None,
     completion_call_id=None,
-    metadata=None,
+    metadata: Optional[dict] = None,
     model_info=None,
     proxy_server_request=None,
     acompletion=None,
@@ -1958,10 +1984,11 @@ def get_litellm_params(
     text_completion=None,
     azure_ad_token_provider=None,
     user_continue_message=None,
-    base_model=None,
-    litellm_trace_id=None,
+    base_model: Optional[str] = None,
+    litellm_trace_id: Optional[str] = None,
     hf_model_name: Optional[str] = None,
     custom_prompt_dict: Optional[dict] = None,
+    litellm_metadata: Optional[dict] = None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -1993,8 +2020,8 @@ def get_litellm_params(
         "litellm_trace_id": litellm_trace_id,
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
+        "litellm_metadata": litellm_metadata,
     }
-
     return litellm_params
 
 
@@ -2074,12 +2101,28 @@ def get_optional_params_transcription(
                     )
             return non_default_params
 
+    provider_config: Optional[BaseAudioTranscriptionConfig] = None
+    if custom_llm_provider is not None:
+        provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+
     if custom_llm_provider == "openai" or custom_llm_provider == "azure":
         optional_params = non_default_params
     elif custom_llm_provider == "groq":
         supported_params = litellm.GroqSTTConfig().get_supported_openai_params_stt()
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.GroqSTTConfig().map_openai_params_stt(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+    elif provider_config is not None:  # handles fireworks ai, and any future providers
+        supported_params = provider_config.get_supported_openai_params(model=model)
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -4425,6 +4468,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_audio_input=_model_info.get("supports_audio_input", False),
                 supports_audio_output=_model_info.get("supports_audio_output", False),
                 supports_pdf_input=_model_info.get("supports_pdf_input", False),
+                supports_embedding_image_input=_model_info.get(
+                    "supports_embedding_image_input", False
+                ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
             )
@@ -5993,6 +6039,15 @@ def is_base64_encoded(s: str) -> bool:
         return False
 
 
+def get_base64_str(s: str) -> str:
+    """
+    s: b64str OR data:image/png;base64,b64str
+    """
+    if "," in s:
+        return s.split(",")[1]
+    return s
+
+
 def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     """
     Returns true, if messages has tool call blocks.
@@ -6261,6 +6316,26 @@ class ProviderConfigManager:
             return litellm.InfinityRerankConfig()
         return litellm.CohereRerankConfig()
 
+    @staticmethod
+    def get_provider_audio_transcription_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAudioTranscriptionConfig]:
+        if litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIAudioTranscriptionConfig()
+        return None
+
+    @staticmethod
+    def get_provider_text_completion_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseTextCompletionConfig:
+        if LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAITextCompletionConfig()
+        elif LlmProviders.TOGETHER_AI == provider:
+            return litellm.TogetherAITextCompletionConfig()
+        return litellm.OpenAITextCompletionConfig()
+
 
 def get_end_user_id_for_cost_tracking(
     litellm_params: dict,
@@ -6316,3 +6391,31 @@ def is_prompt_caching_valid_prompt(
     except Exception as e:
         verbose_logger.error(f"Error in is_prompt_caching_valid_prompt: {e}")
         return False
+
+
+def extract_duration_from_srt_or_vtt(srt_or_vtt_content: str) -> Optional[float]:
+    """
+    Extracts the total duration (in seconds) from SRT or VTT content.
+
+    Args:
+        srt_or_vtt_content (str): The content of an SRT or VTT file as a string.
+
+    Returns:
+        Optional[float]: The total duration in seconds, or None if no timestamps are found.
+    """
+    # Regular expression to match timestamps in the format "hh:mm:ss,ms" or "hh:mm:ss.ms"
+    timestamp_pattern = r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})"
+
+    timestamps = re.findall(timestamp_pattern, srt_or_vtt_content)
+
+    if not timestamps:
+        return None
+
+    # Convert timestamps to seconds and find the max (end time)
+    durations = []
+    for match in timestamps:
+        hours, minutes, seconds, milliseconds = map(int, match)
+        total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
+        durations.append(total_seconds)
+
+    return max(durations) if durations else None

@@ -274,7 +274,7 @@ def test_vertex_ai_anthropic_streaming():
 # )
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_vertex_ai_anthropic_async():
+async def test_aavertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
     try:
 

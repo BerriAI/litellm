@@ -131,11 +131,11 @@ async def unblock_user(data: BlockUsers):
     return {"blocked_users": litellm.blocked_user_list}
 
 
-def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNew]:
+def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
     """
     Return a new budget object if new budget params are passed.
     """
-    budget_params = BudgetNew.model_fields.keys()
+    budget_params = BudgetNewRequest.model_fields.keys()
     budget_kv_pairs = {}
 
     # Get the actual values from the data object using getattr
@@ -147,7 +147,7 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNew]:
             budget_kv_pairs[field_name] = value
 
     if budget_kv_pairs:
-        return BudgetNew(**budget_kv_pairs)
+        return BudgetNewRequest(**budget_kv_pairs)
     return None
 
 
@@ -182,6 +182,7 @@ async def new_end_user(
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+    - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     
@@ -271,7 +272,7 @@ async def new_end_user(
         _user_data = data.dict(exclude_none=True)
 
         for k, v in _user_data.items():
-            if k not in BudgetNew.model_fields.keys():
+            if k not in BudgetNewRequest.model_fields.keys():
                 new_end_user_obj[k] = v
 
         ## WRITE TO DB ##

@@ -11,8 +11,9 @@ model_list:
     litellm_params:
       model: bedrock/*
 
+litellm_settings:
+  callbacks: ["otel"]
 
-# for /files endpoints
-files_settings:
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
+# callback_settings:
+#   otel:
+#     message_logging: False

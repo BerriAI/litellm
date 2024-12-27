@@ -14,7 +14,7 @@ from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingResponse,
 )
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
-from litellm.utils import is_base64_encoded
+from litellm.utils import get_base64_str, is_base64_encoded
 
 
 class AmazonTitanMultimodalEmbeddingG1Config:
@@ -44,15 +44,15 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         ## check if b64 encoded str or not ##
         is_encoded = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
+            b64_str = get_base64_str(input)
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(
-                inputImage=input
+                inputImage=b64_str
             )
         else:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
         for k, v in inference_params.items():
             transformed_request[k] = v  # type: ignore
-
         return transformed_request
 
     def _transform_response(

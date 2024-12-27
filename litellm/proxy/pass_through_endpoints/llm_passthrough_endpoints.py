@@ -313,6 +313,65 @@ async def azure_proxy_route(
         raise Exception(
             "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
         )
+    # Add or update query parameters
+    azure_api_key = get_secret_str(secret_name="AZURE_API_KEY")
+    if azure_api_key is None:
+        raise Exception(
+            "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
+        )
+
+    return await _base_openai_pass_through_handler(
+        endpoint=endpoint,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        base_target_url=base_target_url,
+        api_key=azure_api_key,
+    )
+
+
+@router.api_route(
+    "/openai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["OpenAI Pass-through", "pass-through"],
+)
+async def openai_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Simple pass-through for OpenAI. Use this if you want to directly send a request to OpenAI.
+
+
+    """
+    base_target_url = "https://api.openai.com"
+    # Add or update query parameters
+    openai_api_key = get_secret_str(secret_name="OPENAI_API_KEY")
+    if openai_api_key is None:
+        raise Exception(
+            "Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI."
+        )
+
+    return await _base_openai_pass_through_handler(
+        endpoint=endpoint,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        base_target_url=base_target_url,
+        api_key=openai_api_key,
+    )
+
+
+async def _base_openai_pass_through_handler(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    base_target_url: str,
+    api_key: str,
+):
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -322,9 +381,6 @@ async def azure_proxy_route(
     # Construct the full target URL using httpx
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(path=encoded_endpoint)
-
-    # Add or update query parameters
-    azure_api_key = get_secret_str(secret_name="AZURE_API_KEY")
 
     ## check for streaming
     is_streaming_request = False
@@ -336,8 +392,8 @@ async def azure_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={
-            "authorization": "Bearer {}".format(azure_api_key),
-            "api-key": "{}".format(azure_api_key),
+            "authorization": "Bearer {}".format(api_key),
+            "api-key": "{}".format(api_key),
         },
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(

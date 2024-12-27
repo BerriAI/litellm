@@ -36,6 +36,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -2238,6 +2239,32 @@ def test_bedrock_nova_topk(top_k_param):
         )
 
 
+def test_bedrock_cross_region_inference(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/us.meta.llama3-3-70b-instruct-v1:0",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1:0/converse"
+        )
+
+
 def test_bedrock_empty_content_real_call():
     completion(
         model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -2325,3 +2352,30 @@ def test_nova_optional_params_tool_choice():
         ],
         tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
     )
+
+
+class TestBedrockEmbedding(BaseLLMEmbeddingTest):
+    def get_base_embedding_call_args(self) -> dict:
+        return {
+            "model": "bedrock/amazon.titan-embed-image-v1",
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def test_bedrock_image_embedding_transformation(self):
+        from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+            AmazonTitanMultimodalEmbeddingG1Config,
+        )
+
+        args = {
+            "input": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII=",
+            "inference_params": {},
+        }
+
+        transformed_request = (
+            AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
+        )
+        transformed_request[
+            "inputImage"
+        ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="

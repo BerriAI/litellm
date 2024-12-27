@@ -59,6 +59,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "dynamic_rate_limiter",
     "langsmith",
     "prometheus",
+    "otel",
     "datadog",
     "datadog_llm_observability",
     "galileo",
@@ -1040,6 +1041,7 @@ from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.together_ai.chat import TogetherAIConfig
+from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
@@ -1049,9 +1051,11 @@ from .llms.petals.completion.transformation import PetalsConfig
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
+    VertexGeminiConfig as VertexAIConfig,
+)
+from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig,
-    VertexAIConfig,
-    GoogleAIStudioGeminiConfig as GeminiConfig,
+    GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
 )
 
 
@@ -1134,6 +1138,10 @@ from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
+from .llms.fireworks_ai.audio_transcription.transformation import (
+    FireworksAIAudioTranscriptionConfig,
+)
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
