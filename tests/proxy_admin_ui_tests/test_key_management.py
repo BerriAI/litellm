@@ -807,7 +807,7 @@ async def test_key_update_with_model_specific_params(prisma_client):
     request._url = URL(url="/update/key")
 
     args = {
-        "key_alias": "test-key",
+        "key_alias": f"test-key_{uuid.uuid4()}",
         "duration": None,
         "models": ["all-team-models"],
         "spend": 0,
