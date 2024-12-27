@@ -130,6 +130,13 @@ class CustomGuardrail(CustomLogger):
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
         """
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True:
+            verbose_logger.warning(
+                f"Guardrail Tracing is only available for premium users. Skipping guardrail logging for guardrail={self.guardrail_name} event_hook={self.event_hook}"
+            )
+            return
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
         slg = StandardLoggingGuardrailInformation(
