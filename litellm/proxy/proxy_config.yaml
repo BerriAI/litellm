@@ -11,9 +11,12 @@ model_list:
     litellm_params:
       model: bedrock/*
 
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q # your guardrail ID on bedrock
+      guardrailVersion: "DRAFT"         # your guardrail version on bedrock
 litellm_settings:
-  callbacks: ["otel"]
-
-# callback_settings:
-#   otel:
-#     message_logging: False
+  callbacks: ["datadog"]
