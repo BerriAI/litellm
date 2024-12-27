@@ -11,9 +11,22 @@ model_list:
     litellm_params:
       model: bedrock/*
 
-litellm_settings:
-  callbacks: ["otel"]
 
-# callback_settings:
-#   otel:
-#     message_logging: False
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+    guardrail_info:
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
+
+
+litellm_settings:
+  callbacks: ["datadog"]

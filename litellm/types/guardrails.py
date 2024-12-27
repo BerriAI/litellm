@@ -136,3 +136,12 @@ class BedrockRequest(TypedDict, total=False):
 
 class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
+
+
+class GuardrailInfoResponse(BaseModel):
+    guardrail_name: Optional[str]
+    guardrail_info: Optional[Dict]  # This will contain all other fields
+
+
+class ListGuardrailsResponse(BaseModel):
+    guardrails: List[GuardrailInfoResponse]
