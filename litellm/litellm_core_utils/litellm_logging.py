@@ -3038,6 +3038,9 @@ def get_standard_logging_object_payload(
             response_cost_failure_debug_info=kwargs.get(
                 "response_cost_failure_debug_information"
             ),
+            guardrail_information=metadata.get(
+                "standard_logging_guardrail_information", None
+            ),
         )
 
         return payload
