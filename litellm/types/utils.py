@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
+from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
@@ -1500,6 +1501,12 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: Optional[str]
 
 
+class StandardLoggingGuardrailInformation(TypedDict, total=False):
+    guardrail_name: Optional[str]
+    guardrail_mode: Optional[GuardrailEventHooks]
+    guardrail_response: Optional[dict]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
@@ -1539,6 +1546,7 @@ class StandardLoggingPayload(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
+    guardrail_information: Optional[StandardLoggingGuardrailInformation]
 
 
 from typing import AsyncIterator, Iterator
