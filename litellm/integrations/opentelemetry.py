@@ -114,6 +114,21 @@ class OpenTelemetry(CustomLogger):
 
         # init CustomLogger params
         super().__init__(**kwargs)
+        self._init_otel_logger_on_litellm_proxy()
+
+    def _init_otel_logger_on_litellm_proxy(self):
+        """
+        Initializes OpenTelemetry for litellm proxy server
+
+        - Adds Otel as a service callback
+        - Sets `proxy_server.open_telemetry_logger` to self
+        """
+        from litellm.proxy import proxy_server
+
+        # Add Otel as a service callback
+        if "otel" not in litellm.service_callback:
+            litellm.service_callback.append("otel")
+        setattr(proxy_server, "open_telemetry_logger", self)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_sucess(kwargs, response_obj, start_time, end_time)
