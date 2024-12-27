@@ -11,7 +11,6 @@ from typing_extensions import TypedDict
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
-    BudgetConfig,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
