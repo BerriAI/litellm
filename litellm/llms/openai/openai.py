@@ -260,10 +260,17 @@ class OpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        raise NotImplementedError(
-            "OpenAI handler does this validation as it uses the OpenAI SDK."
-        )
+        if headers is None:
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+        if api_key is not None and "Authorization" not in headers:
+            headers.update({"Authorization": "Bearer {}".format(api_key)})
+
+        return headers
 
 
 class OpenAIChatCompletion(BaseLLM):

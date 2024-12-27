@@ -90,3 +90,24 @@ class AzureAIStudioConfig(OpenAIConfig):
             )
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if headers is None:
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+        # set 'api-key' in headers if api base is 'services.azure.ai'
+        if api_base and "services.ai.azure" in api_base:
+            headers["api-key"] = api_key
+        else:
+            headers["Authorization"] = "Bearer {}".format(api_key)
+        return headers

@@ -245,27 +245,23 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-        if isinstance(provider_config, OpenAILikeChatConfig):
-            ## GET HEADERS
-            headers = provider_config.validate_environment(
-                headers=headers or {},
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                api_key=api_key,
-            )
+        ## GET HEADERS
+        headers = provider_config.validate_environment(
+            headers=headers or {},
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
 
-            ## GET COMPLETE API BASE
-            api_base = provider_config.get_complete_url(
-                api_base=api_base,
-                model=model,
-                optional_params=optional_params,
-                stream=stream,
-            )
-        else:
-            raise NotImplementedError(
-                "OpenAI-like chat completion is not supported for this model"
-            )
+        ## GET COMPLETE API BASE
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+            stream=stream,
+        )
 
         extra_body = optional_params.pop("extra_body", {})
         json_mode = optional_params.pop("json_mode", None)

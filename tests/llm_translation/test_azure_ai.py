@@ -142,4 +142,6 @@ def test_azure_ai_global_standard_deployment():
             == "https://my-deployment-francecentral.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
         )
 
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "fake-api-key"
+
         print(resp)
