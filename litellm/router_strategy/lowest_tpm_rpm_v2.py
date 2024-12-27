@@ -411,14 +411,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             for deployment in healthy_deployments:
                 tpm_dict[deployment["model_info"]["id"]] = 0
         else:
-            dt = get_utc_datetime()
-            current_minute = dt.strftime(
-                "%H-%M"
-            )  # use the same timezone regardless of system clock
-
             for d in healthy_deployments:
                 ## if healthy deployment not yet used
-                tpm_key = f"{d['model_info']['id']}:tpm:{current_minute}"
+                tpm_key = d["model_info"]["id"]
                 if tpm_key not in tpm_dict or tpm_dict[tpm_key] is None:
                     tpm_dict[tpm_key] = 0
 

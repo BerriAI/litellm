@@ -175,7 +175,7 @@ def test_get_available_deployments():
 
 def test_router_get_available_deployments():
     """
-    Test if routers 'get_available_deployments' returns the least busy deployment
+    Test if routers 'get_available_deployments' returns the lowest tpm deployment
     """
     model_list = [
         {
