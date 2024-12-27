@@ -124,18 +124,22 @@ def get_supported_openai_params(  # noqa: PLR0915
                 return litellm.VertexAILlama3Config().get_supported_openai_params(
                     model=model
                 )
-            if model.startswith("mistral"):
+            elif model.startswith("mistral"):
                 return litellm.VertexAIMistralConfig().get_supported_openai_params(
                     model=model
                 )
-            if model.startswith("codestral"):
+            elif model.startswith("codestral"):
                 return (
                     litellm.CodestralTextCompletionConfig().get_supported_openai_params(
                         model=model
                     )
                 )
-            if model.startswith("claude"):
+            elif model.startswith("claude"):
                 return litellm.VertexAIAnthropicConfig().get_supported_openai_params(
+                    model=model
+                )
+            elif "openai" in model:
+                return litellm.VertexAIModelGardenConfig().get_supported_openai_params(
                     model=model
                 )
             return litellm.VertexGeminiConfig().get_supported_openai_params(model=model)
