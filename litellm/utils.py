@@ -6193,16 +6193,16 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
-            # elif "openai" in model:
-            #     return litellm.VertexAIOpenAIConfig()
-            # elif "llama" in model:
-            #     return litellm.VertexAILlama3Config()
-            # elif "mistral" in model:
-            #     return litellm.VertexAIMistralConfig()
-            # elif "jamba" in model:
-            #     return litellm.VertexAIJambaConfig()
-            # elif "codestral" in model:
-            #     return litellm.VertexAICodestralConfig()
+            elif "openai" in model:
+                return litellm.VertexAIModelGardenConfig()
+            elif "llama" in model:
+                return litellm.VertexAILlama3Config()
+            elif "mistral" in model:
+                return litellm.VertexAIMistralConfig()
+            elif "jamba" in model:
+                return litellm.VertexAIAi21Config()
+            elif "codestral" in model:
+                return litellm.CodestralTextCompletionConfig()
         elif litellm.LlmProviders.CLOUDFLARE == provider:
             return litellm.CloudflareChatConfig()
         elif litellm.LlmProviders.SAGEMAKER_CHAT == provider:

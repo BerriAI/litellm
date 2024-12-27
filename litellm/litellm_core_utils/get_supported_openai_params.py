@@ -121,9 +121,13 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
             if model.startswith("meta/"):
-                return litellm.VertexAILlama3Config().get_supported_openai_params()
+                return litellm.VertexAILlama3Config().get_supported_openai_params(
+                    model=model
+                )
             if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params(model=model)
+                return litellm.VertexAIMistralConfig().get_supported_openai_params(
+                    model=model
+                )
             if model.startswith("codestral"):
                 return (
                     litellm.CodestralTextCompletionConfig().get_supported_openai_params(

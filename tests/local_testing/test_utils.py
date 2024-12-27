@@ -1248,7 +1248,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 def _validate_config(config: BaseConfig, provider: str, model: str):
     assert isinstance(
         config, BaseConfig
-    ), f"Provider {provider}, model {model} is not inheriting from OpenAILikeChatConfig"
+    ), f"Provider {provider}, model {model} is not inheriting from BaseConfig"
 
 
 def test_openai_like_chat_completion_provider_config():

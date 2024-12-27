@@ -2,9 +2,10 @@ import types
 from typing import Optional
 
 import litellm
+from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
-class VertexAILlama3Config:
+class VertexAILlama3Config(OpenAILikeChatConfig):
     """
     Reference:https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/llama#streaming
 
@@ -45,24 +46,3 @@ class VertexAILlama3Config:
             )
             and v is not None
         }
-
-    def get_supported_openai_params(self):
-        return litellm.OpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ):
-        if "max_completion_tokens" in non_default_params:
-            non_default_params["max_tokens"] = non_default_params.pop(
-                "max_completion_tokens"
-            )
-        return litellm.OpenAIConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=drop_params,
-        )

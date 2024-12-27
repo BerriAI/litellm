@@ -1056,6 +1056,7 @@ from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
     VertexGeminiConfig as VertexAIConfig,
 )
+from .llms.vertex_ai.vertex_model_garden.transformation import VertexAIModelGardenConfig
 from .llms.gemini.chat.transformation import (
     GoogleAIStudioGeminiConfig,
     GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
@@ -1073,6 +1074,9 @@ from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
 )
 from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
     VertexAILlama3Config,
+)
+from .llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import (
+    VertexAIMistralConfig,
 )
 from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
