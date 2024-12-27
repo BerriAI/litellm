@@ -112,8 +112,26 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
+## **Using Guardrails client side**
 
-## Advanced
+
+### ✨ View available guardrails (/guardrails/list)
+
+Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
+
+```shell
+curl -X GET 'http://0.0.0.0:4000/guardrails/list'
+```
+
+Expected response
+
+```json
+{
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+}
+```
+
+
 
 ### ✨ Pass additional parameters to guardrail
 
@@ -194,6 +212,23 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 
 </Tabs>
+
+
+## **Proxy Admin Controls**
+
+### ✨ Monitoring Guardrails
+
+Track guardrails that were run. The response in particular if it's a pass/fail may be important for flagging failure rate due to e.g. guardrail going rogue and failing requests we don't intend to fail
+
+#### Traced Guardrail Success
+
+<Image img={require('../../../img/gd_success.png')} />
+
+#### Traced Guardrail Failure
+
+<Image img={require('../../../img/gd_fail.png')} />
+
+
 
 
 ### ✨ Control Guardrails per Project (API Key)
@@ -319,22 +354,6 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 :::
 
 
-
-### ✨ List guardrails
-
-Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
-
-```shell
-curl -X GET 'http://0.0.0.0:4000/guardrails/list'
-```
-
-Expected response
-
-```json
-{
-    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
-}
-```
 
 ## Spec: `guardrails` Parameter
 
