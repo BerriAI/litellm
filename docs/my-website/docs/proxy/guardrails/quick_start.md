@@ -218,7 +218,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ### ✨ Monitoring Guardrails
 
-Track guardrails that were run. The response in particular if it's a pass/fail may be important for flagging failure rate due to e.g. guardrail going rogue and failing requests we don't intend to fail
+Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
 
 #### Traced Guardrail Success
 
