@@ -39,7 +39,6 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        custom_endpoint: Optional[bool] = None,
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
@@ -70,7 +69,6 @@ class GroqChatCompletion(OpenAILikeChatHandler):
             headers=headers,
             timeout=timeout,
             client=client,
-            custom_endpoint=custom_endpoint,
             streaming_decoder=streaming_decoder,
             fake_stream=fake_stream,
         )

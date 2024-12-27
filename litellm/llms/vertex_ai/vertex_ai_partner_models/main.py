@@ -231,7 +231,6 @@ class VertexAIPartnerModels(VertexBase):
                 timeout=timeout,
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
-                custom_endpoint=True,
             )
 
         except Exception as e:
