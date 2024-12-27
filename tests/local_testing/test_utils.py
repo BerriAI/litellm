@@ -1240,3 +1240,48 @@ def test_token_counter_with_image_url_with_detail_high():
     )
     print("tokens", _tokens)
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
+
+
+from litellm.llms.base_llm.chat.transformation import BaseConfig
+
+
+def _validate_config(config: BaseConfig, provider: str, model: str):
+    assert isinstance(
+        config, BaseConfig
+    ), f"Provider {provider}, model {model} is not inheriting from OpenAILikeChatConfig"
+
+
+def test_openai_like_chat_completion_provider_config():
+    """
+    Tests that all providers which call openai-like chat completion handler are inheriting from the config.
+    """
+    from litellm.utils import ProviderConfigManager
+
+    providers_using_openai_like_handler = [
+        "databricks",
+        "watsonx",
+        "azure_ai",
+        "groq",
+        "sagemaker_chat",
+        "vertex_ai",
+    ]
+
+    vertex_ai_oai_models = [
+        "vertex_ai/openai/gpt-4o",
+        "vertex_ai/llama-3",
+        "vertex_ai/mistral-ai",
+        "vertex_ai/jamba",
+    ]
+
+    for provider in providers_using_openai_like_handler:
+        if provider == "vertex_ai":
+            for model in vertex_ai_oai_models:
+                config = ProviderConfigManager.get_provider_chat_config(
+                    model=model, provider=provider
+                )
+                _validate_config(config, provider, model)
+        else:
+            config = ProviderConfigManager.get_provider_chat_config(
+                model="test", provider=provider
+            )
+            _validate_config(config, provider, "test")
