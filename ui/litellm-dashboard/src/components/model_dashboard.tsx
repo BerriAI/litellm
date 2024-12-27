@@ -250,6 +250,23 @@ const handleSubmit = async (
               litellmParamsObj[key] = value;
             }
           }
+        } else if (key == "model_info_params") {
+          console.log("model_info_params:", value);
+          let modelInfoParams = {};
+          if (value && value != undefined) {
+            try {
+              modelInfoParams = JSON.parse(value);
+            } catch (error) {
+              message.error(
+                "Failed to parse LiteLLM Extra Params: " + error,
+                10
+              );
+              throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            for (const [key, value] of Object.entries(modelInfoParams)) {
+              modelInfoObj[key] = value;
+            }
+          }
         }
 
         // Check if key is any of the specified API related keys
@@ -2056,6 +2073,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Text>
                     </Col>
                   </Row>
+                  <Form.Item
+                    label="Model Info"
+                    name="model_info_params"
+                    tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
+                    className="mb-0"
+                  >
+                    <TextArea
+                      rows={4}
+                      placeholder='{
+                    "mode": "chat"
+                  }'
+                    />
+                  </Form.Item>
                 </>
                 <div style={{ textAlign: "center", marginTop: "10px" }}>
                   <Button2 htmlType="submit">Add Model</Button2>
