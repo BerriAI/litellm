@@ -154,7 +154,7 @@ Expected response
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -237,6 +237,18 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
 
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+
+:::
+
+### Setup
+
+1. Connect LiteLLM to a [supported logging provider](../logging)
+2. Make a request with a `guardrails` parameter
+3. Check your logging provider for the guardrail trace
+
 #### Traced Guardrail Success
 
 <Image img={require('../../../img/gd_success.png')} />
@@ -252,7 +264,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -314,7 +326,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
