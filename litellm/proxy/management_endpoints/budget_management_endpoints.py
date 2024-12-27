@@ -41,6 +41,7 @@ async def new_budget(
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+    - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
@@ -83,6 +84,7 @@ async def update_budget(
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+    - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
