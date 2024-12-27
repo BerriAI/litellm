@@ -80,7 +80,9 @@ def make_sync_call(
     response = client.post(api_base, headers=headers, data=data, stream=not fake_stream)
 
     if response.status_code != 200:
-        raise OpenAILikeError(status_code=response.status_code, message=response.read())
+        raise OpenAILikeError(
+            status_code=response.status_code, message=str(response.read())
+        )
 
     if streaming_decoder is not None:
         completion_stream = streaming_decoder.iter_bytes(
@@ -232,25 +234,39 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        custom_endpoint: Optional[bool] = None,
         streaming_decoder: Optional[
             CustomStreamingDecoder
         ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
         fake_stream: bool = False,
     ):
-        custom_endpoint = custom_endpoint or optional_params.pop(
-            "custom_endpoint", None
-        )
         base_model: Optional[str] = optional_params.pop("base_model", None)
-        api_base, headers = self._validate_environment(
-            api_base=api_base,
-            api_key=api_key,
-            endpoint_type="chat_completions",
-            custom_endpoint=custom_endpoint,
-            headers=headers,
+        stream: bool = optional_params.pop("stream", None) or False
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-        stream: bool = optional_params.pop("stream", None) or False
+        if isinstance(provider_config, OpenAILikeChatConfig):
+            ## GET HEADERS
+            headers = provider_config.validate_environment(
+                headers=headers or {},
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_key=api_key,
+            )
+
+            ## GET COMPLETE API BASE
+            api_base = provider_config.get_complete_url(
+                api_base=api_base,
+                model=model,
+                optional_params=optional_params,
+                stream=stream,
+            )
+        else:
+            raise NotImplementedError(
+                "OpenAI-like chat completion is not supported for this model"
+            )
+
         extra_body = optional_params.pop("extra_body", {})
         json_mode = optional_params.pop("json_mode", None)
         optional_params.pop("max_retries", None)

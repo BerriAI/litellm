@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 import httpx
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ChatCompletionAssistantMessage
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ..common_utils import OpenAILikeBase, OpenAILikeError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -20,7 +21,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class OpenAILikeChatConfig(OpenAIGPTConfig):
+class OpenAILikeChatConfig(OpenAILikeBase, OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self,
         api_base: Optional[str],
@@ -124,3 +125,39 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             mapped_params.pop("max_completion_tokens", None)
 
         return mapped_params
+
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if api_base is None:
+            raise OpenAILikeError(
+                status_code=400,
+                message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+            )
+
+        api_base = self._add_endpoint_to_api_base(
+            api_base=api_base, endpoint_type="chat_completions"
+        )
+        return api_base
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        if headers is None:
+            headers = {
+                "Content-Type": "application/json",
+            }
+
+        if api_key is not None and "Authorization" not in headers:
+            headers.update({"Authorization": "Bearer {}".format(api_key)})
+
+        return headers
