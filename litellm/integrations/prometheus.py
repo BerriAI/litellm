@@ -633,8 +633,12 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = metadata.get(remaining_requests_variable_name, sys.maxsize)
-        remaining_tokens = metadata.get(remaining_tokens_variable_name, sys.maxsize)
+        remaining_requests = (
+            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        )
+        remaining_tokens = (
+            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+        )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
             user_api_key, user_api_key_alias, model_group
