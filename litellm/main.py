@@ -5170,6 +5170,8 @@ async def ahealth_check(
     """
     Support health checks for different providers. Return remaining rate limit, etc.
     """
+    from litellm.realtime_api.main import _realtime_health_check
+
     passed_in_mode: Optional[str] = None
     try:
         model: Optional[str] = model_params.get("model", None)
@@ -5220,15 +5222,22 @@ async def ahealth_check(
                 query=prompt or "",
                 documents=["my sample text"],
             ),
-            "realtime": lambda: {},  # Placeholder for realtime health check
+            "realtime": lambda: _realtime_health_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=model_params.get("api_base", None),
+                api_key=model_params.get("api_key", None),
+                api_version=model_params.get("api_version", None),
+            ),
         }
 
         if mode in mode_handlers:
             _response = await mode_handlers[mode]()
             # Only process headers for chat mode
-            return _create_health_check_response(
-                _response._hidden_params.get("headers", {})
+            _response_headers: dict = (
+                getattr(_response, "_hidden_params", {}).get("headers", {}) or {}
             )
+            return _create_health_check_response(_response_headers)
 
         # Fallback to chat model health check
         return await ahealth_check_chat_models(
