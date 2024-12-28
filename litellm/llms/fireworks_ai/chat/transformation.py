@@ -1,7 +1,8 @@
 from typing import List, Literal, Optional, Tuple, Union
 
+import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -109,6 +110,45 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def _add_transform_inline_image_block(
+        self, content: ChatCompletionImageObject, model: str
+    ) -> ChatCompletionImageObject:
+        """
+        Add transform_inline to the image_url (allows non-vision models to parse documents/images/etc.)
+        - ignore if model is a vision model
+        - ignore if user has disabled this feature
+        """
+        if (
+            "vision" in model or litellm.disable_add_transform_inline_image_block
+        ):  # allow user to toggle this feature.
+            return content
+        if isinstance(content["image_url"], str):
+            content["image_url"] = f"{content['image_url']}#transform=inline"
+        elif isinstance(content["image_url"], dict):
+            content["image_url"][
+                "url"
+            ] = f"{content['image_url']['url']}#transform=inline"
+        return content
+
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+    ) -> List[AllMessageValues]:
+        """
+        Add 'transform=inline' to the url of the image_url
+        """
+        for message in messages:
+            if message["role"] == "user":
+                _message_content = message.get("content")
+                if _message_content is not None and isinstance(_message_content, list):
+                    for content in _message_content:
+                        if content["type"] == "image_url":
+                            content = self._add_transform_inline_image_block(
+                                content=content, model=model
+                            )
+        return messages
 
     def transform_request(
         self,

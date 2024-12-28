@@ -103,3 +103,27 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.FIREWORKS_AI
+
+
+def test_document_inlining_example():
+    completion = litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "What are the candidate's BA and MBA GPAs?",
+                    },
+                ],
+            }
+        ],
+    )
+    print(completion)
