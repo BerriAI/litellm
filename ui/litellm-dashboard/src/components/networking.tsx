@@ -31,8 +31,6 @@ const handleError = async (errorData: string) => {
       await sleep(3000); // 5 second sleep
       document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
       window.location.href = baseUrl;
-    } else {
-      message.error(errorData);
     }
     lastErrorTime = currentTime;
   } else {
@@ -450,7 +448,7 @@ export const keyCreateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
