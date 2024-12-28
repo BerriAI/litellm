@@ -380,6 +380,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if param == "seed":
                 optional_params["seed"] = value
 
+        if litellm.vertex_ai_safety_settings is not None:
+            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:

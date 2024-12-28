@@ -122,6 +122,22 @@ def test_bedrock_optional_params_completions(model):
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/amazon.titan-large",
+    ],
+)
+def test_bedrock_optional_params_simple(model):
+    litellm.drop_params = True
+    get_optional_params(
+        model=model,
+        max_tokens=10,
+        temperature=0.1,
+        custom_llm_provider="bedrock",
+    )
+
+
+@pytest.mark.parametrize(
     "model, expected_dimensions, dimensions_kwarg",
     [
         ("bedrock/amazon.titan-embed-text-v1", False, None),

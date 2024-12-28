@@ -2770,23 +2770,6 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
                 )
 
-    def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
-        """
-        filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
-        """
-        filtered_stop = None
-        if "stop" in supported_params and litellm.drop_params:
-            if provider == "bedrock" and "amazon" in model:
-                filtered_stop = []
-                if isinstance(stop, list):
-                    for s in stop:
-                        if re.match(r"^(\|+|User:)$", s):
-                            filtered_stop.append(s)
-        if filtered_stop is not None:
-            supported_params["stop"] = filtered_stop
-
-        return supported_params
-
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -2882,21 +2865,16 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        # handle cohere params
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if logit_bias is not None:
-            optional_params["logit_bias"] = logit_bias
-        if top_p is not None:
-            optional_params["p"] = top_p
-        if presence_penalty is not None:
-            optional_params["repetition_penalty"] = presence_penalty
-        if stop is not None:
-            optional_params["stopping_tokens"] = stop
+        optional_params = litellm.MaritalkConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -2987,8 +2965,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
 
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
     elif custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3021,8 +2997,6 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
     elif litellm.VertexAIAnthropicConfig.is_supported_model(
         model=model, custom_llm_provider=custom_llm_provider
     ):
@@ -3162,19 +3136,16 @@ def get_optional_params(  # noqa: PLR0915
         elif "amazon" in model:  # amazon titan llms
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            if max_tokens is not None:
-                optional_params["maxTokenCount"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if stop is not None:
-                filtered_stop = _map_and_modify_arg(
-                    {"stop": stop}, provider="bedrock", model=model
-                )
-                optional_params["stopSequences"] = filtered_stop["stop"]
-            if top_p is not None:
-                optional_params["topP"] = top_p
-            if stream:
-                optional_params["stream"] = stream
+            optional_params = litellm.AmazonTitanConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
         elif "meta" in model:  # amazon / meta llms
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
