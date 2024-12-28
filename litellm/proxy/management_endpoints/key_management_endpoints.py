@@ -347,16 +347,21 @@ async def generate_key_fn(  # noqa: PLR0915
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
-        # elif litellm.key_generation_settings is not None:
-        if data.team_id is None:
-            team_table: Optional[LiteLLM_TeamTableCachedObj] = None
-        else:
-            team_table = await get_team_object(
-                team_id=data.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
+        team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        if data.team_id is not None:
+            try:
+                team_table = await get_team_object(
+                    team_id=data.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Error getting team object in `/key/generate`: {e}"
+                )
+                team_table = None
+
         key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
