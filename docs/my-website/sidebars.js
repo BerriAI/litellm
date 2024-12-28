@@ -73,7 +73,6 @@ const sidebars = {
           items: [
             "proxy/virtual_keys", 
             "proxy/token_auth", 
-            "proxy/control_access",
             "proxy/service_accounts", 
             "proxy/access_control",
             "proxy/ip_address",
@@ -83,19 +82,21 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Model Access",
+          items: [
+            "proxy/model_access",
+            "proxy/model_access_groups",
+            "proxy/team_model_add"
+          ]
+        },
+        {
+          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui", 
             "proxy/admin_ui_sso",
             "proxy/self_serve", 
             "proxy/custom_sso"
-          ],
-        },
-        {
-          type: "category",
-          label: "Team Management",
-          items: [
-            "proxy/team_model_add"
           ],
         },
         {
