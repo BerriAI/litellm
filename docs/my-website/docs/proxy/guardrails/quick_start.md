@@ -120,12 +120,43 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
-## **Using Guardrails client side**
+
+## **Using Guardrails Client Side**
+
+### Test yourself **(OSS)**
+
+Pass `guardrails` to your request body to test it
 
 
-### ✨ View available guardrails (/guardrails/list)
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
 
-Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
+### Expose to your users **(Enterprise)**
+
+Follow this simple workflow to implement and tune guardrails:
+
+### 1. ✨ View Available Guardrails
+
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+
+:::
+
+First, check what guardrails are available and their parameters:
+
+
+Call `/guardrails/list` to view available guardrails and the guardrail info (supported parameters, description, etc)
 
 ```shell
 curl -X GET 'http://0.0.0.0:4000/guardrails/list'
@@ -137,7 +168,7 @@ Expected response
 {
     "guardrails": [
         {
-        "guardrail_name": "bedrock-pre-guard",
+        "guardrail_name": "aporia-post-guard",
         "guardrail_info": {
             "params": [
             {
@@ -156,17 +187,65 @@ Expected response
 }
 ```
 
+>
+This config will return the `/guardrails/list` response above. The `guardrail_info` field is optional and you can add any fields under info for consumers of your guardrail
+>
+```yaml
+- guardrail_name: "aporia-post-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+    guardrail_info: # Optional field, info is returned on GET /guardrails/list
+      # you can enter any fields under info for consumers of your guardrail
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
+```
 
 
-### ✨ Pass additional parameters to guardrail
+### 2. Apply Guardrails
+Add selected guardrails to your chat completion request:
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "your message"}],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+### 3. Test with Mock LLM completions
+
+Send `mock_response` to test guardrails without making an LLM call. More info on `mock_response` [here](../../completion/mock_requests)
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "mock_response": "This is a mock response",
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+
+### 4. ✨ Pass Dynamic Parameters to Guardrail
 
 :::info
 
 ✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
-
-
 
 Use this to pass additional parameters to the guardrail API call. e.g. things like success threshold. **[See `guardrails` spec for more details](#spec-guardrails-parameter)**
 
@@ -239,6 +318,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
+
+
 ## **Proxy Admin Controls**
 
 ### ✨ Monitoring Guardrails
@@ -251,7 +332,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::
 
-### Setup
+#### Setup
 
 1. Connect LiteLLM to a [supported logging provider](../logging)
 2. Make a request with a `guardrails` parameter
