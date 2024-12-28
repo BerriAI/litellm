@@ -119,8 +119,8 @@ async def _arealtime(
 async def _realtime_health_check(
     model: str,
     api_base: str,
-    api_key: str,
     custom_llm_provider: str,
+    api_key: Optional[str],
     api_version: Optional[str] = None,
 ):
     """
