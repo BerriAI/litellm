@@ -73,6 +73,7 @@ const sidebars = {
           items: [
             "proxy/virtual_keys", 
             "proxy/token_auth", 
+            "proxy/control_access",
             "proxy/service_accounts", 
             "proxy/access_control",
             "proxy/ip_address",
