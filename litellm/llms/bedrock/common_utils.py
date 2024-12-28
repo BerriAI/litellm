@@ -621,7 +621,7 @@ class AmazonLlamaConfig(AmazonInvokeMixin, BaseConfig):
         return optional_params
 
 
-class AmazonMistralConfig:
+class AmazonMistralConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral.html
     Supported Params for the Amazon / Mistral models:
@@ -669,6 +669,29 @@ class AmazonMistralConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return ["max_tokens", "temperature", "top_p", "stop", "stream"]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["max_tokens"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "top_p":
+                optional_params["top_p"] = v
+            if k == "stop":
+                optional_params["stop"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
 
 
 def add_custom_header(headers):

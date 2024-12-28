@@ -3125,20 +3125,6 @@ def get_optional_params(  # noqa: PLR0915
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
-        elif "mistral" in model:
-            _check_valid_arg(supported_params=supported_params)
-            # mistral params on bedrock
-            # \"max_tokens\":400,\"temperature\":0.7,\"top_p\":0.7,\"stop\":[\"\\\\n\\\\nHuman:\"]}"
-            if max_tokens is not None:
-                optional_params["max_tokens"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["top_p"] = top_p
-            if stop is not None:
-                optional_params["stop"] = stop
-            if stream is not None:
-                optional_params["stream"] = stream
         else:
             _check_valid_arg(supported_params=supported_params)
             optional_params = provider_config.map_openai_params(
@@ -6242,6 +6228,8 @@ class ProviderConfigManager:
                 return litellm.AmazonAI21Config()
             elif "cohere" in model:  # cohere models on bedrock
                 return litellm.AmazonCohereConfig()
+            elif "mistral" in model:  # mistral models on bedrock
+                return litellm.AmazonMistralConfig()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod

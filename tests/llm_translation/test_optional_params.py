@@ -128,6 +128,7 @@ def test_bedrock_optional_params_completions(model):
         "bedrock/meta.llama3-2-11b-instruct-v1:0",
         "bedrock/ai21.j2-ultra-v1",
         "bedrock/cohere.command-nightly",
+        "bedrock/mistral.mistral-7b",
     ],
 )
 def test_bedrock_optional_params_simple(model):
