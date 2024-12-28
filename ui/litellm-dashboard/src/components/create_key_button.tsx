@@ -197,7 +197,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setModelsToPick(tempModelsToPick);
   }, [team, userModels]);
 
-  console.log("team in create key:", team);
   return (
     <div>
       <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
@@ -226,7 +225,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               >
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
-                <Radio value="another_user">Another User</Radio>
+                {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
               </Radio.Group>
             </Form.Item>
 
@@ -237,6 +236,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               valuePropName="user_id"
               className="mt-8"
               rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
             >
               <TextInput 
                 placeholder="User ID" 
