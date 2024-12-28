@@ -23,7 +23,6 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     initialize,
-    startup_event,
 )  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
