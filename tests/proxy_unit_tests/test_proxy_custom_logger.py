@@ -28,12 +28,6 @@ from litellm.proxy.proxy_server import (
 filepath = os.path.dirname(os.path.abspath(__file__))
 python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
 
-# @app.on_event("startup")
-# async def wrapper_startup_event():
-# initialize(config=config_fp)
-
-# Use the app fixture in your client fixture
-
 
 @pytest.fixture
 def client():
