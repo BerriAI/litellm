@@ -552,6 +552,17 @@ def _handle_mock_potential_exceptions(
         )
     elif (
         isinstance(mock_response, str)
+        and mock_response == "litellm.ContextWindowExceededError"
+    ):
+        raise litellm.ContextWindowExceededError(
+            message="this is a mock context window exceeded error",
+            llm_provider=getattr(
+                mock_response, "llm_provider", custom_llm_provider or "openai"
+            ),  # type: ignore
+            model=model,
+        )
+    elif (
+        isinstance(mock_response, str)
         and mock_response == "litellm.InternalServerError"
     ):
         raise litellm.InternalServerError(
@@ -734,7 +745,7 @@ def mock_completion(
     except Exception as e:
         if isinstance(e, openai.APIError):
             raise e
-        raise Exception("Mock completion response failed")
+        raise Exception("Mock completion response failed - {}".format(e))
 
 
 @client
