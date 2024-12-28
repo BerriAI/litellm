@@ -51,6 +51,10 @@ from litellm import (  # type: ignore
     get_optional_params,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.health_check_utils import (
+    _create_health_check_response,
+    _filter_model_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
@@ -5205,35 +5209,32 @@ async def ahealth_check(
                 "no-cache": True
             }  # don't used cached responses for making health check calls
         # Map modes to their corresponding health check calls
+
         mode_handlers = {
             "chat": lambda: litellm.acompletion(**model_params),
             "completion": lambda: litellm.atext_completion(
-                **{k: v for k, v in model_params.items() if k != "messages"},
+                **_filter_model_params(model_params),
                 prompt=prompt or "test",
             ),
             "embedding": lambda: litellm.aembedding(
-                **{
-                    k: v for k, v in model_params.items() if k != "messages"
-                },  # Remove messages param
-                input=input or ["test"],  # Provide default input if none provided
+                **_filter_model_params(model_params),
+                input=input or ["test"],
             ),
             "audio_speech": lambda: litellm.aspeech(
-                **{k: v for k, v in model_params.items() if k != "messages"},
+                **_filter_model_params(model_params),
                 input=prompt or "test",
                 voice="alloy",
             ),
             "audio_transcription": lambda: litellm.atranscription(
-                **{k: v for k, v in model_params.items() if k != "messages"},
+                **_filter_model_params(model_params),
                 file=get_audio_file_for_health_check(),
             ),
             "image_generation": lambda: litellm.aimage_generation(
-                **{k: v for k, v in model_params.items() if k != "messages"},
+                **_filter_model_params(model_params),
                 prompt=prompt,
             ),
             "rerank": lambda: litellm.arerank(
-                **{
-                    k: v for k, v in model_params.items() if k != "messages"
-                },  # Remove messages param
+                **_filter_model_params(model_params),
                 query=prompt or "",
                 documents=["my sample text"],
             ),
@@ -5277,26 +5278,6 @@ async def ahealth_check(
             + stack_trace
         )
         return {"error": error_to_return}
-
-
-def _create_health_check_response(response_headers: dict) -> dict:
-    response = {}
-
-    if (
-        response_headers.get("x-ratelimit-remaining-requests", None) is not None
-    ):  # not provided for dall-e requests
-        response["x-ratelimit-remaining-requests"] = response_headers[
-            "x-ratelimit-remaining-requests"
-        ]
-
-    if response_headers.get("x-ratelimit-remaining-tokens", None) is not None:
-        response["x-ratelimit-remaining-tokens"] = response_headers[
-            "x-ratelimit-remaining-tokens"
-        ]
-
-    if response_headers.get("x-ms-region", None) is not None:
-        response["x-ms-region"] = response_headers["x-ms-region"]
-    return response
 
 
 ####### HELPER FUNCTIONS ################
