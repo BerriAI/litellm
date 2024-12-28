@@ -5169,7 +5169,17 @@ async def ahealth_check(
 ):
     """
     Support health checks for different providers. Return remaining rate limit, etc.
+
+    Returns:
+        {
+            "x-ratelimit-remaining-requests": int,
+            "x-ratelimit-remaining-tokens": int,
+            "x-ms-region": str,
+        }
     """
+    from litellm.litellm_core_utils.audio_utils.utils import (
+        get_audio_file_for_health_check,
+    )
     from litellm.realtime_api.main import _realtime_health_check
 
     passed_in_mode: Optional[str] = None
@@ -5194,11 +5204,13 @@ async def ahealth_check(
             model_params["cache"] = {
                 "no-cache": True
             }  # don't used cached responses for making health check calls
-
         # Map modes to their corresponding health check calls
         mode_handlers = {
             "chat": lambda: litellm.acompletion(**model_params),
-            "completion": lambda: litellm.atext_completion(**model_params),
+            "completion": lambda: litellm.atext_completion(
+                **{k: v for k, v in model_params.items() if k != "messages"},
+                prompt=prompt or "test",
+            ),
             "embedding": lambda: litellm.aembedding(
                 **{
                     k: v for k, v in model_params.items() if k != "messages"
@@ -5210,7 +5222,10 @@ async def ahealth_check(
                 input=prompt or "test",
                 voice="alloy",
             ),
-            "audio_transcription": lambda: litellm.atranscription(**model_params),
+            "audio_transcription": lambda: litellm.atranscription(
+                **{k: v for k, v in model_params.items() if k != "messages"},
+                file=get_audio_file_for_health_check(),
+            ),
             "image_generation": lambda: litellm.aimage_generation(
                 **{k: v for k, v in model_params.items() if k != "messages"},
                 prompt=prompt,
