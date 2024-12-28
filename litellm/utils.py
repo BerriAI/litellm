@@ -2770,6 +2770,9 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
                 )
 
+    provider_config = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -3092,9 +3095,6 @@ def get_optional_params(  # noqa: PLR0915
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders.BEDROCK
-        )
         base_model = litellm.AmazonConverseConfig()._get_base_model(model)
         if base_model in litellm.bedrock_converse_models:
             _check_valid_arg(supported_params=supported_params)
@@ -3137,34 +3137,6 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
-    elif custom_llm_provider == "aleph_alpha":
-        supported_params = [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
-        _check_valid_arg(supported_params=supported_params)
-        if max_tokens is not None:
-            optional_params["maximum_tokens"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if n is not None:
-            optional_params["n"] = n
-        if stop is not None:
-            optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "cloudflare":
         # https://developers.cloudflare.com/workers-ai/models/text-generation/#input
         supported_params = get_supported_openai_params(
@@ -3266,52 +3238,16 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        if temperature is not None:
-            if (
-                temperature == 0 and model == "mistral-7b-instruct"
-            ):  # this model does no support temperature == 0
-                temperature = 0.0001  # close to 0
-            optional_params["temperature"] = temperature
-        if top_p:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
-        if max_tokens:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty:
-            optional_params["frequency_penalty"] = frequency_penalty
-    elif custom_llm_provider == "anyscale":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
-        if model in [
-            "mistralai/Mistral-7B-Instruct-v0.1",
-            "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        ]:
-            supported_params += [  # type: ignore
-                "functions",
-                "function_call",
-                "tools",
-                "tool_choice",
-                "response_format",
-            ]
-        _check_valid_arg(supported_params=supported_params)
-        optional_params = non_default_params
-        if temperature is not None:
-            if temperature == 0 and model in [
-                "mistralai/Mistral-7B-Instruct-v0.1",
-                "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            ]:  # this model does no support temperature == 0
-                temperature = 0.0001  # close to 0
-            optional_params["temperature"] = temperature
-        if top_p:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
-        if max_tokens:
-            optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider

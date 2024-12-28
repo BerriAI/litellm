@@ -78,12 +78,23 @@ class ConfigChecker(ast.NodeVisitor):
     def check_patterns(self) -> List[str]:
         # Check if all configs using map_openai_params inherit from BaseConfig
         for config_name in self.map_openai_calls:
+            print(f"Checking config: {config_name}")
             if (
                 config_name not in self.class_inheritance
                 or "BaseConfig" not in self.class_inheritance[config_name]
             ):
+                # Retrieve the associated class name, if any
+                class_name = next(
+                    (
+                        cls
+                        for cls, bases in self.class_inheritance.items()
+                        if config_name in bases
+                    ),
+                    "Unknown Class",
+                )
                 self.errors.append(
-                    f"Error: {config_name} calls map_openai_params but doesn't inherit from BaseConfig"
+                    f"Error: {config_name} calls map_openai_params but doesn't inherit from BaseConfig. "
+                    f"It is used in the class: {class_name}"
                 )
 
         # Check for parameter assignments in provider blocks
