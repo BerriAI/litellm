@@ -56,7 +56,7 @@ from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLL
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
