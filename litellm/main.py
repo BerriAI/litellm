@@ -5123,35 +5123,27 @@ def speech(
 ##### Health Endpoints #######################
 
 
-async def ahealth_check_chat_models(
+async def ahealth_check_wildcard_models(
     model: str, custom_llm_provider: str, model_params: dict
 ) -> dict:
-    if "*" in model:
-        from litellm.litellm_core_utils.llm_request_utils import (
-            pick_cheapest_chat_model_from_llm_provider,
-        )
+    from litellm.litellm_core_utils.llm_request_utils import (
+        pick_cheapest_chat_model_from_llm_provider,
+    )
 
-        # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_model = pick_cheapest_chat_model_from_llm_provider(
-            custom_llm_provider=custom_llm_provider
-        )
-        fallback_models: Optional[List] = None
-        if custom_llm_provider in litellm.models_by_provider:
-            models = litellm.models_by_provider[custom_llm_provider]
-            random.shuffle(models)  # Shuffle the models list in place
-            fallback_models = models[
-                :2
-            ]  # Pick the first 2 models from the shuffled list
-        model_params["model"] = cheapest_model
-        model_params["fallbacks"] = fallback_models
-        model_params["max_tokens"] = 1
-        await acompletion(**model_params)
-        response: dict = {}  # args like remaining ratelimit etc.
-    else:  # default to completion calls
-        model_params["max_tokens"] = 1
-        await acompletion(**model_params)
-        response = {}  # args like remaining ratelimit etc.
-
+    # this is a wildcard model, we need to pick a random model from the provider
+    cheapest_model = pick_cheapest_chat_model_from_llm_provider(
+        custom_llm_provider=custom_llm_provider
+    )
+    fallback_models: Optional[List] = None
+    if custom_llm_provider in litellm.models_by_provider:
+        models = litellm.models_by_provider[custom_llm_provider]
+        random.shuffle(models)  # Shuffle the models list in place
+        fallback_models = models[:2]  # Pick the first 2 models from the shuffled list
+    model_params["model"] = cheapest_model
+    model_params["fallbacks"] = fallback_models
+    model_params["max_tokens"] = 1
+    await acompletion(**model_params)
+    response: dict = {}  # args like remaining ratelimit etc.
     return response
 
 
@@ -5169,7 +5161,7 @@ async def ahealth_check(
             "rerank",
             "realtime",
         ]
-    ] = None,
+    ] = "chat",
     prompt: Optional[str] = None,
     input: Optional[List] = None,
 ):
@@ -5198,8 +5190,13 @@ async def ahealth_check(
         model_params["cache"] = {
             "no-cache": True
         }  # don't used cached responses for making health check calls
+        if "*" in model:
+            return await ahealth_check_wildcard_models(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                model_params=model_params,
+            )
         # Map modes to their corresponding health check calls
-
         mode_handlers = {
             "chat": lambda: litellm.acompletion(**model_params),
             "completion": lambda: litellm.atext_completion(
@@ -5244,13 +5241,10 @@ async def ahealth_check(
                 getattr(_response, "_hidden_params", {}).get("headers", {}) or {}
             )
             return _create_health_check_response(_response_headers)
-
-        # Fallback to chat model health check
-        return await ahealth_check_chat_models(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            model_params=model_params,
-        )
+        else:
+            raise Exception(
+                f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health"
+            )
     except Exception as e:
         stack_trace = traceback.format_exc()
         if isinstance(stack_trace, str):
