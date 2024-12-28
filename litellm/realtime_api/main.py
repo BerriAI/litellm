@@ -154,5 +154,5 @@ async def _realtime_health_check(
         extra_headers={
             "api-key": api_key,  # type: ignore
         },
-    ) as backend_ws:
+    ):
         return True
