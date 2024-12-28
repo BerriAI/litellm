@@ -260,8 +260,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               valuePropName="team_id"
               className="mt-8"
             >
-              <TextInput value={team ? team["team_id"] : null} 
-              onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
+              <TextInput defaultValue={team ? team["team_id"] : null} onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
             </Form.Item>
 
             <Form.Item
