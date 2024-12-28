@@ -1,5 +1,7 @@
 import Image from '@theme/IdealImage';
 
+`guardrails`, `logging`, `virtual key management`, `new models`
+
 :::info
 
 Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
