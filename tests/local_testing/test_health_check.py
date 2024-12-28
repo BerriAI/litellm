@@ -128,7 +128,6 @@ async def test_groq_health_check():
         mode=None,
         prompt="What's 1 + 1?",
         input=["test from litellm"],
-        default_timeout=6000,
     )
     print(f"response: {response}")
     assert response == {}
