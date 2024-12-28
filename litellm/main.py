@@ -427,6 +427,7 @@ async def acompletion(
         if (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
+            or custom_llm_provider == "azure_ai"
             or custom_llm_provider == "azure_text"
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "anyscale"
@@ -1381,6 +1382,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider="azure_ai",
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,
+                acompletion=acompletion,
             )
 
             response = model_response
@@ -1979,6 +1981,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 custom_llm_provider="maritalk",
                 custom_prompt_dict=custom_prompt_dict,
+                acompletion=acompletion,
             )
 
             response = model_response

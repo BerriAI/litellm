@@ -51,18 +51,13 @@ async def test_azure_ai_with_image_url():
 
     Test that Azure AI studio can handle image_url passed when content is a list containing both text and image_url
     """
-    from openai import AsyncOpenAI
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     litellm.set_verbose = True
 
-    client = AsyncOpenAI(
-        api_key="fake-api-key",
-        base_url="https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com",
-    )
+    client = AsyncHTTPHandler()
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 model="azure_ai/Phi-3-5-vision-instruct-dcvov",
@@ -95,7 +90,7 @@ async def test_azure_ai_with_image_url():
         mock_client.assert_called_once()
 
         # Check the request body
-        request_body = mock_client.call_args.kwargs
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
         assert request_body["model"] == "Phi-3-5-vision-instruct-dcvov"
         assert request_body["messages"] == [
             {
