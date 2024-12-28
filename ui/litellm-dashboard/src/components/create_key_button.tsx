@@ -164,8 +164,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      console.log("error in create key:", error);
+      message.error(`Error creating the key: ${error}`);
     }
   };
 
@@ -197,6 +197,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setModelsToPick(tempModelsToPick);
   }, [team, userModels]);
 
+  console.log("team in create key:", team);
   return (
     <div>
       <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
@@ -254,12 +255,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Form.Item
               label="Team ID"
               name="team_id"
-              hidden={true}
+              hidden={keyOwner !== "another_user"}
               initialValue={team ? team["team_id"] : null}
               valuePropName="team_id"
               className="mt-8"
             >
-              <Input value={team ? team["team_alias"] : ""} disabled />
+              <TextInput value={team ? team["team_id"] : null} 
+              onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
             </Form.Item>
 
             <Form.Item
