@@ -127,7 +127,8 @@ def _team_key_generation_team_member_check(
             detail=f"User={user_api_key_dict.user_id} not assigned to team={team_table.team_id}",
         )
     elif (
-        key_creating_user_in_team.role
+        "allowed_team_member_roles" in team_key_generation
+        and key_creating_user_in_team.role
         not in team_key_generation["allowed_team_member_roles"]
     ):
         raise HTTPException(
