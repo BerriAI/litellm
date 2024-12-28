@@ -51,11 +51,12 @@ from litellm import (  # type: ignore
     get_optional_params,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
 from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLL
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -64,6 +65,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import (
     CustomStreamWrapper,
@@ -5181,15 +5183,8 @@ async def ahealth_check(
             "x-ms-region": str,
         }
     """
-    from litellm.litellm_core_utils.audio_utils.utils import (
-        get_audio_file_for_health_check,
-    )
-    from litellm.realtime_api.main import _realtime_health_check
-
-    passed_in_mode: Optional[str] = None
     try:
         model: Optional[str] = model_params.get("model", None)
-
         if model is None:
             raise Exception("model not set")
 
@@ -5197,17 +5192,12 @@ async def ahealth_check(
             mode = litellm.model_cost[model].get("mode")
 
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        mode = mode
-        passed_in_mode = mode
-        if mode is None:
-            mode = "chat"  # default to chat completion calls
-            model_params["cache"] = {
-                "no-cache": True
-            }  # don't used cached responses for making health check calls
+        model_params["cache"] = {
+            "no-cache": True
+        }  # don't used cached responses for making health check calls
         # Map modes to their corresponding health check calls
 
         mode_handlers = {
@@ -5266,7 +5256,7 @@ async def ahealth_check(
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
 
-        if passed_in_mode is None:
+        if mode is None:
             return {
                 "error": f"error:{str(e)}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}"
             }
