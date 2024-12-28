@@ -36,6 +36,19 @@ async def test_azure_health_check():
 
 
 @pytest.mark.asyncio
+async def test_text_completion_health_check():
+    response = await litellm.ahealth_check(
+        model_params={"model": "gpt-3.5-turbo-instruct"},
+        mode="completion",
+        prompt="What's the weather in SF?",
+    )
+    print(f"response: {response}")
+
+    assert "x-ratelimit-remaining-tokens" in response
+    return response
+
+
+@pytest.mark.asyncio
 async def test_azure_embedding_health_check():
     response = await litellm.ahealth_check(
         model_params={
