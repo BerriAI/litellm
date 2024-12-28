@@ -3092,6 +3092,9 @@ def get_optional_params(  # noqa: PLR0915
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders.BEDROCK
+        )
         base_model = litellm.AmazonConverseConfig()._get_base_model(model)
         if base_model in litellm.bedrock_converse_models:
             _check_valid_arg(supported_params=supported_params)
@@ -3136,7 +3139,7 @@ def get_optional_params(  # noqa: PLR0915
         elif "amazon" in model:  # amazon titan llms
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            optional_params = litellm.AmazonTitanConfig().map_openai_params(
+            optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -3149,14 +3152,16 @@ def get_optional_params(  # noqa: PLR0915
         elif "meta" in model:  # amazon / meta llms
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            if max_tokens is not None:
-                optional_params["max_gen_len"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["top_p"] = top_p
-            if stream:
-                optional_params["stream"] = stream
+            optional_params = provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
         elif "cohere" in model:  # cohere models on bedrock
             _check_valid_arg(supported_params=supported_params)
             # handle cohere params
@@ -6259,6 +6264,14 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
+            if base_model in litellm.bedrock_converse_models:
+                pass
+            elif "amazon" in model:  # amazon titan llms
+                return litellm.AmazonTitanConfig()
+            elif "meta" in model:  # amazon / meta llms
+                return litellm.AmazonLlamaConfig()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod

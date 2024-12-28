@@ -501,7 +501,7 @@ class AnthropicConstants(Enum):
     AI_PROMPT = "\n\nAssistant: "
 
 
-class AmazonLlamaConfig:
+class AmazonLlamaConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=meta.llama2-13b-chat-v1
 
@@ -544,6 +544,32 @@ class AmazonLlamaConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self, model: str) -> List:
+        return [
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stream",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["max_gen_len"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "top_p":
+                optional_params["top_p"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
 
 
 class AmazonMistralConfig:
