@@ -3125,15 +3125,6 @@ def get_optional_params(  # noqa: PLR0915
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
-        elif "cohere" in model:  # cohere models on bedrock
-            _check_valid_arg(supported_params=supported_params)
-            # handle cohere params
-            if stream:
-                optional_params["stream"] = stream
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if max_tokens is not None:
-                optional_params["max_tokens"] = max_tokens
         elif "mistral" in model:
             _check_valid_arg(supported_params=supported_params)
             # mistral params on bedrock
@@ -6249,6 +6240,8 @@ class ProviderConfigManager:
                 return litellm.AmazonLlamaConfig()
             elif "ai21" in model:  # ai21 llms
                 return litellm.AmazonAI21Config()
+            elif "cohere" in model:  # cohere models on bedrock
+                return litellm.AmazonCohereConfig()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod

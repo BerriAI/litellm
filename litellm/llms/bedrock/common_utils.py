@@ -388,7 +388,7 @@ class AmazonAnthropicConfig:
         return optional_params
 
 
-class AmazonCohereConfig:
+class AmazonCohereConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=command
 
@@ -431,6 +431,29 @@ class AmazonCohereConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return [
+            "max_tokens",
+            "temperature",
+            "stream",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "stream":
+                optional_params["stream"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "max_tokens":
+                optional_params["max_tokens"] = v
+        return optional_params
 
 
 class AmazonAI21Config(AmazonInvokeMixin, BaseConfig):
