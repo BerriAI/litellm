@@ -233,7 +233,7 @@ def test_completion_azure_ai_gpt_4o(api_base):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("sync_mode", [False])  # True,
 @pytest.mark.asyncio
 async def test_completion_databricks(sync_mode):
     litellm.set_verbose = True

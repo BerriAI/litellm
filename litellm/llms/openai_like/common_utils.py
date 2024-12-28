@@ -21,12 +21,15 @@ class OpenAILikeBase:
         path = original_url.path
 
         if endpoint_type == "chat_completions" and "/chat/completions" not in path:
-            modified_url = base_url.join("chat/completions")
+            # Append 'chat/completions' to the path without replacing the existing path
+            modified_path = path.rstrip("/") + "/chat/completions"
+            modified_url = base_url.copy_with(path=modified_path)
         elif endpoint_type == "embeddings" and "/embeddings" not in path:
-            modified_url = base_url.join("/embeddings")
+            # Append 'embeddings' to the path without replacing the existing path
+            modified_path = path.rstrip("/") + "/embeddings"
+            modified_url = base_url.copy_with(path=modified_path)
         else:
-            modified_url = base_url  # Handle other cases if needed
-
+            modified_url = base_url  # Use the original base URL if no changes needed
         # Re-add the original query parameters
         api_base = str(modified_url.copy_with(params=original_url.params))
 
