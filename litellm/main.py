@@ -5149,14 +5149,16 @@ async def ahealth_check_chat_models(
     return response
 
 
-async def ahealth_check(  # noqa: PLR0915
+async def ahealth_check(
     model_params: dict,
     mode: Optional[
         Literal[
+            "chat",
             "completion",
             "embedding",
+            "audio_speech",
+            "audio_transcription",
             "image_generation",
-            "chat",
             "batch",
             "rerank",
             "realtime",
@@ -5164,13 +5166,9 @@ async def ahealth_check(  # noqa: PLR0915
     ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
-    default_timeout: float = 6000,
 ):
     """
     Support health checks for different providers. Return remaining rate limit, etc.
-
-    For azure/openai -> completion.with_raw_response
-    For rest -> litellm.acompletion()
     """
     passed_in_mode: Optional[str] = None
     try:
@@ -5191,108 +5189,50 @@ async def ahealth_check(  # noqa: PLR0915
         passed_in_mode = mode
         if mode is None:
             mode = "chat"  # default to chat completion calls
-
-        if custom_llm_provider == "azure":
-            api_key = (
-                model_params.get("api_key")
-                or get_secret_str("AZURE_API_KEY")
-                or get_secret_str("AZURE_OPENAI_API_KEY")
-            )
-
-            api_base: Optional[str] = (
-                model_params.get("api_base")
-                or get_secret_str("AZURE_API_BASE")
-                or get_secret_str("AZURE_OPENAI_API_BASE")
-            )
-
-            if api_base is None:
-                raise ValueError(
-                    "Azure API Base cannot be None. Set via 'AZURE_API_BASE' in env var or `.completion(..., api_base=..)`"
-                )
-
-            api_version = (
-                model_params.get("api_version")
-                or get_secret_str("AZURE_API_VERSION")
-                or get_secret_str("AZURE_OPENAI_API_VERSION")
-            )
-
-            timeout = (
-                model_params.get("timeout")
-                or litellm.request_timeout
-                or default_timeout
-            )
-
-            response = await azure_chat_completions.ahealth_check(
-                model=model,
-                messages=model_params.get(
-                    "messages", None
-                ),  # Replace with your actual messages list
-                api_key=api_key,
-                api_base=api_base,
-                api_version=api_version,
-                timeout=timeout,
-                mode=mode,
-                prompt=prompt,
-                input=input,
-            )
-        elif (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "text-completion-openai"
-        ):
-            api_key = model_params.get("api_key") or get_secret_str("OPENAI_API_KEY")
-            organization = model_params.get("organization")
-
-            timeout = (
-                model_params.get("timeout")
-                or litellm.request_timeout
-                or default_timeout
-            )
-
-            api_base = model_params.get("api_base") or get_secret_str("OPENAI_API_BASE")
-
-            if custom_llm_provider == "text-completion-openai":
-                mode = "completion"
-
-            response = await openai_chat_completions.ahealth_check(
-                model=model,
-                messages=model_params.get(
-                    "messages", None
-                ),  # Replace with your actual messages list
-                api_key=api_key,
-                api_base=api_base,
-                timeout=timeout,
-                mode=mode,
-                prompt=prompt,
-                input=input,
-                organization=organization,
-            )
-        else:
             model_params["cache"] = {
                 "no-cache": True
             }  # don't used cached responses for making health check calls
-            if mode == "embedding":
-                model_params.pop("messages", None)
-                model_params["input"] = input
-                await litellm.aembedding(**model_params)
-                response = {}
-            elif mode == "image_generation":
-                model_params.pop("messages", None)
-                model_params["prompt"] = prompt
-                await litellm.aimage_generation(**model_params)
-                response = {}
-            elif mode == "rerank":
-                model_params.pop("messages", None)
-                model_params["query"] = prompt
-                model_params["documents"] = ["my sample text"]
-                await litellm.arerank(**model_params)
-                response = {}
-            else:
-                response = await ahealth_check_chat_models(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    model_params=model_params,
+
+        # Map modes to their corresponding health check calls
+        mode_handlers = {
+            "chat": lambda: litellm.acompletion(**model_params),
+            "completion": lambda: litellm.atext_completion(**model_params),
+            "embedding": lambda: litellm.aembedding(
+                **{**model_params, "messages": None, "input": input}
+            ),
+            "audio_speech": lambda: litellm.aspeech(**model_params),
+            "audio_transcription": lambda: litellm.atranscription(**model_params),
+            "image_generation": lambda: litellm.aimage_generation(
+                **{**model_params, "messages": None, "prompt": prompt}
+            ),
+            "rerank": lambda: litellm.arerank(
+                **{
+                    **model_params,
+                    "messages": None,
+                    "query": prompt,
+                    "documents": ["my sample text"],
+                }
+            ),
+            "realtime": lambda: {},  # Placeholder for realtime health check
+        }
+
+        if mode in mode_handlers:
+            _response = await mode_handlers[mode]()
+            # Only process headers for chat mode
+            return (
+                _create_health_check_response(
+                    _response._hidden_params.get("headers", {})
                 )
-        return response
+                if mode == "chat"
+                else {}
+            )
+
+        # Fallback to chat model health check
+        return await ahealth_check_chat_models(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_params=model_params,
+        )
     except Exception as e:
         stack_trace = traceback.format_exc()
         if isinstance(stack_trace, str):
@@ -5310,6 +5250,26 @@ async def ahealth_check(  # noqa: PLR0915
             + stack_trace
         )
         return {"error": error_to_return}
+
+
+def _create_health_check_response(response_headers: dict) -> dict:
+    response = {}
+
+    if (
+        response_headers.get("x-ratelimit-remaining-requests", None) is not None
+    ):  # not provided for dall-e requests
+        response["x-ratelimit-remaining-requests"] = response_headers[
+            "x-ratelimit-remaining-requests"
+        ]
+
+    if response_headers.get("x-ratelimit-remaining-tokens", None) is not None:
+        response["x-ratelimit-remaining-tokens"] = response_headers[
+            "x-ratelimit-remaining-tokens"
+        ]
+
+    if response_headers.get("x-ms-region", None) is not None:
+        response["x-ms-region"] = response_headers["x-ms-region"]
+    return response
 
 
 ####### HELPER FUNCTIONS ################
