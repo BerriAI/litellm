@@ -5203,7 +5203,11 @@ async def ahealth_check(
                 },  # Remove messages param
                 input=input or ["test"],  # Provide default input if none provided
             ),
-            "audio_speech": lambda: litellm.aspeech(**model_params),
+            "audio_speech": lambda: litellm.aspeech(
+                **{k: v for k, v in model_params.items() if k != "messages"},
+                input=prompt or "test",
+                voice="alloy",
+            ),
             "audio_transcription": lambda: litellm.atranscription(**model_params),
             "image_generation": lambda: litellm.aimage_generation(
                 **{k: v for k, v in model_params.items() if k != "messages"},

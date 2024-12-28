@@ -152,6 +152,37 @@ async def test_cohere_rerank_health_check():
 
 
 @pytest.mark.asyncio
+async def test_audio_speech_health_check():
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/tts-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+        mode="audio_speech",
+        prompt="Hey",
+    )
+
+    assert "error" not in response
+
+    print(response)
+
+
+# @pytest.mark.asyncio
+# async def test_audio_transcription_health_check():
+#     response = await litellm.ahealth_check(
+#         model_params={
+#             "model": "openai/whisper-1",
+#             "api_key": os.getenv("OPENAI_API_KEY"),
+#         },
+#         mode="audio_transcription",
+#     )
+
+#     assert "error" not in response
+
+#     print(response)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
 )
