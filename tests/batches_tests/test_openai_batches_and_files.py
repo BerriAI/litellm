@@ -296,6 +296,8 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
+    cleanup_azure_files()
+
 
 def cleanup_azure_files():
     """
