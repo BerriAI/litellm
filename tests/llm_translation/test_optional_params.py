@@ -126,6 +126,7 @@ def test_bedrock_optional_params_completions(model):
     [
         "bedrock/amazon.titan-large",
         "bedrock/meta.llama3-2-11b-instruct-v1:0",
+        "bedrock/ai21.j2-ultra-v1",
     ],
 )
 def test_bedrock_optional_params_simple(model):

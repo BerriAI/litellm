@@ -433,7 +433,7 @@ class AmazonCohereConfig:
         }
 
 
-class AmazonAI21Config:
+class AmazonAI21Config(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
 
@@ -494,6 +494,32 @@ class AmazonAI21Config:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self, model: str) -> List:
+        return [
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stream",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["maxTokens"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "top_p":
+                optional_params["topP"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
 
 
 class AnthropicConstants(Enum):

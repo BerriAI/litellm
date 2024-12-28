@@ -3109,18 +3109,7 @@ def get_optional_params(  # noqa: PLR0915
                 ),
                 messages=messages,
             )
-        elif "ai21" in model:
-            _check_valid_arg(supported_params=supported_params)
-            # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
-            # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
-            if max_tokens is not None:
-                optional_params["maxTokens"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["topP"] = top_p
-            if stream:
-                optional_params["stream"] = stream
+
         elif "anthropic" in model:
             _check_valid_arg(supported_params=supported_params)
             if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
@@ -3136,32 +3125,6 @@ def get_optional_params(  # noqa: PLR0915
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
-        elif "amazon" in model:  # amazon titan llms
-            _check_valid_arg(supported_params=supported_params)
-            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            optional_params = provider_config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=(
-                    drop_params
-                    if drop_params is not None and isinstance(drop_params, bool)
-                    else False
-                ),
-            )
-        elif "meta" in model:  # amazon / meta llms
-            _check_valid_arg(supported_params=supported_params)
-            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            optional_params = provider_config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=(
-                    drop_params
-                    if drop_params is not None and isinstance(drop_params, bool)
-                    else False
-                ),
-            )
         elif "cohere" in model:  # cohere models on bedrock
             _check_valid_arg(supported_params=supported_params)
             # handle cohere params
@@ -3185,6 +3148,18 @@ def get_optional_params(  # noqa: PLR0915
                 optional_params["stop"] = stop
             if stream is not None:
                 optional_params["stream"] = stream
+        else:
+            _check_valid_arg(supported_params=supported_params)
+            optional_params = provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
     elif custom_llm_provider == "aleph_alpha":
         supported_params = [
             "max_tokens",
@@ -6272,6 +6247,8 @@ class ProviderConfigManager:
                 return litellm.AmazonTitanConfig()
             elif "meta" in model:  # amazon / meta llms
                 return litellm.AmazonLlamaConfig()
+            elif "ai21" in model:  # ai21 llms
+                return litellm.AmazonAI21Config()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod
