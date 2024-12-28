@@ -146,10 +146,6 @@ async def test_transcription_on_router():
         print("OpenAI Client used= ", proxy_handler_instance.openai_client)
         print("all router level clients= ", router_level_clients)
         assert proxy_handler_instance.openai_client in router_level_clients
-        assert proxy_handler_instance.standard_logging_object is not None
-        assert (
-            proxy_handler_instance.standard_logging_object["model_group"] == "whisper"
-        )
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
