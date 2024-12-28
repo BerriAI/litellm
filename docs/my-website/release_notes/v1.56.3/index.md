@@ -86,6 +86,9 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 You can now assign keys to users via Proxy UI
 
+
+<Image img={require('../../img/ui_key.png')} />
+
 ## New Models
 
 - `openrouter/openai/o1`
