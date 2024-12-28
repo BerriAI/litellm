@@ -125,6 +125,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     try {
       const newKeyAlias = formValues?.key_alias ?? "";
       const newKeyTeamId = formValues?.team_id ?? null;
+
       const existingKeyAliases =
         data
           ?.filter((k) => k.team_id === newKeyTeamId)
@@ -224,11 +225,26 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               >
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
+                <Radio value="another_user">Another User</Radio>
               </Radio.Group>
             </Form.Item>
 
             <Form.Item
-              label={keyOwner === "you" ? "Key Name" : "Service Account ID"}
+              label="User ID"
+              name="user_id"
+              hidden={keyOwner !== "another_user"}
+              valuePropName="user_id"
+              className="mt-8"
+              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+            >
+              <TextInput 
+                placeholder="User ID" 
+                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
               name="key_alias"
               rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
               help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
