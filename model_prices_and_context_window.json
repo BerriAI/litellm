@@ -4494,6 +4494,15 @@
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
+    "openrouter/deepseek/deepseek-coder": {
+        "max_tokens": 8192,
+        "max_input_tokens": 66000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "openrouter",
+        "mode": "chat"
+    },
     "openrouter/microsoft/wizardlm-2-8x22b:nitro": {
         "max_tokens": 65536,
         "input_cost_per_token": 0.000001,
