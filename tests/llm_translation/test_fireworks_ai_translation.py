@@ -105,28 +105,47 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
         return litellm.LlmProviders.FIREWORKS_AI
 
 
-def test_document_inlining_example():
-    completion = litellm.completion(
-        model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
-        messages=[
-            {
-                "role": "user",
-                "content": [
+@pytest.mark.parametrize(
+    "disable_add_transform_inline_image_block",
+    [True, False],
+)
+def test_document_inlining_example(disable_add_transform_inline_image_block):
+    litellm.set_verbose = True
+    if disable_add_transform_inline_image_block is True:
+        with pytest.raises(Exception):
+            completion = litellm.completion(
+                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                messages=[
                     {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": "What are the candidate's BA and MBA GPAs?",
-                    },
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": "What are the candidate's BA and MBA GPAs?",
+                            },
+                        ],
+                    }
                 ],
-            }
-        ],
-    )
-    print(completion)
+                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+            )
+    else:
+        completion = litellm.completion(
+            model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "this is a test request, write a short poem",
+                },
+            ],
+            disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+        )
+        print(completion)
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union, cast
 
 import litellm
 from litellm.secret_managers.main import get_secret_str
@@ -112,7 +112,10 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return optional_params
 
     def _add_transform_inline_image_block(
-        self, content: ChatCompletionImageObject, model: str
+        self,
+        content: ChatCompletionImageObject,
+        model: str,
+        disable_add_transform_inline_image_block: Optional[bool],
     ) -> ChatCompletionImageObject:
         """
         Add transform_inline to the image_url (allows non-vision models to parse documents/images/etc.)
@@ -120,7 +123,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         - ignore if user has disabled this feature
         """
         if (
-            "vision" in model or litellm.disable_add_transform_inline_image_block
+            "vision" in model or disable_add_transform_inline_image_block
         ):  # allow user to toggle this feature.
             return content
         if isinstance(content["image_url"], str):
@@ -131,14 +134,19 @@ class FireworksAIConfig(OpenAIGPTConfig):
             ] = f"{content['image_url']['url']}#transform=inline"
         return content
 
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-        model: str,
+    def _transform_messages_helper(
+        self, messages: List[AllMessageValues], model: str, litellm_params: dict
     ) -> List[AllMessageValues]:
         """
         Add 'transform=inline' to the url of the image_url
         """
+        disable_add_transform_inline_image_block = cast(
+            Optional[bool],
+            litellm_params.get(
+                "disable_add_transform_inline_image_block",
+                litellm.disable_add_transform_inline_image_block,
+            ),
+        )
         for message in messages:
             if message["role"] == "user":
                 _message_content = message.get("content")
@@ -146,7 +154,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     for content in _message_content:
                         if content["type"] == "image_url":
                             content = self._add_transform_inline_image_block(
-                                content=content, model=model
+                                content=content,
+                                model=model,
+                                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
         return messages
 
@@ -160,6 +170,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
     ) -> dict:
         if not model.startswith("accounts/"):
             model = f"accounts/fireworks/models/{model}"
+        messages = self._transform_messages_helper(
+            messages=messages, model=model, litellm_params=litellm_params
+        )
         return super().transform_request(
             model=model,
             messages=messages,

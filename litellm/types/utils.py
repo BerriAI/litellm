@@ -1613,6 +1613,7 @@ all_litellm_params = [
     "caching",
     "mock_response",
     "mock_timeout",
+    "disable_add_transform_inline_image_block",
     "api_key",
     "api_version",
     "prompt_id",

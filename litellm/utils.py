@@ -1989,6 +1989,7 @@ def get_litellm_params(
     hf_model_name: Optional[str] = None,
     custom_prompt_dict: Optional[dict] = None,
     litellm_metadata: Optional[dict] = None,
+    disable_add_transform_inline_image_block: Optional[bool] = None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2021,6 +2022,7 @@ def get_litellm_params(
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
+        "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
     }
     return litellm_params
 
