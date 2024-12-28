@@ -140,8 +140,6 @@ async def test_cohere_rerank_health_check():
     response = await litellm.ahealth_check(
         model_params={
             "model": "cohere/rerank-english-v3.0",
-            "query": "Hey, how's it going",
-            "documents": ["my sample text"],
             "api_key": os.getenv("COHERE_API_KEY"),
         },
         mode="rerank",

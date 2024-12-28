@@ -5198,20 +5198,23 @@ async def ahealth_check(
             "chat": lambda: litellm.acompletion(**model_params),
             "completion": lambda: litellm.atext_completion(**model_params),
             "embedding": lambda: litellm.aembedding(
-                **{**model_params, "messages": None, "input": input}
+                **{
+                    k: v for k, v in model_params.items() if k != "messages"
+                },  # Remove messages param
+                input=input or ["test"],  # Provide default input if none provided
             ),
             "audio_speech": lambda: litellm.aspeech(**model_params),
             "audio_transcription": lambda: litellm.atranscription(**model_params),
             "image_generation": lambda: litellm.aimage_generation(
-                **{**model_params, "messages": None, "prompt": prompt}
+                **{k: v for k, v in model_params.items() if k != "messages"},
+                prompt=prompt,
             ),
             "rerank": lambda: litellm.arerank(
                 **{
-                    **model_params,
-                    "messages": None,
-                    "query": prompt,
-                    "documents": ["my sample text"],
-                }
+                    k: v for k, v in model_params.items() if k != "messages"
+                },  # Remove messages param
+                query=prompt or "",
+                documents=["my sample text"],
             ),
             "realtime": lambda: {},  # Placeholder for realtime health check
         }
@@ -5219,12 +5222,8 @@ async def ahealth_check(
         if mode in mode_handlers:
             _response = await mode_handlers[mode]()
             # Only process headers for chat mode
-            return (
-                _create_health_check_response(
-                    _response._hidden_params.get("headers", {})
-                )
-                if mode == "chat"
-                else {}
+            return _create_health_check_response(
+                _response._hidden_params.get("headers", {})
             )
 
         # Fallback to chat model health check
