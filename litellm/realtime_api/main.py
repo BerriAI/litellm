@@ -148,9 +148,7 @@ async def _realtime_health_check(
             api_version=api_version or "2024-10-01-preview",
         )
     elif custom_llm_provider == "openai":
-        url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", model=model
-        )
+        url = openai_realtime._construct_url(api_base=api_base, model=model)
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={

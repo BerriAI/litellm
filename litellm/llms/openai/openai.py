@@ -1374,6 +1374,17 @@ class OpenAIChatCompletion(BaseLLM):
                 input=prompt,  # type: ignore
                 voice="alloy",
             )
+        elif mode == "realtime":
+            from litellm.realtime_api.main import _realtime_health_check
+
+            # create a websocket connection
+            await _realtime_health_check(
+                model=model or "",
+                api_key=api_key,
+                api_base=api_base or "https://api.openai.com/",
+                custom_llm_provider="openai",
+            )
+            return {}
         else:
             raise ValueError("mode not set, passed in mode: " + mode)
         response = {}
