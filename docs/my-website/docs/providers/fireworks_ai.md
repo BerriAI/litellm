@@ -190,6 +190,116 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Document Inlining 
+
+LiteLLM supports document inlining for Fireworks AI models. This is useful for models that are not vision models, but still need to parse documents/images/etc.
+
+LiteLLM will add `#transform=inline` to the url of the image_url, if the model is not a vision model.[**See Code**](https://github.com/BerriAI/litellm/blob/1ae9d45798bdaf8450f2dfdec703369f3d2212b7/litellm/llms/fireworks_ai/chat/transformation.py#L114)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
+
+completion = litellm.completion(
+    model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What are the candidate's BA and MBA GPAs?",
+                },
+            ],
+        }
+    ],
+)
+print(completion)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: llama-v3p3-70b-instruct
+    litellm_params:
+      model: fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct
+      api_key: os.environ/FIREWORKS_AI_API_KEY
+    #   api_base: os.environ/FIREWORKS_AI_API_BASE [OPTIONAL], defaults to "https://api.fireworks.ai/inference/v1"
+```
+
+2. Start Proxy
+
+```
+litellm --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer YOUR_API_KEY' \
+-d '{"model": "llama-v3p3-70b-instruct", 
+    "messages": [        
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "What are the candidate's BA and MBA GPAs?",
+                },
+            ],
+        }
+    ]}'
+```
+
+</TabItem>
+</Tabs>
+
+### Disable Auto-add
+
+If you want to disable the auto-add of `#transform=inline` to the url of the image_url, you can set the `auto_add_transform_inline` to `False` in the `FireworksAIConfig` class.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+litellm.disable_add_transform_inline_image_block = True
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+litellm_settings:
+    disable_add_transform_inline_image_block: true
+```
+
+</TabItem>
+</Tabs>
+
 ## Supported Models - ALL Fireworks AI Models Supported!
 
 :::info
