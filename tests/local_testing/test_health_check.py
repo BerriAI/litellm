@@ -167,19 +167,20 @@ async def test_audio_speech_health_check():
     print(response)
 
 
-# @pytest.mark.asyncio
-# async def test_audio_transcription_health_check():
-#     response = await litellm.ahealth_check(
-#         model_params={
-#             "model": "openai/whisper-1",
-#             "api_key": os.getenv("OPENAI_API_KEY"),
-#         },
-#         mode="audio_transcription",
-#     )
+@pytest.mark.asyncio
+async def test_audio_transcription_health_check():
+    litellm.set_verbose = True
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/whisper-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+        mode="audio_transcription",
+    )
 
-#     assert "error" not in response
+    assert "error" not in response
 
-#     print(response)
+    print(response)
 
 
 @pytest.mark.asyncio
