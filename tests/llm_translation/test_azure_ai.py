@@ -111,3 +111,39 @@ async def test_azure_ai_with_image_url():
                 ],
             }
         ]
+
+
+def test_azure_ai_global_standard_deployment():
+    """
+    Test that Azure AI studio global standard deployment can be used
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/7275
+    """
+    from openai import AzureOpenAI
+
+    client = AzureOpenAI(
+        api_key="fake-api-key",
+        base_url="https://my-deployment-francecentral.services.ai.azure.com/models/chat/completions",
+        api_version="2024-05-01-preview",
+    )
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            resp = litellm.completion(
+                model="azure_ai/gpt-4o-global-standard",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                api_base="https://my-deployment-francecentral.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+                api_key="fake-api-key",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        print(mock_client.call_args.kwargs)
+        mock_client.assert_called_once()
+
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "fake-api-key"
+
+        print(resp)
