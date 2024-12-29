@@ -1,3 +1,4 @@
+import io
 import json
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
@@ -667,6 +668,47 @@ class BaseLLMHTTPHandler:
             request_data=request_data,
         )
 
+    def handle_audio_file(self, audio_file: FileTypes) -> bytes:
+        """
+        Processes the audio file input based on its type and returns the binary data.
+
+        Args:
+            audio_file: Can be a file path (str), a tuple (filename, file_content), or binary data (bytes).
+
+        Returns:
+            The binary data of the audio file.
+        """
+        binary_data: bytes  # Explicitly declare the type
+
+        # Handle the audio file based on type
+        if isinstance(audio_file, str):
+            # If it's a file path
+            with open(audio_file, "rb") as f:
+                binary_data = f.read()  # `f.read()` always returns `bytes`
+        elif isinstance(audio_file, tuple):
+            # Handle tuple case
+            _, file_content = audio_file[:2]
+            if isinstance(file_content, str):
+                with open(file_content, "rb") as f:
+                    binary_data = f.read()  # `f.read()` always returns `bytes`
+            elif isinstance(file_content, bytes):
+                binary_data = file_content
+            else:
+                raise TypeError(
+                    f"Unexpected type in tuple: {type(file_content)}. Expected str or bytes."
+                )
+        elif isinstance(audio_file, bytes):
+            # Assume it's already binary data
+            binary_data = audio_file
+        elif isinstance(audio_file, io.BufferedReader):
+            # Handle file-like objects
+            binary_data = audio_file.read()
+
+        else:
+            raise TypeError(f"Unsupported type for audio_file: {type(audio_file)}")
+
+        return binary_data
+
     def audio_transcriptions(
         self,
         model: str,
@@ -708,21 +750,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Handle the audio file based on type
-        if isinstance(audio_file, str):
-            # If it's a file path
-            with open(audio_file, "rb") as f:
-                binary_data = f.read()
-        elif isinstance(audio_file, tuple):
-            # Handle tuple case
-            _, file_content = audio_file[:2]
-            if isinstance(file_content, str):
-                with open(file_content, "rb") as f:
-                    binary_data = f.read()
-            else:
-                binary_data = file_content
-        else:
-            # Assume it's already binary data
-            binary_data = audio_file
+        binary_data = self.handle_audio_file(audio_file)
 
         try:
             # Make the POST request
