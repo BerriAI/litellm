@@ -5,6 +5,13 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM supports Deepgram's `/listen` endpoint.
 
+| Property | Details |
+|-------|-------|
+| Description | Deepgram's voice AI platform provides APIs for speech-to-text, text-to-speech, and language understanding. |
+| Provider Route on LiteLLM | `deepgram/` |
+| Provider Doc | [Deepgram ↗](https://developers.deepgram.com/docs/introduction) |
+| Supported OpenAI Endpoints | `/audio/transcriptions` |
+
 ## Quick Start
 
 ```python
