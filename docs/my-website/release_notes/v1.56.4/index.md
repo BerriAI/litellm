@@ -1,5 +1,12 @@
+import Image from '@theme/IdealImage';
 
 ## New Features
+
+## Admin UI
+
+- `Test Key` Tab displays `model` used in response
+
+- `Test Key` Tab renders content in `.md`, `.py` (any code/markdown format)
 
 
 ## Dependency Upgrades
