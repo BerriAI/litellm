@@ -6323,6 +6323,8 @@ class ProviderConfigManager:
     ) -> Optional[BaseAudioTranscriptionConfig]:
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.DEEPGRAM == provider:
+            return litellm.DeepgramAudioTranscriptionConfig()
         return None
 
     @staticmethod

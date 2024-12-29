@@ -1788,6 +1788,7 @@ class LlmProviders(str, Enum):
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
+    DEEPGRAM = "deepgram"
 
 
 class LiteLLMLoggingBaseClass:
