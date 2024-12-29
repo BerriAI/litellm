@@ -118,9 +118,9 @@ async def _arealtime(
 
 async def _realtime_health_check(
     model: str,
-    api_base: str,
     custom_llm_provider: str,
     api_key: Optional[str],
+    api_base: Optional[str] = None,
     api_version: Optional[str] = None,
 ):
     """
@@ -143,12 +143,14 @@ async def _realtime_health_check(
     url: Optional[str] = None
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
-            api_base=api_base,
+            api_base=api_base or "",
             model=model,
             api_version=api_version or "2024-10-01-preview",
         )
     elif custom_llm_provider == "openai":
-        url = openai_realtime._construct_url(api_base=api_base, model=model)
+        url = openai_realtime._construct_url(
+            api_base=api_base or "https://api.openai.com/", model=model
+        )
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={
