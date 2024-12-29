@@ -2773,23 +2773,13 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
                 )
 
-    def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
-        """
-        filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
-        """
-        filtered_stop = None
-        if "stop" in supported_params and litellm.drop_params:
-            if provider == "bedrock" and "amazon" in model:
-                filtered_stop = []
-                if isinstance(stop, list):
-                    for s in stop:
-                        if re.match(r"^(\|+|User:)$", s):
-                            filtered_stop.append(s)
-        if filtered_stop is not None:
-            supported_params["stop"] = filtered_stop
-
-        return supported_params
-
+    provider_config: Optional[BaseConfig] = None
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -2885,21 +2875,16 @@ def get_optional_params(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        # handle cohere params
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if max_tokens is not None:
-            optional_params["max_tokens"] = max_tokens
-        if logit_bias is not None:
-            optional_params["logit_bias"] = logit_bias
-        if top_p is not None:
-            optional_params["p"] = top_p
-        if presence_penalty is not None:
-            optional_params["repetition_penalty"] = presence_penalty
-        if stop is not None:
-            optional_params["stopping_tokens"] = stop
+        optional_params = litellm.MaritalkConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in
         supported_params = get_supported_openai_params(
@@ -2990,8 +2975,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
 
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
     elif custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3024,8 +3007,6 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
     elif litellm.VertexAIAnthropicConfig.is_supported_model(
         model=model, custom_llm_provider=custom_llm_provider
     ):
@@ -3135,18 +3116,7 @@ def get_optional_params(  # noqa: PLR0915
                 ),
                 messages=messages,
             )
-        elif "ai21" in model:
-            _check_valid_arg(supported_params=supported_params)
-            # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
-            # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
-            if max_tokens is not None:
-                optional_params["maxTokens"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["topP"] = top_p
-            if stream:
-                optional_params["stream"] = stream
+
         elif "anthropic" in model:
             _check_valid_arg(supported_params=supported_params)
             if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
@@ -3162,84 +3132,18 @@ def get_optional_params(  # noqa: PLR0915
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
-        elif "amazon" in model:  # amazon titan llms
+        elif provider_config is not None:
             _check_valid_arg(supported_params=supported_params)
-            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            if max_tokens is not None:
-                optional_params["maxTokenCount"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if stop is not None:
-                filtered_stop = _map_and_modify_arg(
-                    {"stop": stop}, provider="bedrock", model=model
-                )
-                optional_params["stopSequences"] = filtered_stop["stop"]
-            if top_p is not None:
-                optional_params["topP"] = top_p
-            if stream:
-                optional_params["stream"] = stream
-        elif "meta" in model:  # amazon / meta llms
-            _check_valid_arg(supported_params=supported_params)
-            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            if max_tokens is not None:
-                optional_params["max_gen_len"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["top_p"] = top_p
-            if stream:
-                optional_params["stream"] = stream
-        elif "cohere" in model:  # cohere models on bedrock
-            _check_valid_arg(supported_params=supported_params)
-            # handle cohere params
-            if stream:
-                optional_params["stream"] = stream
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if max_tokens is not None:
-                optional_params["max_tokens"] = max_tokens
-        elif "mistral" in model:
-            _check_valid_arg(supported_params=supported_params)
-            # mistral params on bedrock
-            # \"max_tokens\":400,\"temperature\":0.7,\"top_p\":0.7,\"stop\":[\"\\\\n\\\\nHuman:\"]}"
-            if max_tokens is not None:
-                optional_params["max_tokens"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["top_p"] = top_p
-            if stop is not None:
-                optional_params["stop"] = stop
-            if stream is not None:
-                optional_params["stream"] = stream
-    elif custom_llm_provider == "aleph_alpha":
-        supported_params = [
-            "max_tokens",
-            "stream",
-            "top_p",
-            "temperature",
-            "presence_penalty",
-            "frequency_penalty",
-            "n",
-            "stop",
-        ]
-        _check_valid_arg(supported_params=supported_params)
-        if max_tokens is not None:
-            optional_params["maximum_tokens"] = max_tokens
-        if stream:
-            optional_params["stream"] = stream
-        if temperature is not None:
-            optional_params["temperature"] = temperature
-        if top_p is not None:
-            optional_params["top_p"] = top_p
-        if presence_penalty is not None:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty is not None:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if n is not None:
-            optional_params["n"] = n
-        if stop is not None:
-            optional_params["stop_sequences"] = stop
+            optional_params = provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
     elif custom_llm_provider == "cloudflare":
         # https://developers.cloudflare.com/workers-ai/models/text-generation/#input
         supported_params = get_supported_openai_params(
@@ -3336,57 +3240,21 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "perplexity":
+    elif custom_llm_provider == "perplexity" and provider_config is not None:
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
         _check_valid_arg(supported_params=supported_params)
-        if temperature is not None:
-            if (
-                temperature == 0 and model == "mistral-7b-instruct"
-            ):  # this model does no support temperature == 0
-                temperature = 0.0001  # close to 0
-            optional_params["temperature"] = temperature
-        if top_p:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
-        if max_tokens:
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty:
-            optional_params["frequency_penalty"] = frequency_penalty
-    elif custom_llm_provider == "anyscale":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
         )
-        if model in [
-            "mistralai/Mistral-7B-Instruct-v0.1",
-            "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        ]:
-            supported_params += [  # type: ignore
-                "functions",
-                "function_call",
-                "tools",
-                "tool_choice",
-                "response_format",
-            ]
-        _check_valid_arg(supported_params=supported_params)
-        optional_params = non_default_params
-        if temperature is not None:
-            if temperature == 0 and model in [
-                "mistralai/Mistral-7B-Instruct-v0.1",
-                "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            ]:  # this model does no support temperature == 0
-                temperature = 0.0001  # close to 0
-            optional_params["temperature"] = temperature
-        if top_p:
-            optional_params["top_p"] = top_p
-        if stream:
-            optional_params["stream"] = stream
-        if max_tokens:
-            optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -6302,6 +6170,20 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
+            if base_model in litellm.bedrock_converse_models:
+                pass
+            elif "amazon" in model:  # amazon titan llms
+                return litellm.AmazonTitanConfig()
+            elif "meta" in model:  # amazon / meta llms
+                return litellm.AmazonLlamaConfig()
+            elif "ai21" in model:  # ai21 llms
+                return litellm.AmazonAI21Config()
+            elif "cohere" in model:  # cohere models on bedrock
+                return litellm.AmazonCohereConfig()
+            elif "mistral" in model:  # mistral models on bedrock
+                return litellm.AmazonMistralConfig()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod
