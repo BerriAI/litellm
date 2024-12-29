@@ -306,6 +306,8 @@ def cleanup_azure_files():
     """
     azure_files = litellm.file_list(
         custom_llm_provider="azure",
+        api_key=os.getenv("AZURE_FT_API_KEY"),
+        api_base=os.getenv("AZURE_FT_API_BASE"),
     )
     print("azure_files=", azure_files)
     for _file in azure_files:
@@ -313,6 +315,8 @@ def cleanup_azure_files():
         delete_file_response = litellm.file_delete(
             file_id=_file.id,
             custom_llm_provider="azure",
+            api_key=os.getenv("AZURE_FT_API_KEY"),
+            api_base=os.getenv("AZURE_FT_API_BASE"),
         )
         print("delete_file_response=", delete_file_response)
         assert delete_file_response.id == _file.id
@@ -327,8 +331,8 @@ def cleanup_azure_ft_models():
         import requests
 
         client = AzureOpenAI(
-            api_key=os.getenv("AZURE_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_FT_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_FT_API_BASE"),
             api_version=os.getenv("AZURE_API_VERSION"),
         )
 
@@ -339,12 +343,12 @@ def cleanup_azure_ft_models():
         # Delete all fine-tuning jobs
         for job in _list_ft_jobs:
             try:
-                endpoint = os.getenv("AZURE_API_BASE").rstrip("/")
+                endpoint = os.getenv("AZURE_FT_API_BASE").rstrip("/")
                 url = f"{endpoint}/openai/fine_tuning/jobs/{job.id}?api-version=2024-10-21"
                 print("url=", url)
 
                 headers = {
-                    "api-key": os.getenv("AZURE_API_KEY"),
+                    "api-key": os.getenv("AZURE_FT_API_KEY"),
                     "Content-Type": "application/json",
                 }
 
@@ -359,7 +363,8 @@ def cleanup_azure_ft_models():
         print(f"Error on cleanup_azure_ft_models: {str(e)}")
 
 
-cleanup_azure_ft_models()
+# # cleanup_azure_files()
+# cleanup_azure_ft_models()
 
 
 @pytest.mark.asyncio
