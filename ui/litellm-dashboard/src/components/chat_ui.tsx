@@ -28,6 +28,7 @@ import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
+import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -319,9 +320,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           <div style={{ 
                             whiteSpace: "pre-wrap", 
                             wordBreak: "break-word",
-                            maxWidth: "100%" 
+                            maxWidth: "100%"
                           }}>
-                            {message.content}
+                            <ReactMarkdown
+                              components={{
+                                code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                                  inline?: boolean;
+                                  node?: any;
+                                }) {
+                                  const match = /language-(\w+)/.exec(className || '');
+                                  return !inline && match ? (
+                                    <SyntaxHighlighter
+                                      style={coy as any}
+                                      language={match[1]}
+                                      PreTag="div"
+                                      {...props}
+                                    >
+                                      {String(children).replace(/\n$/, '')}
+                                    </SyntaxHighlighter>
+                                  ) : (
+                                    <code className={className} {...props}>
+                                      {children}
+                                    </code>
+                                  );
+                                }
+                              }}
+                            >
+                              {message.content}
+                            </ReactMarkdown>
                           </div>
                         </TableCell>
                       </TableRow>
