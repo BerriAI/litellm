@@ -297,6 +297,7 @@ async def test_async_create_batch(provider):
     print("cancel_batch_response=", cancel_batch_response)
 
     cleanup_azure_files()
+    cleanup_azure_ft_models()
 
 
 def cleanup_azure_files():
@@ -315,6 +316,50 @@ def cleanup_azure_files():
         )
         print("delete_file_response=", delete_file_response)
         assert delete_file_response.id == _file.id
+
+
+def cleanup_azure_ft_models():
+    """
+    Test CLEANUP: Delete all existing fine tuning jobs for Azure
+    """
+    try:
+        from openai import AzureOpenAI
+        import requests
+
+        client = AzureOpenAI(
+            api_key=os.getenv("AZURE_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_API_BASE"),
+            api_version=os.getenv("AZURE_API_VERSION"),
+        )
+
+        _list_ft_jobs = client.fine_tuning.jobs.list()
+        print("_list_ft_jobs=", _list_ft_jobs)
+
+        # delete all ft jobs make post request to this
+        # Delete all fine-tuning jobs
+        for job in _list_ft_jobs:
+            try:
+                endpoint = os.getenv("AZURE_API_BASE").rstrip("/")
+                url = f"{endpoint}/openai/fine_tuning/jobs/{job.id}?api-version=2024-10-21"
+                print("url=", url)
+
+                headers = {
+                    "api-key": os.getenv("AZURE_API_KEY"),
+                    "Content-Type": "application/json",
+                }
+
+                response = requests.delete(url, headers=headers)
+                print(f"Deleting job {job.id}: Status {response.status_code}")
+                if response.status_code != 204:
+                    print(f"Error deleting job {job.id}: {response.text}")
+
+            except Exception as e:
+                print(f"Error deleting job {job.id}: {str(e)}")
+    except Exception as e:
+        print(f"Error on cleanup_azure_ft_models: {str(e)}")
+
+
+cleanup_azure_ft_models()
 
 
 @pytest.mark.asyncio
