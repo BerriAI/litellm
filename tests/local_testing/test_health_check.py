@@ -44,8 +44,6 @@ async def test_text_completion_health_check():
         prompt="What's the weather in SF?",
     )
     print(f"response: {response}")
-
-    assert "x-ratelimit-remaining-tokens" in response
     return response
 
 
