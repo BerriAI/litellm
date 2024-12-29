@@ -38,7 +38,7 @@ interface ChatUIProps {
 
 async function generateModelResponse(
   chatHistory: { role: string; content: string }[],
-  updateUI: (chunk: string) => void,
+  updateUI: (chunk: string, model: string) => void,
   selectedModel: string,
   accessToken: string
 ) {
@@ -67,7 +67,7 @@ async function generateModelResponse(
     for await (const chunk of response) {
       console.log(chunk);
       if (chunk.choices[0].delta.content) {
-        updateUI(chunk.choices[0].delta.content);
+        updateUI(chunk.choices[0].delta.content, chunk.model);
       }
     }
   } catch (error) {
@@ -84,7 +84,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>('session');
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<{ role: string; content: string }[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
@@ -144,17 +144,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   }, [chatHistory]);
 
-  const updateUI = (role: string, chunk: string) => {
+  const updateUI = (role: string, chunk: string, model?: string) => {
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
       if (lastMessage && lastMessage.role === role) {
         return [
           ...prevHistory.slice(0, prevHistory.length - 1),
-          { role, content: lastMessage.content + chunk },
+          { role, content: lastMessage.content + chunk, model },
         ];
       } else {
-        return [...prevHistory, { role, content: chunk }];
+        return [...prevHistory, { role, content: chunk, model }];
       }
     });
   };
@@ -190,7 +190,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (selectedModel) {
         await generateModelResponse(
           updatedChatHistory,
-          (chunk) => updateUI("assistant", chunk),
+          (chunk, model) => updateUI("assistant", chunk, model),
           selectedModel,
           effectiveApiKey
         );
@@ -297,11 +297,31 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <TableRow key={index}>
                         <TableCell>
                           <div style={{ 
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            marginBottom: '4px'
+                          }}>
+                            <strong>{message.role}</strong>
+                            {message.role === "assistant" && message.model && (
+                              <span style={{
+                                fontSize: '12px',
+                                color: '#666',
+                                backgroundColor: '#f5f5f5',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontWeight: 'normal'
+                              }}>
+                                {message.model}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ 
                             whiteSpace: "pre-wrap", 
                             wordBreak: "break-word",
                             maxWidth: "100%" 
                           }}>
-                            <strong>{message.role}:</strong> {message.content}
+                            {message.content}
                           </div>
                         </TableCell>
                       </TableRow>
