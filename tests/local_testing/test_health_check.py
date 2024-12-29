@@ -6,6 +6,7 @@ import sys
 import traceback
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -200,11 +201,16 @@ async def test_audio_transcription_health_check():
 @pytest.mark.parametrize(
     "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
 )
-async def test_realtime_health_check(model):
+async def test_async_realtime_health_check(model, mocker):
     """
     Test Health Check with Valid models passes
 
     """
+    mock_websocket = AsyncMock()
+    mock_connect = AsyncMock().__aenter__.return_value = mock_websocket
+    mocker.patch("websockets.connect", return_value=mock_connect)
+
+    litellm.set_verbose = True
     model_params = {
         "model": model,
     }
