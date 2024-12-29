@@ -1,4 +1,4 @@
-from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
+from base_llm_unit_tests import BaseLLMChatTest
 
 
 # Test implementation
