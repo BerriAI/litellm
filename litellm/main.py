@@ -4861,7 +4861,30 @@ def transcription(
             api_base=api_base,
             api_key=api_key,
         )
-
+    elif custom_llm_provider == "deepgram":
+        response = base_llm_http_handler.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            model_response=model_response,
+            atranscription=atranscription,
+            client=(
+                client
+                if client is not None
+                and (
+                    isinstance(client, HTTPHandler)
+                    or isinstance(client, AsyncHTTPHandler)
+                )
+                else None
+            ),
+            timeout=timeout,
+            max_retries=max_retries,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            custom_llm_provider="deepgram",
+            headers={},
+        )
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response

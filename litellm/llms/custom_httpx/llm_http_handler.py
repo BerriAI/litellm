@@ -17,7 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -666,6 +666,88 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             request_data=request_data,
         )
+
+    def audio_transcriptions(
+        self,
+        model: str,
+        audio_file: FileTypes,
+        optional_params: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        max_retries: int,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        atranscription: bool = False,
+        headers: dict = {},
+    ) -> TranscriptionResponse:
+        provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+        )
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
+            messages=[],
+            optional_params=optional_params,
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+        )
+
+        # Handle the audio file based on type
+        if isinstance(audio_file, str):
+            # If it's a file path
+            with open(audio_file, "rb") as f:
+                binary_data = f.read()
+        elif isinstance(audio_file, tuple):
+            # Handle tuple case
+            _, file_content = audio_file[:2]
+            if isinstance(file_content, str):
+                with open(file_content, "rb") as f:
+                    binary_data = f.read()
+            else:
+                binary_data = file_content
+        else:
+            # Assume it's already binary data
+            binary_data = audio_file
+
+        try:
+            # Make the POST request
+            response = client.post(
+                url=complete_url,
+                headers=headers,
+                content=binary_data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        if isinstance(provider_config, litellm.DeepgramAudioTranscriptionConfig):
+            returned_response = provider_config.transform_audio_transcription_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data={},
+                optional_params=optional_params,
+                litellm_params={},
+                api_key=api_key,
+            )
+            return returned_response
+        return model_response
 
     def _handle_error(
         self, e: Exception, provider_config: Union[BaseConfig, BaseRerankConfig]
