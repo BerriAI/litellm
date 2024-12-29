@@ -1107,6 +1107,9 @@ from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
+from .llms.deepgram.audio_transcription.transformation import (
+    DeepgramAudioTranscriptionConfig,
+)
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
