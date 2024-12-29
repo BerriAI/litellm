@@ -43,6 +43,7 @@ const config = {
         id: 'release_notes', 
         path: './release_notes', // Folder where your release notes are stored
         routeBasePath: '/release_notes', // URL path for the release notes
+        sortPosts: 'descending',
         include: ['**/*.md', '**/*.mdx'], // Files to include
         // Other blog options
       },
