@@ -26,6 +26,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+import random
 
 
 def load_vertex_ai_credentials():
@@ -296,8 +297,10 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
-    cleanup_azure_files()
-    cleanup_azure_ft_models()
+    if random.randint(1, 20) == 1:
+        print("Running random cleanup of Azure files and models...")
+        cleanup_azure_files()
+        cleanup_azure_ft_models()
 
 
 def cleanup_azure_files():
@@ -361,10 +364,6 @@ def cleanup_azure_ft_models():
                 print(f"Error deleting job {job.id}: {str(e)}")
     except Exception as e:
         print(f"Error on cleanup_azure_ft_models: {str(e)}")
-
-
-# # cleanup_azure_files()
-# cleanup_azure_ft_models()
 
 
 @pytest.mark.asyncio
