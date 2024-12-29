@@ -5190,6 +5190,7 @@ async def ahealth_check(
         model_params["cache"] = {
             "no-cache": True
         }  # don't used cached responses for making health check calls
+        mode = mode or "chat"
         if "*" in model:
             return await ahealth_check_wildcard_models(
                 model=model,
