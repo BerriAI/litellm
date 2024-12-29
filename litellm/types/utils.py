@@ -75,7 +75,20 @@ class ProviderField(TypedDict):
     field_value: str
 
 
-class ModelInfoBase(TypedDict, total=False):
+class ProviderSpecificModelInfo(TypedDict, total=False):
+    supports_system_messages: Optional[bool]
+    supports_response_schema: Optional[bool]
+    supports_vision: Optional[bool]
+    supports_function_calling: Optional[bool]
+    supports_assistant_prefill: Optional[bool]
+    supports_prompt_caching: Optional[bool]
+    supports_audio_input: Optional[bool]
+    supports_embedding_image_input: Optional[bool]
+    supports_audio_output: Optional[bool]
+    supports_pdf_input: Optional[bool]
+
+
+class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
@@ -116,16 +129,6 @@ class ModelInfoBase(TypedDict, total=False):
             "completion", "embedding", "image_generation", "chat", "audio_transcription"
         ]
     ]
-    supports_system_messages: Optional[bool]
-    supports_response_schema: Optional[bool]
-    supports_vision: Optional[bool]
-    supports_function_calling: Optional[bool]
-    supports_assistant_prefill: Optional[bool]
-    supports_prompt_caching: Optional[bool]
-    supports_audio_input: Optional[bool]
-    supports_embedding_image_input: Optional[bool]
-    supports_audio_output: Optional[bool]
-    supports_pdf_input: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
 
@@ -1613,6 +1616,7 @@ all_litellm_params = [
     "caching",
     "mock_response",
     "mock_timeout",
+    "disable_add_transform_inline_image_block",
     "api_key",
     "api_version",
     "prompt_id",

@@ -899,6 +899,10 @@ def completion(  # type: ignore # noqa: PLR0915
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
     base_model = kwargs.get("base_model", None)
+    ### DISABLE FLAGS ###
+    disable_add_transform_inline_image_block = kwargs.get(
+        "disable_add_transform_inline_image_block", None
+    )
     ### TEXT COMPLETION CALLS ###
     text_completion = kwargs.get("text_completion", False)
     atext_completion = kwargs.get("atext_completion", False)
@@ -956,14 +960,11 @@ def completion(  # type: ignore # noqa: PLR0915
         "top_logprobs",
         "extra_headers",
     ]
-
     default_params = openai_params + all_litellm_params
-
     litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
-
     ## PROMPT MANAGEMENT HOOKS ##
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
@@ -1156,6 +1157,7 @@ def completion(  # type: ignore # noqa: PLR0915
             hf_model_name=hf_model_name,
             custom_prompt_dict=custom_prompt_dict,
             litellm_metadata=kwargs.get("litellm_metadata"),
+            disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
         )
         logging.update_environment_variables(
             model=model,
