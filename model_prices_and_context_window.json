@@ -3486,7 +3486,17 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "vertex_ai/mistral-large@2411": {
+    "vertex_ai/mistral-large@2411-001": {
+        "max_tokens": 8191,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "vertex_ai/mistral-large-2411": {
         "max_tokens": 8191,
         "max_input_tokens": 128000,
         "max_output_tokens": 8191,
@@ -4497,13 +4507,24 @@
         "litellm_provider": "replicate",
         "mode": "chat"
     },
-    "openrouter/deepseek/deepseek-coder": {
-        "max_tokens": 4096,
-        "max_input_tokens": 32000,
+    "openrouter/deepseek/deepseek-chat": {
+        "max_tokens": 8192,
+        "max_input_tokens": 66000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000014,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "openrouter",
+        "supports_prompt_caching": true,
+        "mode": "chat"
+    },
+    "openrouter/deepseek/deepseek-coder": {
+        "max_tokens": 8192,
+        "max_input_tokens": 66000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "openrouter",
+        "supports_prompt_caching": true,
         "mode": "chat"
     },
     "openrouter/microsoft/wizardlm-2-8x22b:nitro": {
