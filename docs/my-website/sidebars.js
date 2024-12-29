@@ -183,6 +183,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/huggingface", 
         "providers/databricks",
+        "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 
