@@ -43,7 +43,12 @@ const config = {
         id: 'release_notes', 
         path: './release_notes', // Folder where your release notes are stored
         routeBasePath: '/release_notes', // URL path for the release notes
-        sortPosts: 'descending',
+        sortPosts: (a, b) => {
+          // Extract folder names from the file paths
+          const folderA = a.metadata.permalink.split('/')[2];  // Get folder name from permalink
+          const folderB = b.metadata.permalink.split('/')[2];
+          return folderA.localeCompare(folderB);  // Compare folder names
+        },
         include: ['**/*.md', '**/*.mdx'], // Files to include
         // Other blog options
       },
