@@ -171,7 +171,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
 def test_transform_inline(content, model, expected_url):
 
     result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
-        content, model
+        content=content, model=model, disable_add_transform_inline_image_block=False
     )
     if isinstance(expected_url, str):
         assert result["image_url"] == expected_url
@@ -188,10 +188,11 @@ def test_transform_inline(content, model, expected_url):
     ],
 )
 def test_global_disable_flag(model, is_disabled, expected_url):
-    litellm.disable_add_transform_inline_image_block = is_disabled
     content = {"image_url": "http://example.com/image.png"}
     result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
-        content, model
+        content=content,
+        model=model,
+        disable_add_transform_inline_image_block=is_disabled,
     )
     assert result["image_url"] == expected_url
     litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
