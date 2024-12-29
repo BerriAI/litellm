@@ -156,6 +156,7 @@ class AmazonTitanConfig(AmazonInvokeMixin, BaseConfig):
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -420,6 +421,7 @@ class AmazonCohereConfig(AmazonInvokeMixin, BaseConfig):
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -506,6 +508,7 @@ class AmazonAI21Config(AmazonInvokeMixin, BaseConfig):
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -582,6 +585,7 @@ class AmazonLlamaConfig(AmazonInvokeMixin, BaseConfig):
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -658,6 +662,7 @@ class AmazonMistralConfig(AmazonInvokeMixin, BaseConfig):
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
