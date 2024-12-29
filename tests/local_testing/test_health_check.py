@@ -6,6 +6,7 @@ import sys
 import traceback
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -33,6 +34,19 @@ async def test_azure_health_check():
 
 
 # asyncio.run(test_azure_health_check())
+
+
+@pytest.mark.asyncio
+async def test_text_completion_health_check():
+    response = await litellm.ahealth_check(
+        model_params={"model": "gpt-3.5-turbo-instruct"},
+        mode="completion",
+        prompt="What's the weather in SF?",
+    )
+    print(f"response: {response}")
+
+    assert "x-ratelimit-remaining-tokens" in response
+    return response
 
 
 @pytest.mark.asyncio
@@ -128,7 +142,6 @@ async def test_groq_health_check():
         mode=None,
         prompt="What's 1 + 1?",
         input=["test from litellm"],
-        default_timeout=6000,
     )
     print(f"response: {response}")
     assert response == {}
@@ -141,8 +154,6 @@ async def test_cohere_rerank_health_check():
     response = await litellm.ahealth_check(
         model_params={
             "model": "cohere/rerank-english-v3.0",
-            "query": "Hey, how's it going",
-            "documents": ["my sample text"],
             "api_key": os.getenv("COHERE_API_KEY"),
         },
         mode="rerank",
@@ -155,14 +166,51 @@ async def test_cohere_rerank_health_check():
 
 
 @pytest.mark.asyncio
+async def test_audio_speech_health_check():
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/tts-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+        mode="audio_speech",
+        prompt="Hey",
+    )
+
+    assert "error" not in response
+
+    print(response)
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_health_check():
+    litellm.set_verbose = True
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/whisper-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+        mode="audio_transcription",
+    )
+
+    assert "error" not in response
+
+    print(response)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
 )
-async def test_realtime_health_check(model):
+async def test_async_realtime_health_check(model, mocker):
     """
     Test Health Check with Valid models passes
 
     """
+    mock_websocket = AsyncMock()
+    mock_connect = AsyncMock().__aenter__.return_value = mock_websocket
+    mocker.patch("websockets.connect", return_value=mock_connect)
+
+    litellm.set_verbose = True
     model_params = {
         "model": model,
     }
