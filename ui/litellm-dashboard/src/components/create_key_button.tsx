@@ -125,6 +125,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     try {
       const newKeyAlias = formValues?.key_alias ?? "";
       const newKeyTeamId = formValues?.team_id ?? null;
+
       const existingKeyAliases =
         data
           ?.filter((k) => k.team_id === newKeyTeamId)
@@ -163,8 +164,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      console.log("error in create key:", error);
+      message.error(`Error creating the key: ${error}`);
     }
   };
 
@@ -224,11 +225,27 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               >
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
+                {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
               </Radio.Group>
             </Form.Item>
 
             <Form.Item
-              label={keyOwner === "you" ? "Key Name" : "Service Account ID"}
+              label="User ID"
+              name="user_id"
+              hidden={keyOwner !== "another_user"}
+              valuePropName="user_id"
+              className="mt-8"
+              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
+            >
+              <TextInput 
+                placeholder="User ID" 
+                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
               name="key_alias"
               rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
               help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
@@ -238,12 +255,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Form.Item
               label="Team ID"
               name="team_id"
-              hidden={true}
+              hidden={keyOwner !== "another_user"}
               initialValue={team ? team["team_id"] : null}
               valuePropName="team_id"
               className="mt-8"
             >
-              <Input value={team ? team["team_alias"] : ""} disabled />
+              <TextInput defaultValue={team ? team["team_id"] : null} onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
             </Form.Item>
 
             <Form.Item
