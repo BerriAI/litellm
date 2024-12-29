@@ -174,6 +174,7 @@ from openai import OpenAIError as OriginalError
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -1989,6 +1990,7 @@ def get_litellm_params(
     hf_model_name: Optional[str] = None,
     custom_prompt_dict: Optional[dict] = None,
     litellm_metadata: Optional[dict] = None,
+    disable_add_transform_inline_image_block: Optional[bool] = None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2021,6 +2023,7 @@ def get_litellm_params(
         "hf_model_name": hf_model_name,
         "custom_prompt_dict": custom_prompt_dict,
         "litellm_metadata": litellm_metadata,
+        "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
     }
     return litellm_params
 
@@ -4241,6 +4244,17 @@ def _get_model_info_helper(  # noqa: PLR0915
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
+            if _model_info is None and ProviderConfigManager.get_provider_model_info(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            ):
+                provider_config = ProviderConfigManager.get_provider_model_info(
+                    model=model, provider=LlmProviders(custom_llm_provider)
+                )
+                if provider_config is not None:
+                    _model_info = cast(
+                        dict, provider_config.get_model_info(model=model)
+                    )
+                    key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -6205,6 +6219,8 @@ class ProviderConfigManager:
     ) -> Optional[BaseAudioTranscriptionConfig]:
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.DEEPGRAM == provider:
+            return litellm.DeepgramAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -6217,6 +6233,15 @@ class ProviderConfigManager:
         elif LlmProviders.TOGETHER_AI == provider:
             return litellm.TogetherAITextCompletionConfig()
         return litellm.OpenAITextCompletionConfig()
+
+    @staticmethod
+    def get_provider_model_info(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseLLMModelInfo]:
+        if LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIConfig()
+        return None
 
 
 def get_end_user_id_for_cost_tracking(

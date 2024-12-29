@@ -45,6 +45,7 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/pass_through",
+            "proxy/spending_monitoring",
         ],
         },
         "proxy/demo",
@@ -83,19 +84,20 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Model Access",
+          items: [
+            "proxy/model_access",
+            "proxy/team_model_add"
+          ]
+        },
+        {
+          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui", 
             "proxy/admin_ui_sso",
             "proxy/self_serve", 
             "proxy/custom_sso"
-          ],
-        },
-        {
-          type: "category",
-          label: "Team Management",
-          items: [
-            "proxy/team_model_add"
           ],
         },
         {
