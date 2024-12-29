@@ -5,15 +5,15 @@ This document is a guide for using LiteLLM Proxy once you have crossed 1M+ rows 
 <iframe width="840" height="500" src="https://www.loom.com/embed/eafd90d5374d4633b99c441fb04df351" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 ## Why is UI Usage Tracking disabled?
-- Heavy database queries on `LiteLLM_Spend_Logs` (once it has 1M+ rows) can slow down your API LLM requests. **We do not want this happening**
+- Heavy database queries on `LiteLLM_Spend_Logs` (once it has 1M+ rows) can slow down your LLM API requests. **We do not want this happening**
 
 ## Solutions for Usage Tracking
 
-1. **Export Logs to Cloud Storage**
+Step 1. **Export Logs to Cloud Storage**
    - [Send logs to S3, GCS, or Azure Blob Storage](https://docs.litellm.ai/docs/proxy/logging)
    - [Log format specification](https://docs.litellm.ai/docs/proxy/logging_spec)
 
-2. **Analyze Data**
+Step 2. **Analyze Data**
    - Use tools like [Redash](https://redash.io/), [Databricks](https://www.databricks.com/), [Snowflake](https://www.snowflake.com/en/) to analyze exported logs
 
 ## Need an Integration? Get in Touch
