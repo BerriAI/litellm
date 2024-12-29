@@ -16,7 +16,7 @@ import secrets
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple, cast
+from typing import List, Literal, Optional, Tuple, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -38,6 +38,7 @@ from litellm.proxy.utils import (
     duration_in_seconds,
     handle_exception_on_proxy,
 )
+from litellm.router import Router
 from litellm.secret_managers.main import get_secret
 from litellm.types.utils import (
     BudgetConfig,
@@ -330,6 +331,8 @@ async def generate_key_fn(  # noqa: PLR0915
     try:
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
+            llm_router,
+            premium_user,
             prisma_client,
             user_api_key_cache,
             user_custom_key_generate,
@@ -385,6 +388,12 @@ async def generate_key_fn(  # noqa: PLR0915
                 status_code=500,
                 detail=str(e),
             )
+
+        _check_model_access_group(
+            models=data.models,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
 
         # check if user set default key/generate params on config.yaml
         if litellm.default_key_generate_params is not None:
@@ -990,6 +999,34 @@ async def info_key_fn(
         return {"key": key, "info": key_info}
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+def _check_model_access_group(
+    models: Optional[List[str]], llm_router: Optional[Router], premium_user: bool
+) -> Literal[True]:
+    """
+    if is_model_access_group is True + is_wildcard_route is True, check if user is a premium user
+
+    Return True if user is a premium user, False otherwise
+    """
+    if models is None or llm_router is None:
+        return True
+
+    for model in models:
+        if llm_router._is_model_access_group_for_wildcard_route(
+            model_access_group=model
+        ):
+            if not premium_user:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Setting a model access group on a wildcard model is only available for LiteLLM Enterprise users.{}".format(
+                            CommonProxyErrors.not_premium_user.value
+                        )
+                    },
+                )
+
+    return True
 
 
 async def generate_key_helper_fn(  # noqa: PLR0915
