@@ -2770,9 +2770,11 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
                 )
 
-    provider_config = ProviderConfigManager.get_provider_chat_config(
-        model=model, provider=LlmProviders(custom_llm_provider)
-    )
+    provider_config: Optional[BaseConfig] = None
+    if custom_llm_provider is not None and custom_llm_provider in litellm.provider_list:
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
@@ -3125,7 +3127,7 @@ def get_optional_params(  # noqa: PLR0915
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                 )
-        else:
+        elif provider_config is not None:
             _check_valid_arg(supported_params=supported_params)
             optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
@@ -3233,7 +3235,7 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "perplexity":
+    elif custom_llm_provider == "perplexity" and provider_config is not None:
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
         )
