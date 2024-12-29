@@ -7,7 +7,7 @@ import Image from '@theme/IdealImage';
 
 ### **Deepgram Speech to Text**
 
-New Speech to Text support for Deepgram models. [**Start Here**](../providers/deepgram.md)
+New Speech to Text support for Deepgram models. [**Start Here**](https://docs.litellm.ai/docs/providers/deepgram)
 
 ```python
 from litellm import transcription
