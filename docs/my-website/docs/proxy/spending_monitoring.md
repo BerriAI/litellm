@@ -16,6 +16,12 @@ Step 1. **Export Logs to Cloud Storage**
 Step 2. **Analyze Data**
    - Use tools like [Redash](https://redash.io/), [Databricks](https://www.databricks.com/), [Snowflake](https://www.snowflake.com/en/) to analyze exported logs
 
+[Optional] Step 3. **Disable Spend + Error Logs to LiteLLM DB**
+
+[See Instructions Here](./prod#6-disable-spend_logs--error_logs-if-not-using-the-litellm-ui)
+
+Disabling this will prevent your LiteLLM DB from growing in size, which will help with performance (prevent health checks from failing).
+
 ## Need an Integration? Get in Touch
 
 - Request a logging integration on [Github Issues](https://github.com/BerriAI/litellm/issues)
