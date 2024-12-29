@@ -5153,7 +5153,13 @@ async def ahealth_check(  # noqa: PLR0915
     model_params: dict,
     mode: Optional[
         Literal[
-            "completion", "embedding", "image_generation", "chat", "batch", "rerank"
+            "completion",
+            "embedding",
+            "image_generation",
+            "chat",
+            "batch",
+            "rerank",
+            "realtime",
         ]
     ] = None,
     prompt: Optional[str] = None,
