@@ -1,13 +1,15 @@
 from typing import List, Literal, Optional, Tuple, Union, cast
 
 import litellm
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.utils import ModelInfoBase, ProviderSpecificModelInfo
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class FireworksAIConfig(OpenAIGPTConfig):
+class FireworksAIConfig(BaseLLMModelInfo, OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 
@@ -159,6 +161,31 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
         return messages
+
+    def get_model_info(
+        self, model: str, existing_model_info: Optional[ModelInfoBase] = None
+    ) -> ModelInfoBase:
+        provider_specific_model_info = ProviderSpecificModelInfo(
+            supports_function_calling=True,
+            supports_prompt_caching=True,  # https://docs.fireworks.ai/guides/prompt-caching
+            supports_pdf_input=True,  # via document inlining
+            supports_vision=True,  # via document inlining
+        )
+        if existing_model_info is not None:
+            return ModelInfoBase(
+                **{**existing_model_info, **provider_specific_model_info}
+            )
+        return ModelInfoBase(
+            key=model,
+            litellm_provider="fireworks_ai",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            **provider_specific_model_info,
+        )
 
     def transform_request(
         self,

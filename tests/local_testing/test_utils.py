@@ -1240,3 +1240,15 @@ def test_token_counter_with_image_url_with_detail_high():
     )
     print("tokens", _tokens)
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
+
+
+def test_fireworks_ai_document_inlining():
+    """
+    With document inlining, all fireworks ai models are now:
+    - supports_pdf
+    - supports_vision
+    """
+    from litellm.utils import supports_pdf_input, supports_vision
+
+    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is True
+    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is True
