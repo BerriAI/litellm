@@ -152,3 +152,27 @@ async def test_cohere_rerank_health_check():
     assert "error" not in response
 
     print(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
+)
+async def test_realtime_health_check(model):
+    """
+    Test Health Check with Valid models passes
+
+    """
+    model_params = {
+        "model": model,
+    }
+    if model == "azure/gpt-4o-realtime-preview":
+        model_params["api_base"] = os.getenv("AZURE_REALTIME_API_BASE")
+        model_params["api_key"] = os.getenv("AZURE_REALTIME_API_KEY")
+        model_params["api_version"] = os.getenv("AZURE_REALTIME_API_VERSION")
+    response = await litellm.ahealth_check(
+        model_params=model_params,
+        mode="realtime",
+    )
+    print(response)
+    assert response == {}

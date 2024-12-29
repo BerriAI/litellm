@@ -1585,6 +1585,18 @@ class AzureChatCompletion(BaseLLM):
             )
         elif mode == "batch":
             completion = await client.batches.with_raw_response.list(limit=1)  # type: ignore
+        elif mode == "realtime":
+            from litellm.realtime_api.main import _realtime_health_check
+
+            # create a websocket connection
+            await _realtime_health_check(
+                model=model or "",
+                api_key=api_key,
+                api_base=api_base,
+                api_version=api_version,
+                custom_llm_provider="azure",
+            )
+            return {}
         else:
             raise Exception("mode not set")
         response = {}
