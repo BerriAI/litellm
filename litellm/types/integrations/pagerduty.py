@@ -47,13 +47,14 @@ class AlertingConfig(TypedDict, total=False):
     failure_threshold_window_seconds: int  # Window in seconds
 
     # Requests hanging threshold
-    hanging_threshold_seconds: int  # Number of seconds a request hangs
+    hanging_threshold_seconds: float  # Number of seconds of waiting for a response before a request is considered hanging
     hanging_threshold_window_seconds: int  # Window in seconds
 
 
 class FailureEvent(StandardLoggingUserAPIKeyMetadata, total=False):
     """Simple structure to hold timestamp and error info."""
 
+    failure_event_type: Literal["failed_response", "hanging_response"]
     timestamp: datetime
     error_class: Optional[str]
     error_code: Optional[str]
