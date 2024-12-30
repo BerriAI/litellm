@@ -6050,7 +6050,10 @@ class ProviderConfigManager:
         """
         Returns the provider config for a given provider.
         """
-        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+        if (
+            provider == LlmProviders.OPENAI
+            and litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
+        ):
             return litellm.OpenAIO1Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
@@ -6122,6 +6125,8 @@ class ProviderConfigManager:
         ):
             return litellm.AI21ChatConfig()
         elif litellm.LlmProviders.AZURE == provider:
+            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+                return litellm.AzureOpenAIO1Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIStudioConfig()

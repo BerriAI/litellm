@@ -35,3 +35,20 @@ class AzureOpenAIO1Config(OpenAIO1Config):
             if m in model:
                 return True
         return False
+
+    # def get_complete_url(
+    #     self,
+    #     api_base: str,
+    #     model: str,
+    #     optional_params: dict,
+    #     stream: Optional[bool] = None,
+    # ) -> str:
+    #     """
+    #     Since this is used in the openai handler, we need to give the url minus the `/chat/completions` prefix.
+
+    #     Returns:
+    #     https://openai-gpt-4-test-v-1.openai.azure.com/openai/deployments/o1-preview
+    #     """
+    #     print("GET COMPLETE URL CALLED")
+    #     api_base = api_base.rstrip("/")
+    #     return f"{api_base}/openai/deployments/{model}"

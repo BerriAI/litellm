@@ -1252,6 +1252,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     timeout=timeout,  # type: ignore
                     client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
+                    custom_llm_provider=custom_llm_provider,
                 )
             else:
                 ## LOAD CONFIG - if set

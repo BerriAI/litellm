@@ -14,18 +14,18 @@ from ..common_utils import get_azure_openai_client
 
 
 class AzureOpenAIO1ChatCompletion(OpenAIChatCompletion):
-    def get_openai_client(
+    def _get_openai_client(
         self,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        organization: Optional[str],
+        is_async: bool,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
+        max_retries: Optional[int] = 2,
+        organization: Optional[str] = None,
         client: Optional[
             Union[OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI]
         ] = None,
-        _is_async: bool = False,
-        api_version: Optional[str] = None,
     ) -> Optional[
         Union[
             OpenAI,
@@ -34,6 +34,7 @@ class AzureOpenAIO1ChatCompletion(OpenAIChatCompletion):
             AsyncAzureOpenAI,
         ]
     ]:
+
         # Override to use Azure-specific client initialization
         if isinstance(client, OpenAI) or isinstance(client, AsyncOpenAI):
             client = None
@@ -46,5 +47,5 @@ class AzureOpenAIO1ChatCompletion(OpenAIChatCompletion):
             organization=organization,
             api_version=api_version,
             client=client,
-            _is_async=_is_async,
+            _is_async=is_async,
         )

@@ -94,6 +94,7 @@ class BaseLLMChatTest(ABC):
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""
         base_completion_call_args = self.get_base_completion_call_args()
+        litellm.set_verbose = True
         messages = [
             {
                 "role": "user",
@@ -112,8 +113,17 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
+        chunks = []
         for chunk in response:
             print(chunk)
+            chunks.append(chunk)
+
+        resp = litellm.stream_chunk_builder(chunks=chunks)
+        print(resp)
+
+        # assert resp.usage.prompt_tokens > 0
+        # assert resp.usage.completion_tokens > 0
+        # assert resp.usage.total_tokens > 0
 
     def test_pydantic_model_input(self):
         litellm.set_verbose = True

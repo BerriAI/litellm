@@ -436,6 +436,7 @@ class OpenAIChatCompletion(BaseLLM):
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
     ):
+
         super().completion()
         try:
             fake_stream: bool = False
@@ -445,6 +446,7 @@ class OpenAIChatCompletion(BaseLLM):
             )
             stream: Optional[bool] = inference_params.pop("stream", False)
             provider_config: Optional[BaseConfig] = None
+
             if custom_llm_provider is not None and model is not None:
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
@@ -454,6 +456,7 @@ class OpenAIChatCompletion(BaseLLM):
                 fake_stream = provider_config.should_fake_stream(
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
                 )
+
             if headers:
                 inference_params["extra_headers"] = headers
             if model is None or messages is None:
@@ -553,7 +556,6 @@ class OpenAIChatCompletion(BaseLLM):
                             raise OpenAIError(
                                 status_code=422, message="max retries must be an int"
                             )
-
                         openai_client: OpenAI = self._get_openai_client(  # type: ignore
                             is_async=False,
                             api_key=api_key,
@@ -778,6 +780,7 @@ class OpenAIChatCompletion(BaseLLM):
         data["stream"] = True
         if stream_options is not None:
             data["stream_options"] = stream_options
+
         openai_client: OpenAI = self._get_openai_client(  # type: ignore
             is_async=False,
             api_key=api_key,
