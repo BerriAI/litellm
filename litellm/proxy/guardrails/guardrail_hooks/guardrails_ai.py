@@ -12,7 +12,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
@@ -79,6 +82,7 @@ class GuardrailsAI(CustomGuardrail):
             )
         return _json_response
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,

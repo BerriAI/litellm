@@ -801,9 +801,7 @@ class Router:
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-
             request_priority = kwargs.get("priority") or self.default_priority
-
             start_time = time.time()
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
@@ -1422,7 +1420,7 @@ class Router:
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1660,13 +1658,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
-                {
-                    "deployment": deployment["litellm_params"]["model"],
-                    "model_info": deployment.get("model_info", {}),
-                }
-            )
-            kwargs["model_info"] = deployment.get("model_info", {})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             data["model"]
             for k, v in self.default_litellm_params.items():
@@ -1777,7 +1769,7 @@ class Router:
         messages = [{"role": "user", "content": "dummy-text"}]
         try:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = await self.async_get_available_deployment(
@@ -2215,7 +2207,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2320,7 +2312,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -4721,10 +4713,14 @@ class Router:
         return None
 
     def get_model_access_groups(
-        self, model_name: Optional[str] = None
+        self, model_name: Optional[str] = None, model_access_group: Optional[str] = None
     ) -> Dict[str, List[str]]:
         """
         If model_name is provided, only return access groups for that model.
+
+        Parameters:
+        - model_name: Optional[str] - the received model name from the user (can be a wildcard route). If set, will only return access groups for that model.
+        - model_access_group: Optional[str] - the received model access group from the user. If set, will only return models for that access group.
         """
         from collections import defaultdict
 
@@ -4734,10 +4730,38 @@ class Router:
         if model_list:
             for m in model_list:
                 for group in m.get("model_info", {}).get("access_groups", []):
-                    model_name = m["model_name"]
-                    access_groups[group].append(model_name)
+                    if model_access_group is not None:
+                        if group == model_access_group:
+                            model_name = m["model_name"]
+                            access_groups[group].append(model_name)
+                    else:
+                        model_name = m["model_name"]
+                        access_groups[group].append(model_name)
 
         return access_groups
+
+    def _is_model_access_group_for_wildcard_route(
+        self, model_access_group: str
+    ) -> bool:
+        """
+        Return True if model access group is a wildcard route
+        """
+        # GET ACCESS GROUPS
+        access_groups = self.get_model_access_groups(
+            model_access_group=model_access_group
+        )
+
+        if len(access_groups) == 0:
+            return False
+
+        models = access_groups.get(model_access_group, [])
+
+        for model in models:
+            # CHECK IF MODEL ACCESS GROUP IS A WILDCARD ROUTE
+            if self.pattern_router.route(request=model) is not None:
+                return True
+
+        return False
 
     def get_settings(self):
         """
