@@ -69,6 +69,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
+            pip install "websockets==10.4"
       - save_cache:
           paths:
             - ./venv

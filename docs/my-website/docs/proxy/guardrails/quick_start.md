@@ -29,6 +29,14 @@ guardrails:
       mode: "post_call"
       api_key: os.environ/APORIA_API_KEY_2
       api_base: os.environ/APORIA_API_BASE_2
+    guardrail_info: # Optional field, info is returned on GET /guardrails/list
+      # you can enter any fields under info for consumers of your guardrail
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
 ```
 
 
@@ -113,17 +121,131 @@ curl -i http://localhost:4000/v1/chat/completions \
 </Tabs>
 
 
-## Advanced
+## **Using Guardrails Client Side**
 
-### ✨ Pass additional parameters to guardrail
+### Test yourself **(OSS)**
+
+Pass `guardrails` to your request body to test it
+
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+### Expose to your users **(Enterprise)**
+
+Follow this simple workflow to implement and tune guardrails:
+
+### 1. ✨ View Available Guardrails
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
+First, check what guardrails are available and their parameters:
 
+
+Call `/guardrails/list` to view available guardrails and the guardrail info (supported parameters, description, etc)
+
+```shell
+curl -X GET 'http://0.0.0.0:4000/guardrails/list'
+```
+
+Expected response
+
+```json
+{
+    "guardrails": [
+        {
+        "guardrail_name": "aporia-post-guard",
+        "guardrail_info": {
+            "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1 indicating content toxicity level"
+            },
+            {
+                "name": "pii_detection",
+                "type": "boolean"
+            }
+            ]
+        }
+        }
+    ]
+}
+```
+
+>
+This config will return the `/guardrails/list` response above. The `guardrail_info` field is optional and you can add any fields under info for consumers of your guardrail
+>
+```yaml
+- guardrail_name: "aporia-post-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+    guardrail_info: # Optional field, info is returned on GET /guardrails/list
+      # you can enter any fields under info for consumers of your guardrail
+      params:
+        - name: "toxicity_score"
+          type: "float"
+          description: "Score between 0-1 indicating content toxicity level"
+        - name: "pii_detection"
+          type: "boolean"
+```
+
+
+### 2. Apply Guardrails
+Add selected guardrails to your chat completion request:
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "your message"}],
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+### 3. Test with Mock LLM completions
+
+Send `mock_response` to test guardrails without making an LLM call. More info on `mock_response` [here](../../completion/mock_requests)
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ],
+    "mock_response": "This is a mock response",
+    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
+  }'
+```
+
+
+### 4. ✨ Pass Dynamic Parameters to Guardrail
+
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+
+:::
 
 Use this to pass additional parameters to the guardrail API call. e.g. things like success threshold. **[See `guardrails` spec for more details](#spec-guardrails-parameter)**
 
@@ -196,11 +318,42 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
+
+
+## **Proxy Admin Controls**
+
+### ✨ Monitoring Guardrails
+
+Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
+
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+
+:::
+
+#### Setup
+
+1. Connect LiteLLM to a [supported logging provider](../logging)
+2. Make a request with a `guardrails` parameter
+3. Check your logging provider for the guardrail trace
+
+#### Traced Guardrail Success
+
+<Image img={require('../../../img/gd_success.png')} />
+
+#### Traced Guardrail Failure
+
+<Image img={require('../../../img/gd_fail.png')} />
+
+
+
+
 ### ✨ Control Guardrails per Project (API Key)
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -262,7 +415,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
 
 :::
 
@@ -319,28 +472,27 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 :::
 
 
+## Specification 
 
-### ✨ List guardrails
+### `guardrails` Configuration on YAML
 
-Show available guardrails on the proxy server. This makes it easier for developers to know what guardrails are available / can be used.
-
-```shell
-curl -X GET 'http://0.0.0.0:4000/guardrails/list'
+```yaml
+guardrails:
+  - guardrail_name: string     # Required: Name of the guardrail
+    litellm_params:            # Required: Configuration parameters
+      guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
+      mode: string             # Required: One of "pre_call", "post_call", "during_call", "logging_only"
+      api_key: string          # Required: API key for the guardrail service
+      api_base: string         # Optional: Base URL for the guardrail service
+    guardrail_info:            # Optional[Dict]: Additional information about the guardrail
+      
 ```
 
-Expected response
-
-```json
-{
-    "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
-}
-```
-
-## Spec: `guardrails` Parameter
+### `guardrails` Request Parameter
 
 The `guardrails` parameter can be passed to any LiteLLM Proxy endpoint (`/chat/completions`, `/completions`, `/embeddings`).
 
-### Format Options
+#### Format Options
 
 1. Simple List Format:
 ```python
@@ -364,7 +516,7 @@ In this format the dictionary key is `guardrail_name` you want to run
 }
 ```
 
-### Type Definition
+#### Type Definition
 ```python
 guardrails: Union[
     List[str],                              # Simple list of guardrail names

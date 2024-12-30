@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
@@ -96,6 +97,8 @@ class GoogleAIStudioGeminiConfig(
             del non_default_params["frequency_penalty"]
         if "presence_penalty" in non_default_params:
             del non_default_params["presence_penalty"]
+        if litellm.vertex_ai_safety_settings is not None:
+            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return super().map_openai_params(
             model=model,
             non_default_params=non_default_params,

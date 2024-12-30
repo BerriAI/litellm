@@ -151,6 +151,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
+disable_add_transform_inline_image_block: bool = False
 in_memory_llm_clients_cache: InMemoryCache = InMemoryCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
@@ -1107,6 +1108,9 @@ from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
+from .llms.deepgram.audio_transcription.transformation import (
+    DeepgramAudioTranscriptionConfig,
+)
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig

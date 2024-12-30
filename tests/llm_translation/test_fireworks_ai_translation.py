@@ -103,3 +103,96 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.FIREWORKS_AI
+
+
+@pytest.mark.parametrize(
+    "disable_add_transform_inline_image_block",
+    [True, False],
+)
+def test_document_inlining_example(disable_add_transform_inline_image_block):
+    litellm.set_verbose = True
+    if disable_add_transform_inline_image_block is True:
+        with pytest.raises(Exception):
+            completion = litellm.completion(
+                model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": "What are the candidate's BA and MBA GPAs?",
+                            },
+                        ],
+                    }
+                ],
+                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+            )
+    else:
+        completion = litellm.completion(
+            model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "this is a test request, write a short poem",
+                },
+            ],
+            disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+        )
+        print(completion)
+
+
+@pytest.mark.parametrize(
+    "content, model, expected_url",
+    [
+        (
+            {"image_url": "http://example.com/image.png"},
+            "gpt-4",
+            "http://example.com/image.png#transform=inline",
+        ),
+        (
+            {"image_url": {"url": "http://example.com/image.png"}},
+            "gpt-4",
+            {"url": "http://example.com/image.png#transform=inline"},
+        ),
+        (
+            {"image_url": "http://example.com/image.png"},
+            "vision-gpt",
+            "http://example.com/image.png",
+        ),
+    ],
+)
+def test_transform_inline(content, model, expected_url):
+
+    result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
+        content=content, model=model, disable_add_transform_inline_image_block=False
+    )
+    if isinstance(expected_url, str):
+        assert result["image_url"] == expected_url
+    else:
+        assert result["image_url"]["url"] == expected_url["url"]
+
+
+@pytest.mark.parametrize(
+    "model, is_disabled, expected_url",
+    [
+        ("gpt-4", True, "http://example.com/image.png"),
+        ("vision-gpt", False, "http://example.com/image.png"),
+        ("gpt-4", False, "http://example.com/image.png#transform=inline"),
+    ],
+)
+def test_global_disable_flag(model, is_disabled, expected_url):
+    content = {"image_url": "http://example.com/image.png"}
+    result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
+        content=content,
+        model=model,
+        disable_add_transform_inline_image_block=is_disabled,
+    )
+    assert result["image_url"] == expected_url
+    litellm.disable_add_transform_inline_image_block = False  # Reset for other tests

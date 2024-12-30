@@ -1,3 +1,7 @@
+"""
+Test custom guardrail + unit tests for guardrails
+"""
+
 import io
 import os
 import sys
@@ -29,6 +33,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.proxy.guardrails.guardrail_endpoints import _get_guardrails_list_response
+from litellm.types.guardrails import GuardrailInfoResponse, ListGuardrailsResponse
 
 
 def test_get_guardrail_from_metadata():
@@ -143,3 +149,48 @@ def test_get_guardrail_dynamic_request_body_params():
         }
     }
     assert guardrail.get_guardrail_dynamic_request_body_params(data) == {}
+
+
+def test_get_guardrails_list_response():
+    # Test case 1: Valid guardrails config
+    sample_config = [
+        {
+            "guardrail_name": "test-guard",
+            "guardrail_info": {
+                "params": [
+                    {
+                        "name": "toxicity_score",
+                        "type": "float",
+                        "description": "Score between 0-1",
+                    }
+                ]
+            },
+        }
+    ]
+
+    response = _get_guardrails_list_response(sample_config)
+    assert isinstance(response, ListGuardrailsResponse)
+    assert len(response.guardrails) == 1
+    assert response.guardrails[0].guardrail_name == "test-guard"
+    assert response.guardrails[0].guardrail_info == {
+        "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1",
+            }
+        ]
+    }
+
+    # Test case 2: Empty guardrails config
+    empty_response = _get_guardrails_list_response([])
+    assert isinstance(empty_response, ListGuardrailsResponse)
+    assert len(empty_response.guardrails) == 0
+
+    # Test case 3: Missing optional fields
+    minimal_config = [{"guardrail_name": "minimal-guard"}]
+    minimal_response = _get_guardrails_list_response(minimal_config)
+    assert isinstance(minimal_response, ListGuardrailsResponse)
+    assert len(minimal_response.guardrails) == 1
+    assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
+    assert minimal_response.guardrails[0].guardrail_info is None

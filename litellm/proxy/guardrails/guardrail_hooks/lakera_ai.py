@@ -20,7 +20,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -294,6 +297,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             """
             self._check_response_flagged(response=response.json())
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -330,6 +334,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
         )
 
+    @log_guardrail_information
     async def async_moderation_hook(  ### 👈 KEY CHANGE ###
         self,
         data: dict,

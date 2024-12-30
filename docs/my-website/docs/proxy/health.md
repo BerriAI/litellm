@@ -168,6 +168,20 @@ Expected Response
 }
 ```
 
+### Realtime Models 
+
+To run realtime health checks, specify the mode as "realtime" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o-realtime-audio
+    litellm_params:
+      model: openai/gpt-4o-realtime-audio
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
+```
+
 ## Background Health Checks 
 
 You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`. 

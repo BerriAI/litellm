@@ -269,6 +269,9 @@ audio_file = open(file_path, "rb")
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=4, delay=2)
+@pytest.mark.skip(
+    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
+)
 async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output

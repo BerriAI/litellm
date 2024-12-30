@@ -8,24 +8,71 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.guardrails import GuardrailInfoResponse, ListGuardrailsResponse
 
 #### GUARDRAILS ENDPOINTS ####
 
 router = APIRouter()
 
 
-def _get_guardrail_names_from_config(guardrails_config: List[Dict]) -> List[str]:
-    return [guardrail["guardrail_name"] for guardrail in guardrails_config]
+def _get_guardrails_list_response(
+    guardrails_config: List[Dict],
+) -> ListGuardrailsResponse:
+    """
+    Helper function to get the guardrails list response
+    """
+    guardrail_configs: List[GuardrailInfoResponse] = []
+    for guardrail in guardrails_config:
+        guardrail_configs.append(
+            GuardrailInfoResponse(
+                guardrail_name=guardrail.get("guardrail_name"),
+                guardrail_info=guardrail.get("guardrail_info"),
+            )
+        )
+    return ListGuardrailsResponse(guardrails=guardrail_configs)
 
 
 @router.get(
     "/guardrails/list",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ListGuardrailsResponse,
 )
 async def list_guardrails():
     """
+    ✨ Enterprise Feature
     List the guardrails that are available on the proxy server
+
+    👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/guardrails/list" -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrails": [
+            {
+            "guardrail_name": "bedrock-pre-guard",
+            "guardrail_info": {
+                "params": [
+                {
+                    "name": "toxicity_score",
+                    "type": "float",
+                    "description": "Score between 0-1 indicating content toxicity level"
+                },
+                {
+                    "name": "pii_detection",
+                    "type": "boolean"
+                }
+                ]
+            }
+            }
+        ]
+    }
+    ```
     """
     from litellm.proxy.proxy_server import premium_user, proxy_config
 
@@ -47,4 +94,4 @@ async def list_guardrails():
             detail={"error": "No guardrails found in config"},
         )
 
-    return _get_guardrail_names_from_config(config["guardrails"])
+    return _get_guardrails_list_response(_guardrails_config)

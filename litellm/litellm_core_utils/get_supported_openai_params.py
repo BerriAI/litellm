@@ -192,4 +192,12 @@ def get_supported_openai_params(  # noqa: PLR0915
             )
         else:
             return litellm.TritonConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "deepgram":
+        if request_type == "transcription":
+            return (
+                litellm.DeepgramAudioTranscriptionConfig().get_supported_openai_params(
+                    model=model
+                )
+            )
+
     return None

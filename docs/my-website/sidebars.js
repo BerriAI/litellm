@@ -45,6 +45,7 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/pass_through",
+            "proxy/spending_monitoring",
         ],
         },
         "proxy/demo",
@@ -64,6 +65,7 @@ const sidebars = {
           label: "Making LLM Requests",
           items: [
             "proxy/user_keys",
+            "proxy/clientside_auth",
             "proxy/response_headers", 
           ],
         },
@@ -82,19 +84,20 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Model Access",
+          items: [
+            "proxy/model_access",
+            "proxy/team_model_add"
+          ]
+        },
+        {
+          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui", 
             "proxy/admin_ui_sso",
             "proxy/self_serve", 
             "proxy/custom_sso"
-          ],
-        },
-        {
-          type: "category",
-          label: "Team Management",
-          items: [
-            "proxy/team_model_add"
           ],
         },
         {
@@ -181,6 +184,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/huggingface", 
         "providers/databricks",
+        "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 

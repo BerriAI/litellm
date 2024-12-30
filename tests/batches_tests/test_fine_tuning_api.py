@@ -148,6 +148,12 @@ async def test_create_fine_tune_jobs_async():
         print("response from litellm.list_fine_tuning_jobs=", ft_jobs)
         assert len(list(ft_jobs)) > 0
 
+        # retrieve fine tuning job
+        response = await litellm.aretrieve_fine_tuning_job(
+            fine_tuning_job_id=create_fine_tuning_response.id,
+        )
+        print("response from litellm.retrieve_fine_tuning_job=", response)
+
         # delete file
 
         await litellm.afile_delete(

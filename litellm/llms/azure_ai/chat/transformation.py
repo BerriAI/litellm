@@ -51,7 +51,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 message["content"] = texts
         return messages
 
-    def _is_azure_openai_model(self, model: str) -> bool:
+    def _is_azure_openai_model(self, model: str, api_base: Optional[str]) -> bool:
         try:
             if "/" in model:
                 model = model.split("/", 1)[1]
@@ -60,6 +60,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 or model in litellm.open_ai_text_completion_models
                 or model in litellm.open_ai_embedding_models
             ):
+                return True
+
+            if api_base and "services.ai.azure" in api_base:
                 return True
         except Exception:
             return False
@@ -75,7 +78,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_base = api_base or get_secret_str("AZURE_AI_API_BASE")
         dynamic_api_key = api_key or get_secret_str("AZURE_AI_API_KEY")
 
-        if self._is_azure_openai_model(model=model):
+        if self._is_azure_openai_model(model=model, api_base=api_base):
             verbose_logger.debug(
                 "Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(
                     model
