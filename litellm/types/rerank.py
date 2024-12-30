@@ -30,19 +30,19 @@ class OptionalRerankParams(TypedDict, total=False):
 
 
 class RerankBilledUnits(TypedDict, total=False):
-    search_units: int
-    total_tokens: int
+    search_units: Optional[int]
+    total_tokens: Optional[int]
 
 
 class RerankTokens(TypedDict, total=False):
-    input_tokens: int
-    output_tokens: int
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
 
 
 class RerankResponseMeta(TypedDict, total=False):
-    api_version: dict
-    billed_units: RerankBilledUnits
-    tokens: RerankTokens
+    api_version: Optional[dict]
+    billed_units: Optional[RerankBilledUnits]
+    tokens: Optional[RerankTokens]
 
 
 class RerankResponseResult(TypedDict):
