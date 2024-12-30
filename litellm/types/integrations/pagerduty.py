@@ -1,0 +1,49 @@
+from datetime import datetime
+from typing import List, Literal, Optional, TypedDict, Union
+
+
+class LinkDict(TypedDict, total=False):
+    href: str
+    text: Optional[str]
+
+
+class ImageDict(TypedDict, total=False):
+    src: str
+    href: Optional[str]
+    alt: Optional[str]
+
+
+class PagerDutyPayload(TypedDict, total=False):
+    summary: str
+    timestamp: Optional[str]  # ISO 8601 date-time format
+    severity: Literal["critical", "warning", "error", "info"]
+    source: str
+    component: Optional[str]
+    group: Optional[str]
+    class_: Optional[str]  # Using class_ since 'class' is a reserved keyword
+    custom_details: Optional[dict]
+
+
+class PagerDutyRequestBody(TypedDict, total=False):
+    payload: PagerDutyPayload
+    routing_key: str
+    event_action: Literal["trigger", "acknowledge", "resolve"]
+    dedup_key: Optional[str]
+    client: Optional[str]
+    client_url: Optional[str]
+    links: Optional[List[LinkDict]]
+    images: Optional[List[ImageDict]]
+
+
+class AlertingConfig(TypedDict, total=False):
+    """
+    Config for alerting thresholds
+    """
+
+    # Requests failing threshold
+    failure_threshold: int  # Number of requests failing in a window
+    failure_threshold_window_seconds: int  # Window in seconds
+
+    # Requests hanging threshold
+    hanging_threshold_seconds: int  # Number of seconds a request hangs
+    hanging_threshold_window_seconds: int  # Window in seconds
