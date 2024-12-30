@@ -30,3 +30,37 @@ async def test_pagerduty_alerting():
         pass
 
     await asyncio.sleep(2)
+
+
+@pytest.mark.asyncio
+async def test_pagerduty_alerting_high_failure_rate():
+    pagerduty = PagerDutyAlerting(
+        alerting_config=AlertingConfig(
+            failure_threshold=3, failure_threshold_window_seconds=600
+        )
+    )
+    litellm.callbacks = [pagerduty]
+
+    try:
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.RateLimitError",
+        )
+    except litellm.RateLimitError:
+        pass
+
+    await asyncio.sleep(2)
+
+    # make 3 more fails
+    for _ in range(3):
+        try:
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+    await asyncio.sleep(2)
