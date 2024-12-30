@@ -91,28 +91,29 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
-    # def test_streaming(self):
-    #     """Check if litellm handles streaming correctly"""
-    #     base_completion_call_args = self.get_base_completion_call_args()
-    #     messages = [
-    #         {
-    #             "role": "user",
-    #             "content": [{"type": "text", "text": "Hello, how are you?"}],
-    #         }
-    #     ]
-    #     try:
-    #         response = self.completion_function(
-    #             **base_completion_call_args,
-    #             messages=messages,
-    #             stream=True,
-    #         )
-    #         assert response is not None
-    #     except litellm.InternalServerError:
-    #         pytest.skip("Model is overloaded")
+    def test_streaming(self):
+        """Check if litellm handles streaming correctly"""
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello, how are you?"}],
+            }
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                stream=True,
+            )
+            assert response is not None
+            assert isinstance(response, CustomStreamWrapper)
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
-    #     # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
-    #     for chunk in response:
-    #         print(chunk)
+        # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
+        for chunk in response:
+            print(chunk)
 
     def test_pydantic_model_input(self):
         litellm.set_verbose = True

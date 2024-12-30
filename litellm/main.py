@@ -1225,10 +1225,7 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if (
-                litellm.enable_preview_features
-                and litellm.AzureOpenAIO1Config().is_o1_model(model=model)
-            ):
+            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():
@@ -1244,7 +1241,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_key=api_key,
                     api_base=api_base,
                     api_version=api_version,
-                    api_type=api_type,
                     dynamic_params=dynamic_params,
                     azure_ad_token=azure_ad_token,
                     model_response=model_response,
