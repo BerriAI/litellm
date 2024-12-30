@@ -9,3 +9,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 litellm_settings:
   callbacks: ["datadog"]
+
+general_settings: 
+  alerting: ["pagerduty"]
+  
