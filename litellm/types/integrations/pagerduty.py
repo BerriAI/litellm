@@ -47,3 +47,19 @@ class AlertingConfig(TypedDict, total=False):
     # Requests hanging threshold
     hanging_threshold_seconds: int  # Number of seconds a request hangs
     hanging_threshold_window_seconds: int  # Window in seconds
+
+
+class FailureEvent:
+    """Simple structure to hold timestamp and error info."""
+
+    def __init__(
+        self,
+        timestamp: datetime,
+        error_class: Optional[str],
+        error_code: Optional[str],
+        error_llm_provider: Optional[str],
+    ):
+        self.timestamp = timestamp
+        self.error_class = error_class
+        self.error_code = error_code
+        self.error_llm_provider = error_llm_provider
