@@ -62,8 +62,6 @@ class AzureAIStudioConfig(OpenAIConfig):
             ):
                 return True
 
-            if api_base and "services.ai.azure" in api_base:
-                return True
         except Exception:
             return False
         return False

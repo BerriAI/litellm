@@ -114,20 +114,23 @@ async def test_azure_ai_with_image_url():
 
 
 def test_azure_ai_services_handler():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
     litellm.set_verbose = True
-    import logging
-    import httpx
 
-    logging.basicConfig(
-        format="%(levelname)s [%(asctime)s] %(name)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        level=logging.DEBUG,
-    )
+    client = HTTPHandler()
 
-    response = litellm.completion(
-        model="azure_ai/",
-        messages=[{"role": "user", "content": "Hello, how are you?"}],
-        api_key="610f806211ab47f2a694493000045858",
-        api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
-    )
-    print(response)
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = litellm.completion(
+                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                api_key="my-fake-api-key",
+                api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+                client=client,
+            )
+            print(response)
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()

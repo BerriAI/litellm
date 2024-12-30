@@ -1384,21 +1384,13 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            ## LOAD CONFIG - if set
-            config = litellm.AzureAIStudioConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in optional_params
-                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
-                    optional_params[k] = v
-
             ## FOR COHERE
             if "command-r" in model:  # make sure tool call in messages are str
                 messages = stringify_json_tool_call_content(messages=messages)
 
             ## COMPLETION CALL
             try:
-                response = openai_chat_completions.completion(
+                response = openai_like_chat_completion.completion(
                     model=model,
                     messages=messages,
                     headers=headers,
@@ -1414,9 +1406,8 @@ def completion(  # type: ignore # noqa: PLR0915
                     timeout=timeout,  # type: ignore
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
-                    organization=organization,
                     custom_llm_provider=custom_llm_provider,
-                    drop_params=non_default_params.get("drop_params"),
+                    encoding=encoding,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
