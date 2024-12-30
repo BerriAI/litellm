@@ -7613,6 +7613,38 @@
         "litellm_provider": "cloudflare", 
         "mode": "chat"
       },
+      "voyage/voyage-01": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-lite-01": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-large-2": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-lite-02-instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
     "voyage/voyage-law-2": {
         "max_tokens": 16000,
         "max_input_tokens": 16000,
