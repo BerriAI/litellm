@@ -7637,6 +7637,14 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
+    "voyage/voyage-finance-2": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
     "voyage/voyage-lite-02-instruct": {
         "max_tokens": 4000,
         "max_input_tokens": 4000,
@@ -7665,14 +7673,6 @@
         "max_tokens": 4000,
         "max_input_tokens": 4000,
         "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.000000,
-        "litellm_provider": "voyage",
-        "mode": "embedding"
-    },
-    "voyage/voyage-finance-2": {
-        "max_tokens": 4000,
-        "max_input_tokens": 4000,
-        "input_cost_per_token": 0.00000012,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",
         "mode": "embedding"
