@@ -111,3 +111,23 @@ async def test_azure_ai_with_image_url():
                 ],
             }
         ]
+
+
+def test_azure_ai_services_handler():
+    litellm.set_verbose = True
+    import logging
+    import httpx
+
+    logging.basicConfig(
+        format="%(levelname)s [%(asctime)s] %(name)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        level=logging.DEBUG,
+    )
+
+    response = litellm.completion(
+        model="azure_ai/",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        api_key="610f806211ab47f2a694493000045858",
+        api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+    )
+    print(response)
