@@ -465,18 +465,10 @@ class SlackAlerting(CustomBatchLogger):
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
             alerting_metadata: dict = {}
-            if (
-                request_data is not None
-                and request_data.get("litellm_status", "") != "success"
-                and request_data.get("litellm_status", "") != "fail"
-            ):
-                ## CHECK IF CACHE IS UPDATED
-                litellm_call_id = request_data.get("litellm_call_id", "")
-                status: Optional[str] = await self.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(litellm_call_id), local_only=True
-                )
-                if status is not None and (status == "success" or status == "fail"):
-                    return
+            if await self._request_is_completed(request_data=request_data) is True:
+                return
+
+            if request_data is not None:
                 if request_data.get("deployment", None) is not None and isinstance(
                     request_data["deployment"], dict
                 ):
@@ -1753,3 +1745,23 @@ Model Info:
             )
 
         return
+
+    async def _request_is_completed(self, request_data: Optional[dict]) -> bool:
+        """
+        Returns True if the request is completed - either as a success or failure
+        """
+        if request_data is None:
+            return False
+
+        if (
+            request_data.get("litellm_status", "") != "success"
+            and request_data.get("litellm_status", "") != "fail"
+        ):
+            ## CHECK IF CACHE IS UPDATED
+            litellm_call_id = request_data.get("litellm_call_id", "")
+            status: Optional[str] = await self.internal_usage_cache.async_get_cache(
+                key="request_status:{}".format(litellm_call_id), local_only=True
+            )
+            if status is not None and (status == "success" or status == "fail"):
+                return True
+        return False
