@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
+from litellm.types.rerank import RerankResponse
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -354,3 +355,33 @@ async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hi
     assert response.results is not None
 
     assert_response_shape(response, custom_llm_provider="cohere")
+
+
+def test_rerank_response_assertions():
+    r = RerankResponse(
+        **{
+            "id": "ab0fcca0-b617-11ef-b292-0242ac110002",
+            "results": [
+                {"index": 2, "relevance_score": 0.9958819150924683, "document": None},
+                {"index": 0, "relevance_score": 0.001293411129154265, "document": None},
+                {
+                    "index": 1,
+                    "relevance_score": 7.641685078851879e-05,
+                    "document": None,
+                },
+                {
+                    "index": 3,
+                    "relevance_score": 7.621097756782547e-05,
+                    "document": None,
+                },
+            ],
+            "meta": {
+                "api_version": None,
+                "billed_units": None,
+                "tokens": None,
+                "warnings": None,
+            },
+        }
+    )
+
+    assert_response_shape(r, custom_llm_provider="custom")
