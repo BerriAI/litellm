@@ -228,6 +228,37 @@ async def test_rerank_endpoint(model_list):
     RerankResponse.model_validate(response)
 
 
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "model", ["omni-moderation-latest", "openai/omni-moderation-latest", None]
+)
+async def test_moderation_endpoint(model):
+    litellm.set_verbose = True
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+        ]
+    )
+
+    if model is None:
+        response = await router.amoderation(input="hello this is a test")
+    else:
+        response = await router.amoderation(model=model, input="hello this is a test")
+
+    print("moderation response: ", response)
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_aaaaatext_completion_endpoint(model_list, sync_mode):
