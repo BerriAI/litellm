@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     CustomStreamWrapper,
     Usage,
@@ -4314,7 +4315,11 @@ def moderation(
 
 @client
 async def amoderation(
-    input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
+    input: str,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
 ):
     from openai import AsyncOpenAI
 
@@ -4335,6 +4340,20 @@ async def amoderation(
         )
     else:
         _openai_client = openai_client
+
+    optional_params = GenericLiteLLMParams(**kwargs)
+    try:
+        model, _custom_llm_provider, _dynamic_api_key, _dynamic_api_base = (
+            litellm.get_llm_provider(
+                model=model or "",
+                custom_llm_provider=custom_llm_provider,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+            )
+        )
+    except litellm.BadRequestError:
+        # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
+        pass
     if model is not None:
         response = await _openai_client.moderations.create(input=input, model=model)
     else:
@@ -5095,7 +5114,6 @@ def speech(
             aspeech=aspeech,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
-        from litellm.types.router import GenericLiteLLMParams
 
         generic_optional_params = GenericLiteLLMParams(**kwargs)
 
