@@ -14,6 +14,9 @@ Translations handled by LiteLLM:
 
 from typing import Optional
 
+from litellm import verbose_logger
+from litellm.utils import get_model_info
+
 from ...openai.chat.o1_transformation import OpenAIO1Config
 
 
@@ -24,8 +27,23 @@ class AzureOpenAIO1Config(OpenAIO1Config):
         stream: Optional[bool],
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
+        """
+        Currently no Azure OpenAI models support native streaming.
+        """
         if stream is not True:
             return False
+
+        if model is not None:
+            try:
+                model_info = get_model_info(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+                if model_info.get("supports_native_streaming") is True:
+                    return False
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error getting model info in AzureOpenAIO1Config: {e}"
+                )
 
         return True
 
@@ -35,20 +53,3 @@ class AzureOpenAIO1Config(OpenAIO1Config):
             if m in model:
                 return True
         return False
-
-    # def get_complete_url(
-    #     self,
-    #     api_base: str,
-    #     model: str,
-    #     optional_params: dict,
-    #     stream: Optional[bool] = None,
-    # ) -> str:
-    #     """
-    #     Since this is used in the openai handler, we need to give the url minus the `/chat/completions` prefix.
-
-    #     Returns:
-    #     https://openai-gpt-4-test-v-1.openai.azure.com/openai/deployments/o1-preview
-    #     """
-    #     print("GET COMPLETE URL CALLED")
-    #     api_base = api_base.rstrip("/")
-    #     return f"{api_base}/openai/deployments/{model}"

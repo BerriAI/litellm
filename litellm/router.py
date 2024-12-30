@@ -3812,6 +3812,7 @@ class Router:
             _model_name = (
                 deployment.litellm_params.custom_llm_provider + "/" + _model_name
             )
+
         litellm.register_model(
             model_cost={
                 _model_name: _model_info,
