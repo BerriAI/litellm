@@ -1,13 +1,16 @@
+import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from litellm.integrations.custom_logger import CustomLogger
+from litellm._logging import verbose_logger
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.pagerduty import (
     AlertingConfig,
     FailureEvent,
@@ -20,7 +23,7 @@ from litellm.types.utils import (
 )
 
 
-class PagerDutyAlerting(CustomLogger):
+class PagerDutyAlerting(SlackAlerting):
     def __init__(self, alerting_config: AlertingConfig, **kwargs):
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
@@ -100,6 +103,30 @@ class PagerDutyAlerting(CustomLogger):
             # Clear the list of failure events after sending the alert
             self._failure_events = []
 
+    async def pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Optional[dict],
+        call_type: Literal[
+            "completion",
+            "text_completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+            "pass_through_endpoint",
+            "rerank",
+        ],
+    ) -> Optional[dict]:
+        """
+        Pre-Call hook - sleeps for 'self.alerting_threshold' seconds and checks if response has completed
+
+        If not then counts as a hanging request and sends an alert to PagerDuty
+        """
+        verbose_logger.info("Inside Proxy Logging Pre-call hook!")
+        ### ALERTING ###
+        asyncio.create_task(self.response_taking_too_long(request_data=data))
+
     async def send_alert_to_pagerduty(self, alert_message: str, custom_details: dict):
         """
         Send [High] Alert to PagerDuty
@@ -116,6 +143,7 @@ class PagerDutyAlerting(CustomLogger):
                 summary=alert_message,
                 severity="critical",
                 source="LiteLLM Alert",
+                component="LiteLLM",
                 custom_details=custom_details,
             ),
             routing_key=self.api_key,
