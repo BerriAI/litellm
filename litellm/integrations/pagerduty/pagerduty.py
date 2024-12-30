@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -20,7 +20,7 @@ from litellm.types.utils import (
 )
 
 
-class PagerDutyAlerting(CustomBatchLogger):
+class PagerDutyAlerting(CustomLogger):
     def __init__(self, alerting_config: AlertingConfig, **kwargs):
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
@@ -32,8 +32,6 @@ class PagerDutyAlerting(CustomBatchLogger):
         self._failure_events: List[FailureEvent] = []
 
         super().__init__(**kwargs)
-
-    # ------------------ Main Logic ------------------ #
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -50,7 +48,7 @@ class PagerDutyAlerting(CustomBatchLogger):
             raise ValueError(
                 "standard_logging_object is required for PagerDutyAlerting"
             )
-
+        _event_metadata = standard_logging_payload.get("metadata") or {}
         error_info: Optional[StandardLoggingPayloadErrorInformation] = (
             standard_logging_payload.get("error_information") or {}
         )
@@ -62,6 +60,15 @@ class PagerDutyAlerting(CustomBatchLogger):
                 error_class=error_info.get("error_class"),
                 error_code=error_info.get("error_code"),
                 error_llm_provider=error_info.get("llm_provider"),
+                user_api_key_hash=_event_metadata.get("user_api_key_hash"),
+                user_api_key_alias=_event_metadata.get("user_api_key_alias"),
+                user_api_key_org_id=_event_metadata.get("user_api_key_org_id"),
+                user_api_key_team_id=_event_metadata.get("user_api_key_team_id"),
+                user_api_key_user_id=_event_metadata.get("user_api_key_user_id"),
+                user_api_key_team_alias=_event_metadata.get("user_api_key_team_alias"),
+                user_api_key_end_user_id=_event_metadata.get(
+                    "user_api_key_end_user_id"
+                ),
             )
         )
 
@@ -125,9 +132,12 @@ class PagerDutyAlerting(CustomBatchLogger):
 
     def _prune_failure_events(self, cutoff: datetime):
         """Remove any events that are older than the cutoff time."""
-        self._failure_events = [
-            fe for fe in self._failure_events if fe.timestamp > cutoff
-        ]
+        _failure_events = []
+        for fe in self._failure_events:
+            _timestamp = fe.get("timestamp")
+            if _timestamp and _timestamp > cutoff:
+                _failure_events.append(fe)
+        self._failure_events = _failure_events
 
     def _build_error_summaries(self, max_errors: int = 5) -> List[str]:
         """
@@ -139,9 +149,9 @@ class PagerDutyAlerting(CustomBatchLogger):
         summaries = []
         for fe in recent_events:
             # If any of these is None, show "N/A" to avoid messing up the summary string
-            error_class = fe.error_class or "N/A"
-            error_code = fe.error_code or "N/A"
-            error_llm_provider = fe.error_llm_provider or "N/A"
+            error_class = fe.get("error_class") or "N/A"
+            error_code = fe.get("error_code") or "N/A"
+            error_llm_provider = fe.get("error_llm_provider") or "N/A"
 
             summaries.append(
                 f"{error_class} (code: {error_code}, provider: {error_llm_provider})"

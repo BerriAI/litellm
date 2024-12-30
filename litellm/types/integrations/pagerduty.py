@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import List, Literal, Optional, TypedDict, Union
 
+from litellm.types.utils import StandardLoggingUserAPIKeyMetadata
+
 
 class LinkDict(TypedDict, total=False):
     href: str
@@ -49,17 +51,10 @@ class AlertingConfig(TypedDict, total=False):
     hanging_threshold_window_seconds: int  # Window in seconds
 
 
-class FailureEvent:
+class FailureEvent(StandardLoggingUserAPIKeyMetadata, total=False):
     """Simple structure to hold timestamp and error info."""
 
-    def __init__(
-        self,
-        timestamp: datetime,
-        error_class: Optional[str],
-        error_code: Optional[str],
-        error_llm_provider: Optional[str],
-    ):
-        self.timestamp = timestamp
-        self.error_class = error_class
-        self.error_code = error_code
-        self.error_llm_provider = error_llm_provider
+    timestamp: datetime
+    error_class: Optional[str]
+    error_code: Optional[str]
+    error_llm_provider: Optional[str]
