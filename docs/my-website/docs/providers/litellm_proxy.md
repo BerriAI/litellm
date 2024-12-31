@@ -9,13 +9,13 @@ import TabItem from '@theme/TabItem';
 
 :::
 
-**[LiteLLM Proxy](../simple_proxy) is OpenAI compatible**, you just need the `openai/` prefix before the model
+**[LiteLLM Proxy](../simple_proxy) is OpenAI compatible**, you just need the `litellm_proxy/` prefix before the model
 
 ## Required Variables
 
 ```python
-os.environ["OPENAI_API_KEY"] = "" # "sk-1234" your litellm proxy api key 
-os.environ["OPENAI_API_BASE"] = "" # "http://localhost:4000" your litellm proxy api base
+os.environ["LITELLM_PROXY_API_KEY"] = "" # "sk-1234" your litellm proxy api key 
+os.environ["LITELLM_PROXY_API_BASE"] = "" # "http://localhost:4000" your litellm proxy api base
 ```
 
 
@@ -25,18 +25,18 @@ import os
 import litellm
 from litellm import completion
 
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["LITELLM_PROXY_API_KEY"] = ""
 
 # set custom api base to your proxy
 # either set .env or litellm.api_base
-# os.environ["OPENAI_API_BASE"] = ""
+# os.environ["LITELLM_PROXY_API_BASE"] = ""
 litellm.api_base = "your-openai-proxy-url"
 
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-# openai call
-response = completion(model="openai/your-model-name", messages)
+# litellm proxy call
+response = completion(model="litellm_proxy/your-model-name", messages)
 ```
 
 ## Usage - passing `api_base`, `api_key` per request
@@ -48,13 +48,13 @@ import os
 import litellm
 from litellm import completion
 
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["LITELLM_PROXY_API_KEY"] = ""
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-# openai call
+# litellm proxy call
 response = completion(
-    model="openai/your-model-name", 
+    model="litellm_proxy/your-model-name", 
     messages, 
     api_base = "your-litellm-proxy-url",
     api_key = "your-litellm-proxy-api-key"
@@ -67,13 +67,13 @@ import os
 import litellm
 from litellm import completion
 
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["LITELLM_PROXY_API_KEY"] = ""
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
 response = completion(
-    model="openai/your-model-name", 
+    model="litellm_proxy/your-model-name", 
     messages, 
     api_base = "your-litellm-proxy-url", 
     stream=True

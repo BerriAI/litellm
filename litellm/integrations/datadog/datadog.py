@@ -6,7 +6,9 @@ DD Reference API: https://docs.datadoghq.com/api/latest/logs
 `async_log_success_event` - used by litellm proxy to send logs to datadog
 `log_success_event` - sync version of logging to DataDog, only used on litellm Python SDK, if user opts in to using sync functions
 
-async_log_success_event will store batch of DD_MAX_BATCH_SIZE in memory and flush to Datadog once it reaches DD_MAX_BATCH_SIZE or every 5 seconds
+async_log_success_event:  will store batch of DD_MAX_BATCH_SIZE in memory and flush to Datadog once it reaches DD_MAX_BATCH_SIZE or every 5 seconds
+
+async_service_failure_hook: Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
 
 For batching specific details see CustomBatchLogger class
 """
@@ -14,10 +16,10 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import datetime
 import os
-import sys
 import traceback
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime as datetimeObj
+from typing import Any, List, Optional, Union
 
 from httpx import Response
 
@@ -29,9 +31,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-
-from .types import DD_ERRORS, DatadogPayload
-from .utils import make_json_serializable
+from litellm.types.integrations.datadog import *
+from litellm.types.services import ServiceLoggerPayload
+from litellm.types.utils import StandardLoggingPayload
 
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
 
@@ -50,7 +52,7 @@ class DataDogLogger(CustomBatchLogger):
         `DD_SITE` - your datadog site, example = `"us5.datadoghq.com"`
         """
         try:
-            verbose_logger.debug(f"Datadog: in init datadog logger")
+            verbose_logger.debug("Datadog: in init datadog logger")
             # check if the correct env variables are set
             if os.getenv("DD_API_KEY", None) is None:
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
@@ -66,9 +68,13 @@ class DataDogLogger(CustomBatchLogger):
 
             ###################################
             # OPTIONAL -only used for testing
-            if os.getenv("_DATADOG_BASE_URL", None) is not None:
-                _dd_base_url = os.getenv("_DATADOG_BASE_URL")
-                self.intake_url = f"{_dd_base_url}/api/v2/logs"
+            dd_base_url: Optional[str] = (
+                os.getenv("_DATADOG_BASE_URL")
+                or os.getenv("DATADOG_BASE_URL")
+                or os.getenv("DD_BASE_URL")
+            )
+            if dd_base_url is not None:
+                self.intake_url = f"{dd_base_url}/api/v2/logs"
             ###################################
             self.sync_client = _get_httpx_client()
             asyncio.create_task(self.periodic_flush())
@@ -98,20 +104,20 @@ class DataDogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "Datadog: Logging - Enters logging function for model %s", kwargs
             )
-            dd_payload = self.create_datadog_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
-            self.log_queue.append(dd_payload)
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
             verbose_logger.debug(
-                f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+                "Datadog: Logging - Enters logging function for model %s", kwargs
             )
-
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
             verbose_logger.exception(
@@ -170,19 +176,24 @@ class DataDogLogger(CustomBatchLogger):
         - instantly logs it on DD API
         """
         try:
-            verbose_logger.debug(
-                "Datadog: Logging - Enters logging function for model %s", kwargs
-            )
-            dd_payload = self.create_datadog_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
+            if litellm.datadog_use_v1 is True:
+                dd_payload = self._create_v0_logging_payload(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+            else:
+                dd_payload = self.create_datadog_logging_payload(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
 
             response = self.sync_client.post(
                 url=self.intake_url,
-                json=dd_payload,
+                json=dd_payload,  # type: ignore
                 headers={
                     "DD-API-KEY": self.DD_API_KEY,
                 },
@@ -207,6 +218,23 @@ class DataDogLogger(CustomBatchLogger):
             pass
         pass
 
+    async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+
+        dd_payload = self.create_datadog_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        self.log_queue.append(dd_payload)
+        verbose_logger.debug(
+            f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds..."
+        )
+
+        if len(self.log_queue) >= self.batch_size:
+            await self.async_send_batch()
+
     def create_datadog_logging_payload(
         self,
         kwargs: Union[dict, Any],
@@ -228,6 +256,128 @@ class DataDogLogger(CustomBatchLogger):
         """
         import json
 
+        from litellm.litellm_core_utils.litellm_logging import (
+            truncate_standard_logging_payload_content,
+        )
+
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+        if standard_logging_object is None:
+            raise ValueError("standard_logging_object not found in kwargs")
+
+        status = DataDogStatus.INFO
+        if standard_logging_object.get("status") == "failure":
+            status = DataDogStatus.ERROR
+
+        # Build the initial payload
+        truncate_standard_logging_payload_content(standard_logging_object)
+        json_payload = json.dumps(standard_logging_object, default=str)
+
+        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
+
+        dd_payload = DatadogPayload(
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
+            message=json_payload,
+            service=self._get_datadog_service(),
+            status=status,
+        )
+        return dd_payload
+
+    async def async_send_compressed_data(self, data: List) -> Response:
+        """
+        Async helper to send compressed data to datadog self.intake_url
+
+        Datadog recommends using gzip to compress data
+        https://docs.datadoghq.com/api/latest/logs/
+
+        "Datadog recommends sending your logs compressed. Add the Content-Encoding: gzip header to the request when sending"
+        """
+        import gzip
+        import json
+
+        compressed_data = gzip.compress(json.dumps(data, default=str).encode("utf-8"))
+        response = await self.async_client.post(
+            url=self.intake_url,
+            data=compressed_data,  # type: ignore
+            headers={
+                "DD-API-KEY": self.DD_API_KEY,
+                "Content-Encoding": "gzip",
+                "Content-Type": "application/json",
+            },
+        )
+        return response
+
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Any] = None,
+        start_time: Optional[Union[datetimeObj, float]] = None,
+        end_time: Optional[Union[float, datetimeObj]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """
+        Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
+
+        - example - Redis is failing / erroring, will be logged on DataDog
+        """
+
+        try:
+            import json
+
+            _payload_dict = payload.model_dump()
+            _dd_message_str = json.dumps(_payload_dict, default=str)
+            _dd_payload = DatadogPayload(
+                ddsource="litellm",
+                ddtags="",
+                hostname="",
+                message=_dd_message_str,
+                service="litellm-server",
+                status=DataDogStatus.WARN,
+            )
+
+            self.log_queue.append(_dd_payload)
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Datadog: Logger - Exception in async_service_failure_hook: {e}"
+            )
+        pass
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: Optional[str] = "",
+        parent_otel_span: Optional[Any] = None,
+        start_time: Optional[Union[datetimeObj, float]] = None,
+        end_time: Optional[Union[float, datetimeObj]] = None,
+        event_metadata: Optional[dict] = None,
+    ):
+        """
+        Logs success from Redis, Postgres (Adjacent systems), as 'INFO' on DataDog
+
+        No user has asked for this so far, this might be spammy on datatdog. If need arises we can implement this
+        """
+        return
+
+    def _create_v0_logging_payload(
+        self,
+        kwargs: Union[dict, Any],
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> DatadogPayload:
+        """
+        Note: This is our V1 Version of DataDog Logging Payload
+
+
+        (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
+        """
+        import json
+
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
             litellm_params.get("metadata", {}) or {}
@@ -241,12 +391,12 @@ class DataDogLogger(CustomBatchLogger):
         usage = dict(usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
-        except:
+        except Exception:
             response_time = None
 
         try:
             response_obj = dict(response_obj)
-        except:
+        except Exception:
             response_obj = response_obj
 
         # Clean Metadata before logging - never log raw metadata
@@ -283,40 +433,40 @@ class DataDogLogger(CustomBatchLogger):
             "metadata": clean_metadata,
         }
 
-        make_json_serializable(payload)
-        json_payload = json.dumps(payload)
+        json_payload = json.dumps(payload, default=str)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
         dd_payload = DatadogPayload(
-            ddsource=os.getenv("DD_SOURCE", "litellm"),
-            ddtags="",
-            hostname="",
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(),
+            hostname=self._get_datadog_hostname(),
             message=json_payload,
-            service="litellm-server",
+            service=self._get_datadog_service(),
+            status=DataDogStatus.INFO,
         )
         return dd_payload
 
-    async def async_send_compressed_data(self, data: List) -> Response:
-        """
-        Async helper to send compressed data to datadog self.intake_url
+    @staticmethod
+    def _get_datadog_tags():
+        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')},HOSTNAME:{DataDogLogger._get_datadog_hostname()},POD_NAME:{os.getenv('POD_NAME', 'unknown')}"
 
-        Datadog recommends using gzip to compress data
-        https://docs.datadoghq.com/api/latest/logs/
+    @staticmethod
+    def _get_datadog_source():
+        return os.getenv("DD_SOURCE", "litellm")
 
-        "Datadog recommends sending your logs compressed. Add the Content-Encoding: gzip header to the request when sending"
-        """
-        import gzip
-        import json
+    @staticmethod
+    def _get_datadog_service():
+        return os.getenv("DD_SERVICE", "litellm-server")
 
-        compressed_data = gzip.compress(json.dumps(data).encode("utf-8"))
-        response = await self.async_client.post(
-            url=self.intake_url,
-            data=compressed_data,
-            headers={
-                "DD-API-KEY": self.DD_API_KEY,
-                "Content-Encoding": "gzip",
-                "Content-Type": "application/json",
-            },
-        )
-        return response
+    @staticmethod
+    def _get_datadog_hostname():
+        return os.getenv("HOSTNAME", "")
+
+    @staticmethod
+    def _get_datadog_env():
+        return os.getenv("DD_ENV", "unknown")
+
+    @staticmethod
+    def _get_datadog_pod_name():
+        return os.getenv("POD_NAME", "unknown")

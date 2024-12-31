@@ -3,7 +3,6 @@ python script to pre-create all views required by LiteLLM Proxy Server
 """
 
 import asyncio
-import os
 
 # Enter your DATABASE_URL here
 
@@ -16,7 +15,7 @@ db = Prisma(
 )
 
 
-async def check_view_exists():
+async def check_view_exists():  # noqa: PLR0915
     """
     Checks if the LiteLLM_VerificationTokenView and MonthlyGlobalSpend exists in the user's db.
 
@@ -33,7 +32,7 @@ async def check_view_exists():
         # Try to select one row from the view
         await db.query_raw("""SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1""")
         print("LiteLLM_VerificationTokenView Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         # If an error occurs, the view does not exist, so create it
         await db.execute_raw(
             """
@@ -51,27 +50,30 @@ async def check_view_exists():
 
         print("LiteLLM_VerificationTokenView Created!")  # noqa
 
-    sql_query = """
-        CREATE MATERIALIZED VIEW IF NOT EXISTS "MonthlyGlobalSpend" AS 
+    try:
+        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
+        print("MonthlyGlobalSpend Exists!")  # noqa
+    except Exception:
+        sql_query = """
+        CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
         SELECT
-            DATE_TRUNC('day', "startTime") AS date, 
-            SUM("spend") AS spend 
+        DATE("startTime") AS date, 
+        SUM("spend") AS spend 
         FROM 
-            "LiteLLM_SpendLogs" 
+        "LiteLLM_SpendLogs" 
         WHERE 
-            "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+        "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
         GROUP BY 
-            DATE_TRUNC('day', "startTime");
-    """
-    # Execute the queries
-    await db.execute_raw(query=sql_query)
+        DATE("startTime");
+        """
+        await db.execute_raw(query=sql_query)
 
-    print("MonthlyGlobalSpend Created!")  # noqa
+        print("MonthlyGlobalSpend Created!")  # noqa
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
         print("Last30dKeysBySpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
         SELECT 
@@ -99,7 +101,7 @@ async def check_view_exists():
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
         print("Last30dModelsBySpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
         SELECT
@@ -121,7 +123,7 @@ async def check_view_exists():
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
         print("MonthlyGlobalSpendPerKey Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
             SELECT
@@ -144,7 +146,7 @@ async def check_view_exists():
             """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
         )
         print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
             SELECT
@@ -168,7 +170,7 @@ async def check_view_exists():
     try:
         await db.query_raw("""SELECT 1 FROM DailyTagSpend LIMIT 1""")
         print("DailyTagSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE OR REPLACE VIEW DailyTagSpend AS
         SELECT
@@ -186,7 +188,7 @@ async def check_view_exists():
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
         print("Last30dTopEndUsersSpend Exists!")  # noqa
-    except Exception as e:
+    except Exception:
         sql_query = """
         CREATE VIEW "Last30dTopEndUsersSpend" AS
         SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend

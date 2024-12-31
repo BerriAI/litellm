@@ -135,7 +135,7 @@ Cli arguments,  --host, --port, --num_workers
      ```
 
 ## --request_timeout
-   - **Default:** `600`
+   - **Default:** `6000`
    - **Type:** `int`
    - Set the timeout in seconds for completion calls.
    - **Usage:** 
@@ -176,3 +176,11 @@ Cli arguments,  --host, --port, --num_workers
      ```
 
 
+## --log_config
+   - **Default:** `None`
+   - **Type:** `str`
+   - Specify a log configuration file for uvicorn.
+   - **Usage:** 
+     ```shell
+     litellm --log_config path/to/log_config.conf
+     ```

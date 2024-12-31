@@ -1,5 +1,8 @@
 import datetime
 
+import litellm
+
+
 class AthinaLogger:
     def __init__(self):
         import os
@@ -23,7 +26,6 @@ class AthinaLogger:
         ]
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
-        import requests  # type: ignore
         import json
         import traceback
 
@@ -33,7 +35,9 @@ class AthinaLogger:
                 if "complete_streaming_response" in kwargs:
                     # Log the completion response in streaming mode
                     completion_response = kwargs["complete_streaming_response"]
-                    response_json = completion_response.model_dump() if completion_response else {}
+                    response_json = (
+                        completion_response.model_dump() if completion_response else {}
+                    )
                 else:
                     # Skip logging if the completion response is not available
                     return
@@ -52,8 +56,8 @@ class AthinaLogger:
             }
 
             if (
-                type(end_time) == datetime.datetime
-                and type(start_time) == datetime.datetime
+                type(end_time) is datetime.datetime
+                and type(start_time) is datetime.datetime
             ):
                 data["response_time"] = int(
                     (end_time - start_time).total_seconds() * 1000
@@ -77,7 +81,7 @@ class AthinaLogger:
                     if key in metadata:
                         data[key] = metadata[key]
 
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),

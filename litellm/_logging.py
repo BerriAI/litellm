@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import traceback
 from datetime import datetime
 from logging import Formatter
 
@@ -34,6 +33,9 @@ class JsonFormatter(Formatter):
             "level": record.levelname,
             "timestamp": self.formatTime(record),
         }
+
+        if record.exc_info:
+            json_record["stacktrace"] = self.formatException(record.exc_info)
 
         return json.dumps(json_record)
 
@@ -98,5 +100,5 @@ def print_verbose(print_statement):
     try:
         if set_verbose:
             print(print_statement)  # noqa
-    except:
+    except Exception:
         pass

@@ -2,18 +2,16 @@
 For companies that need SSO, user management and professional support for LiteLLM Proxy
 
 :::info
-Interested in Enterprise? Schedule a meeting with us here 👉
-[Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
+Get free 7-day trial key [here](https://www.litellm.ai/#trial)
 :::
 
 Deploy managed LiteLLM Proxy within your VPC.
 
 Includes all enterprise features.
 
-[**View AWS Marketplace Listing**](https://aws.amazon.com/marketplace/pp/prodview-gdm3gswgjhgjo?sr=0-1&ref_=beagle&applicationId=AWSMPContessa)
+[**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
 
-[**Get early access**](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[**Get 7 day trial key**](https://www.litellm.ai/#trial)
 
 
 This covers: 
@@ -33,9 +31,11 @@ This covers:
         - ✅ [Team Based Logging](./proxy/team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
         - ✅ [Disable Logging for a Team](./proxy/team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
     - **Controlling Guardrails by Virtual Keys**
-    - **Spend Tracking & Data Exports**
+    - **Spend Tracking, Budgets & Data Exports**
         - ✅ [Tracking Spend for Custom Tags](./proxy/enterprise#tracking-spend-for-custom-tags)
-        - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+        - ✅ [Set USD Budgets Spend for Custom Tags](./proxy/provider_budget_routing#-tag-budgets)
+        - ✅ [Set Model budgets for Virtual Keys](./proxy/users#-virtual-key-model-specific)
+        - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
         - ✅ [API Endpoints to get Spend Reports per Team, API Key, Customer](./proxy/cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
     - **Prometheus Metrics**
         - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](./proxy/prometheus)
@@ -44,6 +44,9 @@ This covers:
         - ✅ [Custom Branding + Routes on Swagger Docs](./proxy/enterprise#swagger-docs---custom-routes--branding)
         - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
         - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
+    - **Guardrails**
+        - ✅ [Setting team/key based guardrails](./proxy/guardrails/quick_start.md#-control-guardrails-per-project-api-key)
+        - ✅ [API endpoint listing available guardrails](./proxy/guardrails/bedrock.md#list-guardrails)
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**

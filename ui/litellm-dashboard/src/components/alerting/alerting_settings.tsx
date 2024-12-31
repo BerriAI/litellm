@@ -41,7 +41,6 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
     alertingSettingsItem[]
   >([]);
 
-  console.log("INSIDE ALERTING SETTINGS");
   useEffect(() => {
     // get values
     if (!accessToken) {
@@ -59,6 +58,8 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
         ? { ...setting, field_value: newValue }
         : setting
     );
+
+    console.log(`updatedSettings: ${JSON.stringify(updatedSettings)}`)
     setAlertingSettings(updatedSettings);
   };
 
@@ -67,6 +68,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
       return;
     }
 
+    console.log(`formValues: ${formValues}`)
     let fieldValue = formValues;
 
     if (fieldValue == null || fieldValue == undefined) {
@@ -74,14 +76,25 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
     }
 
     const initialFormValues: Record<string, any> = {};
+    
     alertingSettings.forEach((setting) => {
       initialFormValues[setting.field_name] = setting.field_value;
     });
 
     // Merge initialFormValues with actual formValues
     const mergedFormValues = { ...formValues, ...initialFormValues };
+    console.log(`mergedFormValues: ${JSON.stringify(mergedFormValues)}`)
+    const { slack_alerting, ...alertingArgs } = mergedFormValues;
+    console.log(`slack_alerting: ${slack_alerting}, alertingArgs: ${JSON.stringify(alertingArgs)}`)
     try {
-      updateConfigFieldSetting(accessToken, "alerting_args", mergedFormValues);
+      updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
+      if (typeof slack_alerting === "boolean") {
+        if (slack_alerting == true) {
+          updateConfigFieldSetting(accessToken, "alerting", ["slack"]);
+        } else {
+          updateConfigFieldSetting(accessToken, "alerting", []);
+        }
+      }
       // update value in state
       message.success("Wait 10s for proxy to update.");
     } catch (error) {
@@ -107,7 +120,6 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
             }
           : setting
       );
-      console.log("INSIDE HANDLE RESET FIELD");
       setAlertingSettings(updatedSettings);
     } catch (error) {
       // do something

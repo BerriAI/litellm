@@ -26,9 +26,11 @@ Features:
 - **Customize Logging, Guardrails, Caching per project**
     - ✅ [Team Based Logging](./team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
     - ✅ [Disable Logging for a Team](./team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
--- **Spend Tracking & Data Exports**
+- **Spend Tracking & Data Exports**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
-    - ✅ [Exporting LLM Logs to GCS Bucket](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+    - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
+    - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
+    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
 - **Prometheus Metrics**
     - ✅ [Prometheus Metrics - Num Requests, failures, LLM Provider Outages](prometheus)
@@ -507,6 +509,11 @@ curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: 
 ## Enforce Required Params for LLM Requests
 Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
 
+
+<Tabs>
+
+<TabItem value="config" label="Set on Config">
+
 **Step 1** Define all Params you want to enforce on config.yaml
 
 This means `["user"]` and `["metadata]["generation_name"]` are required in all LLM Requests to LiteLLM
@@ -518,8 +525,21 @@ general_settings:
     - user
     - metadata.generation_name
 ```
+</TabItem>
 
-Start LiteLLM Proxy
+<TabItem value="key" label="Set on Key">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "enforced_params": ["user", "metadata.generation_name"]
+}'
+```
+
+</TabItem>
+</Tabs>
 
 **Step 2 Verify if this works**
 

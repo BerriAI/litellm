@@ -26,32 +26,6 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
-  themes: [
-    [
-      require.resolve("@getcanary/docusaurus-theme-search-pagefind"),
-      {
-        styles: {
-          "--canary-color-primary-c": 0.1,
-          "--canary-color-primary-h": 270,
-        },
-        pagefind: {
-          ranking: {
-            // https://pagefind.app/docs/ranking
-            pageLength: 0.0,
-            termFrequency: 1.0,
-            termSimilarity: 1.0,
-            termSaturation: 2.0,
-          }
-        },
-        tabs: [
-          { name: "All", pattern: "**/*" },
-          { name: "Providers", pattern: "/docs/providers/**" },
-          { name: "Proxy", pattern: "/docs/proxy/**" }
-        ],
-        indexOnly: true,
-      },
-    ],
-  ],
   plugins: [
     [
       '@docusaurus/plugin-ideal-image',
@@ -63,6 +37,17 @@ const config = {
         disableInDev: false,
       },
     ],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'release_notes', 
+        path: './release_notes', // Folder where your release notes are stored
+        routeBasePath: '/release_notes', // URL path for the release notes
+        include: ['**/*.md', '**/*.mdx'], // Files to include
+        // Other blog options
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -90,7 +75,6 @@ const config = {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
-        blog: false, // Optional: disable the blog plugin
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
@@ -139,9 +123,10 @@ const config = {
           {
             sidebarId: 'tutorialSidebar',
             position: 'left',
-            label: '🚀 Hosted',
+            label: 'Hosted',
             to: "docs/hosted"
           },
+          { to: '/release_notes', label: 'Release Notes', position: 'left' },
           {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
@@ -156,15 +141,7 @@ const config = {
             href: 'https://discord.com/invite/wuPM9dRgDw',
             label: 'Discord',
             position: 'right',
-          },
-          {
-            type: 'html',
-            position: 'right',
-            value:
-              `<a href=# class=navbar__link data-fr-widget>
-                I'm Confused
-              </a>`
-          },
+          }
         ],
       },
       footer: {

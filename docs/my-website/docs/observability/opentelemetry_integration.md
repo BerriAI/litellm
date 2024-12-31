@@ -35,7 +35,7 @@ OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
 
 ```shell
 OTEL_EXPORTER="otlp_http"
-OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_ENDPOINT="http://0.0.0.0:4318"
 ```
 
 </TabItem>
@@ -44,14 +44,24 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 
 ```shell
 OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="http:/0.0.0.0:4317"
+OTEL_ENDPOINT="http://0.0.0.0:4317"
+```
+
+</TabItem>
+
+<TabItem value="laminar" label="Log to Laminar">
+
+```shell
+OTEL_EXPORTER="otlp_grpc"
+OTEL_ENDPOINT="https://api.lmnr.ai:8443"
+OTEL_HEADERS="authorization=Bearer <project-api-key>"
 ```
 
 </TabItem>
 
 </Tabs>
 
-Use just 2 lines of code, to instantly log your LLM responses **across all providers** with OpenTelemetry:
+Use just 1 line of code, to instantly log your LLM responses **across all providers** with OpenTelemetry:
 
 ```python
 litellm.callbacks = ["otel"]
@@ -76,3 +86,20 @@ Be aware that if you are continuing an existing trace, and you set `update_trace
 ## Support
 
 For any question or issue with the integration you can reach out to the OpenLLMetry maintainers on [Slack](https://traceloop.com/slack) or via [email](mailto:dev@traceloop.com).
+
+## Troubleshooting
+
+### Trace LiteLLM Proxy user/key/org/team information on failed requests
+
+LiteLLM emits the user_api_key_metadata
+- key hash
+- key_alias
+- org_id
+- user_id
+- team_id
+
+for successful + failed requests 
+
+click under `litellm_request` in the trace
+
+<Image img={require('../../img/otel_debug_trace.png')} />

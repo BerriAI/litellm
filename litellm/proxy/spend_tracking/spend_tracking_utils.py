@@ -1,13 +1,14 @@
 import json
-import os
 import secrets
-import traceback
-from typing import Optional
+from datetime import datetime as dt
+from typing import Optional, cast
+
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
-from litellm.proxy.utils import hash_token
+from litellm.proxy.utils import PrismaClient, hash_token
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -30,9 +31,7 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
 def get_logging_payload(
     kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
 ) -> SpendLogsPayload:
-    from pydantic import Json
 
-    from litellm.proxy._types import LiteLLM_SpendLogs
     from litellm.proxy.proxy_server import general_settings, master_key
 
     verbose_proxy_logger.debug(
@@ -41,7 +40,9 @@ def get_logging_payload(
 
     if kwargs is None:
         kwargs = {}
-    if response_obj is None:
+    if response_obj is None or (
+        not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict)
+    ):
         response_obj = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
@@ -51,10 +52,10 @@ def get_logging_payload(
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
-    usage = response_obj.get("usage", None) or {}
-    if type(usage) == litellm.Usage:
+    usage = cast(dict, response_obj).get("usage", None) or {}
+    if isinstance(usage, litellm.Usage):
         usage = dict(usage)
-    id = response_obj.get("id", kwargs.get("litellm_call_id"))
+    id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
@@ -105,6 +106,8 @@ def get_logging_payload(
     additional_usage_values = {}
     for k, v in usage.items():
         if k not in special_usage_fields:
+            if isinstance(v, BaseModel):
+                v = v.model_dump()
             additional_usage_values.update({k: v})
     clean_metadata["additional_usage_values"] = additional_usage_values
 
@@ -147,6 +150,7 @@ def get_logging_payload(
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
+            custom_llm_provider=kwargs.get("custom_llm_provider", ""),
         )
 
         verbose_proxy_logger.debug(
@@ -159,3 +163,79 @@ def get_logging_payload(
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+async def get_spend_by_team_and_customer(
+    start_date: dt,
+    end_date: dt,
+    team_id: str,
+    customer_id: str,
+    prisma_client: PrismaClient,
+):
+    sql_query = """
+    WITH SpendByModelApiKey AS (
+        SELECT
+            date_trunc('day', sl."startTime") AS group_by_day,
+            COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+            sl.end_user AS customer,
+            sl.model,
+            sl.api_key,
+            SUM(sl.spend) AS model_api_spend,
+            SUM(sl.total_tokens) AS model_api_tokens
+        FROM 
+            "LiteLLM_SpendLogs" sl
+        LEFT JOIN 
+            "LiteLLM_TeamTable" tt 
+        ON 
+            sl.team_id = tt.team_id
+        WHERE
+            sl."startTime" BETWEEN $1::date AND $2::date
+            AND sl.team_id = $3
+            AND sl.end_user = $4
+        GROUP BY
+            date_trunc('day', sl."startTime"),
+            tt.team_alias,
+            sl.end_user,
+            sl.model,
+            sl.api_key
+    )
+        SELECT
+            group_by_day,
+            jsonb_agg(jsonb_build_object(
+                'team_name', team_name,
+                'customer', customer,
+                'total_spend', total_spend,
+                'metadata', metadata
+            )) AS teams_customers
+        FROM (
+            SELECT
+                group_by_day,
+                team_name,
+                customer,
+                SUM(model_api_spend) AS total_spend,
+                jsonb_agg(jsonb_build_object(
+                    'model', model,
+                    'api_key', api_key,
+                    'spend', model_api_spend,
+                    'total_tokens', model_api_tokens
+                )) AS metadata
+            FROM 
+                SpendByModelApiKey
+            GROUP BY
+                group_by_day,
+                team_name,
+                customer
+        ) AS aggregated
+        GROUP BY
+            group_by_day
+        ORDER BY
+            group_by_day;
+    """
+
+    db_response = await prisma_client.db.query_raw(
+        sql_query, start_date, end_date, team_id, customer_id
+    )
+    if db_response is None:
+        return []
+
+    return db_response

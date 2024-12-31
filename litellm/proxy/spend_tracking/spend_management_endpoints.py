@@ -1,14 +1,26 @@
 #### SPEND MANAGEMENT #####
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+import collections
+import os
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    get_spend_by_team_and_customer,
+)
+from litellm.proxy.utils import handle_exception_on_proxy
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+else:
+    PrismaClient = Any
 
 router = APIRouter()
 
@@ -35,7 +47,7 @@ async def spend_key_fn():
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
@@ -80,7 +92,7 @@ async def spend_user_fn(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         if user_id is not None:
@@ -142,7 +154,7 @@ async def view_spend_tags(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         # run the following SQL query on prisma
@@ -247,7 +259,6 @@ async def get_global_activity(
         "sum_total_tokens": 2012
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -258,12 +269,12 @@ async def get_global_activity(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         if (
@@ -415,7 +426,6 @@ async def get_global_activity_model(
         },
     ]
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -426,12 +436,12 @@ async def get_global_activity_model(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         if (
@@ -569,7 +579,6 @@ async def get_global_activity_exceptions_per_deployment(
         },
     ]
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -580,12 +589,12 @@ async def get_global_activity_exceptions_per_deployment(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         sql_query = """
@@ -703,7 +712,6 @@ async def get_global_activity_exceptions(
         "sum_api_exceptions": 20,
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -714,12 +722,12 @@ async def get_global_activity_exceptions(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         sql_query = """
@@ -825,7 +833,7 @@ async def get_global_spend_provider(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         if (
@@ -888,7 +896,7 @@ async def get_global_spend_provider(
                             litellm_params=_deployment.litellm_params,
                         )
                         provider_spend_mapping[_provider] += row["spend"]
-                    except:
+                    except Exception:
                         pass
 
         for provider, spend in provider_spend_mapping.items():
@@ -931,6 +939,14 @@ async def get_global_spend_report(
     internal_user_id: Optional[str] = fastapi.Query(
         default=None,
         description="View spend for a specific internal_user_id. Example internal_user_id='1234",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="View spend for a specific team_id. Example team_id='1234",
+    ),
+    customer_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="View spend for a specific customer_id. Example customer_id='1234. Can be used in conjunction with team_id as well.",
     ),
 ):
     """
@@ -976,7 +992,7 @@ async def get_global_spend_report(
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         if premium_user is not True:
@@ -1074,8 +1090,12 @@ async def get_global_spend_report(
                 return []
 
             return db_response
-
+        elif team_id is not None and customer_id is not None:
+            return await get_spend_by_team_and_customer(
+                start_date_obj, end_date_obj, team_id, customer_id, prisma_client
+            )
         if group_by == "team":
+
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
             sql_query = """
@@ -1264,7 +1284,7 @@ async def global_get_all_tag_names():
 
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         sql_query = """
@@ -1305,7 +1325,6 @@ async def global_get_all_tag_names():
     "/global/spend/tags",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
@@ -1341,13 +1360,12 @@ async def global_view_spend_tags(
     """
     import traceback
 
-    from enterprise.utils import ui_get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
         if end_date is None or start_date is None:
@@ -1393,7 +1411,7 @@ async def _get_spend_report_for_time_range(
 
     if prisma_client is None:
         verbose_proxy_logger.error(
-            f"Database not connected. Connect a database to your proxy for weekly, monthly spend reports"
+            "Database not connected. Connect a database to your proxy for weekly, monthly spend reports"
         )
         return None
 
@@ -1597,7 +1615,7 @@ async def calculate_spend(request: SpendCalculateRequest):
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
-async def view_spend_logs(
+async def view_spend_logs(  # noqa: PLR0915
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -1659,7 +1677,7 @@ async def view_spend_logs(
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
             raise Exception(
-                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         spend_logs = []
         if (
@@ -1942,7 +1960,7 @@ async def global_spend_for_internal_user(
 
         user_id = user_api_key_dict.user_id
         if user_id is None:
-            raise ValueError(f"/global/spend/logs Error: User ID is None")
+            raise ValueError("/global/spend/logs Error: User ID is None")
         if api_key is not None:
             sql_query = """
                 SELECT * FROM "MonthlyGlobalSpendPerUserPerKey"
@@ -1971,7 +1989,7 @@ async def global_spend_for_internal_user(
     include_in_schema=False,
 )
 async def global_spend_logs(
-    api_key: str = fastapi.Query(
+    api_key: Optional[str] = fastapi.Query(
         default=None,
         description="API Key to get global spend (spend per day for last 30d). Admin-only endpoint",
     ),
@@ -1986,6 +2004,10 @@ async def global_spend_logs(
     """
     import traceback
 
+    from litellm.integrations.prometheus_helpers.prometheus_api import (
+        get_daily_spend_from_prometheus,
+        is_prometheus_connected,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -2007,22 +2029,28 @@ async def global_spend_logs(
 
             return response
 
-        if api_key is None:
-            sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
+        prometheus_api_enabled = is_prometheus_connected()
 
-            response = await prisma_client.db.query_raw(query=sql_query)
-
+        if prometheus_api_enabled:
+            response = await get_daily_spend_from_prometheus(api_key=api_key)
             return response
         else:
-            sql_query = """
-                SELECT * FROM "MonthlyGlobalSpendPerKey"
-                WHERE "api_key" = $1
-                ORDER BY "date";
-                """
+            if api_key is None:
+                sql_query = """SELECT * FROM "MonthlyGlobalSpend" ORDER BY "date";"""
 
-            response = await prisma_client.db.query_raw(sql_query, api_key)
+                response = await prisma_client.db.query_raw(query=sql_query)
 
-            return response
+                return response
+            else:
+                sql_query = """
+                    SELECT * FROM "MonthlyGlobalSpendPerKey"
+                    WHERE "api_key" = $1
+                    ORDER BY "date";
+                    """
+
+                response = await prisma_client.db.query_raw(sql_query, api_key)
+
+                return response
 
     except Exception as e:
         error_trace = traceback.format_exc()
@@ -2064,7 +2092,6 @@ async def global_spend():
     try:
 
         total_spend = 0.0
-        total_proxy_budget = 0.0
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -2429,15 +2456,199 @@ async def global_spend_models(
     return response
 
 
-@router.post(
-    "/global/predict/spend/logs",
-    tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
-)
-async def global_predict_spend_logs(request: Request):
-    from enterprise.utils import _forecast_daily_cost
+@router.get("/provider/budgets", response_model=ProviderBudgetResponse)
+async def provider_budgets() -> ProviderBudgetResponse:
+    """
+    Provider Budget Routing - Get Budget, Spend Details https://docs.litellm.ai/docs/proxy/provider_budget_routing
 
-    data = await request.json()
-    data = data.get("data")
-    return _forecast_daily_cost(data)
+    Use this endpoint to check current budget, spend and budget reset time for a provider
+
+    Example Request
+
+    ```bash
+    curl -X GET http://localhost:4000/provider/budgets \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Response
+
+    ```json
+    {
+        "providers": {
+            "openai": {
+                "budget_limit": 1e-12,
+                "time_period": "1d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "azure": {
+                "budget_limit": 100.0,
+                "time_period": "1d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "anthropic": {
+                "budget_limit": 100.0,
+                "time_period": "10d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "vertex_ai": {
+                "budget_limit": 100.0,
+                "time_period": "12d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            }
+        }
+    }
+    ```
+
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500, detail={"error": "No llm_router found"}
+            )
+
+        provider_budget_config = llm_router.provider_budget_config
+        if provider_budget_config is None:
+            raise ValueError(
+                "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
+            )
+
+        provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
+        for _provider, _budget_info in provider_budget_config.items():
+            if llm_router.router_budget_logger is None:
+                raise ValueError("No router budget logger found")
+            _provider_spend = (
+                await llm_router.router_budget_logger._get_current_provider_spend(
+                    _provider
+                )
+                or 0.0
+            )
+            _provider_budget_ttl = await llm_router.router_budget_logger._get_current_provider_budget_reset_at(
+                _provider
+            )
+            provider_budget_response_object = ProviderBudgetResponseObject(
+                budget_limit=_budget_info.max_budget,
+                time_period=_budget_info.budget_duration,
+                spend=_provider_spend,
+                budget_reset_at=_provider_budget_ttl,
+            )
+            provider_budget_response_dict[_provider] = provider_budget_response_object
+        return ProviderBudgetResponse(providers=provider_budget_response_dict)
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/provider/budgets: Exception occured - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(e)
+
+
+async def get_spend_by_tags(
+    prisma_client: PrismaClient, start_date=None, end_date=None
+):
+    response = await prisma_client.db.query_raw(
+        """
+        SELECT
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        COUNT(*) AS log_count,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs"
+        GROUP BY individual_request_tag;
+        """
+    )
+
+    return response
+
+
+async def ui_get_spend_by_tags(
+    start_date: str,
+    end_date: str,
+    prisma_client: Optional[PrismaClient] = None,
+    tags_str: Optional[str] = None,
+):
+    """
+    Should cover 2 cases:
+    1. When user is getting spend for all_tags. "all_tags" in tags_list
+    2. When user is getting spend for specific tags.
+    """
+
+    # tags_str is a list of strings csv of tags
+    # tags_str = tag1,tag2,tag3
+    # convert to list if it's not None
+    tags_list: Optional[List[str]] = None
+    if tags_str is not None and len(tags_str) > 0:
+        tags_list = tags_str.split(",")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response = None
+    if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
+        # Get spend for all tags
+        sql_query = """
+        SELECT
+            individual_request_tag,
+            spend_date,
+            log_count,
+            total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+        ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+        )
+    else:
+        # filter by tags list
+        sql_query = """
+        SELECT
+            individual_request_tag,
+            SUM(log_count) AS log_count,
+            SUM(total_spend) AS total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+          AND individual_request_tag = ANY($3::text[])
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+            tags_list,
+        )
+
+    # print("tags - spend")
+    # print(response)
+    # Bar Chart 1 - Spend per tag - Top 10 tags by spend
+    total_spend_per_tag: collections.defaultdict = collections.defaultdict(float)
+    total_requests_per_tag: collections.defaultdict = collections.defaultdict(int)
+    for row in response:
+        tag_name = row["individual_request_tag"]
+        tag_spend = row["total_spend"]
+
+        total_spend_per_tag[tag_name] += tag_spend
+        total_requests_per_tag[tag_name] += row["log_count"]
+
+    sorted_tags = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)
+    # convert to ui format
+    ui_tags = []
+    for tag in sorted_tags:
+        current_spend = tag[1]
+        if current_spend is not None and isinstance(current_spend, float):
+            current_spend = round(current_spend, 4)
+        ui_tags.append(
+            {
+                "name": tag[0],
+                "spend": current_spend,
+                "log_count": total_requests_per_tag[tag[0]],
+            }
+        )
+
+    return {"spend_per_tag": ui_tags}

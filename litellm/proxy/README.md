@@ -41,3 +41,4 @@ print(response)
 - `management_endpoints/key_management_endpoints.py` - all `/key/*` routes
 - `management_endpoints/team_endpoints.py` - all `/team/*` routes
 - `management_endpoints/internal_user_endpoints.py` - all `/user/*` routes
+- `management_endpoints/ui_sso.py` - all `/sso/*` routes

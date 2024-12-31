@@ -21,6 +21,7 @@ import {
   InputNumber,
   Select,
   message,
+  Radio,
 } from "antd";
 import {
   keyCreateCall,
@@ -39,6 +40,31 @@ interface CreateKeyProps {
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
 
+const getPredefinedTags = (data: any[] | null) => {
+  let allTags = [];
+
+  console.log("data:", JSON.stringify(data));
+
+  if (data) {
+    for (let key of data) {
+      if (key["metadata"] && key["metadata"]["tags"]) {
+        allTags.push(...key["metadata"]["tags"]);
+      }
+    }
+  }
+
+  // Deduplicate using Set
+  const uniqueTags = Array.from(new Set(allTags)).map(tag => ({
+    value: tag,
+    label: tag,
+  }));
+
+
+  console.log("uniqueTags:", uniqueTags);
+  return uniqueTags;
+}
+
+
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
@@ -53,6 +79,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [softBudget, setSoftBudget] = useState(null);
   const [userModels, setUserModels] = useState([]);
   const [modelsToPick, setModelsToPick] = useState([]);
+  const [keyOwner, setKeyOwner] = useState("you");
+  const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
+
+
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -95,6 +125,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     try {
       const newKeyAlias = formValues?.key_alias ?? "";
       const newKeyTeamId = formValues?.team_id ?? null;
+
       const existingKeyAliases =
         data
           ?.filter((k) => k.team_id === newKeyTeamId)
@@ -108,6 +139,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       message.info("Making API Call");
       setIsModalVisible(true);
+
+      // If it's a service account, add the service_account_id to the metadata
+      if (keyOwner === "service_account") {
+        // Parse existing metadata or create an empty object
+        let metadata: Record<string, any> = {};
+        try {
+          metadata = JSON.parse(formValues.metadata || "{}");
+        } catch (error) {
+          console.error("Error parsing metadata:", error);
+        }
+        metadata["service_account_id"] = formValues.key_alias;
+        // Update the formValues with the new metadata
+        formValues.metadata = JSON.stringify(metadata);
+      }
+
       const response = await keyCreateCall(accessToken, userID, formValues);
 
       console.log("key create Response:", response);
@@ -118,8 +164,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      console.log("error in create key:", error);
+      message.error(`Error creating the key: ${error}`);
     }
   };
 
@@ -172,23 +218,49 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           labelAlign="left"
         >
           <>
+            <Form.Item label="Owned By" className="mb-4">
+              <Radio.Group
+                onChange={(e) => setKeyOwner(e.target.value)}
+                value={keyOwner}
+              >
+                <Radio value="you">You</Radio>
+                <Radio value="service_account">Service Account</Radio>
+                {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
+              </Radio.Group>
+            </Form.Item>
+
             <Form.Item
-              label="Key Name"
+              label="User ID"
+              name="user_id"
+              hidden={keyOwner !== "another_user"}
+              valuePropName="user_id"
+              className="mt-8"
+              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
+            >
+              <TextInput 
+                placeholder="User ID" 
+                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
               name="key_alias"
-              rules={[{ required: true, message: "Please input a key name" }]}
-              help="required"
+              rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
+              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
             >
               <TextInput placeholder="" />
             </Form.Item>
             <Form.Item
               label="Team ID"
               name="team_id"
-              hidden={true}
+              hidden={keyOwner !== "another_user"}
               initialValue={team ? team["team_id"] : null}
               valuePropName="team_id"
               className="mt-8"
             >
-              <Input value={team ? team["team_alias"] : ""} disabled />
+              <TextInput defaultValue={team ? team["team_id"] : null} onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
             </Form.Item>
 
             <Form.Item
@@ -325,6 +397,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   <Input.TextArea
                     rows={4}
                     placeholder="Enter metadata as JSON"
+                  />
+                </Form.Item>
+                <Form.Item label="Tags" name="tags" className="mt-8" help={`Tags for tracking spend and/or doing tag-based routing.`}>
+                <Select
+                    mode="tags"
+                    style={{ width: '100%' }}
+                    placeholder="Enter tags"
+                    tokenSeparators={[',']}
+                    options={predefinedTags}
                   />
                 </Form.Item>
               </AccordionBody>

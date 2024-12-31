@@ -145,11 +145,13 @@ enum Providers {
   Bedrock = "Amazon Bedrock",
   Groq = "Groq",
   MistralAI = "Mistral AI",
+  Deepseek = "Deepseek",
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   Cohere = "Cohere",
   Databricks = "Databricks",
   Ollama = "Ollama",
+  xAI = "xAI",
 }
 
 const provider_map: Record<string, string> = {
@@ -165,6 +167,8 @@ const provider_map: Record<string, string> = {
   OpenAI_Compatible: "openai",
   Vertex_AI: "vertex_ai",
   Databricks: "databricks",
+  xAI: "xai",
+  Deepseek: "deepseek",
   Ollama: "ollama",
 
 };
@@ -244,6 +248,23 @@ const handleSubmit = async (
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
               litellmParamsObj[key] = value;
+            }
+          }
+        } else if (key == "model_info_params") {
+          console.log("model_info_params:", value);
+          let modelInfoParams = {};
+          if (value && value != undefined) {
+            try {
+              modelInfoParams = JSON.parse(value);
+            } catch (error) {
+              message.error(
+                "Failed to parse LiteLLM Extra Params: " + error,
+                10
+              );
+              throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            for (const [key, value] of Object.entries(modelInfoParams)) {
+              modelInfoObj[key] = value;
             }
           }
         }
@@ -340,6 +361,132 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
+
+
+  const updateModelMetrics = async (
+    modelGroup: string | null,
+    startTime: Date | undefined,
+    endTime: Date | undefined,
+  ) => {
+    console.log("Updating model metrics for group:", modelGroup);
+    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
+      return;
+    }
+    console.log(
+      "inside updateModelMetrics - startTime:",
+      startTime,
+      "endTime:",
+      endTime
+    );
+    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
+
+    let selected_token = selectedAPIKey?.token;
+    if (selected_token === undefined) {
+      selected_token = null;
+    }
+
+    let selected_customer = selectedCustomer;
+    if (selected_customer === undefined) {
+      selected_customer = null;
+    }
+
+    // make startTime and endTime to last hour of the day
+    startTime.setHours(0);
+    startTime.setMinutes(0);
+    startTime.setSeconds(0);
+
+    endTime.setHours(23);
+    endTime.setMinutes(59);
+    endTime.setSeconds(59);
+
+
+    try {
+      const modelMetricsResponse = await modelMetricsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+      console.log("Model metrics response:", modelMetricsResponse);
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setModelMetrics(modelMetricsResponse.data);
+      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
+
+      const streamingModelMetricsResponse = await streamingModelMetricsCall(
+        accessToken,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString()
+      );
+
+      // Assuming modelMetricsResponse now contains the metric data for the specified model group
+      setStreamingModelMetrics(streamingModelMetricsResponse.data);
+      setStreamingModelMetricsCategories(
+        streamingModelMetricsResponse.all_api_bases
+      );
+
+      const modelExceptionsResponse = await modelExceptionsCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+      console.log("Model exceptions response:", modelExceptionsResponse);
+      setModelExceptions(modelExceptionsResponse.data);
+      setAllExceptions(modelExceptionsResponse.exception_types);
+
+      const slowResponses = await modelMetricsSlowResponsesCall(
+        accessToken,
+        userID,
+        userRole,
+        modelGroup,
+        startTime.toISOString(),
+        endTime.toISOString(),
+        selected_token,
+        selected_customer
+      );
+
+      console.log("slowResponses:", slowResponses);
+
+      setSlowResponsesData(slowResponses);
+
+
+      if (modelGroup) {
+        const dailyExceptions = await adminGlobalActivityExceptions(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        );
+
+        setGlobalExceptionData(dailyExceptions);
+
+        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
+          accessToken,
+          startTime?.toISOString().split('T')[0],
+          endTime?.toISOString().split('T')[0],
+          modelGroup,
+        )
+
+        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
+
+      }
+
+      
+    } catch (error) {
+      console.error("Failed to fetch model metrics", error);
+    }
+  };
+
 
   useEffect(() => {
     updateModelMetrics(
@@ -975,131 +1122,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       setHealthCheckResponse("Error running health check");
     }
   };
-
-  const updateModelMetrics = async (
-    modelGroup: string | null,
-    startTime: Date | undefined,
-    endTime: Date | undefined,
-  ) => {
-    console.log("Updating model metrics for group:", modelGroup);
-    if (!accessToken || !userID || !userRole || !startTime || !endTime) {
-      return;
-    }
-    console.log(
-      "inside updateModelMetrics - startTime:",
-      startTime,
-      "endTime:",
-      endTime
-    );
-    setSelectedModelGroup(modelGroup); // If you want to store the selected model group in state
-
-    let selected_token = selectedAPIKey?.token;
-    if (selected_token === undefined) {
-      selected_token = null;
-    }
-
-    let selected_customer = selectedCustomer;
-    if (selected_customer === undefined) {
-      selected_customer = null;
-    }
-
-    // make startTime and endTime to last hour of the day
-    startTime.setHours(0);
-    startTime.setMinutes(0);
-    startTime.setSeconds(0);
-
-    endTime.setHours(23);
-    endTime.setMinutes(59);
-    endTime.setSeconds(59);
-
-
-    try {
-      const modelMetricsResponse = await modelMetricsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-      console.log("Model metrics response:", modelMetricsResponse);
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setModelMetrics(modelMetricsResponse.data);
-      setModelMetricsCategories(modelMetricsResponse.all_api_bases);
-
-      const streamingModelMetricsResponse = await streamingModelMetricsCall(
-        accessToken,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString()
-      );
-
-      // Assuming modelMetricsResponse now contains the metric data for the specified model group
-      setStreamingModelMetrics(streamingModelMetricsResponse.data);
-      setStreamingModelMetricsCategories(
-        streamingModelMetricsResponse.all_api_bases
-      );
-
-      const modelExceptionsResponse = await modelExceptionsCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-      console.log("Model exceptions response:", modelExceptionsResponse);
-      setModelExceptions(modelExceptionsResponse.data);
-      setAllExceptions(modelExceptionsResponse.exception_types);
-
-      const slowResponses = await modelMetricsSlowResponsesCall(
-        accessToken,
-        userID,
-        userRole,
-        modelGroup,
-        startTime.toISOString(),
-        endTime.toISOString(),
-        selected_token,
-        selected_customer
-      );
-
-      console.log("slowResponses:", slowResponses);
-
-      setSlowResponsesData(slowResponses);
-
-
-      if (modelGroup) {
-        const dailyExceptions = await adminGlobalActivityExceptions(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        );
-  
-        setGlobalExceptionData(dailyExceptions);
-  
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        )
-  
-        setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-
-      }
-
-      
-    } catch (error) {
-      console.error("Failed to fetch model metrics", error);
-    }
-  };
-
 
   const FilterByContent = (
       <div >
@@ -2051,6 +2073,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Text>
                     </Col>
                   </Row>
+                  <Form.Item
+                    label="Model Info"
+                    name="model_info_params"
+                    tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
+                    className="mb-0"
+                  >
+                    <TextArea
+                      rows={4}
+                      placeholder='{
+                    "mode": "chat"
+                  }'
+                    />
+                  </Form.Item>
                 </>
                 <div style={{ textAlign: "center", marginTop: "10px" }}>
                   <Button2 htmlType="submit">Add Model</Button2>

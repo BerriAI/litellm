@@ -1,7 +1,7 @@
 import React from "react";
 import { Form, Input, InputNumber, Row, Col, Button as Button2 } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
-import { Button, Badge, Icon, Text, TableRow, TableCell } from "@tremor/react";
+import { Button, Badge, Icon, Text, TableRow, TableCell, Switch } from "@tremor/react";
 import Paragraph from "antd/es/typography/Paragraph";
 interface AlertingSetting {
   field_name: string;
@@ -30,10 +30,15 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   const [form] = Form.useForm();
 
   const onFinish = () => {
+    console.log(`INSIDE ONFINISH`)
     const formData = form.getFieldsValue();
-    const isEmpty = Object.values(formData).some(
-      (value) => value === "" || value === null || value === undefined
-    );
+    const isEmpty = Object.entries(formData).every(([key, value]) => {
+      if (typeof value === 'boolean') {
+        return false; // Boolean values are never considered empty
+      }
+      return value === '' || value === null || value === undefined;
+    });
+    console.log(`formData: ${JSON.stringify(formData)}, isEmpty: ${isEmpty}`)
     if (!isEmpty) {
       handleSubmit(formData);
     } else {
@@ -68,6 +73,11 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
                       value={value.field_value}
                       onChange={(e) => handleInputChange(value.field_name, e)}
                     />
+                  ) : value.field_type === "Boolean" ? (
+                    <Switch
+                      checked={value.field_value}
+                      onChange={(checked) => handleInputChange(value.field_name, checked)}
+                    />
                   ) : (
                     <Input
                       value={value.field_value}
@@ -86,7 +96,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
               </TableCell>
             )
           ) : (
-            <Form.Item name={value.field_name} className="mb-0">
+            <Form.Item name={value.field_name} className="mb-0" valuePropName={value.field_type === "Boolean" ? "checked" : "value"}>
               <TableCell>
                 {value.field_type === "Integer" ? (
                   <InputNumber
@@ -95,7 +105,17 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
                     onChange={(e) => handleInputChange(value.field_name, e)}
                     className="p-0"
                   />
-                ) : (
+                ) : value.field_type === "Boolean" ? (
+                  <Switch
+                    checked={value.field_value}
+                    onChange={(checked) => {
+                      handleInputChange(value.field_name, checked);
+                      form.setFieldsValue({ [value.field_name]: checked });
+                    }}
+
+                    
+                  />
+                ) :(
                   <Input
                     value={value.field_value}
                     onChange={(e) => handleInputChange(value.field_name, e)}

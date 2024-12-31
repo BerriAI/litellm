@@ -93,7 +93,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ## Check Model Support 
 
-Call `litellm.get_model_info` to check if a model/provider supports `response_format`. 
+Call `litellm.get_model_info` to check if a model/provider supports `prefix`. 
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

@@ -1,35 +1,29 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-import traceback
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm import token_counter
 from litellm._logging import verbose_logger, verbose_router_logger
-from litellm.caching import DualCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
+from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
 
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
 
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):
-        try:
-            return self.model_dump()  # noqa
-        except Exception as e:
-            # if using pydantic v1
-            return self.dict()
+    Span = _Span
+else:
+    Span = Any
 
 
-class RoutingArgs(LiteLLMBase):
+class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 
@@ -136,7 +130,9 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
-    async def async_pre_call_check(self, deployment: Dict) -> Optional[Dict]:
+    async def async_pre_call_check(
+        self, deployment: Dict, parent_otel_span: Optional[Span]
+    ) -> Optional[Dict]:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -170,7 +166,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 deployment_rpm = deployment.get("model_info", {}).get("rpm")
             if deployment_rpm is None:
                 deployment_rpm = float("inf")
-
             if local_result is not None and local_result >= deployment_rpm:
                 raise litellm.RateLimitError(
                     message="Deployment over defined rpm limit={}. current usage={}".format(
@@ -185,13 +180,17 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             deployment_rpm,
                             local_result,
                         ),
+                        headers={"retry-after": str(60)},  # type: ignore
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
                 result = await self.router_cache.async_increment_cache(
-                    key=rpm_key, value=1, ttl=self.routing_args.ttl
+                    key=rpm_key,
+                    value=1,
+                    ttl=self.routing_args.ttl,
+                    parent_otel_span=parent_otel_span,
                 )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
@@ -207,6 +206,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                                 deployment_rpm,
                                 result,
                             ),
+                            headers={"retry-after": str(60)},  # type: ignore
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
                     )
@@ -222,45 +222,44 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             """
             Update TPM/RPM usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
-                pass
-            else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
+            if standard_logging_object is None:
+                raise ValueError("standard_logging_object not passed in.")
+            model_group = standard_logging_object.get("model_group")
+            id = standard_logging_object.get("model_id")
+            if model_group is None or id is None:
+                return
+            elif isinstance(id, int):
+                id = str(id)
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                if model_group is None or id is None:
-                    return
-                elif isinstance(id, int):
-                    id = str(id)
+            total_tokens = standard_logging_object.get("total_tokens")
 
-                total_tokens = response_obj["usage"]["total_tokens"]
+            # ------------
+            # Setup values
+            # ------------
+            dt = get_utc_datetime()
+            current_minute = dt.strftime(
+                "%H-%M"
+            )  # use the same timezone regardless of system clock
 
-                # ------------
-                # Setup values
-                # ------------
-                dt = get_utc_datetime()
-                current_minute = dt.strftime(
-                    "%H-%M"
-                )  # use the same timezone regardless of system clock
+            tpm_key = f"{id}:tpm:{current_minute}"
+            # ------------
+            # Update usage
+            # ------------
+            # update cache
 
-                tpm_key = f"{id}:tpm:{current_minute}"
-                # ------------
-                # Update usage
-                # ------------
-                # update cache
-
-                ## TPM
-                self.router_cache.increment_cache(
-                    key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
-                )
-                ### TESTING ###
-                if self.test_flag:
-                    self.logged_success += 1
+            ## TPM
+            self.router_cache.increment_cache(
+                key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
+            )
+            ### TESTING ###
+            if self.test_flag:
+                self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - {}".format(
                     str(e)
                 )
             )
@@ -271,101 +270,59 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             """
             Update TPM usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
-                pass
-            else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
-
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                if model_group is None or id is None:
-                    return
-                elif isinstance(id, int):
-                    id = str(id)
-
-                total_tokens = response_obj["usage"]["total_tokens"]
-
-                # ------------
-                # Setup values
-                # ------------
-                dt = get_utc_datetime()
-                current_minute = dt.strftime(
-                    "%H-%M"
-                )  # use the same timezone regardless of system clock
-
-                tpm_key = f"{id}:tpm:{current_minute}"
-                # ------------
-                # Update usage
-                # ------------
-                # update cache
-
-                ## TPM
-                await self.router_cache.async_increment_cache(
-                    key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
-                )
-
-                ### TESTING ###
-                if self.test_flag:
-                    self.logged_success += 1
-        except Exception as e:
-            verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
-                    str(e)
-                )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
             )
-            pass
-
-    def _common_checks_available_deployment(
-        self,
-        model_group: str,
-        healthy_deployments: list,
-        tpm_keys: list,
-        tpm_values: list,
-        rpm_keys: list,
-        rpm_values: list,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-    ):
-        """
-        Common checks for get available deployment, across sync + async implementations
-        """
-        tpm_dict = {}  # {model_id: 1, ..}
-        for idx, key in enumerate(tpm_keys):
-            tpm_dict[tpm_keys[idx]] = tpm_values[idx]
-
-        rpm_dict = {}  # {model_id: 1, ..}
-        for idx, key in enumerate(rpm_keys):
-            rpm_dict[rpm_keys[idx]] = rpm_values[idx]
-
-        try:
-            input_tokens = token_counter(messages=messages, text=input)
-        except:
-            input_tokens = 0
-        verbose_router_logger.debug(f"input_tokens={input_tokens}")
-        # -----------------------
-        # Find lowest used model
-        # ----------------------
-        lowest_tpm = float("inf")
-
-        if tpm_dict is None:  # base case - none of the deployments have been used
-            # initialize a tpm dict with {model_id: 0}
-            tpm_dict = {}
-            for deployment in healthy_deployments:
-                tpm_dict[deployment["model_info"]["id"]] = 0
-        else:
+            if standard_logging_object is None:
+                raise ValueError("standard_logging_object not passed in.")
+            model_group = standard_logging_object.get("model_group")
+            id = standard_logging_object.get("model_id")
+            if model_group is None or id is None:
+                return
+            elif isinstance(id, int):
+                id = str(id)
+            total_tokens = standard_logging_object.get("total_tokens")
+            # ------------
+            # Setup values
+            # ------------
             dt = get_utc_datetime()
             current_minute = dt.strftime(
                 "%H-%M"
             )  # use the same timezone regardless of system clock
 
-            for d in healthy_deployments:
-                ## if healthy deployment not yet used
-                tpm_key = f"{d['model_info']['id']}:tpm:{current_minute}"
-                if tpm_key not in tpm_dict or tpm_dict[tpm_key] is None:
-                    tpm_dict[tpm_key] = 0
+            tpm_key = f"{id}:tpm:{current_minute}"
+            # ------------
+            # Update usage
+            # ------------
+            # update cache
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            ## TPM
+            await self.router_cache.async_increment_cache(
+                key=tpm_key,
+                value=total_tokens,
+                ttl=self.routing_args.ttl,
+                parent_otel_span=parent_otel_span,
+            )
 
-        all_deployments = tpm_dict
+            ### TESTING ###
+            if self.test_flag:
+                self.logged_success += 1
+        except Exception as e:
+            verbose_logger.exception(
+                "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            pass
+
+    def _return_potential_deployments(
+        self,
+        healthy_deployments: List[Dict],
+        all_deployments: Dict,
+        input_tokens: int,
+        rpm_dict: Dict,
+    ):
+        lowest_tpm = float("inf")
         potential_deployments = []  # if multiple deployments have the same low value
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
@@ -400,8 +357,10 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 _deployment_rpm = float("inf")
             if item_tpm + input_tokens > _deployment_tpm:
                 continue
-            elif (rpm_dict is not None and item in rpm_dict) and (
-                rpm_dict[item] + 1 >= _deployment_rpm
+            elif (
+                (rpm_dict is not None and item in rpm_dict)
+                and rpm_dict[item] is not None
+                and (rpm_dict[item] + 1 >= _deployment_rpm)
             ):
                 continue
             elif item_tpm == lowest_tpm:
@@ -409,6 +368,62 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 potential_deployments = [_deployment]
+        return potential_deployments
+
+    def _common_checks_available_deployment(  # noqa: PLR0915
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        tpm_keys: list,
+        tpm_values: Optional[list],
+        rpm_keys: list,
+        rpm_values: Optional[list],
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+    ) -> Optional[dict]:
+        """
+        Common checks for get available deployment, across sync + async implementations
+        """
+
+        if tpm_values is None or rpm_values is None:
+            return None
+
+        tpm_dict = {}  # {model_id: 1, ..}
+        for idx, key in enumerate(tpm_keys):
+            tpm_dict[tpm_keys[idx].split(":")[0]] = tpm_values[idx]
+
+        rpm_dict = {}  # {model_id: 1, ..}
+        for idx, key in enumerate(rpm_keys):
+            rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
+
+        try:
+            input_tokens = token_counter(messages=messages, text=input)
+        except Exception:
+            input_tokens = 0
+        verbose_router_logger.debug(f"input_tokens={input_tokens}")
+        # -----------------------
+        # Find lowest used model
+        # ----------------------
+
+        if tpm_dict is None:  # base case - none of the deployments have been used
+            # initialize a tpm dict with {model_id: 0}
+            tpm_dict = {}
+            for deployment in healthy_deployments:
+                tpm_dict[deployment["model_info"]["id"]] = 0
+        else:
+            for d in healthy_deployments:
+                ## if healthy deployment not yet used
+                tpm_key = d["model_info"]["id"]
+                if tpm_key not in tpm_dict or tpm_dict[tpm_key] is None:
+                    tpm_dict[tpm_key] = 0
+
+        all_deployments = tpm_dict
+        potential_deployments = self._return_potential_deployments(
+            healthy_deployments=healthy_deployments,
+            all_deployments=all_deployments,
+            input_tokens=input_tokens,
+            rpm_dict=rpm_dict,
+        )
         print_verbose("returning picked lowest tpm/rpm deployment.")
 
         if len(potential_deployments) > 0:
@@ -455,8 +470,12 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
             keys=combined_tpm_rpm_keys
         )  # [1, 2, None, ..]
 
-        tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]
-        rpm_values = combined_tpm_rpm_values[len(tpm_keys) :]
+        if combined_tpm_rpm_values is not None:
+            tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]
+            rpm_values = combined_tpm_rpm_values[len(tpm_keys) :]
+        else:
+            tpm_values = None
+            rpm_values = None
 
         deployment = self._common_checks_available_deployment(
             model_group=model_group,
@@ -472,7 +491,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         try:
             assert deployment is not None
             return deployment
-        except Exception as e:
+        except Exception:
             ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
             deployment_dict = {}
             for index, _deployment in enumerate(healthy_deployments):
@@ -494,7 +513,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_tpm = float("inf")
 
                     ### GET CURRENT TPM ###
-                    current_tpm = tpm_values[index]
+                    current_tpm = tpm_values[index] if tpm_values else 0
 
                     ### GET DEPLOYMENT TPM LIMIT ###
                     _deployment_rpm = None
@@ -512,7 +531,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_rpm = float("inf")
 
                     ### GET CURRENT RPM ###
-                    current_rpm = rpm_values[index]
+                    current_rpm = rpm_values[index] if rpm_values else 0
 
                     deployment_dict[id] = {
                         "current_tpm": current_tpm,
@@ -520,8 +539,16 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         "current_rpm": current_rpm,
                         "rpm_limit": _deployment_rpm,
                     }
-            raise ValueError(
-                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
+            raise litellm.RateLimitError(
+                message=f"{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
+                llm_provider="",
+                model=model_group,
+                response=httpx.Response(
+                    status_code=429,
+                    content="",
+                    headers={"retry-after": str(60)},  # type: ignore
+                    request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
             )
 
     def get_available_deployments(
@@ -530,6 +557,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         healthy_deployments: list,
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
+        parent_otel_span: Optional[Span] = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -555,10 +583,10 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                 rpm_keys.append(rpm_key)
 
         tpm_values = self.router_cache.batch_get_cache(
-            keys=tpm_keys
+            keys=tpm_keys, parent_otel_span=parent_otel_span
         )  # [1, 2, None, ..]
         rpm_values = self.router_cache.batch_get_cache(
-            keys=rpm_keys
+            keys=rpm_keys, parent_otel_span=parent_otel_span
         )  # [1, 2, None, ..]
 
         deployment = self._common_checks_available_deployment(
@@ -575,7 +603,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         try:
             assert deployment is not None
             return deployment
-        except Exception as e:
+        except Exception:
             ### GET THE DICT OF TPM / RPM + LIMITS PER DEPLOYMENT ###
             deployment_dict = {}
             for index, _deployment in enumerate(healthy_deployments):
@@ -597,7 +625,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_tpm = float("inf")
 
                     ### GET CURRENT TPM ###
-                    current_tpm = tpm_values[index]
+                    current_tpm = tpm_values[index] if tpm_values else 0
 
                     ### GET DEPLOYMENT TPM LIMIT ###
                     _deployment_rpm = None
@@ -615,7 +643,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         _deployment_rpm = float("inf")
 
                     ### GET CURRENT RPM ###
-                    current_rpm = rpm_values[index]
+                    current_rpm = rpm_values[index] if rpm_values else 0
 
                     deployment_dict[id] = {
                         "current_tpm": current_tpm,

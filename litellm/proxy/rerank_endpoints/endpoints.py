@@ -1,13 +1,9 @@
 #### Rerank Endpoints #####
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
 
-import fastapi
 import orjson
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -86,7 +82,7 @@ async def rerank(
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
-
+        additional_headers = hidden_params.get("additional_headers", None) or {}
         fastapi_response.headers.update(
             get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -96,6 +92,7 @@ async def rerank(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                **additional_headers,
             )
         )
 

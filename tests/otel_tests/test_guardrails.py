@@ -70,6 +70,7 @@ async def generate_key(session, guardrails):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Aporia account disabled")
 async def test_llm_guard_triggered_safe_request():
     """
     - Tests a request where no content mod is triggered
@@ -99,6 +100,7 @@ async def test_llm_guard_triggered_safe_request():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Aporia account disabled")
 async def test_llm_guard_triggered():
     """
     - Tests a request where no content mod is triggered
@@ -146,6 +148,7 @@ async def test_no_llm_guard_triggered():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Aporia account disabled")
 async def test_guardrails_with_api_key_controls():
     """
     - Make two API Keys
@@ -209,7 +212,7 @@ async def test_bedrock_guardrail_triggered():
                 session,
                 "sk-1234",
                 model="fake-openai-endpoint",
-                messages=[{"role": "user", "content": f"Hello do you like coffee?"}],
+                messages=[{"role": "user", "content": "Hello do you like coffee?"}],
                 guardrails=["bedrock-pre-guard"],
             )
             pytest.fail("Should have thrown an exception")

@@ -5,15 +5,25 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import Required, TypedDict
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .utils import ModelResponse
+
+
+class ConfigurableClientsideParamsCustomAuth(TypedDict):
+    api_base: str
+
+
+CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = Optional[
+    List[Union[str, ConfigurableClientsideParamsCustomAuth]]
+]
 
 
 class ModelConfig(BaseModel):
@@ -93,6 +103,7 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
+    team_id: Optional[str] = None  # the team id that this model belongs to
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -139,6 +150,9 @@ class GenericLiteLLMParams(BaseModel):
     )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    ## LOGGING PARAMS ##
+    litellm_trace_id: Optional[str] = None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
     ## VERTEX AI ##
@@ -159,6 +173,10 @@ class GenericLiteLLMParams(BaseModel):
 
     max_file_size_mb: Optional[float] = None
 
+    # Deployment budgets
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -175,6 +193,8 @@ class GenericLiteLLMParams(BaseModel):
             None  # timeout when making stream=True calls, if str, pass in as os.environ/
         ),
         organization: Optional[str] = None,  # for openai orgs
+        ## LOGGING PARAMS ##
+        litellm_trace_id: Optional[str] = None,
         ## UNIFIED PROJECT/REGION ##
         region_name: Optional[str] = None,
         ## VERTEX AI ##
@@ -192,6 +212,9 @@ class GenericLiteLLMParams(BaseModel):
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
         max_file_size_mb: Optional[float] = None,
+        # Deployment budgets
+        max_budget: Optional[float] = None,
+        budget_duration: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -302,6 +325,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: Optional[int]
     order: Optional[int]
     weight: Optional[int]
+    max_parallel_requests: Optional[int]
     api_key: Optional[str]
     api_base: Optional[str]
     api_version: Optional[str]
@@ -309,6 +333,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: Optional[Union[float, str]]
     max_retries: Optional[int]
     organization: Optional[Union[List, str]]  # for openai orgs
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
@@ -334,10 +359,15 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # use this for tag-based routing
     tags: Optional[List[str]]
 
+    # deployment budgets
+    max_budget: Optional[float]
+    budget_duration: Optional[str]
 
-class DeploymentTypedDict(TypedDict):
-    model_name: str
-    litellm_params: LiteLLMParamsTypedDict
+
+class DeploymentTypedDict(TypedDict, total=False):
+    model_name: Required[str]
+    litellm_params: Required[LiteLLMParamsTypedDict]
+    model_info: dict
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
@@ -414,6 +444,12 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+    no_deployments_with_tag_routing = (
+        "Not allowed to access model due to tags configuration"
+    )
+    no_deployments_with_provider_budget_routing = (
+        "No deployments available - crossed budget"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -474,7 +510,12 @@ class ModelGroupInfo(BaseModel):
     output_cost_per_token: Optional[float] = None
     mode: Optional[
         Literal[
-            "chat", "embedding", "completion", "image_generation", "audio_transcription"
+            "chat",
+            "embedding",
+            "completion",
+            "image_generation",
+            "audio_transcription",
+            "rerank",
         ]
     ] = Field(default="chat")
     tpm: Optional[int] = None
@@ -483,6 +524,7 @@ class ModelGroupInfo(BaseModel):
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
+    configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
 
 class AssistantsTypedDict(TypedDict):
@@ -587,3 +629,36 @@ class RouterRateLimitError(ValueError):
 class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+VALID_LITELLM_ENVIRONMENTS = [
+    "development",
+    "staging",
+    "production",
+]
+
+
+class RoutingStrategy(enum.Enum):
+    LEAST_BUSY = "least-busy"
+    LATENCY_BASED = "latency-based-routing"
+    COST_BASED = "cost-based-routing"
+    USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
+    USAGE_BASED_ROUTING = "usage-based-routing"
+    PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
+
+
+class RouterCacheEnum(enum.Enum):
+    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
+    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
+
+
+class GenericBudgetWindowDetails(BaseModel):
+    """Details about a provider's budget window"""
+
+    budget_start: float
+    spend_key: str
+    start_time_key: str
+    ttl_seconds: int
+
+
+OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]

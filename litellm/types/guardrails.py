@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -17,6 +17,15 @@ litellm_settings:
         callbacks: [hide_secrets]
         default_on: true
 """
+
+
+class SupportedGuardrailIntegrations(Enum):
+    APORIA = "aporia"
+    BEDROCK = "bedrock"
+    GURDRAILS_AI = "guardrails_ai"
+    LAKERA = "lakera"
+    PRESIDIO = "presidio"
+    HIDE_SECRETS = "hide-secrets"
 
 
 class Role(Enum):
@@ -89,10 +98,17 @@ class LitellmParams(TypedDict):
     presidio_ad_hoc_recognizers: Optional[str]
     mock_redacted_text: Optional[dict]
 
+    # hide secrets params
+    detect_secrets_config: Optional[dict]
 
-class Guardrail(TypedDict):
+    # guardrails ai params
+    guard_name: Optional[str]
+
+
+class Guardrail(TypedDict, total=False):
     guardrail_name: str
     litellm_params: LitellmParams
+    guardrail_info: Optional[Dict]
 
 
 class guardrailConfig(TypedDict):
@@ -117,3 +133,16 @@ class BedrockContentItem(TypedDict, total=False):
 class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
     content: List[BedrockContentItem]
+
+
+class DynamicGuardrailParams(TypedDict):
+    extra_body: Dict[str, Any]
+
+
+class GuardrailInfoResponse(BaseModel):
+    guardrail_name: Optional[str]
+    guardrail_info: Optional[Dict]  # This will contain all other fields
+
+
+class ListGuardrailsResponse(BaseModel):
+    guardrails: List[GuardrailInfoResponse]

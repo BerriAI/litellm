@@ -1,21 +1,8 @@
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import HTTPException, status
 
 import litellm
-from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -58,15 +45,16 @@ async def route_request(
         "atranscription",
         "amoderation",
         "arerank",
+        "_arealtime",  # private function for realtime API
     ],
 ):
     """
     Common helper to route the request
 
     """
-    router_model_names = llm_router.model_names if llm_router is not None else []
 
-    if "api_key" in data:
+    router_model_names = llm_router.model_names if llm_router is not None else []
+    if "api_key" in data or "api_base" in data:
         return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
@@ -85,7 +73,6 @@ async def route_request(
         else:
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
-
     elif llm_router is not None:
         if (
             data["model"] in router_model_names
@@ -109,8 +96,11 @@ async def route_request(
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
                 llm_router.default_deployment is not None
-                or len(llm_router.provider_default_deployments) > 0
+                or len(llm_router.pattern_router.patterns) > 0
             ):
+                return getattr(llm_router, f"{route_type}")(**data)
+            elif route_type == "amoderation":
+                # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
 
     elif user_model is not None:

@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Embedding Models
+# Embeddings
 
 ## Quick Start
 ```python
@@ -80,6 +80,60 @@ query_result = embeddings.embed_query(text)
 
 print(f"VERTEX AI EMBEDDINGS")
 print(query_result[:5])
+```
+</TabItem>
+</Tabs>
+
+
+## Image Embeddings
+
+For models that support image embeddings, you can pass in a base64 encoded image string to the `input` param.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import embedding
+import os
+
+# set your api key
+os.environ["COHERE_API_KEY"] = ""
+
+response = embedding(model="cohere/embed-english-v3.0", input=["<base64 encoded image>"])
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: cohere-embed
+    litellm_params:
+      model: cohere/embed-english-v3.0
+      api_key: os.environ/COHERE_API_KEY
+```
+
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml 
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
+-H 'Authorization: Bearer sk-54d77cd67b9febbb' \
+-H 'Content-Type: application/json' \
+-d '{
+  "model": "cohere/embed-english-v3.0",
+  "input": ["<base64 encoded image>"]
+}'
 ```
 </TabItem>
 </Tabs>
@@ -340,6 +394,32 @@ print(response)
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
 
+## Gemini AI Embedding Models
+
+### API keys
+
+This can be set as env variables or passed as **params to litellm.embedding()**
+```python
+import os
+os.environ["GEMINI_API_KEY"] = ""
+```
+
+### Usage - Embedding
+```python
+from litellm import embedding
+response = embedding(
+  model="gemini/text-embedding-004",
+  input=["good morning from litellm"],
+)
+print(response)
+```
+
+All models listed [here](https://ai.google.dev/gemini-api/docs/models/gemini) are supported:
+
+| Model Name         | Function Call                                         |
+| :---               | :---                                                  |
+| text-embedding-004 | `embedding(model="gemini/text-embedding-004", input)` |
+
 
 ## Vertex AI Embedding Models
 
@@ -357,7 +437,7 @@ response = embedding(
 print(response)
 ```
 
-## Supported Models
+### Supported Models
 All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
 
 | Model Name               | Function Call                                                                                                                                                      |

@@ -4,12 +4,25 @@ import json
 import pytest
 import sys
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch, ANY
 
+import os
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
-from litellm.exceptions import BadRequestError, InternalServerError
+from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
+from base_llm_unit_tests import BaseLLMChatTest
+
+try:
+    import databricks.sdk
+
+    databricks_sdk_installed = True
+except ImportError:
+    databricks_sdk_installed = False
 
 
 def mock_chat_response() -> Dict[str, Any]:
@@ -33,8 +46,9 @@ def mock_chat_response() -> Dict[str, Any]:
         "usage": {
             "prompt_tokens": 230,
             "completion_tokens": 38,
-            "total_tokens": 268,
             "completion_tokens_details": None,
+            "total_tokens": 268,
+            "prompt_tokens_details": None,
         },
         "system_fingerprint": None,
     }
@@ -190,12 +204,20 @@ def mock_embedding_response() -> Dict[str, Any]:
             "total_tokens": 8,
             "completion_tokens": 0,
             "completion_tokens_details": None,
+            "prompt_tokens_details": None,
         },
     }
 
 
 @pytest.mark.parametrize("set_base", [True, False])
-def test_throws_if_only_one_of_api_base_or_api_key_set(monkeypatch, set_base):
+def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
+    monkeypatch, set_base
+):
+    # Simulate that the databricks SDK is not installed
+    monkeypatch.setitem(sys.modules, "databricks.sdk", None)
+
+    err_msg = "the Databricks base URL and API key are not set"
+
     if set_base:
         monkeypatch.setenv(
             "DATABRICKS_API_BASE",
@@ -204,16 +226,16 @@ def test_throws_if_only_one_of_api_base_or_api_key_set(monkeypatch, set_base):
         monkeypatch.delenv(
             "DATABRICKS_API_KEY",
         )
-        err_msg = "A call is being made to LLM Provider but no key is set"
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
-        monkeypatch.delenv("DATABRICKS_API_BASE")
-        err_msg = "A call is being made to LLM Provider but no api base is set"
+        monkeypatch.delenv(
+            "DATABRICKS_API_BASE",
+        )
 
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(
             model="databricks/dbrx-instruct-071224",
-            messages={"role": "user", "content": "How are you?"},
+            messages=[{"role": "user", "content": "How are you?"}],
         )
     assert err_msg in str(exc)
 
@@ -256,7 +278,7 @@ def test_completions_with_sync_http_handler(monkeypatch):
         assert response.to_dict() == expected_response_json
 
         mock_post.assert_called_once_with(
-            f"{base_url}/chat/completions",
+            url=f"{base_url}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -313,6 +335,7 @@ def test_completions_with_async_http_handler(monkeypatch):
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
+            timeout=ANY,
             data=json.dumps(
                 {
                     "model": "dbrx-instruct-071224",
@@ -356,17 +379,21 @@ def test_completions_streaming_with_sync_http_handler(monkeypatch):
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            data=json.dumps(
-                {
-                    "model": "dbrx-instruct-071224",
-                    "messages": messages,
-                    "temperature": 0.5,
-                    "stream": True,
-                    "extraparam": "testpassingextraparam",
-                }
-            ),
+            data=ANY,
             stream=True,
         )
+
+        actual_data = json.loads(
+            mock_post.call_args.kwargs["data"]
+        )  # Deserialize the actual data
+        expected_data = {
+            "model": "dbrx-instruct-071224",
+            "messages": messages,
+            "temperature": 0.5,
+            "stream": True,
+            "extraparam": "testpassingextraparam",
+        }
+        assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
 
 
 def test_completions_streaming_with_async_http_handler(monkeypatch):
@@ -409,16 +436,83 @@ def test_completions_streaming_with_async_http_handler(monkeypatch):
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
+            data=ANY,
+            stream=True,
+        )
+
+        actual_data = json.loads(
+            mock_post.call_args.kwargs["data"]
+        )  # Deserialize the actual data
+        expected_data = {
+            "model": "dbrx-instruct-071224",
+            "messages": messages,
+            "temperature": 0.5,
+            "stream": True,
+            "extraparam": "testpassingextraparam",
+        }
+        assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
+
+
+@pytest.mark.skipif(not databricks_sdk_installed, reason="Databricks SDK not installed")
+def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_API_BASE")
+    monkeypatch.delenv("DATABRICKS_API_KEY")
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response()
+
+    expected_response_json = {
+        **mock_chat_response(),
+        **{
+            "model": "databricks/dbrx-instruct-071224",
+        },
+    }
+
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+    }
+    messages = [{"role": "user", "content": "How are you?"}]
+
+    mock_workspace_client: WorkspaceClient = MagicMock()
+    mock_config: Config = MagicMock()
+    # Simulate the behavior of the config property and its methods
+    mock_config.authenticate.side_effect = lambda: headers
+    mock_config.host = base_url  # Assign directly as if it's a property
+    mock_workspace_client.config = mock_config
+
+    with patch(
+        "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
+    ), patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/dbrx-instruct-071224",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+        )
+        assert response.to_dict() == expected_response_json
+
+        mock_post.assert_called_once_with(
+            f"{base_url}/serving-endpoints/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
             data=json.dumps(
                 {
                     "model": "dbrx-instruct-071224",
                     "messages": messages,
                     "temperature": 0.5,
-                    "stream": True,
                     "extraparam": "testpassingextraparam",
+                    "stream": False,
                 }
             ),
-            stream=True,
         )
 
 
@@ -500,3 +594,104 @@ def test_embeddings_with_async_http_handler(monkeypatch):
                 }
             ),
         )
+
+
+@pytest.mark.skipif(not databricks_sdk_installed, reason="Databricks SDK not installed")
+def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkeypatch):
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
+
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_embedding_response()
+
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+    }
+    inputs = ["Hello", "World"]
+
+    mock_workspace_client: WorkspaceClient = MagicMock()
+    mock_config: Config = MagicMock()
+    # Simulate the behavior of the config property and its methods
+    mock_config.authenticate.side_effect = lambda: headers
+    mock_config.host = base_url  # Assign directly as if it's a property
+    mock_workspace_client.config = mock_config
+
+    with patch(
+        "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
+    ), patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.embedding(
+            model="databricks/bge-large-en-v1.5",
+            input=inputs,
+            client=sync_handler,
+            extraparam="testpassingextraparam",
+        )
+        assert response.to_dict() == mock_embedding_response()
+
+        mock_post.assert_called_once_with(
+            f"{base_url}/serving-endpoints/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(
+                {
+                    "model": "bge-large-en-v1.5",
+                    "input": inputs,
+                    "extraparam": "testpassingextraparam",
+                }
+            ),
+        )
+
+
+class TestDatabricksCompletion(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {"model": "databricks/databricks-dbrx-instruct"}
+
+    def test_pdf_handling(self, pdf_messages):
+        pytest.skip("Databricks does not support PDF handling")
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pytest.skip("Databricks is openai compatible")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_databricks_embeddings(sync_mode):
+    import openai
+
+    try:
+        litellm.set_verbose = True
+        litellm.drop_params = True
+
+        if sync_mode:
+            response = litellm.embedding(
+                model="databricks/databricks-bge-large-en",
+                input=["good morning from litellm"],
+                instruction="Represent this sentence for searching relevant passages:",
+            )
+        else:
+            response = await litellm.aembedding(
+                model="databricks/databricks-bge-large-en",
+                input=["good morning from litellm"],
+                instruction="Represent this sentence for searching relevant passages:",
+            )
+
+        print(f"response: {response}")
+
+        openai.types.CreateEmbeddingResponse.model_validate(
+            response.model_dump(), strict=True
+        )
+        # stubbed endpoint is setup to return this
+        # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

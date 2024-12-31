@@ -26,6 +26,7 @@ import {
 } from "@tremor/react";
 
 import { message } from "antd";
+import { Modal } from "antd";
 
 import {
   userInfoCall,
@@ -43,6 +44,8 @@ import {
   TrashIcon,
 } from "@heroicons/react/outline";
 
+import { userDeleteCall } from "./networking";
+
 interface ViewUserDashboardProps {
   accessToken: string | null;
   token: string | null;
@@ -52,6 +55,15 @@ interface ViewUserDashboardProps {
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
 }
+
+interface UserListResponse {
+  users: any[] | null;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -67,17 +79,57 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   teams,
   setKeys,
 }) => {
+  const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
-  const [currentPage, setCurrentPage] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<string | null>(null);
   const [possibleUIRoles, setPossibleUIRoles] = useState<
     Record<string, Record<string, string>>
   >({});
   const defaultPageSize = 25;
+
+  // check if window is not undefined
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", function () {
+      // Clear session storage
+      sessionStorage.clear();
+    });
+  }
+
+  const handleDelete = (userId: string) => {
+    setUserToDelete(userId);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (userToDelete && accessToken) {
+      try {
+        await userDeleteCall(accessToken, [userToDelete]);
+        message.success("User deleted successfully");
+        // Update the user list after deletion
+        if (userData) {
+          const updatedUserData = userData.filter(user => user.user_id !== userToDelete);
+          setUserData(updatedUserData);
+        }
+      } catch (error) {
+        console.error("Error deleting user:", error);
+        message.error("Failed to delete user");
+      }
+    }
+    setIsDeleteModalOpen(false);
+    setUserToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
+    setUserToDelete(null);
+  };
 
   const handleEditCancel = async () => {
     setSelectedUser(null);
@@ -114,20 +166,42 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        // Replace with your actual API call for model data
-        const userDataResponse = await userInfoCall(
-          accessToken,
-          null,
-          userRole,
-          true,
-          currentPage,
-          defaultPageSize
-        );
-        console.log("user data response:", userDataResponse);
-        setUserData(userDataResponse);
+        // Check session storage first
+        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
+        if (cachedUserData) {
+          const parsedData = JSON.parse(cachedUserData);
+          setUserListResponse(parsedData);
+          setUserData(parsedData.users || []);
+        } else {
+          // Fetch from API if not in cache
+          const userDataResponse = await userInfoCall(
+            accessToken,
+            null,
+            userRole,
+            true,
+            currentPage,
+            defaultPageSize
+          );
 
-        const availableUserRoles = await getPossibleUserRoles(accessToken);
-        setPossibleUIRoles(availableUserRoles);
+          // Store in session storage
+          sessionStorage.setItem(
+            `userList_${currentPage}`,
+            JSON.stringify(userDataResponse)
+          );
+
+          setUserListResponse(userDataResponse);
+          setUserData(userDataResponse.users || []);
+        }
+
+        // Fetch roles if not cached
+        const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+        if (cachedRoles) {
+          setPossibleUIRoles(JSON.parse(cachedRoles));
+        } else {
+          const availableUserRoles = await getPossibleUserRoles(accessToken);
+          sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+          setPossibleUIRoles(availableUserRoles);
+        }
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -136,6 +210,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     if (accessToken && token && userRole && userID) {
       fetchData();
     }
+
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
@@ -149,27 +224,31 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   function renderPagination() {
     if (!userData) return null;
 
-    const totalPages = Math.ceil(userData.length / defaultPageSize);
+    const totalPages = userListResponse?.total_pages || 0;
+
+    const handlePageChange = (newPage: number) => {
+      setUserData([]); // Clear current users
+      setCurrentPage(newPage);
+    };
+  
 
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing Page {currentPage + 1} of {totalPages}
+          Showing Page {currentPage } of {totalPages}
         </div>
         <div className="flex">
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 0}
-            onClick={() => setCurrentPage(currentPage - 1)}
+            disabled={currentPage === 1}
+            onClick={() => handlePageChange(currentPage - 1)}
           >
             &larr; Prev
           </button>
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            // disabled={currentPage === totalPages}
-            onClick={() => {
-              setCurrentPage(currentPage + 1);
-            }}
+            disabled={currentPage === totalPages}
+            onClick={() => handlePageChange(currentPage + 1)}
           >
             Next &rarr;
           </button>
@@ -216,27 +295,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>
                         <TableCell>
-                          {user.max_budget ? user.max_budget : "Unlimited"}
+                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
                         </TableCell>
                         <TableCell>
                           <Grid numItems={2}>
-                            {user && user.key_aliases ? (
-                              user.key_aliases.filter(
-                                (key: any) => key !== null
-                              ).length > 0 ? (
-                                <Badge size={"xs"} color={"indigo"}>
-                                  {
-                                    user.key_aliases.filter(
-                                      (key: any) => key !== null
-                                    ).length
-                                  }
-                                  &nbsp;Keys
-                                </Badge>
-                              ) : (
-                                <Badge size={"xs"} color={"gray"}>
-                                  No Keys
-                                </Badge>
-                              )
+                            {user.key_count > 0 ? (
+                              <Badge size={"xs"} color={"indigo"}>
+                                {user.key_count} Keys
+                              </Badge>
                             ) : (
                               <Badge size={"xs"} color={"gray"}>
                                 No Keys
@@ -255,11 +321,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                           >
                             View Keys
                           </Icon>
-                          {/* 
-                        <Icon icon={TrashIcon} onClick= {() => {
-                          setOpenDialogId(user.user_id)
-                          setSelectedItem(user)
-                        }}>View Keys</Icon> */}
+                          <Icon
+                            icon={TrashIcon}
+                            onClick={() => handleDelete(user.user_id)}
+                          >
+                            Delete
+                          </Icon>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -271,25 +338,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <div className="flex-1"></div>
                   <div className="flex-1 flex justify-between items-center"></div>
                 </div>
-                {/* <Table className="max-h-[70vh] min-h-[500px]">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>End User</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell>Total Events</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {endUsers?.map((user: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>{user.end_user}</TableCell>
-                        <TableCell>{user.total_spend}</TableCell>
-                        <TableCell>{user.total_events}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table> */}
               </TabPanel>
             </TabPanels>
           </TabGroup>
@@ -300,6 +348,53 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             user={selectedUser}
             onSubmit={handleEditSubmit}
           />
+          {isDeleteModalOpen && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 transition-opacity"
+              aria-hidden="true"
+            >
+              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+
+            {/* Modal Panel */}
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
+
+            {/* Confirmation Modal Content */}
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="sm:flex sm:items-start">
+                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      Delete User
+                    </h3>
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-500">
+                        Are you sure you want to delete this user?
+                      </p>
+                      <p className="text-sm font-medium text-gray-900 mt-2">
+                        User ID: {userToDelete}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <Button onClick={confirmDelete} color="red" className="ml-2">
+                  Delete
+                </Button>
+                <Button onClick={cancelDelete}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
         </Card>
         {renderPagination()}
       </Grid>

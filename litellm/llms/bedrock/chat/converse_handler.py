@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper, get_secret
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
@@ -27,6 +27,8 @@ def make_sync_call(
     model: str,
     messages: list,
     logging_obj,
+    json_mode: Optional[bool] = False,
+    fake_stream: bool = False,
 ):
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
@@ -35,13 +37,13 @@ def make_sync_call(
         api_base,
         headers=headers,
         data=data,
-        stream=True if "ai21" not in api_base else False,
+        stream=not fake_stream,
     )
 
     if response.status_code != 200:
         raise BedrockError(status_code=response.status_code, message=response.read())
 
-    if "ai21" in api_base:
+    if fake_stream:
         model_response: (
             ModelResponse
         ) = litellm.AmazonConverseConfig()._transform_response(
@@ -57,7 +59,9 @@ def make_sync_call(
             print_verbose=litellm.print_verbose,
             encoding=litellm.encoding,
         )  # type: ignore
-        completion_stream: Any = MockResponseIterator(model_response=model_response)
+        completion_stream: Any = MockResponseIterator(
+            model_response=model_response, json_mode=json_mode
+        )
     else:
         decoder = AWSEventStreamDecoder(model=model)
         completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
@@ -104,6 +108,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
+        fake_stream: bool = False,
+        json_mode: Optional[bool] = False,
     ) -> CustomStreamWrapper:
 
         completion_stream = await make_call(
@@ -114,6 +120,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             model=model,
             messages=messages,
             logging_obj=logging_obj,
+            fake_stream=fake_stream,
+            json_mode=json_mode,
         )
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -159,7 +167,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return litellm.AmazonConverseConfig()._transform_response(
@@ -176,7 +184,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
-    def completion(
+    def completion(  # noqa: PLR0915
         self,
         model: str,
         messages: list,
@@ -195,7 +203,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
@@ -205,12 +212,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
         modelId = optional_params.pop("model_id", None)
+        fake_stream = optional_params.pop("fake_stream", False)
+        json_mode = optional_params.get("json_mode", False)
         if modelId is not None:
             modelId = self.encode_model_id(model_id=modelId)
         else:
             modelId = model
 
-        provider = model.split(".")[0]
+        if stream is True and "ai21" in modelId:
+            fake_stream = True
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
@@ -264,7 +274,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        if (stream is not None and stream is True) and provider != "ai21":
+        if (stream is not None and stream is True) and not fake_stream:
             endpoint_url = f"{endpoint_url}/model/{modelId}/converse-stream"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse-stream"
         else:
@@ -329,6 +339,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                     headers=prepped.headers,
                     timeout=timeout,
                     client=client,
+                    json_mode=json_mode,
+                    fake_stream=fake_stream,
                 )  # type: ignore
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -372,6 +384,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                json_mode=json_mode,
+                fake_stream=fake_stream,
             )
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,

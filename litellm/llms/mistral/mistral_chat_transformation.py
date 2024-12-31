@@ -6,11 +6,18 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-import types
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union
+
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    handle_messages_with_content_list_to_str_conversion,
+    strip_none_values_from_message,
+)
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 
 
-class MistralConfig:
+class MistralConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.mistral.ai/api/
 
@@ -64,23 +71,9 @@ class MistralConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
-    def get_supported_openai_params(self):
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return [
             "stream",
             "temperature",
@@ -101,7 +94,13 @@ class MistralConfig:
         else:  # openai 'tool_choice' object param not supported by Mistral API
             return "any"
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -124,3 +123,70 @@ class MistralConfig:
             if param == "response_format":
                 optional_params["response_format"] = value
         return optional_params
+
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
+        api_base = (
+            api_base
+            or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
+            or "https://api.mistral.ai/v1"
+        )  # type: ignore
+
+        # if api_base does not end with /v1 we add it
+        if api_base is not None and not api_base.endswith(
+            "/v1"
+        ):  # Mistral always needs a /v1 at the end
+            api_base = api_base + "/v1"
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
+            or get_secret_str("MISTRAL_API_KEY")
+        )
+        return api_base, dynamic_api_key
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str
+    ) -> List[AllMessageValues]:
+        """
+        - handles scenario where content is list and not string
+        - content list is just text, and no images
+        - if image passed in, then just return as is (user-intended)
+        - if `name` is passed, then drop it for mistral API: https://github.com/BerriAI/litellm/issues/6696
+
+        Motivation: mistral api doesn't support content as a list
+        """
+        ## 1. If 'image_url' in content, then return as is
+        for m in messages:
+            _content_block = m.get("content")
+            if _content_block and isinstance(_content_block, list):
+                for c in _content_block:
+                    if c.get("type") == "image_url":
+                        return messages
+
+        ## 2. If content is list, then convert to string
+        messages = handle_messages_with_content_list_to_str_conversion(messages)
+
+        ## 3. Handle name in message
+        new_messages: List[AllMessageValues] = []
+        for m in messages:
+            m = MistralConfig._handle_name_in_message(m)
+            m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
+            new_messages.append(m)
+
+        return new_messages
+
+    @classmethod
+    def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
+        """
+        Mistral API only supports `name` in tool messages
+
+        If role == tool, then we keep `name`
+        Otherwise, we drop `name`
+        """
+        _name = message.get("name")  # type: ignore
+        if _name is not None and message["role"] != "tool":
+            message.pop("name", None)  # type: ignore
+
+        return message

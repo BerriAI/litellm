@@ -2,15 +2,10 @@
 ## Log success + failure events to Braintrust
 
 import copy
-import json
 import os
-import threading
-import traceback
-import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 
-import dotenv
 import httpx
 from pydantic import BaseModel
 
@@ -18,12 +13,11 @@ import litellm
 from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.utils import get_formatted_prompt
+from litellm.utils import print_verbose
 
 global_braintrust_http_handler = get_async_httpx_client(
     llm_provider=httpxSpecialProvider.LoggingCallback
@@ -125,7 +119,9 @@ class BraintrustLogger(CustomLogger):
 
         self.default_project_id = project_dict["id"]
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")
@@ -136,27 +132,23 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             prompt = {"messages": kwargs.get("messages")}
-
+            output = None
             if response_obj is not None and (
                 kwargs.get("call_type", None) == "embedding"
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
-                input = prompt
                 output = None
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                input = prompt
                 output = response_obj.choices[0].text
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
-                input = prompt
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
@@ -169,7 +161,7 @@ class BraintrustLogger(CustomLogger):
                 metadata = copy.deepcopy(
                     metadata
                 )  # Avoid modifying the original metadata
-            except:
+            except Exception:
                 new_metadata = {}
                 for key, value in metadata.items():
                     if (
@@ -210,16 +202,13 @@ class BraintrustLogger(CustomLogger):
                 clean_metadata["litellm_response_cost"] = cost
 
             metrics: Optional[dict] = None
-            if (
-                response_obj is not None
-                and hasattr(response_obj, "usage")
-                and isinstance(response_obj.usage, litellm.Usage)
-            ):
-                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+            usage_obj = getattr(response_obj, "usage", None)
+            if usage_obj and isinstance(usage_obj, litellm.Usage):
+                litellm.utils.get_logging_id(start_time, response_obj)
                 metrics = {
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                    "total_tokens": response_obj.usage.total_tokens,
+                    "prompt_tokens": usage_obj.prompt_tokens,
+                    "completion_tokens": usage_obj.completion_tokens,
+                    "total_tokens": usage_obj.total_tokens,
                     "total_cost": cost,
                 }
 
@@ -234,6 +223,9 @@ class BraintrustLogger(CustomLogger):
                 request_data["metrics"] = metrics
 
             try:
+                print_verbose(
+                    f"global_braintrust_sync_http_handler.post: {global_braintrust_sync_http_handler.post}"
+                )
                 global_braintrust_sync_http_handler.post(
                     url=f"{self.api_base}/project_logs/{project_id}/insert",
                     json={"events": [request_data]},
@@ -244,7 +236,9 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(  # noqa: PLR0915
+        self, kwargs, response_obj, start_time, end_time
+    ):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")
@@ -255,27 +249,23 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             prompt = {"messages": kwargs.get("messages")}
-
+            output = None
             if response_obj is not None and (
                 kwargs.get("call_type", None) == "embedding"
                 or isinstance(response_obj, litellm.EmbeddingResponse)
             ):
-                input = prompt
                 output = None
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ModelResponse
             ):
-                input = prompt
                 output = response_obj["choices"][0]["message"].json()
             elif response_obj is not None and isinstance(
                 response_obj, litellm.TextCompletionResponse
             ):
-                input = prompt
                 output = response_obj.choices[0].text
             elif response_obj is not None and isinstance(
                 response_obj, litellm.ImageResponse
             ):
-                input = prompt
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
@@ -331,16 +321,13 @@ class BraintrustLogger(CustomLogger):
                 clean_metadata["litellm_response_cost"] = cost
 
             metrics: Optional[dict] = None
-            if (
-                response_obj is not None
-                and hasattr(response_obj, "usage")
-                and isinstance(response_obj.usage, litellm.Usage)
-            ):
-                generation_id = litellm.utils.get_logging_id(start_time, response_obj)
+            usage_obj = getattr(response_obj, "usage", None)
+            if usage_obj and isinstance(usage_obj, litellm.Usage):
+                litellm.utils.get_logging_id(start_time, response_obj)
                 metrics = {
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                    "total_tokens": response_obj.usage.total_tokens,
+                    "prompt_tokens": usage_obj.prompt_tokens,
+                    "completion_tokens": usage_obj.completion_tokens,
+                    "total_tokens": usage_obj.total_tokens,
                     "total_cost": cost,
                 }
 

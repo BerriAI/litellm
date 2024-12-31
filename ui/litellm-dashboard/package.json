@@ -18,13 +18,13 @@
     "fs": "^0.0.1-security",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
-    "next": "14.1.1",
+    "next": "^14.2.15",
     "openai": "^4.28.0",
     "react": "^18",
     "react-copy-to-clipboard": "^5.1.0",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
-    "react-syntax-highlighter": "^15.5.0"
+    "react-syntax-highlighter": "^15.6.1"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.7",

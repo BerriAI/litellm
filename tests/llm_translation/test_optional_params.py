@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.llms.prompt_templates.factory import map_system_message_pt
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
@@ -73,6 +73,72 @@ def test_bedrock_optional_params_embeddings():
         model="", user="John", encoding_format=None, custom_llm_provider="bedrock"
     )
     assert len(optional_params) == 0
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-3-haiku-20240307-v1:0",
+        "us.meta.llama3-2-11b-instruct-v1:0",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+    ],
+)
+def test_bedrock_optional_params_completions(model):
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "structure_output",
+                "description": "Send structured output back to the user",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {"type": "string"},
+                        "sentiment": {"type": "string"},
+                    },
+                    "required": ["reasoning", "sentiment"],
+                    "additionalProperties": False,
+                },
+                "additionalProperties": False,
+            },
+        }
+    ]
+    optional_params = get_optional_params(
+        model=model,
+        max_tokens=10,
+        temperature=0.1,
+        tools=tools,
+        custom_llm_provider="bedrock",
+    )
+    print(f"optional_params: {optional_params}")
+    assert len(optional_params) == 4
+    assert optional_params == {
+        "maxTokens": 10,
+        "stream": False,
+        "temperature": 0.1,
+        "tools": tools,
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/amazon.titan-large",
+        "bedrock/meta.llama3-2-11b-instruct-v1:0",
+        "bedrock/ai21.j2-ultra-v1",
+        "bedrock/cohere.command-nightly",
+        "bedrock/mistral.mistral-7b",
+    ],
+)
+def test_bedrock_optional_params_simple(model):
+    litellm.drop_params = True
+    get_optional_params(
+        model=model,
+        max_tokens=10,
+        temperature=0.1,
+        custom_llm_provider="bedrock",
+    )
 
 
 @pytest.mark.parametrize(
@@ -144,9 +210,10 @@ def test_databricks_optional_params():
         custom_llm_provider="databricks",
         max_tokens=10,
         temperature=0.2,
+        stream=True,
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 2
+    assert len(optional_params) == 3
     assert "user" not in optional_params
 
 
@@ -365,7 +432,9 @@ def test_dynamic_drop_params(drop_params):
 
 
 def test_dynamic_drop_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -411,7 +480,9 @@ def test_dynamic_drop_params_parallel_tool_calls():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -451,8 +522,24 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
+def test_dynamic_drop_additional_params_stream_options():
+    """
+    Make a call to vertex ai, dropping 'stream_options' specifically
+    """
+    optional_params = litellm.utils.get_optional_params(
+        model="mistral-large-2411@001",
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+        additional_drop_params=["stream_options"],
+    )
+
+    assert "stream_options" not in optional_params
+
+
 def test_dynamic_drop_additional_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -600,3 +687,335 @@ def test_o1_model_params():
     )
     assert optional_params["seed"] == 10
     assert optional_params["user"] == "John"
+
+
+def test_azure_o1_model_params():
+    optional_params = get_optional_params(
+        model="o1-preview",
+        custom_llm_provider="azure",
+        seed=10,
+        user="John",
+    )
+    assert optional_params["seed"] == 10
+    assert optional_params["user"] == "John"
+
+
+@pytest.mark.parametrize(
+    "temperature, expected_error",
+    [(0.2, True), (1, False), (0, True)],
+)
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_o1_model_temperature_params(provider, temperature, expected_error):
+    if expected_error:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="o1-preview",
+                custom_llm_provider=provider,
+                temperature=temperature,
+            )
+    else:
+        get_optional_params(
+            model="o1-preview-2024-09-12",
+            custom_llm_provider="openai",
+            temperature=temperature,
+        )
+
+
+def test_unmapped_gemini_model_params():
+    """
+    Test if unmapped gemini model optional params are translated correctly
+    """
+    optional_params = get_optional_params(
+        model="gemini-new-model",
+        custom_llm_provider="vertex_ai",
+        stop="stop_word",
+    )
+    assert optional_params["stop_sequences"] == ["stop_word"]
+
+
+def _check_additional_properties(schema):
+    if isinstance(schema, dict):
+        # Remove the 'additionalProperties' key if it exists and is set to False
+        if "additionalProperties" in schema or "strict" in schema:
+            raise ValueError(
+                "additionalProperties and strict should not be in the schema"
+            )
+
+        # Recursively process all dictionary values
+        for key, value in schema.items():
+            _check_additional_properties(value)
+
+    elif isinstance(schema, list):
+        # Recursively process all items in the list
+        for item in schema:
+            _check_additional_properties(item)
+
+    return schema
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [
+        ("hosted_vllm", "my-vllm-model"),
+        ("gemini", "gemini-1.5-pro"),
+        ("vertex_ai", "gemini-1.5-pro"),
+    ],
+)
+def test_drop_nested_params_add_prop_and_strict(provider, model):
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/5288
+
+    Relevant issue - https://github.com/BerriAI/litellm/issues/6136
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "structure_output",
+                "description": "Send structured output back to the user",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {"type": "string"},
+                        "sentiment": {"type": "string"},
+                    },
+                    "required": ["reasoning", "sentiment"],
+                    "additionalProperties": False,
+                },
+                "additionalProperties": False,
+            },
+        }
+    ]
+    tool_choice = {"type": "function", "function": {"name": "structure_output"}}
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        temperature=0.2,
+        tools=tools,
+        tool_choice=tool_choice,
+        additional_drop_params=[
+            ["tools", "function", "strict"],
+            ["tools", "function", "additionalProperties"],
+        ],
+    )
+
+    _check_additional_properties(optional_params["tools"])
+
+
+def test_hosted_vllm_tool_param():
+    """
+    Relevant issue - https://github.com/BerriAI/litellm/issues/6228
+    """
+    optional_params = get_optional_params(
+        model="my-vllm-model",
+        custom_llm_provider="hosted_vllm",
+        temperature=0.2,
+        tools=None,
+        tool_choice=None,
+    )
+    assert "tools" not in optional_params
+    assert "tool_choice" not in optional_params
+
+
+def test_unmapped_vertex_anthropic_model():
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider="vertex_ai",
+        max_retries=10,
+    )
+    assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+def test_anthropic_parallel_tool_calls(provider):
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider=provider,
+        parallel_tool_calls=True,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tool_choice"]["disable_parallel_tool_use"] is False
+
+
+def test_anthropic_computer_tool_use():
+    tools = [
+        {
+            "type": "computer_20241022",
+            "function": {
+                "name": "computer",
+                "parameters": {
+                    "display_height_px": 100,
+                    "display_width_px": 100,
+                    "display_number": 1,
+                },
+            },
+        }
+    ]
+
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider="anthropic",
+        tools=tools,
+    )
+    assert optional_params["tools"][0]["type"] == "computer_20241022"
+    assert optional_params["tools"][0]["display_height_px"] == 100
+    assert optional_params["tools"][0]["display_width_px"] == 100
+    assert optional_params["tools"][0]["display_number"] == 1
+
+
+def test_vertex_schema_field():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "json",
+                "description": "Respond with a JSON object.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thinking": {
+                            "type": "string",
+                            "description": "Your internal thoughts on different problem details given the guidance.",
+                        },
+                        "problems": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "icon": {
+                                        "type": "string",
+                                        "enum": [
+                                            "BarChart2",
+                                            "Bell",
+                                        ],
+                                        "description": "The name of a Lucide icon to display",
+                                    },
+                                    "color": {
+                                        "type": "string",
+                                        "description": "A Tailwind color class for the icon, e.g., 'text-red-500'",
+                                    },
+                                    "problem": {
+                                        "type": "string",
+                                        "description": "The title of the problem being addressed, approximately 3-5 words.",
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": "A brief explanation of the problem, approximately 20 words.",
+                                    },
+                                    "impacts": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "A list of potential impacts or consequences of the problem, approximately 3 words each.",
+                                    },
+                                    "automations": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "A list of potential automations to address the problem, approximately 3-5 words each.",
+                                    },
+                                },
+                                "required": [
+                                    "icon",
+                                    "color",
+                                    "problem",
+                                    "description",
+                                    "impacts",
+                                    "automations",
+                                ],
+                                "additionalProperties": False,
+                            },
+                            "description": "Please generate problem cards that match this guidance.",
+                        },
+                    },
+                    "required": ["thinking", "problems"],
+                    "additionalProperties": False,
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                },
+            },
+        }
+    ]
+
+    optional_params = get_optional_params(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        tools=tools,
+    )
+    print(optional_params)
+    print(optional_params["tools"][0]["function_declarations"][0])
+    assert (
+        "$schema"
+        not in optional_params["tools"][0]["function_declarations"][0]["parameters"]
+    )
+
+
+def test_watsonx_tool_choice():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
+    )
+    print(optional_params)
+    assert optional_params["tool_choice_options"] == "auto"
+
+
+def test_watsonx_text_top_k():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider="watsonx_text", top_k=10
+    )
+    print(optional_params)
+    assert optional_params["top_k"] == 10
+
+
+def test_together_ai_model_params():
+    optional_params = get_optional_params(
+        model="together_ai", custom_llm_provider="together_ai", logprobs=1
+    )
+    print(optional_params)
+    assert optional_params["logprobs"] == 1
+
+
+def test_forward_user_param():
+    from litellm.utils import get_supported_openai_params, get_optional_params
+
+    model = "claude-3-5-sonnet-20240620"
+    optional_params = get_optional_params(
+        model=model,
+        user="test_user",
+        custom_llm_provider="anthropic",
+    )
+
+    assert optional_params["metadata"]["user_id"] == "test_user"
+
+
+def test_lm_studio_embedding_params():
+    optional_params = get_optional_params_embeddings(
+        model="lm_studio/gemma2-9b-it",
+        custom_llm_provider="lm_studio",
+        dimensions=1024,
+        drop_params=True,
+    )
+    assert len(optional_params) == 0
+
+
+def test_ollama_pydantic_obj():
+    from pydantic import BaseModel
+
+    class ResponseFormat(BaseModel):
+        x: str
+        y: str
+
+    get_optional_params(
+        model="qwen2:0.5b",
+        custom_llm_provider="ollama",
+        response_format=ResponseFormat,
+    )
+
+
+def test_gemini_frequency_penalty():
+    from litellm.utils import get_supported_openai_params
+
+    optional_params = get_supported_openai_params(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        request_type="chat_completion",
+    )
+    assert optional_params is not None
+    assert "frequency_penalty" in optional_params

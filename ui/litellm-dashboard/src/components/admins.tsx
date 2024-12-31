@@ -215,10 +215,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     const fetchProxyAdminInfo = async () => {
       if (accessToken != null) {
         const combinedList: any[] = [];
-        const proxyViewers = await userGetAllUsersCall(
+        const response = await userGetAllUsersCall(
           accessToken,
           "proxy_admin_viewer"
         );
+        console.log("proxy admin viewer response: ", response);
+        const proxyViewers: User[] = response["users"];
+        console.log(`proxy viewers response: ${proxyViewers}`);
         proxyViewers.forEach((viewer: User) => {
           combinedList.push({
             user_role: viewer.user_role,
@@ -229,10 +232,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
         console.log(`proxy viewers: ${proxyViewers}`);
 
-        const proxyAdmins = await userGetAllUsersCall(
+        const response2 = await userGetAllUsersCall(
           accessToken,
           "proxy_admin"
         );
+
+        const proxyAdmins: User[] = response2["users"];
 
         proxyAdmins.forEach((admins: User) => {
           combinedList.push({
@@ -309,13 +314,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               className="px-3 py-2 border rounded-md w-full"
             />
           </Form.Item>
-          {/* <div className="text-center mb-4">OR</div>
-          <Form.Item label="User ID" name="user_id" className="mb-4">
-            <Input
-              name="user_id"
-              className="px-3 py-2 border rounded-md w-full"
-            />
-          </Form.Item> */}
         </>
         <div style={{ textAlign: "right", marginTop: "10px" }} className="mt-4">
           <Button2 htmlType="submit">Add member</Button2>

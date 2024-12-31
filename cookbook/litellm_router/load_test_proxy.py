@@ -1,14 +1,12 @@
-import sys, os
-import traceback
+import sys
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
 
 from litellm import Router
 import litellm
@@ -137,7 +135,7 @@ for future in futures:
     else:
         failed_calls += 1
 
-print(f"Load test Summary:")
+print("Load test Summary:")
 print(f"Total Requests: {concurrent_calls}")
 print(f"Successful Calls: {successful_calls}")
 print(f"Failed Calls: {failed_calls}")

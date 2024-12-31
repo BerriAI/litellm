@@ -48,7 +48,7 @@ litellm --health
 
 ### Embedding Models 
 
-We need some way to know if the model is an embedding model when running checks, if you have this in your config, specifying mode it makes an embedding health check
+To run embedding health checks, specify the mode as "embedding" in your config for the relevant model.
 
 ```yaml
 model_list:
@@ -64,7 +64,7 @@ model_list:
 
 ### Image Generation Models 
 
-We need some way to know if the model is an image generation model when running checks, if you have this in your config, specifying mode it makes an image generation health check
+To run image generation health checks, specify the mode as "image_generation" in your config for the relevant model.
 
 ```yaml
 model_list:
@@ -81,7 +81,8 @@ model_list:
 
 ### Text Completion Models 
 
-We need some way to know if the model is a text completion model when running checks, if you have this in your config, specifying mode it makes an embedding health check
+
+To run `/completions` health checks, specify the mode as "completion" in your config for the relevant model.
 
 ```yaml
 model_list:
@@ -120,6 +121,20 @@ model_list:
       mode: audio_speech
 ```
 
+### Rerank Models 
+
+To run rerank health checks, specify the mode as "rerank" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: rerank-english-v3.0
+    litellm_params:
+      model: cohere/rerank-english-v3.0
+      api_key: os.environ/COHERE_API_KEY
+    model_info:
+      mode: rerank
+```
+
 ### Batch Models (Azure Only)
 
 For Azure models deployed as 'batch' models, set `mode: batch`. 
@@ -151,6 +166,20 @@ Expected Response
     "healthy_count": 1,
     "unhealthy_count": 0
 }
+```
+
+### Realtime Models 
+
+To run realtime health checks, specify the mode as "realtime" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o-realtime-audio
+    litellm_params:
+      model: openai/gpt-4o-realtime-audio
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
 ```
 
 ## Background Health Checks 

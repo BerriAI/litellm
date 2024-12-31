@@ -3,3 +3,9 @@ cookbook
 .circleci
 .github
 tests
+.git
+.github
+.circleci
+.devcontainer
+*.tgz
+log.txt

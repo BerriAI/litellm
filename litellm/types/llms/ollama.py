@@ -1,5 +1,5 @@
 import json
-from typing import Any, Optional, TypedDict, Union
+from typing import Any, List, Optional, TypedDict, Union
 
 from pydantic import BaseModel
 from typing_extensions import (
@@ -22,3 +22,8 @@ class OllamaToolCallFunction(
 
 class OllamaToolCall(TypedDict):
     function: OllamaToolCallFunction
+
+
+class OllamaVisionModelObject(TypedDict):
+    prompt: str
+    images: List[str]

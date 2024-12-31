@@ -3,8 +3,10 @@
 import base64
 import json
 import os
-import traceback
 from datetime import datetime
+from typing import Optional
+
+import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -21,14 +23,13 @@ class LicenseCheck:
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
         verbose_proxy_logger.debug("License Str value - {}".format(self.license_str))
-        self.http_handler = HTTPHandler()
+        self.http_handler = HTTPHandler(timeout=15)
         self.public_key = None
         self.read_public_key()
 
     def read_public_key(self):
         try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import padding, rsa
+            from cryptography.hazmat.primitives import serialization
 
             # current dir
             current_dir = os.path.dirname(os.path.realpath(__file__))
@@ -44,23 +45,46 @@ class LicenseCheck:
             verbose_proxy_logger.error(f"Error reading public key: {str(e)}")
 
     def _verify(self, license_str: str) -> bool:
+
+        verbose_proxy_logger.debug(
+            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against {}/verify_license - {}".format(
+                self.base_url, license_str
+            )
+        )
         url = "{}/verify_license/{}".format(self.base_url, license_str)
 
+        response: Optional[httpx.Response] = None
         try:  # don't impact user, if call fails
-            response = self.http_handler.get(url=url)
+            num_retries = 3
+            for i in range(num_retries):
+                try:
+                    response = self.http_handler.get(url=url)
+                    if response is None:
+                        raise Exception("No response from license server")
+                    response.raise_for_status()
+                except httpx.HTTPStatusError:
+                    if i == num_retries - 1:
+                        raise
 
-            response.raise_for_status()
+            if response is None:
+                raise Exception("No response from license server")
 
             response_json = response.json()
 
             premium = response_json["verify"]
 
             assert isinstance(premium, bool)
+
+            verbose_proxy_logger.debug(
+                "litellm.proxy.auth.litellm_license.py::_verify - License={} is premium={}".format(
+                    license_str, premium
+                )
+            )
             return premium
         except Exception as e:
-            verbose_proxy_logger.error(
-                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License via api. - {}".format(
-                    str(e)
+            verbose_proxy_logger.exception(
+                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License={} via api. - {}".format(
+                    license_str, str(e)
                 )
             )
             return False
@@ -72,7 +96,7 @@ class LicenseCheck:
         """
         try:
             verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - {}".format(
+                "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={}".format(
                     self.license_str
                 )
             )
@@ -98,13 +122,13 @@ class LicenseCheck:
             elif self._verify(license_str=self.license_str) is True:
                 return True
             return False
-        except Exception as e:
+        except Exception:
             return False
 
     def verify_license_without_api_request(self, public_key, license_key):
         try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import padding, rsa
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
 
             # Decode the license key
             decoded = base64.b64decode(license_key)
