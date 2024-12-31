@@ -172,6 +172,7 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
     litellm_deployment_successful_fallbacks = [
