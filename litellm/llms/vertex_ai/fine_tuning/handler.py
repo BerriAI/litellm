@@ -44,6 +44,44 @@ class VertexFineTuningAPI(VertexLLM):
         except Exception:
             return 0
 
+    def convert_openai_request_to_vertex(
+        self, create_fine_tuning_job_data: FineTuningJobCreate, **kwargs
+    ) -> FineTuneJobCreate:
+        """
+        convert request from OpenAI format to Vertex format
+        https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
+        supervised_tuning_spec = FineTunesupervisedTuningSpec(
+        """
+
+        supervised_tuning_spec = FineTunesupervisedTuningSpec(
+            training_dataset_uri=create_fine_tuning_job_data.training_file,
+        )
+
+        if create_fine_tuning_job_data.validation_file:
+            supervised_tuning_spec["validation_dataset"] = (
+                create_fine_tuning_job_data.validation_file
+            )
+
+        if kwargs.get("adapter_size"):
+            supervised_tuning_spec["adapter_size"] = kwargs.get("adapter_size")
+
+        hyperparameters = create_fine_tuning_job_data.hyperparameters
+        if hyperparameters:
+            if hyperparameters.n_epochs:
+                supervised_tuning_spec["epoch_count"] = int(hyperparameters.n_epochs)
+            if hyperparameters.learning_rate_multiplier:
+                supervised_tuning_spec["learning_rate_multiplier"] = float(
+                    hyperparameters.learning_rate_multiplier
+                )
+
+        fine_tune_job = FineTuneJobCreate(
+            baseModel=create_fine_tuning_job_data.model,
+            supervisedTuningSpec=supervised_tuning_spec,
+            tunedModelDisplayName=create_fine_tuning_job_data.suffix,
+        )
+
+        return fine_tune_job
+
     def convert_vertex_response_to_open_ai_response(
         self, response: ResponseTuningJob
     ) -> FineTuningJob:
@@ -87,44 +125,6 @@ class VertexFineTuningAPI(VertexLLM):
             estimated_finish=None,
             integrations=[],
         )
-
-    def convert_openai_request_to_vertex(
-        self, create_fine_tuning_job_data: FineTuningJobCreate, **kwargs
-    ) -> FineTuneJobCreate:
-        """
-        convert request from OpenAI format to Vertex format
-        https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
-        supervised_tuning_spec = FineTunesupervisedTuningSpec(
-        """
-
-        supervised_tuning_spec = FineTunesupervisedTuningSpec(
-            training_dataset_uri=create_fine_tuning_job_data.training_file,
-        )
-
-        if create_fine_tuning_job_data.validation_file:
-            supervised_tuning_spec["validation_dataset"] = (
-                create_fine_tuning_job_data.validation_file
-            )
-
-        if kwargs.get("adapter_size"):
-            supervised_tuning_spec["adapter_size"] = kwargs.get("adapter_size")
-
-        hyperparameters = create_fine_tuning_job_data.hyperparameters
-        if hyperparameters:
-            if hyperparameters.n_epochs:
-                supervised_tuning_spec["epoch_count"] = int(hyperparameters.n_epochs)
-            if hyperparameters.learning_rate_multiplier:
-                supervised_tuning_spec["learning_rate_multiplier"] = float(
-                    hyperparameters.learning_rate_multiplier
-                )
-
-        fine_tune_job = FineTuneJobCreate(
-            baseModel=create_fine_tuning_job_data.model,
-            supervisedTuningSpec=supervised_tuning_spec,
-            tunedModelDisplayName=create_fine_tuning_job_data.suffix,
-        )
-
-        return fine_tune_job
 
     async def acreate_fine_tuning_job(
         self,
