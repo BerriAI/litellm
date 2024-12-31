@@ -14,7 +14,11 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+from litellm.integrations.prometheus import (
+    PrometheusLogger,
+    UserAPIKeyLabelValues,
+    get_tag_from_metadata,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -849,3 +853,11 @@ def test_prometheus_factory(monkeypatch, disable_end_user_tracking):
         assert returned_dict["end_user"] == None
     else:
         assert returned_dict["end_user"] == "test_end_user"
+
+
+def test_get_tag_from_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels", ["metadata.foo", "metadata.bar"]
+    )
+    metadata = {"foo": "bar", "bar": "baz", "taz": "qux"}
+    assert get_tag_from_metadata(metadata) == ["bar", "baz"]

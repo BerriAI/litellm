@@ -5,6 +5,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import List, Optional, cast
 
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -392,7 +393,15 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
-
+        _requester_metadata = standard_logging_payload["metadata"].get(
+            "requester_metadata"
+        )
+        _tags = standard_logging_payload["request_tags"]
+        metadata_tags: Optional[List[str]] = None
+        if _requester_metadata is not None:
+            metadata_tags = get_tag_from_metadata(metadata=_requester_metadata)
+        if metadata_tags is not None:
+            _tags.extend(metadata_tags)
         print_verbose(
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
         )
@@ -407,6 +416,7 @@ class PrometheusLogger(CustomLogger):
             user=user_id,
             status_code="200",
             model=model,
+            tags=_tags,
         )
 
         if (
@@ -1185,6 +1195,7 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         _tags = cast(List[str], kwargs.get("tags") or [])
+
         enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
             fallback_model=_new_model,
@@ -1376,3 +1387,31 @@ def prometheus_label_factory(
         )
 
     return filtered_labels
+
+
+def get_tag_from_metadata(metadata: dict) -> Optional[List[str]]:
+    """
+    Get tag from metadata
+    """
+    keys = litellm.custom_prometheus_metadata_labels
+    if keys is None or len(keys) == 0:
+        return None
+
+    result = []
+
+    for key in keys:
+        # Split the dot notation key into parts
+        key = key.replace("metadata.", "", 1) if key.startswith("metadata.") else key
+
+        keys_parts = key.split(".")
+        # Traverse through the dictionary using the parts
+        value = metadata
+        for part in keys_parts:
+            value = value.get(part, None)  # Get the value, return None if not found
+            if value is None:
+                break
+
+        if value is not None and isinstance(value, str):
+            result.append(value)
+
+    return result
