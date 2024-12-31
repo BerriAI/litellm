@@ -41,7 +41,7 @@ class HumanLoopPromptManager(DualCache):
 
     def _compile_prompt_helper(
         self, prompt_template: List[AllMessageValues], prompt_variables: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    ) -> List[AllMessageValues]:
         """
         Helper function to compile the prompt by substituting variables in the template.
 
@@ -52,7 +52,7 @@ class HumanLoopPromptManager(DualCache):
         Returns:
             list: A list of dictionaries with variables substituted.
         """
-        compiled_prompts = []
+        compiled_prompts: List[AllMessageValues] = []
 
         for template in prompt_template:
             tc = template.get("content")
