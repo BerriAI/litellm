@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import pytest
 import litellm
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting, AlertingConfig
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 @pytest.mark.asyncio
@@ -64,3 +65,31 @@ async def test_pagerduty_alerting_high_failure_rate():
             pass
 
     await asyncio.sleep(2)
+
+
+@pytest.mark.asyncio
+async def test_pagerduty_hanging_request_alerting():
+    pagerduty = PagerDutyAlerting(
+        alerting_config=AlertingConfig(hanging_threshold_seconds=0.0000001)
+    )
+    litellm.callbacks = [pagerduty]
+
+    await pagerduty.pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test",
+            key_alias="test-pagerduty",
+            team_alias="test-team",
+            org_id="test-org",
+            user_id="test-user",
+            end_user_id="test-end-user",
+        ),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="completion",
+    )
+
+    await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    await asyncio.sleep(1)

@@ -13,7 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.pagerduty import (
     AlertingConfig,
-    FailureEvent,
+    PagerDutyInternalEvent,
     PagerDutyPayload,
     PagerDutyRequestBody,
 )
@@ -24,84 +24,77 @@ from litellm.types.utils import (
 
 
 class PagerDutyAlerting(SlackAlerting):
+    """
+    Tracks failed requests and hanging requests separately.
+    If threshold is crossed for either type, triggers a PagerDuty alert.
+    """
+
     def __init__(self, alerting_config: AlertingConfig, **kwargs):
+        super().__init__(**kwargs)
+
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
             raise ValueError("PAGERDUTY_API_KEY is not set")
+
         self.api_key: str = _api_key
         self.alerting_config: AlertingConfig = alerting_config
 
-        # We'll store all recent failures (including error info) in a single list.
-        self._failure_events: List[FailureEvent] = []
+        # Separate storage for failures vs. hangs
+        self._failure_events: List[PagerDutyInternalEvent] = []
+        self._hanging_events: List[PagerDutyInternalEvent] = []
 
-        super().__init__(**kwargs)
+    # ------------------ MAIN LOGIC ------------------ #
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Record a failure event. Only send an alert to PagerDuty if the
-        configured failure threshold is exceeded in the specified window.
+        configured *failure* threshold is exceeded in the specified window.
         """
         now = datetime.now(timezone.utc)
-
-        # Extract info from the standard logging object
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
         )
-        if standard_logging_payload is None:
+        if not standard_logging_payload:
             raise ValueError(
                 "standard_logging_object is required for PagerDutyAlerting"
             )
-        _event_metadata = standard_logging_payload.get("metadata") or {}
+
+        # Extract error details
         error_info: Optional[StandardLoggingPayloadErrorInformation] = (
             standard_logging_payload.get("error_information") or {}
         )
+        _meta = standard_logging_payload.get("metadata") or {}
 
-        # Create a FailureEvent and add it to our list
         self._failure_events.append(
-            FailureEvent(
+            PagerDutyInternalEvent(
+                failure_event_type="failed_response",
                 timestamp=now,
                 error_class=error_info.get("error_class"),
                 error_code=error_info.get("error_code"),
                 error_llm_provider=error_info.get("llm_provider"),
-                user_api_key_hash=_event_metadata.get("user_api_key_hash"),
-                user_api_key_alias=_event_metadata.get("user_api_key_alias"),
-                user_api_key_org_id=_event_metadata.get("user_api_key_org_id"),
-                user_api_key_team_id=_event_metadata.get("user_api_key_team_id"),
-                user_api_key_user_id=_event_metadata.get("user_api_key_user_id"),
-                user_api_key_team_alias=_event_metadata.get("user_api_key_team_alias"),
-                user_api_key_end_user_id=_event_metadata.get(
-                    "user_api_key_end_user_id"
-                ),
+                user_api_key_hash=_meta.get("user_api_key_hash"),
+                user_api_key_alias=_meta.get("user_api_key_alias"),
+                user_api_key_org_id=_meta.get("user_api_key_org_id"),
+                user_api_key_team_id=_meta.get("user_api_key_team_id"),
+                user_api_key_user_id=_meta.get("user_api_key_user_id"),
+                user_api_key_team_alias=_meta.get("user_api_key_team_alias"),
+                user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
             )
         )
 
-        # Prune events older than our threshold window
+        # Prune + Possibly alert
         window_seconds = self.alerting_config.get(
             "failure_threshold_window_seconds", 60
         )
         threshold = self.alerting_config.get("failure_threshold", 1)
-        cutoff = now - timedelta(seconds=window_seconds)
-        self._prune_failure_events(cutoff)
 
-        # If the number of recent failures crosses the threshold, alert PagerDuty
-        if len(self._failure_events) >= threshold:
-            error_summaries = self._build_error_summaries(max_errors=5)
-            alert_message = (
-                f"High LLM API Failure Rate: {len(self._failure_events)} failures "
-                f"in the last {window_seconds} seconds."
-            )
-
-            # Instead of just a text summary, we can also provide more details
-            # in the "custom_details" field of the PagerDuty payload
-            custom_details = {"recent_errors": error_summaries}
-
-            await self.send_alert_to_pagerduty(
-                alert_message=alert_message,
-                custom_details=custom_details,
-            )
-
-            # Clear the list of failure events after sending the alert
-            self._failure_events = []
+        # If threshold is crossed, send PD alert for failures
+        await self._send_alert_if_thresholds_crossed(
+            events=self._failure_events,
+            window_seconds=window_seconds,
+            threshold=threshold,
+            alert_prefix="High LLM API Failure Rate",
+        )
 
     async def pre_call_hook(
         self,
@@ -119,69 +112,139 @@ class PagerDutyAlerting(SlackAlerting):
         ],
     ) -> Optional[dict]:
         """
-        Pre-Call hook - sleeps for 'self.alerting_threshold' seconds and checks if response has completed
-
-        If not then counts as a hanging request and sends an alert to PagerDuty
+        Example of detecting hanging requests by waiting a given threshold.
+        If the request didn't finish by then, we treat it as 'hanging'.
         """
         verbose_logger.info("Inside Proxy Logging Pre-call hook!")
-        ### ALERTING ###
-        asyncio.create_task(self.response_taking_too_long(request_data=data))
+        asyncio.create_task(
+            self.hanging_response_handler(
+                request_data=data, user_api_key_dict=user_api_key_dict
+            )
+        )
+
+    async def hanging_response_handler(
+        self, request_data: Optional[dict], user_api_key_dict: UserAPIKeyAuth
+    ):
+        """
+        Checks if request completed by the time 'hanging_threshold_seconds' elapses.
+        If not, we classify it as a hanging request.
+        """
+        await asyncio.sleep(self.alerting_config.get("hanging_threshold_seconds", 60))
+
+        if await self._request_is_completed(request_data=request_data):
+            return  # It's not hanging if completed
+
+        # Otherwise, record it as hanging
+        self._hanging_events.append(
+            PagerDutyInternalEvent(
+                failure_event_type="hanging_response",
+                timestamp=datetime.now(timezone.utc),
+                error_class="HangingRequest",
+                error_code="HangingRequest",
+                error_llm_provider="HangingRequest",
+                user_api_key_hash=user_api_key_dict.api_key,
+                user_api_key_alias=user_api_key_dict.key_alias,
+                user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_team_id=user_api_key_dict.team_id,
+                user_api_key_user_id=user_api_key_dict.user_id,
+                user_api_key_team_alias=user_api_key_dict.team_alias,
+                user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            )
+        )
+
+        # Prune + Possibly alert
+        window_seconds = self.alerting_config.get(
+            "hanging_threshold_window_seconds", 60
+        )
+        threshold = self.alerting_config.get("hanging_threshold", 1)
+
+        # If threshold is crossed, send PD alert for hangs
+        await self._send_alert_if_thresholds_crossed(
+            events=self._hanging_events,
+            window_seconds=window_seconds,
+            threshold=threshold,
+            alert_prefix="High Number of Hanging LLM Requests",
+        )
+
+    # ------------------ HELPERS ------------------ #
+
+    async def _send_alert_if_thresholds_crossed(
+        self,
+        events: List[PagerDutyInternalEvent],
+        window_seconds: int,
+        threshold: int,
+        alert_prefix: str,
+    ):
+        """
+        1. Prune old events
+        2. If threshold is reached, build alert, send to PagerDuty
+        3. Clear those events
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+        pruned = [e for e in events if e.get("timestamp", datetime.min) > cutoff]
+
+        # Update the reference list
+        events.clear()
+        events.extend(pruned)
+
+        # Check threshold
+        if len(events) >= threshold:
+            # Build short summary of last N events
+            error_summaries = self._build_error_summaries(events, max_errors=5)
+            alert_message = (
+                f"{alert_prefix}: {len(events)} in the last {window_seconds} seconds."
+            )
+            custom_details = {"recent_errors": error_summaries}
+
+            await self.send_alert_to_pagerduty(
+                alert_message=alert_message,
+                custom_details=custom_details,
+            )
+
+            # Clear them after sending an alert, so we don't spam
+            events.clear()
+
+    def _build_error_summaries(
+        self, events: List[PagerDutyInternalEvent], max_errors: int = 5
+    ) -> List[str]:
+        """
+        Build short text summaries for the last `max_errors`.
+        Example: "ValueError (code: 500, provider: openai)"
+        """
+        recent = events[-max_errors:]
+        summaries = []
+        for fe in recent:
+            # If any of these is None, show "N/A" to avoid messing up the summary string
+            fe.pop("timestamp")
+            summaries.append(fe)
+        return summaries
 
     async def send_alert_to_pagerduty(self, alert_message: str, custom_details: dict):
         """
-        Send [High] Alert to PagerDuty
+        Send [critical] Alert to PagerDuty
 
         https://developer.pagerduty.com/api-reference/YXBpOjI3NDgyNjU-pager-duty-v2-events-api
         """
-        async_client: AsyncHTTPHandler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
-
-        # Insert the 'custom_details' into the PagerDuty payload
-        payload: PagerDutyRequestBody = PagerDutyRequestBody(
-            payload=PagerDutyPayload(
-                summary=alert_message,
-                severity="critical",
-                source="LiteLLM Alert",
-                component="LiteLLM",
-                custom_details=custom_details,
-            ),
-            routing_key=self.api_key,
-            event_action="trigger",
-        )
-
-        return await async_client.post(
-            url="https://events.pagerduty.com/v2/enqueue",
-            json=dict(payload),
-            headers={"Content-Type": "application/json"},
-        )
-
-    # ------------------ Helpers ------------------ #
-
-    def _prune_failure_events(self, cutoff: datetime):
-        """Remove any events that are older than the cutoff time."""
-        _failure_events = []
-        for fe in self._failure_events:
-            _timestamp = fe.get("timestamp")
-            if _timestamp and _timestamp > cutoff:
-                _failure_events.append(fe)
-        self._failure_events = _failure_events
-
-    def _build_error_summaries(self, max_errors: int = 5) -> List[str]:
-        """
-        Build short text summaries for the last `max_errors` events.
-        Example: "ValueError (code: 500, provider: openai)"
-        """
-        # Take only the last few errors
-        recent_events = self._failure_events[-max_errors:]
-        summaries = []
-        for fe in recent_events:
-            # If any of these is None, show "N/A" to avoid messing up the summary string
-            error_class = fe.get("error_class") or "N/A"
-            error_code = fe.get("error_code") or "N/A"
-            error_llm_provider = fe.get("error_llm_provider") or "N/A"
-
-            summaries.append(
-                f"{error_class} (code: {error_code}, provider: {error_llm_provider})"
+        try:
+            async_client: AsyncHTTPHandler = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.LoggingCallback
             )
-        return summaries
+            payload: PagerDutyRequestBody = PagerDutyRequestBody(
+                payload=PagerDutyPayload(
+                    summary=alert_message,
+                    severity="critical",
+                    source="LiteLLM Alert",
+                    component="LiteLLM",
+                    custom_details=custom_details,
+                ),
+                routing_key=self.api_key,
+                event_action="trigger",
+            )
+
+            return await async_client.post(
+                url="https://events.pagerduty.com/v2/enqueue",
+                json=dict(payload),
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error sending alert to PagerDuty: {e}")
