@@ -307,6 +307,9 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
+)
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
