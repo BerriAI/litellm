@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # PagerDuty Alerting
 
 :::info
@@ -46,6 +48,14 @@ general_settings:
 
 3. Test it 
 
+
+Start LiteLLM Proxy
+
+```shell
+litellm --config config.yaml
+```
+
+### LLM API Failure Alert
 Try sending a bad request to proxy 
 
 ```shell
@@ -65,6 +75,9 @@ curl -i --location 'http://0.0.0.0:4000/chat/completions' \
 '
 ```
 
+<Image img={require('../../img/pagerduty_fail.png')} />
+
+### LLM Hanging Alert
 
 Try sending a hanging request to proxy 
 
@@ -86,6 +99,8 @@ curl -i --location 'http://0.0.0.0:4000/chat/completions' \
     }
 '
 ```
+
+<Image img={require('../../img/pagerduty_hanging.png')} />
 
 
 
