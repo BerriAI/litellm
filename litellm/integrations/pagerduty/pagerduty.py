@@ -46,6 +46,8 @@ class PagerDutyAlerting(SlackAlerting):
     def __init__(
         self, alerting_args: Optional[Union[AlertingConfig, dict]] = None, **kwargs
     ):
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+
         super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
@@ -73,6 +75,12 @@ class PagerDutyAlerting(SlackAlerting):
         # Separate storage for failures vs. hangs
         self._failure_events: List[PagerDutyInternalEvent] = []
         self._hanging_events: List[PagerDutyInternalEvent] = []
+
+        # premium user check
+        if premium_user is not True:
+            raise ValueError(
+                f"PagerDutyAlerting is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+            )
 
     # ------------------ MAIN LOGIC ------------------ #
 
