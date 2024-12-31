@@ -1,7 +1,7 @@
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -29,15 +29,23 @@ class PagerDutyAlerting(SlackAlerting):
     If threshold is crossed for either type, triggers a PagerDuty alert.
     """
 
-    def __init__(self, alerting_config: AlertingConfig, **kwargs):
-        super().__init__(**kwargs)
-
+    def __init__(
+        self, alerting_args: Optional[Union[AlertingConfig, dict]] = None, **kwargs
+    ):
+        super().__init__()
         _api_key = os.getenv("PAGERDUTY_API_KEY")
         if not _api_key:
             raise ValueError("PAGERDUTY_API_KEY is not set")
 
         self.api_key: str = _api_key
-        self.alerting_config: AlertingConfig = alerting_config
+        if alerting_args is None:
+            raise ValueError(
+                "alerting_args is required for PagerDutyAlerting. Please set alerting_args in the config file or pass it as an argument."
+            )
+        elif isinstance(alerting_args, dict):
+            self.alerting_args: AlertingConfig = AlertingConfig(**alerting_args)  # type: ignore
+        else:
+            self.alerting_args: AlertingConfig = alerting_args
 
         # Separate storage for failures vs. hangs
         self._failure_events: List[PagerDutyInternalEvent] = []
@@ -83,10 +91,8 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_config.get(
-            "failure_threshold_window_seconds", 60
-        )
-        threshold = self.alerting_config.get("failure_threshold", 1)
+        window_seconds = self.alerting_args.get("failure_threshold_window_seconds", 60)
+        threshold = self.alerting_args.get("failure_threshold", 1)
 
         # If threshold is crossed, send PD alert for failures
         await self._send_alert_if_thresholds_crossed(
@@ -129,7 +135,7 @@ class PagerDutyAlerting(SlackAlerting):
         Checks if request completed by the time 'hanging_threshold_seconds' elapses.
         If not, we classify it as a hanging request.
         """
-        await asyncio.sleep(self.alerting_config.get("hanging_threshold_seconds", 60))
+        await asyncio.sleep(self.alerting_args.get("hanging_threshold_seconds", 60))
 
         if await self._request_is_completed(request_data=request_data):
             return  # It's not hanging if completed
@@ -153,10 +159,8 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_config.get(
-            "hanging_threshold_window_seconds", 60
-        )
-        threshold = self.alerting_config.get("hanging_threshold", 1)
+        window_seconds = self.alerting_args.get("hanging_threshold_window_seconds", 60)
+        threshold = self.alerting_args.get("hanging_threshold", 1)
 
         # If threshold is crossed, send PD alert for hangs
         await self._send_alert_if_thresholds_crossed(
@@ -188,6 +192,9 @@ class PagerDutyAlerting(SlackAlerting):
         events.extend(pruned)
 
         # Check threshold
+        verbose_logger.debug(
+            f"Have {len(events)} events in the last {window_seconds} seconds. Threshold is {threshold}"
+        )
         if len(events) >= threshold:
             # Build short summary of last N events
             error_summaries = self._build_error_summaries(events, max_errors=5)
@@ -226,6 +233,7 @@ class PagerDutyAlerting(SlackAlerting):
         https://developer.pagerduty.com/api-reference/YXBpOjI3NDgyNjU-pager-duty-v2-events-api
         """
         try:
+            verbose_logger.debug(f"Sending alert to PagerDuty: {alert_message}")
             async_client: AsyncHTTPHandler = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )

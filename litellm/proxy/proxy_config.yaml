@@ -12,4 +12,10 @@ litellm_settings:
 
 general_settings: 
   alerting: ["pagerduty"]
-  
+  alerting_args:
+    failure_threshold: 1  # Number of requests failing in a window
+    failure_threshold_window_seconds: 10  # Window in seconds
+
+    # Requests hanging threshold
+    hanging_threshold_seconds: 0.0000001  # Number of seconds of waiting for a response before a request is considered hanging
+    hanging_threshold_window_seconds: 10  # Window in seconds
