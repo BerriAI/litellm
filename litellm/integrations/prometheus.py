@@ -396,12 +396,15 @@ class PrometheusLogger(CustomLogger):
         _requester_metadata = standard_logging_payload["metadata"].get(
             "requester_metadata"
         )
-        _tags = standard_logging_payload["request_tags"]
-        metadata_tags: Optional[List[str]] = None
-        if _requester_metadata is not None:
-            metadata_tags = get_tag_from_metadata(metadata=_requester_metadata)
-        if metadata_tags is not None:
-            _tags.extend(metadata_tags)
+        if standard_logging_payload is not None and isinstance(
+            standard_logging_payload, dict
+        ):
+            _tags = get_tags_from_standard_logging_payload(
+                cast(StandardLoggingPayload, standard_logging_payload)
+            )
+        else:
+            _tags = []
+
         print_verbose(
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
         )
@@ -540,13 +543,16 @@ class PrometheusLogger(CustomLogger):
             user_id,
         ).inc(standard_logging_payload["total_tokens"])
 
-        _tags = standard_logging_payload["request_tags"]
-        for tag in _tags:
-            self.litellm_tokens_by_tag_metric.labels(
-                **{
-                    UserAPIKeyLabelNames.TAG.value: tag,
-                }
-            ).inc(standard_logging_payload["total_tokens"])
+        if standard_logging_payload is not None and isinstance(
+            standard_logging_payload, dict
+        ):
+            _tags = get_tags_from_standard_logging_payload(standard_logging_payload)
+            for tag in _tags:
+                self.litellm_tokens_by_tag_metric.labels(
+                    **{
+                        UserAPIKeyLabelNames.TAG.value: tag,
+                    }
+                ).inc(standard_logging_payload["total_tokens"])
 
         _labels = prometheus_label_factory(
             supported_enum_labels=PrometheusMetricLabels.litellm_input_tokens_metric.value,
@@ -825,6 +831,12 @@ class PrometheusLogger(CustomLogger):
         """
         try:
             _tags = cast(List[str], request_data.get("tags") or [])
+            request_metadata = request_data.get("metadata", {})
+            metadata_tags: Optional[List[str]] = None
+            if request_metadata is not None and isinstance(request_metadata, dict):
+                metadata_tags = get_tag_from_metadata(metadata=request_metadata)
+            if metadata_tags is not None:
+                _tags.extend(metadata_tags)
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -964,22 +976,27 @@ class PrometheusLogger(CustomLogger):
             ).inc()
 
             # tag based tracking
-            _tags = standard_logging_payload["request_tags"]
-            for tag in _tags:
-                self.litellm_deployment_failure_by_tag_responses.labels(
-                    **{
-                        UserAPIKeyLabelNames.REQUESTED_MODEL.value: model_group,
-                        UserAPIKeyLabelNames.TAG.value: tag,
-                        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value: litellm_model_name,
-                        UserAPIKeyLabelNames.MODEL_ID.value: model_id,
-                        UserAPIKeyLabelNames.API_BASE.value: api_base,
-                        UserAPIKeyLabelNames.API_PROVIDER.value: llm_provider,
-                        UserAPIKeyLabelNames.EXCEPTION_CLASS.value: exception.__class__.__name__,
-                        UserAPIKeyLabelNames.EXCEPTION_STATUS.value: str(
-                            getattr(exception, "status_code", None)
-                        ),
-                    }
-                ).inc()
+            if standard_logging_payload is not None and isinstance(
+                standard_logging_payload, dict
+            ):
+                _tags = get_tags_from_standard_logging_payload(
+                    cast(StandardLoggingPayload, standard_logging_payload)
+                )
+                for tag in _tags:
+                    self.litellm_deployment_failure_by_tag_responses.labels(
+                        **{
+                            UserAPIKeyLabelNames.REQUESTED_MODEL.value: model_group,
+                            UserAPIKeyLabelNames.TAG.value: tag,
+                            UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value: litellm_model_name,
+                            UserAPIKeyLabelNames.MODEL_ID.value: model_id,
+                            UserAPIKeyLabelNames.API_BASE.value: api_base,
+                            UserAPIKeyLabelNames.API_PROVIDER.value: llm_provider,
+                            UserAPIKeyLabelNames.EXCEPTION_CLASS.value: exception.__class__.__name__,
+                            UserAPIKeyLabelNames.EXCEPTION_STATUS.value: str(
+                                getattr(exception, "status_code", None)
+                            ),
+                        }
+                    ).inc()
 
             self.litellm_deployment_total_requests.labels(
                 litellm_model_name=litellm_model_name,
@@ -1377,6 +1394,20 @@ def prometheus_label_factory(
         )
 
     return filtered_labels
+
+
+def get_tags_from_standard_logging_payload(
+    standard_logging_payload: StandardLoggingPayload,
+) -> List[str]:
+    _tags = standard_logging_payload["request_tags"]
+    _requester_metadata = standard_logging_payload["metadata"].get("requester_metadata")
+    metadata_tags: Optional[List[str]] = None
+    if _requester_metadata is not None:
+        metadata_tags = get_tag_from_metadata(metadata=_requester_metadata)
+    if metadata_tags is not None:
+        _tags.extend(metadata_tags)
+
+    return _tags
 
 
 def get_tag_from_metadata(metadata: dict) -> Optional[List[str]]:
