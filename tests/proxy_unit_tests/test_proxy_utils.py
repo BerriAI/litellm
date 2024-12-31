@@ -1191,3 +1191,34 @@ def test_litellm_verification_token_view_response_with_budget_table(
             getattr(resp, expected_user_api_key_auth_key)
             == expected_user_api_key_auth_value
         )
+
+
+def test_is_allowed_to_create_key():
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _is_allowed_to_create_key,
+    )
+
+    assert (
+        _is_allowed_to_create_key(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user_id", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+            user_id="test_user_id",
+            team_id="test_team_id",
+        )
+        is True
+    )
+
+    assert (
+        _is_allowed_to_create_key(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user_id",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                team_id="litellm-dashboard",
+            ),
+            user_id="test_user_id",
+            team_id="test_team_id",
+        )
+        is True
+    )
