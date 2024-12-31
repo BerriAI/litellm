@@ -9,7 +9,7 @@ Handles two types of alerts:
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
