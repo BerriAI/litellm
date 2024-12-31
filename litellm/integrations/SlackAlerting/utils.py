@@ -3,7 +3,7 @@ Utils used for slack alerting
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
