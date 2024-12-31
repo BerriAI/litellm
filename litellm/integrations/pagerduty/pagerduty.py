@@ -9,7 +9,7 @@ Handles two types of alerts:
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -31,6 +31,11 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
 )
 
+PAGERDUTY_DEFAULT_FAILURE_THRESHOLD = 60
+PAGERDUTY_DEFAULT_FAILURE_THRESHOLD_WINDOW_SECONDS = 60
+PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS = 60
+PAGERDUTY_DEFAULT_HANGING_THRESHOLD_WINDOW_SECONDS = 600
+
 
 class PagerDutyAlerting(SlackAlerting):
     """
@@ -51,10 +56,22 @@ class PagerDutyAlerting(SlackAlerting):
             raise ValueError(
                 "alerting_args is required for PagerDutyAlerting. Please set alerting_args in the config file or pass it as an argument."
             )
-        elif isinstance(alerting_args, dict):
-            self.alerting_args: AlertingConfig = AlertingConfig(**alerting_args)  # type: ignore
-        else:
-            self.alerting_args: AlertingConfig = alerting_args
+        self.alerting_args: AlertingConfig = AlertingConfig(
+            failure_threshold=alerting_args.get(
+                "failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD
+            ),
+            failure_threshold_window_seconds=alerting_args.get(
+                "failure_threshold_window_seconds",
+                PAGERDUTY_DEFAULT_FAILURE_THRESHOLD_WINDOW_SECONDS,
+            ),
+            hanging_threshold_seconds=alerting_args.get(
+                "hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
+            ),
+            hanging_threshold_window_seconds=alerting_args.get(
+                "hanging_threshold_window_seconds",
+                PAGERDUTY_DEFAULT_HANGING_THRESHOLD_WINDOW_SECONDS,
+            ),
+        )
 
         # Separate storage for failures vs. hangs
         self._failure_events: List[PagerDutyInternalEvent] = []
@@ -137,6 +154,7 @@ class PagerDutyAlerting(SlackAlerting):
                 request_data=data, user_api_key_dict=user_api_key_dict
             )
         )
+        return None
 
     async def hanging_response_handler(
         self, request_data: Optional[dict], user_api_key_dict: UserAPIKeyAuth
@@ -146,9 +164,13 @@ class PagerDutyAlerting(SlackAlerting):
         If not, we classify it as a hanging request.
         """
         verbose_logger.debug(
-            f"Inside Hanging Response Handler!..sleeping for {self.alerting_args.get('hanging_threshold_seconds', 60)} seconds"
+            f"Inside Hanging Response Handler!..sleeping for {self.alerting_args.get('hanging_threshold_seconds', PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS)} seconds"
         )
-        await asyncio.sleep(self.alerting_args.get("hanging_threshold_seconds", 60))
+        await asyncio.sleep(
+            self.alerting_args.get(
+                "hanging_threshold_seconds", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
+            )
+        )
 
         if await self._request_is_completed(request_data=request_data):
             return  # It's not hanging if completed
@@ -172,8 +194,13 @@ class PagerDutyAlerting(SlackAlerting):
         )
 
         # Prune + Possibly alert
-        window_seconds = self.alerting_args.get("hanging_threshold_window_seconds", 60)
-        threshold = self.alerting_args.get("hanging_threshold", 1)
+        window_seconds = self.alerting_args.get(
+            "hanging_threshold_window_seconds",
+            PAGERDUTY_DEFAULT_HANGING_THRESHOLD_WINDOW_SECONDS,
+        )
+        threshold: int = self.alerting_args.get(
+            "hanging_threshold_fails", PAGERDUTY_DEFAULT_HANGING_THRESHOLD_SECONDS
+        )
 
         # If threshold is crossed, send PD alert for hangs
         await self._send_alert_if_thresholds_crossed(
@@ -226,7 +253,7 @@ class PagerDutyAlerting(SlackAlerting):
 
     def _build_error_summaries(
         self, events: List[PagerDutyInternalEvent], max_errors: int = 5
-    ) -> List[str]:
+    ) -> List[PagerDutyInternalEvent]:
         """
         Build short text summaries for the last `max_errors`.
         Example: "ValueError (code: 500, provider: openai)"

@@ -48,6 +48,7 @@ class AlertingConfig(TypedDict, total=False):
 
     # Requests hanging threshold
     hanging_threshold_seconds: float  # Number of seconds of waiting for a response before a request is considered hanging
+    hanging_threshold_fails: int  # Number of requests hanging in a window
     hanging_threshold_window_seconds: int  # Window in seconds
 
 
