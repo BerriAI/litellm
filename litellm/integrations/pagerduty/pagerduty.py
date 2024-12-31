@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -110,10 +111,11 @@ class PagerDutyAlerting(SlackAlerting):
             alert_prefix="High LLM API Failure Rate",
         )
 
-    async def pre_call_hook(
+    async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        data: Optional[dict],
+        cache: DualCache,
+        data: dict,
         call_type: Literal[
             "completion",
             "text_completion",
@@ -124,7 +126,7 @@ class PagerDutyAlerting(SlackAlerting):
             "pass_through_endpoint",
             "rerank",
         ],
-    ) -> Optional[dict]:
+    ) -> Optional[Union[Exception, str, dict]]:
         """
         Example of detecting hanging requests by waiting a given threshold.
         If the request didn't finish by then, we treat it as 'hanging'.

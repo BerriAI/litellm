@@ -74,7 +74,7 @@ async def test_pagerduty_hanging_request_alerting():
     )
     litellm.callbacks = [pagerduty]
 
-    await pagerduty.pre_call_hook(
+    await pagerduty.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="test",
             key_alias="test-pagerduty",
