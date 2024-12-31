@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, cast
+from typing import Any, List, Optional, Tuple, cast
 
 import httpx
 from httpx import Response
@@ -165,10 +165,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: litellm.Any,
-        api_key: str | None = None,
-        json_mode: bool | None = None,
-    ) -> litellm.ModelResponse:
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
         model_response.model = f"azure_ai/{model}"
         return super().transform_response(
             model=model,
