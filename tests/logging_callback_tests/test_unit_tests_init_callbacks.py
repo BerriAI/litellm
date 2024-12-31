@@ -35,6 +35,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.integrations.humanloop import HumanloopLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
 
@@ -59,6 +60,7 @@ callback_class_str_to_classType = {
     "argilla": ArgillaLogger,
     "opentelemetry": OpenTelemetry,
     "azure_storage": AzureBlobStorageLogger,
+    "humanloop": HumanloopLogger,
     # OTEL compatible loggers
     "logfire": OpenTelemetry,
     "arize": OpenTelemetry,
@@ -178,7 +180,9 @@ async def use_callback_in_llm_call(
             assert isinstance(litellm.success_callback[0], expected_class)
             assert isinstance(litellm.failure_callback[0], expected_class)
 
-            assert len(litellm._async_success_callback) == 1
+            assert (
+                len(litellm._async_success_callback) == 1
+            ), f"Got={litellm._async_success_callback}"
             assert len(litellm._async_failure_callback) == 1
             assert len(litellm.success_callback) == 1
             assert len(litellm.failure_callback) == 1

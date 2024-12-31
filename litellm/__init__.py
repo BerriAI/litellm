@@ -26,6 +26,8 @@ from litellm.constants import (
     DEFAULT_REPLICATE_POLLING_RETRIES,
     DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
     LITELLM_CHAT_PROVIDERS,
+    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
+    OPENAI_CHAT_COMPLETION_PARAMS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -72,6 +74,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "argilla",
     "mlflow",
     "langfuse",
+    "humanloop",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
