@@ -7,10 +7,8 @@ https://humanloop.com/
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
 
 import httpx
-from jinja2 import Template
 
 import litellm
-from litellm import verbose_logger
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import get_secret_str
