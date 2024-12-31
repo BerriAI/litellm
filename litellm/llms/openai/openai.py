@@ -233,6 +233,7 @@ class OpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
 
     def transform_response(
@@ -486,14 +487,6 @@ class OpenAIChatCompletion(BaseLLM):
 
             if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
-
-            if messages is not None and provider_config is not None:
-                if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
-                    provider_config, OpenAIConfig
-                ):  # [TODO]: remove. no longer needed as .transform_request can just handle this.
-                    messages = provider_config._transform_messages(
-                        messages=messages, model=model
-                    )
 
             for _ in range(
                 2

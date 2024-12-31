@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple, cast
 
 import httpx
+from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
@@ -8,10 +9,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
+from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ProviderField
+from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base
 
 
@@ -152,3 +154,32 @@ class AzureAIStudioConfig(OpenAIConfig):
             )
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: litellm.Any,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> litellm.ModelResponse:
+        model_response.model = f"azure_ai/{model}"
+        return super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
