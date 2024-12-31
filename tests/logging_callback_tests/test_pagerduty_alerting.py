@@ -15,7 +15,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 @pytest.mark.asyncio
 async def test_pagerduty_alerting():
     pagerduty = PagerDutyAlerting(
-        alerting_config=AlertingConfig(
+        alerting_args=AlertingConfig(
             failure_threshold=1, failure_threshold_window_seconds=10
         )
     )
@@ -36,7 +36,7 @@ async def test_pagerduty_alerting():
 @pytest.mark.asyncio
 async def test_pagerduty_alerting_high_failure_rate():
     pagerduty = PagerDutyAlerting(
-        alerting_config=AlertingConfig(
+        alerting_args=AlertingConfig(
             failure_threshold=3, failure_threshold_window_seconds=600
         )
     )
@@ -70,7 +70,7 @@ async def test_pagerduty_alerting_high_failure_rate():
 @pytest.mark.asyncio
 async def test_pagerduty_hanging_request_alerting():
     pagerduty = PagerDutyAlerting(
-        alerting_config=AlertingConfig(hanging_threshold_seconds=0.0000001)
+        alerting_args=AlertingConfig(hanging_threshold_seconds=0.0000001)
     )
     litellm.callbacks = [pagerduty]
 
