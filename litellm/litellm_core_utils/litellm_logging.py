@@ -30,6 +30,7 @@ from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -2205,7 +2206,12 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
+    custom_logger_init_args: Optional[dict] = {},
 ) -> Optional[CustomLogger]:
+    """
+    Initialize a custom logger compatible class
+    """
+    custom_logger_init_args = custom_logger_init_args or {}
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -2428,6 +2434,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         langfuse_logger = LangfusePromptManagement()
         _in_memory_loggers.append(langfuse_logger)
         return langfuse_logger  # type: ignore
+    elif logging_integration == "pagerduty":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PagerDutyAlerting):
+                return callback
+        pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
+        _in_memory_loggers.append(pagerduty_logger)
+        return pagerduty_logger  # type: ignore
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
@@ -2542,6 +2555,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):
+                return callback
+    elif logging_integration == "pagerduty":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PagerDutyAlerting):
                 return callback
 
     return None
