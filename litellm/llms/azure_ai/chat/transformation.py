@@ -1,4 +1,6 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
@@ -10,6 +12,7 @@ from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderField
+from litellm.utils import _add_path_to_api_base
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -28,6 +31,55 @@ class AzureAIStudioConfig(OpenAIConfig):
             headers["Authorization"] = f"Bearer {api_key}"
 
         return headers
+
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Constructs a complete URL for the API request.
+
+        Args:
+        - api_base: Base URL, e.g.,
+            "https://litellm8397336933.services.ai.azure.com"
+            OR
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+        - model: Model name.
+        - optional_params: Additional query parameters, including "api_version".
+        - stream: If streaming is required (optional).
+
+        Returns:
+        - A complete URL string, e.g.,
+        "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+        """
+        original_url = httpx.URL(api_base)
+
+        # Extract api_version or use default
+        api_version = cast(Optional[str], optional_params.get("api_version"))
+
+        # Check if 'api-version' is already present
+        if "api-version" not in original_url.params and api_version:
+            # Add api_version to optional_params
+            original_url.params["api-version"] = api_version
+
+        # Add the path to the base URL
+        if "services.ai.azure.com" in api_base:
+            new_url = _add_path_to_api_base(
+                api_base=api_base, ending_path="/models/chat/completions"
+            )
+        else:
+            new_url = _add_path_to_api_base(
+                api_base=api_base, ending_path="/chat/completions"
+            )
+
+        # Convert optional_params to query parameters
+        query_params = original_url.params
+        final_url = httpx.URL(new_url).copy_with(params=query_params)
+
+        return str(final_url)
 
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
