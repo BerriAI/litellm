@@ -4544,7 +4544,7 @@ def test_humanloop_completion(monkeypatch):
     resp = litellm.completion(
         model="humanloop/gpt-3.5-turbo",
         humanloop_api_key=os.getenv("HUMANLOOP_API_KEY"),
-        prompt_id="test-chat-prompt",
+        prompt_id="pr_nmSOVpEdyYPm2DrOwCoOm",
         prompt_variables={"person": "John"},
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )

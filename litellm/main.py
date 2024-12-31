@@ -923,44 +923,7 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    openai_params = [
-        "functions",
-        "function_call",
-        "temperature",
-        "temperature",
-        "top_p",
-        "n",
-        "stream",
-        "stream_options",
-        "stop",
-        "max_completion_tokens",
-        "modalities",
-        "prediction",
-        "audio",
-        "max_tokens",
-        "presence_penalty",
-        "frequency_penalty",
-        "logit_bias",
-        "user",
-        "request_timeout",
-        "api_base",
-        "api_version",
-        "api_key",
-        "deployment_id",
-        "organization",
-        "base_url",
-        "default_headers",
-        "timeout",
-        "response_format",
-        "seed",
-        "tools",
-        "tool_choice",
-        "max_retries",
-        "parallel_tool_calls",
-        "logprobs",
-        "top_logprobs",
-        "extra_headers",
-    ]
+    openai_params = litellm.OPENAI_CHAT_COMPLETION_PARAMS
     default_params = openai_params + all_litellm_params
     litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {

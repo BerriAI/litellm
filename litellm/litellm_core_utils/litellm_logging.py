@@ -76,6 +76,7 @@ from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
+from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
@@ -446,6 +447,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: str,
         prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
+
         for (
             custom_logger_compatible_callback
         ) in litellm._known_custom_logger_compatible_callbacks:
@@ -455,6 +457,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     internal_usage_cache=None,
                     llm_router=None,
                 )
+
                 if custom_logger is None:
                     continue
                 model, messages, non_default_params = (
@@ -2428,6 +2431,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         langfuse_logger = LangfusePromptManagement()
         _in_memory_loggers.append(langfuse_logger)
         return langfuse_logger  # type: ignore
+    elif logging_integration == "humanloop":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, HumanloopLogger):
+                return callback
+
+        humanloop_logger = HumanloopLogger()
+        _in_memory_loggers.append(humanloop_logger)
+        return humanloop_logger  # type: ignore
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
