@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REPLICATE_POLLING_RETRIES,
     DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
     LITELLM_CHAT_PROVIDERS,
+    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (

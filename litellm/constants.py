@@ -68,7 +68,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lm_studio",
     "galadriel",
 ]
-
+HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = 60  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
 ########################### Logging Callback Constants ###########################
