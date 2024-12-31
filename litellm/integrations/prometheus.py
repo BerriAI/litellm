@@ -416,7 +416,13 @@ class PrometheusLogger(CustomLogger):
             user=user_id,
             status_code="200",
             model=model,
+            litellm_model_name=model,
             tags=_tags,
+            model_id=standard_logging_payload["model_id"],
+            api_base=standard_logging_payload["api_base"],
+            api_provider=standard_logging_payload["custom_llm_provider"],
+            exception_status=None,
+            exception_class=None,
         )
 
         if (
@@ -486,6 +492,7 @@ class PrometheusLogger(CustomLogger):
             # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
             standard_logging_payload=standard_logging_payload,  # type: ignore
+            enum_values=enum_values,
         )
 
         # set x-ratelimit headers
@@ -679,6 +686,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
         standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
     ):
         # latency metrics
         model_parameters: dict = standard_logging_payload["model_parameters"]
@@ -687,24 +695,6 @@ class PrometheusLogger(CustomLogger):
         api_call_start_time = kwargs.get("api_call_start_time", None)
 
         completion_start_time = kwargs.get("completion_start_time", None)
-
-        enum_values = UserAPIKeyLabelValues(
-            end_user=standard_logging_payload["metadata"]["user_api_key_end_user_id"],
-            user=standard_logging_payload["metadata"]["user_api_key_user_id"],
-            hashed_api_key=user_api_key,
-            api_key_alias=user_api_key_alias,
-            team=user_api_team,
-            team_alias=user_api_team_alias,
-            requested_model=standard_logging_payload["model_group"],
-            model=model,
-            litellm_model_name=standard_logging_payload["model_group"],
-            tags=standard_logging_payload["request_tags"],
-            model_id=standard_logging_payload["model_id"],
-            api_base=standard_logging_payload["api_base"],
-            api_provider=standard_logging_payload["custom_llm_provider"],
-            exception_status=None,
-            exception_class=None,
-        )
 
         if (
             completion_start_time is not None
@@ -1397,7 +1387,7 @@ def get_tag_from_metadata(metadata: dict) -> Optional[List[str]]:
     if keys is None or len(keys) == 0:
         return None
 
-    result = []
+    result: List[str] = []
 
     for key in keys:
         # Split the dot notation key into parts
