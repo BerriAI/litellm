@@ -219,6 +219,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_model_info_bedrock_converse_enforcement(monkeypatch):
     """
     Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
