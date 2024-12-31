@@ -1,3 +1,4 @@
+import json
 import traceback
 from datetime import datetime
 from typing import Literal, Optional, Union
@@ -95,12 +96,20 @@ class VertexFineTuningAPI(VertexLLM):
         https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning
         supervised_tuning_spec = FineTunesupervisedTuningSpec(
         """
-        hyperparameters = create_fine_tuning_job_data.hyperparameters
+
         supervised_tuning_spec = FineTunesupervisedTuningSpec(
             training_dataset_uri=create_fine_tuning_job_data.training_file,
-            validation_dataset=create_fine_tuning_job_data.validation_file,
         )
 
+        if create_fine_tuning_job_data.validation_file:
+            supervised_tuning_spec["validation_dataset"] = (
+                create_fine_tuning_job_data.validation_file
+            )
+
+        if kwargs.get("adapter_size"):
+            supervised_tuning_spec["adapter_size"] = kwargs.get("adapter_size")
+
+        hyperparameters = create_fine_tuning_job_data.hyperparameters
         if hyperparameters:
             if hyperparameters.n_epochs:
                 supervised_tuning_spec["epoch_count"] = int(hyperparameters.n_epochs)
@@ -108,8 +117,6 @@ class VertexFineTuningAPI(VertexLLM):
                 supervised_tuning_spec["learning_rate_multiplier"] = float(
                     hyperparameters.learning_rate_multiplier
                 )
-
-        supervised_tuning_spec["adapter_size"] = kwargs.get("adapter_size")
 
         fine_tune_job = FineTuneJobCreate(
             baseModel=create_fine_tuning_job_data.model,
@@ -130,7 +137,7 @@ class VertexFineTuningAPI(VertexLLM):
             verbose_logger.debug(
                 "about to create fine tuning job: %s, request_data: %s",
                 fine_tuning_url,
-                request_data,
+                json.dumps(request_data, indent=4),
             )
             if self.async_handler is None:
                 raise ValueError(
