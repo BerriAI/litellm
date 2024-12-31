@@ -139,15 +139,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_input_tokens_metric = Counter(
                 "litellm_input_tokens",
                 "Total number of input tokens from LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=PrometheusMetricLabels.litellm_input_tokens_metric.value,
             )
 
             # Counter for input tokens by tag
@@ -422,6 +414,7 @@ class PrometheusLogger(CustomLogger):
             team_alias=user_api_team_alias,
             user=user_id,
             status_code="200",
+            model=model,
         )
 
         if (
@@ -459,6 +452,7 @@ class PrometheusLogger(CustomLogger):
             user_api_team=user_api_team,
             user_api_team_alias=user_api_team_alias,
             user_id=user_id,
+            enum_values=enum_values,
         )
 
         # remaining budget metrics
@@ -524,6 +518,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
         user_id: Optional[str],
+        enum_values: UserAPIKeyLabelValues,
     ):
         # token metrics
         self.litellm_tokens_metric.labels(
@@ -544,15 +539,13 @@ class PrometheusLogger(CustomLogger):
                 }
             ).inc(standard_logging_payload["total_tokens"])
 
-        self.litellm_input_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["prompt_tokens"])
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.litellm_input_tokens_metric.value,
+            enum_values=enum_values,
+        )
+        self.litellm_input_tokens_metric.labels(**_labels).inc(
+            standard_logging_payload["prompt_tokens"]
+        )
 
         for tag in _tags:
             self.litellm_input_tokens_by_tag_metric.labels(
