@@ -1,5 +1,4 @@
 import hashlib
-import traceback
 import types
 from typing import (
     Any,
@@ -37,7 +36,6 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_transformation import OpenAIGPTConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 
 
