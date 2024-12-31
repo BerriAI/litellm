@@ -51,7 +51,7 @@ class AlertingConfig(TypedDict, total=False):
     hanging_threshold_window_seconds: int  # Window in seconds
 
 
-class FailureEvent(StandardLoggingUserAPIKeyMetadata, total=False):
+class PagerDutyInternalEvent(StandardLoggingUserAPIKeyMetadata, total=False):
     """Simple structure to hold timestamp and error info."""
 
     failure_event_type: Literal["failed_response", "hanging_response"]
