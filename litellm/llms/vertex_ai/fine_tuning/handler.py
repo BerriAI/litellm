@@ -68,14 +68,14 @@ class VertexFineTuningAPI(VertexLLM):
             training_uri = response["supervisedTuningSpec"]["trainingDatasetUri"] or ""
 
         return FineTuningJob(
-            id=response["name"] or "",
+            id=response.get("name", "") or "",
             created_at=created_at,
-            fine_tuned_model=response["tunedModelDisplayName"],
+            fine_tuned_model=response.get("tunedModelDisplayName", ""),
             finished_at=None,
             hyperparameters=Hyperparameters(
                 n_epochs=0,
             ),
-            model=response["baseModel"] or "",
+            model=response.get("baseModel", "") or "",
             object="fine_tuning.job",
             organization_id="",
             result_files=[],
