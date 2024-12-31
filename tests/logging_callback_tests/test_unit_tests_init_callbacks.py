@@ -20,6 +20,7 @@ from prometheus_client import REGISTRY, CollectorRegistry
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.braintrust_logging import BraintrustLogger
+from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.literal_ai import LiteralAILogger
@@ -66,6 +67,7 @@ callback_class_str_to_classType = {
     "mlflow": MlflowLogger,
     "langfuse": LangfusePromptManagement,
     "otel": OpenTelemetry,
+    "pagerduty": PagerDutyAlerting,
 }
 
 expected_env_vars = {
@@ -85,6 +87,7 @@ expected_env_vars = {
     "ARIZE_SPACE_KEY": "arize_space_key",
     "ARIZE_API_KEY": "arize_api_key",
     "ARGILLA_API_KEY": "argilla_api_key",
+    "PAGERDUTY_API_KEY": "pagerduty_api_key",
 }
 
 
