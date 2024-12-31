@@ -166,6 +166,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         extra_body = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
+        optional_params.pop("max_retries", None)
         return super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
