@@ -26,6 +26,7 @@ from litellm.llms.vertex_ai.fine_tuning.handler import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+from unittest.mock import patch, MagicMock, AsyncMock
 
 vertex_finetune_api = VertexFineTuningAPI()
 
@@ -237,29 +238,75 @@ async def test_azure_create_fine_tune_jobs_async():
 
 
 @pytest.mark.asyncio()
-@pytest.mark.skip(reason="skipping until we can cancel fine tuning jobs")
-async def test_create_vertex_fine_tune_jobs():
-    try:
-        verbose_logger.setLevel(logging.DEBUG)
-        load_vertex_ai_credentials()
+async def test_create_vertex_fine_tune_jobs_mocked():
+    load_vertex_ai_credentials()
+    # Define reusable variables for the test
+    project_id = "633608382793"
+    location = "us-central1"
+    job_id = "3978211980451250176"
+    base_model = "gemini-1.0-pro-002"
+    tuned_model_name = f"{base_model}-f9259f2c-3fdf-4dd3-9413-afef2bfd24f5"
+    training_file = (
+        "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
+    )
+    create_time = "2024-12-31T22:40:20.211140Z"
 
-        vertex_credentials = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
-        print("creating fine tuning job")
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(
+        return_value={
+            "name": f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}",
+            "tunedModelDisplayName": tuned_model_name,
+            "baseModel": base_model,
+            "supervisedTuningSpec": {"trainingDatasetUri": training_file},
+            "state": "JOB_STATE_PENDING",
+            "createTime": create_time,
+            "updateTime": create_time,
+        }
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
         create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model="gemini-1.0-pro-002",
+            model=base_model,
             custom_llm_provider="vertex_ai",
-            training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
-            vertex_project="adroit-crow-413218",
-            vertex_location="us-central1",
-            vertex_credentials=vertex_credentials,
+            training_file=training_file,
+            vertex_project=project_id,
+            vertex_location=location,
         )
-        print("vertex ai create fine tuning response=", create_fine_tuning_response)
 
-        assert create_fine_tuning_response.id is not None
-        assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
-        assert create_fine_tuning_response.object == "fine_tuning.job"
-    except Exception:
-        pass
+        # Verify the request
+        mock_post.assert_called_once()
+
+        # Validate the request
+        assert mock_post.call_args.kwargs["json"] == {
+            "baseModel": base_model,
+            "supervisedTuningSpec": {"training_dataset_uri": training_file},
+            "tunedModelDisplayName": None,
+        }
+
+        # Verify the response
+        response_json = json.loads(create_fine_tuning_response.model_dump_json())
+        assert (
+            response_json["id"]
+            == f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}"
+        )
+        assert response_json["model"] == base_model
+        assert response_json["object"] == "fine_tuning.job"
+        assert response_json["fine_tuned_model"] == tuned_model_name
+        assert response_json["status"] == "queued"
+        assert response_json["training_file"] == training_file
+        assert (
+            response_json["created_at"] == 1735684820
+        )  # Unix timestamp for create_time
+        assert response_json["error"] is None
+        assert response_json["finished_at"] is None
+        assert response_json["validation_file"] is None
+        assert response_json["trained_tokens"] is None
+        assert response_json["estimated_finish"] is None
+        assert response_json["integrations"] == []
 
 
 # Testing OpenAI -> Vertex AI param mapping
@@ -276,7 +323,7 @@ def test_convert_openai_request_to_vertex_basic():
 
     result = vertex_finetune_api.convert_openai_request_to_vertex(openai_data)
 
-    print("converted vertex ai result=", result)
+    print("converted vertex ai result=", json.dumps(result, indent=4))
 
     assert result["baseModel"] == "text-davinci-002"
     assert result["tunedModelDisplayName"] == "my_fine_tuned_model"
@@ -303,7 +350,7 @@ def test_convert_openai_request_to_vertex_with_adapter_size():
         openai_data, adapter_size="SMALL"
     )
 
-    print("converted vertex ai result=", result)
+    print("converted vertex ai result=", json.dumps(result, indent=4))
 
     assert result["baseModel"] == "text-davinci-002"
     assert result["tunedModelDisplayName"] == "custom_model"
@@ -311,7 +358,49 @@ def test_convert_openai_request_to_vertex_with_adapter_size():
         result["supervisedTuningSpec"]["training_dataset_uri"]
         == "gs://bucket/train.jsonl"
     )
-    assert result["supervisedTuningSpec"]["validation_dataset"] is None
     assert result["supervisedTuningSpec"]["epoch_count"] == 5
     assert result["supervisedTuningSpec"]["learning_rate_multiplier"] == 0.2
     assert result["supervisedTuningSpec"]["adapter_size"] == "SMALL"
+
+
+def test_convert_basic_openai_request_to_vertex_request():
+    openai_data = FineTuningJobCreate(
+        training_file="gs://bucket/train.jsonl",
+        model="gemini-1.0-pro-002",
+    )
+
+    result = vertex_finetune_api.convert_openai_request_to_vertex(
+        openai_data, adapter_size="SMALL"
+    )
+
+    print("converted vertex ai result=", json.dumps(result, indent=4))
+
+    assert result["baseModel"] == "gemini-1.0-pro-002"
+    assert result["tunedModelDisplayName"] == None
+    assert (
+        result["supervisedTuningSpec"]["training_dataset_uri"]
+        == "gs://bucket/train.jsonl"
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.skip(reason="skipping - we run mock tests for vertex ai")
+async def test_create_vertex_fine_tune_jobs():
+    verbose_logger.setLevel(logging.DEBUG)
+    # load_vertex_ai_credentials()
+
+    vertex_credentials = os.getenv("GCS_PATH_SERVICE_ACCOUNT")
+    print("creating fine tuning job")
+    create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
+        model="gemini-1.0-pro-002",
+        custom_llm_provider="vertex_ai",
+        training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
+        vertex_project="adroit-crow-413218",
+        vertex_location="us-central1",
+        vertex_credentials=vertex_credentials,
+    )
+    print("vertex ai create fine tuning response=", create_fine_tuning_response)
+
+    assert create_fine_tuning_response.id is not None
+    assert create_fine_tuning_response.model == "gemini-1.0-pro-002"
+    assert create_fine_tuning_response.object == "fine_tuning.job"
