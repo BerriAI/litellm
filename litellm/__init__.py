@@ -72,6 +72,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "argilla",
     "mlflow",
     "langfuse",
+    "pagerduty",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
