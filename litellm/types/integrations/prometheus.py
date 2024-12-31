@@ -175,6 +175,16 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
+    litellm_output_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
     litellm_deployment_successful_fallbacks = [
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.FALLBACK_MODEL.value,

@@ -154,15 +154,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_output_tokens_metric = Counter(
                 "litellm_output_tokens",
                 "Total number of output tokens from LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=PrometheusMetricLabels.litellm_output_tokens_metric.value,
             )
 
             # Counter for output tokens by tag
@@ -554,15 +546,14 @@ class PrometheusLogger(CustomLogger):
                 }
             ).inc(standard_logging_payload["prompt_tokens"])
 
-        self.litellm_output_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["completion_tokens"])
+        _labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.litellm_output_tokens_metric.value,
+            enum_values=enum_values,
+        )
+
+        self.litellm_output_tokens_metric.labels(**_labels).inc(
+            standard_logging_payload["completion_tokens"]
+        )
 
         for tag in _tags:
             self.litellm_output_tokens_by_tag_metric.labels(
