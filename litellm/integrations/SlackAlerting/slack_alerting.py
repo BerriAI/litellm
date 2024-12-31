@@ -6,7 +6,7 @@ import os
 import random
 import time
 from datetime import timedelta
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from openai import APIError
 
@@ -25,12 +25,18 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
-from litellm.router import Router
 from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
 from .utils import _add_langfuse_trace_id_to_alert, process_slack_alerting_variables
+
+if TYPE_CHECKING:
+    from litellm.router import Router as _Router
+
+    Router = _Router
+else:
+    Router = Any
 
 
 class SlackAlerting(CustomBatchLogger):
