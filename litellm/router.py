@@ -296,6 +296,7 @@ class Router:
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
+        litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -3812,6 +3813,7 @@ class Router:
             _model_name = (
                 deployment.litellm_params.custom_llm_provider + "/" + _model_name
             )
+
         litellm.register_model(
             model_cost={
                 _model_name: _model_info,

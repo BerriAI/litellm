@@ -86,6 +86,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_embedding_image_input: Optional[bool]
     supports_audio_output: Optional[bool]
     supports_pdf_input: Optional[bool]
+    supports_native_streaming: Optional[bool]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
