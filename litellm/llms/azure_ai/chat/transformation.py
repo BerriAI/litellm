@@ -155,6 +155,21 @@ class AzureAIStudioConfig(OpenAIConfig):
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        extra_body = optional_params.pop("extra_body", {})
+        if extra_body and isinstance(extra_body, dict):
+            optional_params.update(extra_body)
+        return super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
+
     def transform_response(
         self,
         model: str,
