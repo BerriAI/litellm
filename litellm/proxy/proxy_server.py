@@ -25,10 +25,6 @@ from typing import (
     get_type_hints,
 )
 
-from litellm.litellm_core_utils.litellm_logging import (
-    _init_custom_logger_compatible_class,
-)
-
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -2132,6 +2128,10 @@ class ProxyConfig:
         """
         Initialize alerting settings
         """
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+
         _alerting_callbacks = general_settings.get("alerting", None)
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
         if _alerting_callbacks is None:
