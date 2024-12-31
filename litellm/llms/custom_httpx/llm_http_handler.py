@@ -249,7 +249,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]],
         fake_stream: bool = False,
         client: Optional[HTTPHandler] = None,
-    ) -> Tuple[Any, httpx.Headers]:
+    ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()
         else:
@@ -298,7 +298,7 @@ class BaseLLMHTTPHandler:
             additional_args={"complete_input_dict": data},
         )
 
-        return completion_stream, response.headers
+        return completion_stream, dict(response.headers)
 
     async def acompletion_stream_function(
         self,
