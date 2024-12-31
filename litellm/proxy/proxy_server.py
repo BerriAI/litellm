@@ -293,6 +293,7 @@ from fastapi import (
     Header,
     HTTPException,
     Path,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -6605,6 +6606,20 @@ async def model_info_v1(  # noqa: PLR0915
     return {"data": all_models}
 
 
+def _get_model_group_info(
+    llm_router: Router, all_models_str: List[str], model_group: Optional[str]
+) -> List[ModelGroupInfo]:
+    model_groups: List[ModelGroupInfo] = []
+    for model in all_models_str:
+        if model_group is not None and model_group != model:
+            continue
+
+        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        if _model_group_info is not None:
+            model_groups.append(_model_group_info)
+    return model_groups
+
+
 @router.get(
     "/model_group/info",
     tags=["model management"],
@@ -6612,6 +6627,10 @@ async def model_info_v1(  # noqa: PLR0915
 )
 async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    model_group: Optional[str] = Query(
+        None,
+        description="The model group name. Set this to filter results to a specific model group.",
+    ),
 ):
     """
     Get information about all the deployments on litellm proxy, including config.yaml descriptions (except api key and api base)
@@ -6779,13 +6798,9 @@ async def model_group_info(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
     )
 
-    model_groups: List[ModelGroupInfo] = []
-
-    for model in all_models_str:
-
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
-        if _model_group_info is not None:
-            model_groups.append(_model_group_info)
+    model_groups: List[ModelGroupInfo] = _get_model_group_info(
+        llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
+    )
 
     return {"data": model_groups}
 
