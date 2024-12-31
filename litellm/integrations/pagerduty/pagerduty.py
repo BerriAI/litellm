@@ -52,10 +52,7 @@ class PagerDutyAlerting(SlackAlerting):
             raise ValueError("PAGERDUTY_API_KEY is not set")
 
         self.api_key: str = _api_key
-        if alerting_args is None:
-            raise ValueError(
-                "alerting_args is required for PagerDutyAlerting. Please set alerting_args in the config file or pass it as an argument."
-            )
+        alerting_args = alerting_args or {}
         self.alerting_args: AlertingConfig = AlertingConfig(
             failure_threshold=alerting_args.get(
                 "failure_threshold", PAGERDUTY_DEFAULT_FAILURE_THRESHOLD
