@@ -1390,21 +1390,18 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## COMPLETION CALL
             try:
-                response = openai_like_chat_completion.completion(
+                response = base_llm_http_handler.completion(
                     model=model,
                     messages=messages,
                     headers=headers,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     api_key=api_key,
                     api_base=api_base,
                     acompletion=acompletion,
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                    logger_fn=logger_fn,
                     timeout=timeout,  # type: ignore
-                    custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     custom_llm_provider=custom_llm_provider,
                     encoding=encoding,

@@ -93,7 +93,7 @@ class BaseLLMHTTPHandler:
         stream: Optional[bool] = False,
         fake_stream: bool = False,
         api_key: Optional[str] = None,
-        headers={},
+        headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
         provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -102,10 +102,11 @@ class BaseLLMHTTPHandler:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
-            headers=headers,
+            headers=headers or {},
             model=model,
             messages=messages,
             optional_params=optional_params,
+            api_base=api_base,
         )
 
         api_base = provider_config.get_complete_url(

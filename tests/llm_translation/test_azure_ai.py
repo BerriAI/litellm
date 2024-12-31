@@ -126,11 +126,18 @@ def test_azure_ai_services_handler():
                 model="azure_ai/Meta-Llama-3.1-70B-Instruct",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 api_key="my-fake-api-key",
-                api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+                api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
                 client=client,
             )
+
             print(response)
+
         except Exception as e:
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
+        assert (
+            mock_client.call_args.kwargs["url"]
+            == "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+        )

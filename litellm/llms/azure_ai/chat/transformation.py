@@ -13,6 +13,22 @@ from litellm.types.utils import ProviderField
 
 
 class AzureAIStudioConfig(OpenAIConfig):
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if api_base and "services.ai.azure.com" in api_base:
+            headers["api-key"] = api_key
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        return headers
+
     def get_required_params(self) -> List[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [

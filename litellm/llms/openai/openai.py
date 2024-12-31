@@ -1,4 +1,5 @@
 import hashlib
+import traceback
 import types
 from typing import (
     Any,
@@ -248,9 +249,20 @@ class OpenAIConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError(
-            "OpenAI handler does this transformation as it uses the OpenAI SDK."
+
+        logging_obj.post_call(original_response=raw_response.text)
+        logging_obj.model_call_details["response_headers"] = raw_response.headers
+        final_response_obj = cast(
+            ModelResponse,
+            convert_to_model_response_object(
+                response_object=raw_response.json(),
+                model_response_object=model_response,
+                hidden_params={"headers": raw_response.headers},
+                _response_headers=dict(raw_response.headers),
+            ),
         )
+
+        return final_response_obj
 
     def validate_environment(
         self,
@@ -259,10 +271,12 @@ class OpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        raise NotImplementedError(
-            "OpenAI handler does this validation as it uses the OpenAI SDK."
-        )
+        return {
+            "Authorization": f"Bearer {api_key}",
+            **headers,
+        }
 
 
 class OpenAIChatCompletion(BaseLLM):
