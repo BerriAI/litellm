@@ -1,3 +1,11 @@
+"""
+PagerDuty Alerting Integration
+
+Handles two types of alerts:
+- High LLM API Failure Rate. Configure X fails in Y seconds to trigger an alert.
+- High Number of Hanging LLM Requests. Configure X hangs in Y seconds to trigger an alert.
+"""
+
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
@@ -135,6 +143,9 @@ class PagerDutyAlerting(SlackAlerting):
         Checks if request completed by the time 'hanging_threshold_seconds' elapses.
         If not, we classify it as a hanging request.
         """
+        verbose_logger.debug(
+            f"Inside Hanging Response Handler!..sleeping for {self.alerting_args.get('hanging_threshold_seconds', 60)} seconds"
+        )
         await asyncio.sleep(self.alerting_args.get("hanging_threshold_seconds", 60))
 
         if await self._request_is_completed(request_data=request_data):
