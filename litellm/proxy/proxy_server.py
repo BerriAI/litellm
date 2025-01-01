@@ -274,6 +274,8 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
+from litellm.types.utils import CustomHuggingfaceTokenizer
+from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -5527,11 +5529,16 @@ async def token_counter(request: TokenCountRequest):
 
     deployment = None
     litellm_model_name = None
+    model_info: Optional[ModelMapInfo] = None
     if llm_router is not None:
         # get 1 deployment corresponding to the model
         for _model in llm_router.model_list:
             if _model["model_name"] == request.model:
                 deployment = _model
+                model_info = llm_router.get_router_model_info(
+                    deployment=deployment,
+                    received_model_name=request.model,
+                )
                 break
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
@@ -5542,12 +5549,22 @@ async def token_counter(request: TokenCountRequest):
     model_to_use = (
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
-    _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use)
+
+    custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
+    if model_info is not None:
+        custom_tokenizer = cast(
+            Optional[CustomHuggingfaceTokenizer],
+            model_info.get("custom_tokenizer", None),
+        )
+    _tokenizer_used = litellm.utils._select_tokenizer(
+        model=model_to_use, custom_tokenizer=custom_tokenizer
+    )
     tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,
         text=prompt,
         messages=messages,
+        custom_tokenizer=_tokenizer_used,
     )
     return TokenCountResponse(
         total_tokens=total_tokens,
