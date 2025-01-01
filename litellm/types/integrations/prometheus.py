@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -211,6 +211,7 @@ class UserAPIKeyLabelValues(BaseModel):
     model: Optional[str] = None
     litellm_model_name: Optional[str] = None
     tags: List[str] = []
+    custom_metadata_labels: Dict[str, str] = {}
     model_id: Optional[str] = None
     api_base: Optional[str] = None
     api_provider: Optional[str] = None

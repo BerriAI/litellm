@@ -352,9 +352,7 @@ class PrometheusLogger(CustomLogger):
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
-            _tags = get_tags_from_standard_logging_payload(
-                cast(StandardLoggingPayload, standard_logging_payload)
-            )
+            _tags = standard_logging_payload["request_tags"]
         else:
             _tags = []
 
@@ -379,6 +377,10 @@ class PrometheusLogger(CustomLogger):
             api_provider=standard_logging_payload["custom_llm_provider"],
             exception_status=None,
             exception_class=None,
+            custom_metadata_labels=get_custom_labels_from_metadata(
+                metadata=standard_logging_payload["metadata"].get("requester_metadata")
+                or {}
+            ),
         )
 
         if (
@@ -493,7 +495,7 @@ class PrometheusLogger(CustomLogger):
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
-            _tags = get_tags_from_standard_logging_payload(standard_logging_payload)
+            _tags = standard_logging_payload["request_tags"]
 
         _labels = prometheus_label_factory(
             supported_enum_labels=PrometheusMetricLabels.get_labels(
@@ -749,12 +751,6 @@ class PrometheusLogger(CustomLogger):
         """
         try:
             _tags = cast(List[str], request_data.get("tags") or [])
-            request_metadata = request_data.get("metadata", {})
-            metadata_tags: Optional[List[str]] = None
-            if request_metadata is not None and isinstance(request_metadata, dict):
-                metadata_tags = get_tag_from_metadata(metadata=request_metadata)
-            if metadata_tags is not None:
-                _tags.extend(metadata_tags)
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -881,9 +877,7 @@ class PrometheusLogger(CustomLogger):
             if standard_logging_payload is not None and isinstance(
                 standard_logging_payload, dict
             ):
-                _tags = get_tags_from_standard_logging_payload(
-                    cast(StandardLoggingPayload, standard_logging_payload)
-                )
+                _tags = standard_logging_payload["request_tags"]
                 for tag in _tags:
                     self.litellm_deployment_failure_by_tag_responses.labels(
                         **{
@@ -1282,6 +1276,11 @@ def prometheus_label_factory(
             service_type="prometheus",
         )
 
+    if enum_values.custom_metadata_labels is not None:
+        for key, value in enum_values.custom_metadata_labels.items():
+            if key in supported_enum_labels:
+                filtered_labels[key] = value
+
     for label in supported_enum_labels:
         if label not in filtered_labels:
             filtered_labels[label] = None
@@ -1289,32 +1288,19 @@ def prometheus_label_factory(
     return filtered_labels
 
 
-def get_tags_from_standard_logging_payload(
-    standard_logging_payload: StandardLoggingPayload,
-) -> List[str]:
-    _tags = standard_logging_payload["request_tags"]
-    _requester_metadata = standard_logging_payload["metadata"].get("requester_metadata")
-    metadata_tags: Optional[List[str]] = None
-    if _requester_metadata is not None:
-        metadata_tags = get_tag_from_metadata(metadata=_requester_metadata)
-    if metadata_tags is not None:
-        _tags.extend(metadata_tags)
-
-    return _tags
-
-
-def get_tag_from_metadata(metadata: dict) -> Optional[List[str]]:
+def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
     """
-    Get tag from metadata
+    Get custom labels from metadata
     """
     keys = litellm.custom_prometheus_metadata_labels
     if keys is None or len(keys) == 0:
-        return None
+        return {}
 
-    result: List[str] = []
+    result: Dict[str, str] = {}
 
     for key in keys:
         # Split the dot notation key into parts
+        original_key = key
         key = key.replace("metadata.", "", 1) if key.startswith("metadata.") else key
 
         keys_parts = key.split(".")
@@ -1326,6 +1312,6 @@ def get_tag_from_metadata(metadata: dict) -> Optional[List[str]]:
                 break
 
         if value is not None and isinstance(value, str):
-            result.append(value)
+            result[original_key.replace(".", "_")] = value
 
     return result
