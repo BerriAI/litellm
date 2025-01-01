@@ -194,6 +194,16 @@ def test_increment_token_metrics(prometheus_logger):
     standard_logging_payload["prompt_tokens"] = 50
     standard_logging_payload["completion_tokens"] = 50
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
+
     prometheus_logger._increment_token_metrics(
         standard_logging_payload,
         end_user_id="user1",
@@ -203,6 +213,7 @@ def test_increment_token_metrics(prometheus_logger):
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         user_id="user1",
+        enum_values=enum_values,
     )
 
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
