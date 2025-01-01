@@ -1939,15 +1939,7 @@ class ProxyConfig:
             use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
             load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
             ### ALERTING ###
-
-            proxy_logging_obj.update_values(
-                alerting=general_settings.get("alerting", None),
-                alerting_threshold=general_settings.get("alerting_threshold", 600),
-                alert_types=general_settings.get("alert_types", None),
-                alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
-                alerting_args=general_settings.get("alerting_args", None),
-                redis_cache=redis_usage_cache,
-            )
+            self._load_alerting_settings(general_settings=general_settings)
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
@@ -2134,6 +2126,46 @@ class ProxyConfig:
                 all_guardrails=guardrails_v2, config_file_path=config_file_path
             )
         return router, router.get_model_list(), general_settings
+
+    def _load_alerting_settings(self, general_settings: dict):
+        """
+        Initialize alerting settings
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+
+        _alerting_callbacks = general_settings.get("alerting", None)
+        verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
+        if _alerting_callbacks is None:
+            return
+        for _alert in _alerting_callbacks:
+            if _alert == "slack":
+                # [OLD] v0 implementation
+                proxy_logging_obj.update_values(
+                    alerting=general_settings.get("alerting", None),
+                    alerting_threshold=general_settings.get("alerting_threshold", 600),
+                    alert_types=general_settings.get("alert_types", None),
+                    alert_to_webhook_url=general_settings.get(
+                        "alert_to_webhook_url", None
+                    ),
+                    alerting_args=general_settings.get("alerting_args", None),
+                    redis_cache=redis_usage_cache,
+                )
+            else:
+                # [NEW] v1 implementation - init as a custom logger
+                if _alert in litellm._known_custom_logger_compatible_callbacks:
+                    _logger = _init_custom_logger_compatible_class(
+                        logging_integration=_alert,
+                        internal_usage_cache=None,
+                        llm_router=None,
+                        custom_logger_init_args={
+                            "alerting_args": general_settings.get("alerting_args", None)
+                        },
+                    )
+                    if _logger is not None:
+                        litellm.callbacks.append(_logger)
+        pass
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
