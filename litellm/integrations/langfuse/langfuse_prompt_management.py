@@ -16,9 +16,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
-from ...litellm_core_utils.initialize_dynamic_callback_params import (
-    initialize_standard_callback_dynamic_params,
-)
 from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
