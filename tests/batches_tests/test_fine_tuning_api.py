@@ -24,6 +24,7 @@ from litellm.llms.vertex_ai.fine_tuning.handler import (
     FineTuningJobCreate,
     VertexFineTuningAPI,
 )
+from litellm.types.llms.openai import Hyperparameters
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -239,7 +240,7 @@ async def test_azure_create_fine_tune_jobs_async():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
-    load_vertex_ai_credentials()
+    # load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -309,6 +310,90 @@ async def test_create_vertex_fine_tune_jobs_mocked():
         assert response_json["integrations"] == []
 
 
+@pytest.mark.asyncio()
+async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
+    # load_vertex_ai_credentials()
+    # Define reusable variables for the test
+    project_id = "633608382793"
+    location = "us-central1"
+    job_id = "3978211980451250176"
+    base_model = "gemini-1.0-pro-002"
+    tuned_model_name = f"{base_model}-f9259f2c-3fdf-4dd3-9413-afef2bfd24f5"
+    training_file = (
+        "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
+    )
+    create_time = "2024-12-31T22:40:20.211140Z"
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = MagicMock(
+        return_value={
+            "name": f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}",
+            "tunedModelDisplayName": tuned_model_name,
+            "baseModel": base_model,
+            "supervisedTuningSpec": {"trainingDatasetUri": training_file},
+            "state": "JOB_STATE_PENDING",
+            "createTime": create_time,
+            "updateTime": create_time,
+        }
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
+            model=base_model,
+            custom_llm_provider="vertex_ai",
+            training_file=training_file,
+            vertex_project=project_id,
+            vertex_location=location,
+            hyperparameters={
+                "n_epochs": 5,
+                "learning_rate_multiplier": 0.2,
+                "adapter_size": "SMALL",
+            },
+        )
+
+        # Verify the request
+        mock_post.assert_called_once()
+
+        # Validate the request
+        assert mock_post.call_args.kwargs["json"] == {
+            "baseModel": base_model,
+            "supervisedTuningSpec": {
+                "training_dataset_uri": training_file,
+                "hyperParameters": {
+                    "epoch_count": 5,
+                    "learning_rate_multiplier": 0.2,
+                    "adapter_size": "SMALL",
+                },
+            },
+            "tunedModelDisplayName": None,
+        }
+
+        # Verify the response
+        response_json = json.loads(create_fine_tuning_response.model_dump_json())
+        assert (
+            response_json["id"]
+            == f"projects/{project_id}/locations/{location}/tuningJobs/{job_id}"
+        )
+        assert response_json["model"] == base_model
+        assert response_json["object"] == "fine_tuning.job"
+        assert response_json["fine_tuned_model"] == tuned_model_name
+        assert response_json["status"] == "queued"
+        assert response_json["training_file"] == training_file
+        assert (
+            response_json["created_at"] == 1735684820
+        )  # Unix timestamp for create_time
+        assert response_json["error"] is None
+        assert response_json["finished_at"] is None
+        assert response_json["validation_file"] is None
+        assert response_json["trained_tokens"] is None
+        assert response_json["estimated_finish"] is None
+        assert response_json["integrations"] == []
+
+
 # Testing OpenAI -> Vertex AI param mapping
 
 
@@ -342,15 +427,20 @@ def test_convert_openai_request_to_vertex_basic():
 
 
 def test_convert_openai_request_to_vertex_with_adapter_size():
+    original_hyperparameters = {
+        "n_epochs": 5,
+        "learning_rate_multiplier": 0.2,
+        "adapter_size": "SMALL",
+    }
     openai_data = FineTuningJobCreate(
         training_file="gs://bucket/train.jsonl",
         model="text-davinci-002",
-        hyperparameters={"n_epochs": 5, "learning_rate_multiplier": 0.2},
+        hyperparameters=Hyperparameters(**original_hyperparameters),
         suffix="custom_model",
     )
 
     result = vertex_finetune_api.convert_openai_request_to_vertex(
-        openai_data, kwargs={"adapter_size": "SMALL"}
+        openai_data, original_hyperparameters=original_hyperparameters
     )
 
     print("converted vertex ai result=", json.dumps(result, indent=4))
