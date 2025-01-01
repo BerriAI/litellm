@@ -4,6 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # VertexAI [Anthropic, Gemini, Model Garden]
 
+## Overview
 
 | Property | Details |
 |-------|-------|
@@ -11,6 +12,8 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
 | Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), `/fine_tuning`, [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
+
 
 <br />
 <br />
