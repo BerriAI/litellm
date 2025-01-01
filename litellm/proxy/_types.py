@@ -2237,3 +2237,6 @@ class ProxyStateVariables(TypedDict):
     """
 
     spend_logs_row_count: int
+
+
+UI_TEAM_ID = "litellm-dashboard"

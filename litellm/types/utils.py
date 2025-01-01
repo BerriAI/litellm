@@ -1813,3 +1813,9 @@ class LiteLLMLoggingBaseClass:
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         pass
+
+
+class CustomHuggingfaceTokenizer(TypedDict):
+    identifier: str
+    revision: str  # usually 'main'
+    auth_token: Optional[str]
