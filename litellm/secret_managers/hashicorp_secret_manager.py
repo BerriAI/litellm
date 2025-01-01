@@ -1,11 +1,13 @@
 import os
 from typing import Optional
 
+import litellm
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import KeyManagementSystem
 
 
 class HashicorpSecretManager:
@@ -21,6 +23,9 @@ class HashicorpSecretManager:
             raise ValueError(
                 "Missing Vault token. Please set VAULT_TOKEN in your environment."
             )
+
+        litellm.secret_manager_client = self
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
 
     def get_url(self, secret_name: str) -> str:
         _url = f"{self.vault_addr}/v1/"
