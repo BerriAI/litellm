@@ -10,10 +10,12 @@ This is an Enterprise only endpoint [Get Started with Enterprise here](https://c
 
 :::
 
-## Supported Providers
-- Azure OpenAI
-- OpenAI
-- Vertex AI
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI | - |
+| Cost Tracking | 🟡 | [Let us know if you need this](https://github.com/BerriAI/litellm/issues) |
+| Logging | ✅ | Works across all logging integrations |
+
 
 Add `finetune_settings` and `files_settings` to your litellm config.yaml to use the fine-tuning endpoints.
 ## Example config.yaml for `finetune_settings` and `files_settings`

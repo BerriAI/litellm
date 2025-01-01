@@ -28,4 +28,3 @@ finetune_settings:
     vertex_project: "adroit-crow-413218"
     vertex_location: "us-central1"
     vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
-
