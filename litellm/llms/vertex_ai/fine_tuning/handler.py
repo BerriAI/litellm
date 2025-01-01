@@ -4,14 +4,16 @@ from datetime import datetime
 from typing import Literal, Optional, Union
 
 import httpx
-from openai.types.fine_tuning.fine_tuning_job import FineTuningJob, Hyperparameters
+from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.types.fine_tuning import OpenAIFineTuningHyperparameters
 from litellm.types.llms.openai import FineTuningJobCreate
 from litellm.types.llms.vertex_ai import (
+    FineTuneHyperparameters,
     FineTuneJobCreate,
     FineTunesupervisedTuningSpec,
     ResponseTuningJob,
@@ -45,7 +47,9 @@ class VertexFineTuningAPI(VertexLLM):
             return 0
 
     def convert_openai_request_to_vertex(
-        self, create_fine_tuning_job_data: FineTuningJobCreate, **kwargs
+        self,
+        create_fine_tuning_job_data: FineTuningJobCreate,
+        kwargs: Optional[dict] = None,
     ) -> FineTuneJobCreate:
         """
         convert request from OpenAI format to Vertex format
@@ -62,17 +66,12 @@ class VertexFineTuningAPI(VertexLLM):
                 create_fine_tuning_job_data.validation_file
             )
 
-        if kwargs.get("adapter_size"):
-            supervised_tuning_spec["adapter_size"] = kwargs.get("adapter_size")
-
-        hyperparameters = create_fine_tuning_job_data.hyperparameters
-        if hyperparameters:
-            if hyperparameters.n_epochs:
-                supervised_tuning_spec["epoch_count"] = int(hyperparameters.n_epochs)
-            if hyperparameters.learning_rate_multiplier:
-                supervised_tuning_spec["learning_rate_multiplier"] = float(
-                    hyperparameters.learning_rate_multiplier
-                )
+        _vertex_hyperparameters = (
+            self._transform_openai_hyperparameters_to_vertex_hyperparameters(
+                create_fine_tuning_job_data=create_fine_tuning_job_data, kwargs=kwargs
+            )
+        )
+        supervised_tuning_spec["hyperParameters"] = _vertex_hyperparameters
 
         fine_tune_job = FineTuneJobCreate(
             baseModel=create_fine_tuning_job_data.model,
@@ -81,6 +80,28 @@ class VertexFineTuningAPI(VertexLLM):
         )
 
         return fine_tune_job
+
+    def _transform_openai_hyperparameters_to_vertex_hyperparameters(
+        self,
+        create_fine_tuning_job_data: FineTuningJobCreate,
+        kwargs: Optional[dict] = None,
+    ) -> FineTuneHyperparameters:
+        _oai_hyperparameters = create_fine_tuning_job_data.hyperparameters
+        _vertex_hyperparameters = FineTuneHyperparameters()
+        if _oai_hyperparameters:
+            if _oai_hyperparameters.n_epochs:
+                _vertex_hyperparameters["epoch_count"] = int(
+                    _oai_hyperparameters.n_epochs
+                )
+            if _oai_hyperparameters.learning_rate_multiplier:
+                _vertex_hyperparameters["learning_rate_multiplier"] = float(
+                    _oai_hyperparameters.learning_rate_multiplier
+                )
+
+        if kwargs and kwargs.get("adapter_size", None):
+            _vertex_hyperparameters["adapter_size"] = kwargs.get("adapter_size", None)
+
+        return _vertex_hyperparameters
 
     def convert_vertex_response_to_open_ai_response(
         self, response: ResponseTuningJob
@@ -102,16 +123,16 @@ class VertexFineTuningAPI(VertexLLM):
         created_at = self.convert_response_created_at(response)
 
         training_uri = ""
-        if "supervisedTuningSpec" in response and response["supervisedTuningSpec"]:
-            training_uri = response["supervisedTuningSpec"]["trainingDatasetUri"] or ""
-
+        _supervisedTuningSpec = response.get("supervisedTuningSpec", None) or {}
+        training_uri: str = _supervisedTuningSpec.get("trainingDatasetUri", "") or ""
         return FineTuningJob(
             id=response.get("name", "") or "",
             created_at=created_at,
             fine_tuned_model=response.get("tunedModelDisplayName", ""),
             finished_at=None,
-            hyperparameters=Hyperparameters(
-                n_epochs=0,
+            hyperparameters=self._translate_vertex_response_hyperparameters(
+                vertex_hyper_parameters=_supervisedTuningSpec.get("hyperParameters", {})
+                or {}
             ),
             model=response.get("baseModel", "") or "",
             object="fine_tuning.job",
@@ -124,6 +145,18 @@ class VertexFineTuningAPI(VertexLLM):
             validation_file=None,
             estimated_finish=None,
             integrations=[],
+        )
+
+    def _translate_vertex_response_hyperparameters(
+        self, vertex_hyper_parameters: FineTuneHyperparameters
+    ) -> OpenAIFineTuningHyperparameters:
+        """
+        translate vertex responsehyperparameters to openai hyperparameters
+        """
+        _dict_remaining_hyperparameters: dict = dict(vertex_hyper_parameters)
+        return OpenAIFineTuningHyperparameters(
+            n_epochs=_dict_remaining_hyperparameters.pop("epoch_count", 0),
+            **_dict_remaining_hyperparameters,
         )
 
     async def acreate_fine_tuning_job(
@@ -183,7 +216,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: Optional[str],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
-        **kwargs,
+        kwargs: Optional[dict] = None,
     ):
 
         verbose_logger.debug(
@@ -213,7 +246,8 @@ class VertexFineTuningAPI(VertexLLM):
         }
 
         fine_tune_job = self.convert_openai_request_to_vertex(
-            create_fine_tuning_job_data=create_fine_tuning_job_data, **kwargs
+            create_fine_tuning_job_data=create_fine_tuning_job_data,
+            kwargs=kwargs,
         )
 
         fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
