@@ -3,6 +3,7 @@ from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -27,6 +28,11 @@ class HashicorpSecretManager:
 
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
+        _refresh_interval = os.environ.get("HCP_VAULT_REFRESH_INTERVAL", 86400)
+        _refresh_interval = int(_refresh_interval) if _refresh_interval else 86400
+        self.cache = InMemoryCache(
+            default_ttl=_refresh_interval
+        )  # store in memory for 1 day
 
     def get_url(self, secret_name: str) -> str:
         _url = f"{self.vault_addr}/v1/"
@@ -41,6 +47,8 @@ class HashicorpSecretManager:
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
+        if self.cache.get_cache(secret_name) is not None:
+            return self.cache.get_cache(secret_name)
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
         )
@@ -57,7 +65,9 @@ class HashicorpSecretManager:
 
             # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp = response.json()
-            return self._get_secret_value_from_json_response(json_resp)
+            _value = self._get_secret_value_from_json_response(json_resp)
+            self.cache.set_cache(secret_name, _value)
+            return _value
 
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
@@ -69,6 +79,8 @@ class HashicorpSecretManager:
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
+        if self.cache.get_cache(secret_name) is not None:
+            return self.cache.get_cache(secret_name)
         sync_client = _get_httpx_client()
         try:
             # For KV v2: /v1/<mount>/data/<path>
@@ -79,7 +91,9 @@ class HashicorpSecretManager:
 
             # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp = response.json()
-            return self._get_secret_value_from_json_response(json_resp)
+            _value = self._get_secret_value_from_json_response(json_resp)
+            self.cache.set_cache(secret_name, _value)
+            return _value
 
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
