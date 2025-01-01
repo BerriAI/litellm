@@ -85,6 +85,11 @@ def _is_allowed_to_create_key(
         )
 
     if team_id is not None:
+        if (
+            user_api_key_dict.team_id is not None
+            and user_api_key_dict.team_id == UI_TEAM_ID
+        ):
+            return True  # handle https://github.com/BerriAI/litellm/issues/7482
         assert (
             user_api_key_dict.team_id == team_id
         ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
