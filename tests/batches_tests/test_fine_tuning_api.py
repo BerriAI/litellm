@@ -240,7 +240,7 @@ async def test_azure_create_fine_tune_jobs_async():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked():
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
@@ -312,7 +312,7 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
 @pytest.mark.asyncio()
 async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     # Define reusable variables for the test
     project_id = "633608382793"
     location = "us-central1"
