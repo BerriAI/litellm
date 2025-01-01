@@ -1601,6 +1601,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
 
+    # Humanloop dynamic params
+    humanloop_api_key: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
 
@@ -1675,6 +1678,8 @@ all_litellm_params = [
     "azure_ad_token_provider",
     "tenant_id",
     "client_id",
+    "azure_username",
+    "azure_password",
     "client_secret",
     "user_continue_message",
     "configurable_clientside_auth_params",
@@ -1810,3 +1815,9 @@ class LiteLLMLoggingBaseClass:
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         pass
+
+
+class CustomHuggingfaceTokenizer(TypedDict):
+    identifier: str
+    revision: str  # usually 'main'
+    auth_token: Optional[str]

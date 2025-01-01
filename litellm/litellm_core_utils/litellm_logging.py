@@ -30,6 +30,7 @@ from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -76,6 +77,7 @@ from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
+from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
@@ -93,7 +95,11 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
+from .initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
+)
 from .logging_utils import _assemble_complete_response_from_streaming_chunks
+from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
     from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -152,39 +158,6 @@ class ServiceTraceIDCache:
     def set_cache(self, litellm_call_id: str, service_name: str, trace_id: str) -> None:
         key_name = "{}:{}".format(service_name, litellm_call_id)
         self.cache.set_cache(key=key_name, value=trace_id)
-        return None
-
-
-import hashlib
-
-
-class DynamicLoggingCache:
-    """
-    Prevent memory leaks caused by initializing new logging clients on each request.
-
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/5695
-    """
-
-    def __init__(self) -> None:
-        self.cache = InMemoryCache()
-
-    def get_cache_key(self, args: dict) -> str:
-        args_str = json.dumps(args, sort_keys=True)
-        cache_key = hashlib.sha256(args_str.encode("utf-8")).hexdigest()
-        return cache_key
-
-    def get_cache(self, credentials: dict, service_name: str) -> Optional[Any]:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
-        response = self.cache.get_cache(key=key_name)
-        return response
-
-    def set_cache(self, credentials: dict, service_name: str, logging_obj: Any) -> None:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
-        self.cache.set_cache(key=key_name, value=logging_obj)
         return None
 
 
@@ -369,24 +342,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
         """
-        from litellm.secret_managers.main import get_secret_str
-
-        standard_callback_dynamic_params = StandardCallbackDynamicParams()
-        if kwargs:
-            _supported_callback_params = (
-                StandardCallbackDynamicParams.__annotations__.keys()
-            )
-            for param in _supported_callback_params:
-                if param in kwargs:
-                    _param_value = kwargs.pop(param)
-                    if (
-                        _param_value is not None
-                        and isinstance(_param_value, str)
-                        and "os.environ/" in _param_value
-                    ):
-                        _param_value = get_secret_str(secret_name=_param_value)
-                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
-        return standard_callback_dynamic_params
+        return _initialize_standard_callback_dynamic_params(kwargs)
 
     def update_environment_variables(
         self,
@@ -446,6 +402,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: str,
         prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
+
         for (
             custom_logger_compatible_callback
         ) in litellm._known_custom_logger_compatible_callbacks:
@@ -455,6 +412,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     internal_usage_cache=None,
                     llm_router=None,
                 )
+
                 if custom_logger is None:
                     continue
                 model, messages, non_default_params = (
@@ -960,7 +918,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
+        verbose_logger.debug(
+            f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
+        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -968,9 +928,7 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
-        # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
 
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
@@ -2012,6 +1970,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         result = None  # result sent to all loggers, init this to None incase it's not created
+
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
@@ -2034,7 +1993,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
             except Exception as e:
                 verbose_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success \
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure \
                         logging {}\nCallback={}".format(
                         str(e), callback
                     )
@@ -2205,7 +2164,12 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
+    custom_logger_init_args: Optional[dict] = {},
 ) -> Optional[CustomLogger]:
+    """
+    Initialize a custom logger compatible class
+    """
+    custom_logger_init_args = custom_logger_init_args or {}
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -2428,6 +2392,21 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
         langfuse_logger = LangfusePromptManagement()
         _in_memory_loggers.append(langfuse_logger)
         return langfuse_logger  # type: ignore
+    elif logging_integration == "pagerduty":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PagerDutyAlerting):
+                return callback
+        pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
+        _in_memory_loggers.append(pagerduty_logger)
+        return pagerduty_logger  # type: ignore
+    elif logging_integration == "humanloop":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, HumanloopLogger):
+                return callback
+
+        humanloop_logger = HumanloopLogger()
+        _in_memory_loggers.append(humanloop_logger)
+        return humanloop_logger  # type: ignore
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
@@ -2542,6 +2521,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):
+                return callback
+    elif logging_integration == "pagerduty":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, PagerDutyAlerting):
                 return callback
 
     return None

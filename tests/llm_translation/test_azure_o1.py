@@ -42,7 +42,7 @@ class TestAzureOpenAIO1(BaseLLMChatTest):
                     "model_name": "azure/o1-preview",
                     "litellm_params": {
                         "model": "azure/o1-preview",
-                        "api_key": "my-fake-api-key",
+                        "api_key": "my-fake-o1-key",
                         "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
                     },
                     "model_info": {

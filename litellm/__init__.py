@@ -26,6 +26,8 @@ from litellm.constants import (
     DEFAULT_REPLICATE_POLLING_RETRIES,
     DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
     LITELLM_CHAT_PROVIDERS,
+    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
+    OPENAI_CHAT_COMPLETION_PARAMS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -72,6 +74,8 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "argilla",
     "mlflow",
     "langfuse",
+    "pagerduty",
+    "humanloop",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -304,6 +308,7 @@ tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
+custom_prometheus_metadata_labels: Optional[List[str]] = None
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####

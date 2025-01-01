@@ -274,6 +274,8 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
+from litellm.types.utils import CustomHuggingfaceTokenizer
+from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -293,6 +295,7 @@ from fastapi import (
     Header,
     HTTPException,
     Path,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -1936,15 +1939,7 @@ class ProxyConfig:
             use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
             load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
             ### ALERTING ###
-
-            proxy_logging_obj.update_values(
-                alerting=general_settings.get("alerting", None),
-                alerting_threshold=general_settings.get("alerting_threshold", 600),
-                alert_types=general_settings.get("alert_types", None),
-                alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
-                alerting_args=general_settings.get("alerting_args", None),
-                redis_cache=redis_usage_cache,
-            )
+            self._load_alerting_settings(general_settings=general_settings)
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
@@ -2131,6 +2126,46 @@ class ProxyConfig:
                 all_guardrails=guardrails_v2, config_file_path=config_file_path
             )
         return router, router.get_model_list(), general_settings
+
+    def _load_alerting_settings(self, general_settings: dict):
+        """
+        Initialize alerting settings
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            _init_custom_logger_compatible_class,
+        )
+
+        _alerting_callbacks = general_settings.get("alerting", None)
+        verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
+        if _alerting_callbacks is None:
+            return
+        for _alert in _alerting_callbacks:
+            if _alert == "slack":
+                # [OLD] v0 implementation
+                proxy_logging_obj.update_values(
+                    alerting=general_settings.get("alerting", None),
+                    alerting_threshold=general_settings.get("alerting_threshold", 600),
+                    alert_types=general_settings.get("alert_types", None),
+                    alert_to_webhook_url=general_settings.get(
+                        "alert_to_webhook_url", None
+                    ),
+                    alerting_args=general_settings.get("alerting_args", None),
+                    redis_cache=redis_usage_cache,
+                )
+            else:
+                # [NEW] v1 implementation - init as a custom logger
+                if _alert in litellm._known_custom_logger_compatible_callbacks:
+                    _logger = _init_custom_logger_compatible_class(
+                        logging_integration=_alert,
+                        internal_usage_cache=None,
+                        llm_router=None,
+                        custom_logger_init_args={
+                            "alerting_args": general_settings.get("alerting_args", None)
+                        },
+                    )
+                    if _logger is not None:
+                        litellm.callbacks.append(_logger)
+        pass
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
@@ -5526,11 +5561,16 @@ async def token_counter(request: TokenCountRequest):
 
     deployment = None
     litellm_model_name = None
+    model_info: Optional[ModelMapInfo] = None
     if llm_router is not None:
         # get 1 deployment corresponding to the model
         for _model in llm_router.model_list:
             if _model["model_name"] == request.model:
                 deployment = _model
+                model_info = llm_router.get_router_model_info(
+                    deployment=deployment,
+                    received_model_name=request.model,
+                )
                 break
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
@@ -5541,12 +5581,22 @@ async def token_counter(request: TokenCountRequest):
     model_to_use = (
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
-    _tokenizer_used = litellm.utils._select_tokenizer(model=model_to_use)
+
+    custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
+    if model_info is not None:
+        custom_tokenizer = cast(
+            Optional[CustomHuggingfaceTokenizer],
+            model_info.get("custom_tokenizer", None),
+        )
+    _tokenizer_used = litellm.utils._select_tokenizer(
+        model=model_to_use, custom_tokenizer=custom_tokenizer
+    )
     tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,
         text=prompt,
         messages=messages,
+        custom_tokenizer=_tokenizer_used,
     )
     return TokenCountResponse(
         total_tokens=total_tokens,
@@ -6605,6 +6655,20 @@ async def model_info_v1(  # noqa: PLR0915
     return {"data": all_models}
 
 
+def _get_model_group_info(
+    llm_router: Router, all_models_str: List[str], model_group: Optional[str]
+) -> List[ModelGroupInfo]:
+    model_groups: List[ModelGroupInfo] = []
+    for model in all_models_str:
+        if model_group is not None and model_group != model:
+            continue
+
+        _model_group_info = llm_router.get_model_group_info(model_group=model)
+        if _model_group_info is not None:
+            model_groups.append(_model_group_info)
+    return model_groups
+
+
 @router.get(
     "/model_group/info",
     tags=["model management"],
@@ -6612,20 +6676,41 @@ async def model_info_v1(  # noqa: PLR0915
 )
 async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    model_group: Optional[str] = None,
 ):
     """
     Get information about all the deployments on litellm proxy, including config.yaml descriptions (except api key and api base)
 
-    - /models returns all deployments. Proxy Admins can use this to list all deployments setup on the proxy
     - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
+    - /model_group/info?model_group=rerank-english-v3.0 returns all model groups for a specific model group (`model_name` in config.yaml)
 
+    
 
+    Example Request (All Models):
     ```shell
     curl -X 'GET' \
     'http://localhost:4000/model_group/info' \
     -H 'accept: application/json' \
     -H 'x-api-key: sk-1234'
     ```
+
+    Example Request (Specific Model Group):
+    ```shell
+    curl -X 'GET' \
+    'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0' \
+    -H 'accept: application/json' \
+    -H 'Authorization: Bearer sk-1234'
+    ```
+
+    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml) 
+    ```shell
+    curl -X 'GET' \
+    'http://localhost:4000/model_group/info?model_group=openai/tts-1' 
+    -H 'accept: application/json' \
+    -H 'Authorization: Bearersk-1234'
+    ```
+
+    Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
 
     Example Response:
     ```json
@@ -6779,13 +6864,9 @@ async def model_group_info(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
     )
 
-    model_groups: List[ModelGroupInfo] = []
-
-    for model in all_models_str:
-
-        _model_group_info = llm_router.get_model_group_info(model_group=model)
-        if _model_group_info is not None:
-            model_groups.append(_model_group_info)
+    model_groups: List[ModelGroupInfo] = _get_model_group_info(
+        llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
+    )
 
     return {"data": model_groups}
 

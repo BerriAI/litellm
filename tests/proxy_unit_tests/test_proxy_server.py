@@ -1914,8 +1914,10 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
+    print(f"resp: {resp}")
     models = resp["data"]
     is_model_alias_in_list = False
+    print(f"model_alias: {model_alias}, models: {models}")
     for item in models:
         if model_alias == item.model_group:
             is_model_alias_in_list = True
