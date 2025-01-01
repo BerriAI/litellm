@@ -71,7 +71,9 @@ class VertexFineTuningAPI(VertexLLM):
                 create_fine_tuning_job_data=create_fine_tuning_job_data, kwargs=kwargs
             )
         )
-        supervised_tuning_spec["hyperParameters"] = _vertex_hyperparameters
+
+        if _vertex_hyperparameters and len(_vertex_hyperparameters) > 0:
+            supervised_tuning_spec["hyperParameters"] = _vertex_hyperparameters
 
         fine_tune_job = FineTuneJobCreate(
             baseModel=create_fine_tuning_job_data.model,
