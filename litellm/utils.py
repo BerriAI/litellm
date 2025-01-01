@@ -126,6 +126,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CustomHuggingfaceTokenizer,
     Delta,
     Embedding,
     EmbeddingResponse,
@@ -1242,10 +1243,21 @@ def _is_async_request(
     return False
 
 
-@lru_cache(maxsize=128)
 def _select_tokenizer(
-    model: str,
+    model: str, custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
 ):
+    if custom_tokenizer is not None:
+        custom_tokenizer = Tokenizer.from_pretrained(
+            custom_tokenizer["identifier"],
+            revision=custom_tokenizer["revision"],
+            auth_token=custom_tokenizer["auth_token"],
+        )
+        return {"type": "huggingface_tokenizer", "tokenizer": custom_tokenizer}
+    return _select_tokenizer_helper(model=model)
+
+
+@lru_cache(maxsize=128)
+def _select_tokenizer_helper(model: str):
     if model in litellm.cohere_models and "command-r" in model:
         # cohere
         cohere_tokenizer = Tokenizer.from_pretrained(
