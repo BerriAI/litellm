@@ -149,6 +149,55 @@ Metrics used to track LiteLLM Proxy Budgeting and Rate limiting logic
 | `litellm_remaining_api_key_requests_for_model`                | Remaining Requests for a LiteLLM virtual API key, only if a model-specific rate limit (rpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
 | `litellm_remaining_api_key_tokens_for_model`                | Remaining Tokens for a LiteLLM virtual API key, only if a model-specific token limit (tpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
 
+## [BETA] Custom Metrics
+
+Track custom metrics on prometheus on all events mentioned above. 
+
+1. Define the custom metrics in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: openai/gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  callbacks: ["prometheus"]
+  custom_prometheus_metadata_labels: ["metadata.foo", "metadata.bar"]
+```
+
+2. Make a request with the custom metadata labels
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <LITELLM_API_KEY>' \
+-d '{
+    "model": "openai/gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What'\''s in this image?"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "metadata": {
+        "foo": "hello world"
+    }
+}'
+```
+
+3. Check your `/metrics` endpoint for the custom metrics  
+
+```
+... "tag": "hello world" ...
+```
 
 
 ## Monitor System Health
@@ -169,6 +218,7 @@ litellm_settings:
 | `litellm_redis_latency`         | histogram latency for redis calls     |
 | `litellm_redis_fails`         | Number of failed redis calls    |
 | `litellm_self_latency`         | Histogram latency for successful litellm api call    |
+
 
 ## **🔥 LiteLLM Maintained Grafana Dashboards **
 
@@ -192,6 +242,7 @@ Here is a screenshot of the metrics you can monitor with the LiteLLM Grafana Das
 |----------------------|--------------------------------------|
 | `litellm_llm_api_failed_requests_metric`             | **deprecated** use `litellm_proxy_failed_requests_metric` |
 | `litellm_requests_metric`             | **deprecated** use `litellm_proxy_total_requests_metric` |
+
 
 
 ## FAQ 
