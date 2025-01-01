@@ -5,11 +5,13 @@ from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -199,3 +201,24 @@ class AzureAIStudioConfig(OpenAIConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+
+    def should_retry_llm_api_inside_llm_translation_on_http_error(
+        self, e: httpx.HTTPStatusError, litellm_params: dict
+    ) -> bool:
+        should_drop_params = litellm_params.get("drop_params") or litellm.drop_params
+        error_text = e.response.text
+        if should_drop_params and "Extra inputs are not permitted" in error_text:
+            return True
+        return super().should_retry_llm_api_inside_llm_translation_on_http_error(
+            e=e, litellm_params=litellm_params
+        )
+
+    @property
+    def max_retry_on_unprocessable_entity_error(self) -> int:
+        return 2
+
+    def transform_request_on_unprocessable_entity_error(
+        self, e: httpx.HTTPStatusError, request_data: dict
+    ) -> dict:
+        data = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
+        return data
