@@ -1406,6 +1406,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     custom_llm_provider=custom_llm_provider,
                     encoding=encoding,
+                    stream=stream,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned

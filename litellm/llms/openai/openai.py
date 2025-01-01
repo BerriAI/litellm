@@ -1,10 +1,13 @@
 import hashlib
+import json
 import types
 from typing import (
     Any,
+    AsyncIterator,
     Callable,
     Coroutine,
     Iterable,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -24,10 +27,17 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
-from litellm.types.utils import EmbeddingResponse, ImageResponse, ModelResponse
+from litellm.types.utils import (
+    EmbeddingResponse,
+    GenericStreamingChunk,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -276,6 +286,29 @@ class OpenAIConfig(BaseConfig):
             "Authorization": f"Bearer {api_key}",
             **headers,
         }
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return OpenAIChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        """
+        {'choices': [{'delta': {'content': '', 'role': 'assistant'}, 'finish_reason': None, 'index': 0, 'logprobs': None}], 'created': 1735763082, 'id': 'a83a2b0fbfaf4aab9c2c93cb8ba346d7', 'model': 'mistral-large', 'object': 'chat.completion.chunk'}
+        """
+        try:
+            return ModelResponseStream(**chunk)
+        except Exception as e:
+            raise e
 
 
 class OpenAIChatCompletion(BaseLLM):
