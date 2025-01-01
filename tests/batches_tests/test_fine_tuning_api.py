@@ -466,7 +466,7 @@ def test_convert_basic_openai_request_to_vertex_request():
     )
 
     result = vertex_finetune_api.convert_openai_request_to_vertex(
-        openai_data, kwargs={"adapter_size": "SMALL"}
+        openai_data,
     )
 
     print("converted vertex ai result=", json.dumps(result, indent=4))
