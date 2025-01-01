@@ -241,17 +241,43 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(
-                e=e,
-                provider_config=provider_config,
+        max_retry_on_unprocessable_entity_error = (
+            provider_config.max_retry_on_unprocessable_entity_error
+        )
+
+        response: Optional[httpx.Response] = None
+
+        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+            try:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=timeout,
+                )
+            except httpx.HTTPStatusError as e:
+                hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
+                should_retry = provider_config.should_retry_llm_api_inside_llm_translation_on_http_error(
+                    e=e, litellm_params=litellm_params
+                )
+                if should_retry and not hit_max_retry:
+                    data = (
+                        provider_config.transform_request_on_unprocessable_entity_error(
+                            e=e, request_data=data
+                        )
+                    )
+                    continue
+                else:
+                    raise self._handle_error(e=e, provider_config=provider_config)
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            break
+
+        if response is None:
+            raise provider_config.get_error_class(
+                error_message="No response from the API",
+                status_code=422,  # don't retry on this error
+                headers={},
             )
 
         return provider_config.transform_response(
