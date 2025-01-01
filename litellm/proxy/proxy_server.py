@@ -6627,10 +6627,7 @@ def _get_model_group_info(
 )
 async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    model_group: Optional[str] = Query(
-        None,
-        description="The model group name. Set this to filter results to a specific model group.",
-    ),
+    model_group: Optional[str] = None,
 ):
     """
     Get information about all the deployments on litellm proxy, including config.yaml descriptions (except api key and api base)
