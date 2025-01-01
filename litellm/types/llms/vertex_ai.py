@@ -340,7 +340,7 @@ class FineTuneJobCreate(TypedDict, total=False):
     tunedModelDisplayName: Optional[str]
 
 
-class ResponseSupervisedTuningSpec(TypedDict):
+class ResponseSupervisedTuningSpec(TypedDict, total=False):
     trainingDatasetUri: Optional[str]
     hyperParameters: Optional[FineTuneHyperparameters]
 

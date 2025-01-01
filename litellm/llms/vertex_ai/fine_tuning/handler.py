@@ -16,6 +16,7 @@ from litellm.types.llms.vertex_ai import (
     FineTuneHyperparameters,
     FineTuneJobCreate,
     FineTunesupervisedTuningSpec,
+    ResponseSupervisedTuningSpec,
     ResponseTuningJob,
 )
 
@@ -129,8 +130,9 @@ class VertexFineTuningAPI(VertexLLM):
 
         created_at = self.convert_response_created_at(response)
 
-        training_uri = ""
-        _supervisedTuningSpec = response.get("supervisedTuningSpec", None) or {}
+        _supervisedTuningSpec: ResponseSupervisedTuningSpec = (
+            response.get("supervisedTuningSpec", None) or {}
+        )
         training_uri: str = _supervisedTuningSpec.get("trainingDatasetUri", "") or ""
         return FineTuningJob(
             id=response.get("name", "") or "",

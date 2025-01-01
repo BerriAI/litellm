@@ -114,7 +114,12 @@ def create_fine_tuning_job(
     try:
         _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
-        hyperparameters = hyperparameters or {}
+
+        # handle hyperparameters
+        hyperparameters = hyperparameters or {}  # original hyperparameters
+        _oai_hyperparameters: Hyperparameters = Hyperparameters(
+            **hyperparameters
+        )  # Typed Hyperparameters for OpenAI Spec
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -155,7 +160,6 @@ def create_fine_tuning_job(
                 or os.getenv("OPENAI_API_KEY")
             )
 
-            _oai_hyperparameters: Hyperparameters = Hyperparameters(**hyperparameters)
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
@@ -203,8 +207,6 @@ def create_fine_tuning_job(
                 extra_body.pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
-            _oai_hyperparameters: Hyperparameters = Hyperparameters(**hyperparameters)
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
@@ -244,7 +246,6 @@ def create_fine_tuning_job(
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )
-            _oai_hyperparameters: Hyperparameters = Hyperparameters(**hyperparameters)
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
