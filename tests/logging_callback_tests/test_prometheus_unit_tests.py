@@ -14,7 +14,11 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+from litellm.integrations.prometheus import (
+    PrometheusLogger,
+    UserAPIKeyLabelValues,
+    get_tag_from_metadata,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -190,6 +194,16 @@ def test_increment_token_metrics(prometheus_logger):
     standard_logging_payload["prompt_tokens"] = 50
     standard_logging_payload["completion_tokens"] = 50
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
+
     prometheus_logger._increment_token_metrics(
         standard_logging_payload,
         end_user_id="user1",
@@ -199,6 +213,7 @@ def test_increment_token_metrics(prometheus_logger):
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         user_id="user1",
+        enum_values=enum_values,
     )
 
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
@@ -207,14 +222,28 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
     prometheus_logger.litellm_input_tokens_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model=None,
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
         50
     )
 
     prometheus_logger.litellm_output_tokens_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model=None,
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -274,6 +303,18 @@ def test_set_latency_metrics(prometheus_logger):
     prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
     prometheus_logger.litellm_request_total_latency_metric = MagicMock()
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        requested_model=standard_logging_payload["model_group"],
+        user=standard_logging_payload["metadata"]["user_api_key_user_id"],
+        **standard_logging_payload,
+    )
+
     now = datetime.now()
     kwargs = {
         "end_time": now,  # when the request ends
@@ -291,6 +332,7 @@ def test_set_latency_metrics(prometheus_logger):
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         standard_logging_payload=standard_logging_payload,
+        enum_values=enum_values,
     )
 
     # completion_start_time - api_call_start_time
@@ -303,14 +345,14 @@ def test_set_latency_metrics(prometheus_logger):
 
     # end_time - api_call_start_time
     prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once_with(
-        model="gpt-3.5-turbo",
-        hashed_api_key="key1",
-        api_key_alias="alias1",
-        team="team1",
-        team_alias="team_alias1",
+        end_user=None,
         user="test_user",
-        end_user="test_end_user",
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
         requested_model="openai-gpt",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -318,13 +360,13 @@ def test_set_latency_metrics(prometheus_logger):
 
     # total latency for the request
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once_with(
-        end_user="test_end_user",
-        hashed_api_key="key1",
-        api_key_alias="alias1",
-        requested_model="openai-gpt",
-        team="team1",
-        team_alias="team_alias1",
+        end_user=None,
         user="test_user",
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model="openai-gpt",
         model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
@@ -849,3 +891,11 @@ def test_prometheus_factory(monkeypatch, disable_end_user_tracking):
         assert returned_dict["end_user"] == None
     else:
         assert returned_dict["end_user"] == "test_end_user"
+
+
+def test_get_tag_from_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels", ["metadata.foo", "metadata.bar"]
+    )
+    metadata = {"foo": "bar", "bar": "baz", "taz": "qux"}
+    assert get_tag_from_metadata(metadata) == ["bar", "baz"]
