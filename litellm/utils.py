@@ -1893,7 +1893,6 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         },
     }
     """
-
     loaded_model_cost = {}
     if isinstance(model_cost, dict):
         loaded_model_cost = model_cost
@@ -4353,6 +4352,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_embedding_image_input=_model_info.get(
                     "supports_embedding_image_input", False
                 ),
+                supports_native_streaming=_model_info.get(
+                    "supports_native_streaming", None
+                ),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
             )
@@ -6050,7 +6052,10 @@ class ProviderConfigManager:
         """
         Returns the provider config for a given provider.
         """
-        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
+        if (
+            provider == LlmProviders.OPENAI
+            and litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
+        ):
             return litellm.OpenAIO1Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
@@ -6122,6 +6127,8 @@ class ProviderConfigManager:
         ):
             return litellm.AI21ChatConfig()
         elif litellm.LlmProviders.AZURE == provider:
+            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+                return litellm.AzureOpenAIO1Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIStudioConfig()

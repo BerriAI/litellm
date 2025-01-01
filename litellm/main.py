@@ -923,44 +923,7 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    openai_params = [
-        "functions",
-        "function_call",
-        "temperature",
-        "temperature",
-        "top_p",
-        "n",
-        "stream",
-        "stream_options",
-        "stop",
-        "max_completion_tokens",
-        "modalities",
-        "prediction",
-        "audio",
-        "max_tokens",
-        "presence_penalty",
-        "frequency_penalty",
-        "logit_bias",
-        "user",
-        "request_timeout",
-        "api_base",
-        "api_version",
-        "api_key",
-        "deployment_id",
-        "organization",
-        "base_url",
-        "default_headers",
-        "timeout",
-        "response_format",
-        "seed",
-        "tools",
-        "tool_choice",
-        "max_retries",
-        "parallel_tool_calls",
-        "logprobs",
-        "top_logprobs",
-        "extra_headers",
-    ]
+    openai_params = litellm.OPENAI_CHAT_COMPLETION_PARAMS
     default_params = openai_params + all_litellm_params
     litellm_params = {}  # used to prevent unbound var errors
     non_default_params = {
@@ -1225,10 +1188,7 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if (
-                litellm.enable_preview_features
-                and litellm.AzureOpenAIO1Config().is_o1_model(model=model)
-            ):
+            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():
@@ -1244,7 +1204,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_key=api_key,
                     api_base=api_base,
                     api_version=api_version,
-                    api_type=api_type,
                     dynamic_params=dynamic_params,
                     azure_ad_token=azure_ad_token,
                     model_response=model_response,
@@ -1256,6 +1215,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     timeout=timeout,  # type: ignore
                     client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
+                    custom_llm_provider=custom_llm_provider,
                 )
             else:
                 ## LOAD CONFIG - if set
