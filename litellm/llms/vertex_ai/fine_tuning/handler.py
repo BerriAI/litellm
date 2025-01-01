@@ -49,6 +49,7 @@ class VertexFineTuningAPI(VertexLLM):
     def convert_openai_request_to_vertex(
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
+        original_hyperparameters: dict = {},
         kwargs: Optional[dict] = None,
     ) -> FineTuneJobCreate:
         """
@@ -68,7 +69,9 @@ class VertexFineTuningAPI(VertexLLM):
 
         _vertex_hyperparameters = (
             self._transform_openai_hyperparameters_to_vertex_hyperparameters(
-                create_fine_tuning_job_data=create_fine_tuning_job_data, kwargs=kwargs
+                create_fine_tuning_job_data=create_fine_tuning_job_data,
+                kwargs=kwargs,
+                original_hyperparameters=original_hyperparameters,
             )
         )
 
@@ -86,6 +89,7 @@ class VertexFineTuningAPI(VertexLLM):
     def _transform_openai_hyperparameters_to_vertex_hyperparameters(
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
+        original_hyperparameters: dict = {},
         kwargs: Optional[dict] = None,
     ) -> FineTuneHyperparameters:
         _oai_hyperparameters = create_fine_tuning_job_data.hyperparameters
@@ -100,8 +104,9 @@ class VertexFineTuningAPI(VertexLLM):
                     _oai_hyperparameters.learning_rate_multiplier
                 )
 
-        if kwargs and kwargs.get("adapter_size", None):
-            _vertex_hyperparameters["adapter_size"] = kwargs.get("adapter_size", None)
+        _adapter_size = original_hyperparameters.get("adapter_size", None)
+        if _adapter_size:
+            _vertex_hyperparameters["adapter_size"] = _adapter_size
 
         return _vertex_hyperparameters
 
@@ -219,6 +224,7 @@ class VertexFineTuningAPI(VertexLLM):
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
         kwargs: Optional[dict] = None,
+        original_hyperparameters: Optional[dict] = {},
     ):
 
         verbose_logger.debug(
@@ -250,6 +256,7 @@ class VertexFineTuningAPI(VertexLLM):
         fine_tune_job = self.convert_openai_request_to_vertex(
             create_fine_tuning_job_data=create_fine_tuning_job_data,
             kwargs=kwargs,
+            original_hyperparameters=original_hyperparameters or {},
         )
 
         fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"

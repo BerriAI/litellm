@@ -41,7 +41,7 @@ vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[Hyperparameters] = {},  # type: ignore
+    hyperparameters: Optional[dict] = {},
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -95,7 +95,7 @@ async def acreate_fine_tuning_job(
 def create_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[Hyperparameters] = {},  # type: ignore
+    hyperparameters: Optional[dict] = {},
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -114,6 +114,7 @@ def create_fine_tuning_job(
     try:
         _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
+        hyperparameters = hyperparameters or {}
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -154,10 +155,11 @@ def create_fine_tuning_job(
                 or os.getenv("OPENAI_API_KEY")
             )
 
+            _oai_hyperparameters: Hyperparameters = Hyperparameters(**hyperparameters)
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=hyperparameters,
+                hyperparameters=_oai_hyperparameters,
                 suffix=suffix,
                 validation_file=validation_file,
                 integrations=integrations,
@@ -202,10 +204,11 @@ def create_fine_tuning_job(
             else:
                 get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
+            _oai_hyperparameters: Hyperparameters = Hyperparameters(**hyperparameters)
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=hyperparameters,
+                hyperparameters=_oai_hyperparameters,
                 suffix=suffix,
                 validation_file=validation_file,
                 integrations=integrations,
@@ -241,10 +244,11 @@ def create_fine_tuning_job(
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )
+            _oai_hyperparameters: Hyperparameters = Hyperparameters(**hyperparameters)
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=hyperparameters,
+                hyperparameters=_oai_hyperparameters,
                 suffix=suffix,
                 validation_file=validation_file,
                 integrations=integrations,
@@ -259,6 +263,7 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 api_base=api_base,
                 kwargs=kwargs,
+                original_hyperparameters=hyperparameters,
             )
         else:
             raise litellm.exceptions.BadRequestError(
