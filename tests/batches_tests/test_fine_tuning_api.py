@@ -334,8 +334,11 @@ def test_convert_openai_request_to_vertex_basic():
     assert (
         result["supervisedTuningSpec"]["validation_dataset"] == "gs://bucket/val.jsonl"
     )
-    assert result["supervisedTuningSpec"]["epoch_count"] == 3
-    assert result["supervisedTuningSpec"]["learning_rate_multiplier"] == 0.1
+    assert result["supervisedTuningSpec"]["hyperParameters"]["epoch_count"] == 3
+    assert (
+        result["supervisedTuningSpec"]["hyperParameters"]["learning_rate_multiplier"]
+        == 0.1
+    )
 
 
 def test_convert_openai_request_to_vertex_with_adapter_size():
@@ -347,7 +350,7 @@ def test_convert_openai_request_to_vertex_with_adapter_size():
     )
 
     result = vertex_finetune_api.convert_openai_request_to_vertex(
-        openai_data, adapter_size="SMALL"
+        openai_data, kwargs={"adapter_size": "SMALL"}
     )
 
     print("converted vertex ai result=", json.dumps(result, indent=4))
@@ -358,9 +361,12 @@ def test_convert_openai_request_to_vertex_with_adapter_size():
         result["supervisedTuningSpec"]["training_dataset_uri"]
         == "gs://bucket/train.jsonl"
     )
-    assert result["supervisedTuningSpec"]["epoch_count"] == 5
-    assert result["supervisedTuningSpec"]["learning_rate_multiplier"] == 0.2
-    assert result["supervisedTuningSpec"]["adapter_size"] == "SMALL"
+    assert result["supervisedTuningSpec"]["hyperParameters"]["epoch_count"] == 5
+    assert (
+        result["supervisedTuningSpec"]["hyperParameters"]["learning_rate_multiplier"]
+        == 0.2
+    )
+    assert result["supervisedTuningSpec"]["hyperParameters"]["adapter_size"] == "SMALL"
 
 
 def test_convert_basic_openai_request_to_vertex_request():
@@ -370,7 +376,7 @@ def test_convert_basic_openai_request_to_vertex_request():
     )
 
     result = vertex_finetune_api.convert_openai_request_to_vertex(
-        openai_data, adapter_size="SMALL"
+        openai_data, kwargs={"adapter_size": "SMALL"}
     )
 
     print("converted vertex ai result=", json.dumps(result, indent=4))
