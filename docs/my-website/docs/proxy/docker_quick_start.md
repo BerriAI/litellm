@@ -252,7 +252,7 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 -H 'Content-Type: application/json' \
 -d '{
     "rpm_limit": 1
-}
+}'
 ```
 
 [**See full API Spec**](https://litellm-api.up.railway.app/#/key%20management/generate_key_fn_key_generate_post)
