@@ -1276,14 +1276,15 @@ def prometheus_label_factory(
         if label in supported_enum_labels
     }
 
-    if tag and "tag" in supported_enum_labels:
-        filtered_labels["tag"] = tag
-
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
         filtered_labels["end_user"] = get_end_user_id_for_cost_tracking(
             litellm_params={"user_api_key_end_user_id": enum_values.end_user},
             service_type="prometheus",
         )
+
+    for label in supported_enum_labels:
+        if label not in filtered_labels:
+            filtered_labels[label] = None
 
     return filtered_labels
 
