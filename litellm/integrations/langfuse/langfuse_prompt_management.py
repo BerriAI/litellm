@@ -16,7 +16,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
+from ...litellm_core_utils.initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params,
+)
+from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
+    DynamicLoggingCache,
+)
 from .langfuse import LangFuseLogger
+from .langfuse_handler import LangFuseHandler
 
 if TYPE_CHECKING:
     from langfuse import Langfuse
@@ -28,6 +35,8 @@ if TYPE_CHECKING:
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any
+
+in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
 @lru_cache(maxsize=10)
@@ -252,7 +261,15 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         return model, messages, non_default_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self._old_log_event(
+        standard_callback_dynamic_params = kwargs.get(
+            "standard_callback_dynamic_params"
+        )
+        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+            globalLangfuseLogger=self,
+            standard_callback_dynamic_params=standard_callback_dynamic_params,
+            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+        )
+        langfuse_logger_to_use._old_log_event(
             kwargs=kwargs,
             response_obj=response_obj,
             start_time=start_time,
