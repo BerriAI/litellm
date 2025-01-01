@@ -9,7 +9,10 @@ import litellm
 from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_router_logger
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
-from litellm.llms.azure.common_utils import get_azure_ad_token_from_entrata_id
+from litellm.llms.azure.common_utils import (
+    get_azure_ad_token_from_entrata_id,
+    get_azure_ad_token_from_username_password,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -200,6 +203,14 @@ class InitalizeOpenAISDKClient:
                     tenant_id=litellm_params.get("tenant_id"),
                     client_id=litellm_params.get("client_id"),
                     client_secret=litellm_params.get("client_secret"),
+                )
+            if litellm_params.get("azure_username") and litellm_params.get(
+                "azure_password"
+            ):
+                azure_ad_token_provider = get_azure_ad_token_from_username_password(
+                    azure_username=litellm_params.get("azure_username"),
+                    azure_password=litellm_params.get("azure_password"),
+                    client_id=litellm_params.get("client_id"),
                 )
 
             if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
