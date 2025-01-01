@@ -274,11 +274,9 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
-from litellm.types.utils import (
-    CustomHuggingfaceTokenizer,
-    ModelInfo,
-    StandardLoggingPayload,
-)
+from litellm.types.utils import CustomHuggingfaceTokenizer
+from litellm.types.utils import ModelInfo as ModelMapInfo
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 try:
@@ -5530,7 +5528,7 @@ async def token_counter(request: TokenCountRequest):
 
     deployment = None
     litellm_model_name = None
-    model_info: Optional[ModelInfo] = None
+    model_info: Optional[ModelMapInfo] = None
     if llm_router is not None:
         # get 1 deployment corresponding to the model
         for _model in llm_router.model_list:
