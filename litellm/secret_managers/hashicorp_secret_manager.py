@@ -2,6 +2,7 @@ import os
 from typing import Optional
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -34,7 +35,7 @@ class HashicorpSecretManager:
         _url += f"secret/data/{secret_name}"
         return _url
 
-    async def async_read_secret(self, secret_name: str) -> Optional[dict]:
+    async def async_read_secret(self, secret_name: str) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using an async HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -56,12 +57,13 @@ class HashicorpSecretManager:
 
             # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp = response.json()
-            return json_resp["data"]["data"]
+            return self._get_secret_value_from_json_response(json_resp)
 
         except Exception as e:
+            verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
 
-    def read_secret(self, secret_name: str) -> Optional[dict]:
+    def read_secret(self, secret_name: str) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using a sync HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -77,7 +79,38 @@ class HashicorpSecretManager:
 
             # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp = response.json()
-            return json_resp["data"]["data"]
+            return self._get_secret_value_from_json_response(json_resp)
 
         except Exception as e:
+            verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
+
+    def _get_secret_value_from_json_response(
+        self, json_resp: Optional[dict]
+    ) -> Optional[str]:
+        """
+        Get the secret value from the JSON response
+
+        Json response from hashicorp vault is of the form:
+
+        {
+            "request_id":"036ba77c-018b-31dd-047b-323bcd0cd332",
+            "lease_id":"",
+            "renewable":false,
+            "lease_duration":0,
+            "data":
+                {"data":
+                    {"key":"Vault Is The Way"},
+                    "metadata":{"created_time":"2025-01-01T22:13:50.93942388Z","custom_metadata":null,"deletion_time":"","destroyed":false,"version":1}
+                },
+            "wrap_info":null,
+            "warnings":null,
+            "auth":null,
+            "mount_type":"kv"
+        }
+
+        Note: LiteLLM assumes that all secrets are stored as under the key "key"
+        """
+        if json_resp is None:
+            return None
+        return json_resp.get("data", {}).get("data", {}).get("key", None)
