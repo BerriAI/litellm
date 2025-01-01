@@ -2503,7 +2503,7 @@ create_batch_response = oai_client.batches.create(
 }
 ```
 
-## Fine Tuning APIs
+## **Fine Tuning APIs**
 
 
 | Property | Details |
@@ -2531,8 +2531,6 @@ finetune_settings:
 ```
 
 #### 2. Create a Fine Tuning Job
-
-<TabItem value="Vertex" label="VertexAI">
 
 <Tabs>
 <TabItem value="openai" label="OpenAI Python SDK">
@@ -2562,7 +2560,52 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
 
 </Tabs>
 
+
+**Advanced use case - Passing `adapter_size` to the Vertex AI API**
+
+Set hyper_parameters, such as `n_epochs`, `learning_rate_multiplier` and `adapter_size`. [See Vertex Advanced Hyperparameters](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning#advanced_use_case)
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+
+ft_job = client.fine_tuning.jobs.create(
+    model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
+    training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
+    hyperparameters={
+        "n_epochs": 3,                      # epoch_count on Vertex
+        "learning_rate_multiplier": 0.1,    # learning_rate_multiplier on Vertex
+        "adapter_size": "ADAPTER_SIZE_ONE"  # type: ignore, vertex specific hyperparameter
+    },
+    extra_body={
+        "custom_llm_provider": "vertex_ai",
+    },
+)
+```
 </TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/fine_tuning/jobs \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+    "custom_llm_provider": "vertex_ai",
+    "model": "gemini-1.0-pro-002",
+    "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
+    "hyperparameters": {
+        "n_epochs": 3,
+        "learning_rate_multiplier": 0.1,
+        "adapter_size": "ADAPTER_SIZE_ONE"
+    }
+    }'
+```
+</TabItem>
+
+</Tabs>
 
 
 ## Extra
