@@ -530,7 +530,7 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 ### Entrata ID - use client_id, username, password
 
-Here is an example of setting up `client_id`, `username`, `password` in your litellm proxy `config.yaml`
+Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -539,8 +539,8 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       client_id: os.environ/AZURE_CLIENT_ID
-      username: os.environ/AZURE_USERNAME
-      password: os.environ/AZURE_PASSWORD
+      azure_username: os.environ/AZURE_USERNAME
+      azure_password: os.environ/AZURE_PASSWORD
 ```
 
 Test it 
