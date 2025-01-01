@@ -683,12 +683,10 @@ class OpenAIChatCompletion(BaseLLM):
                         new_messages = messages
                         new_messages.append({"role": "user", "content": ""})
                         messages = new_messages
-                    elif (
-                        "unknown field: parameter index is not a valid field" in str(e)
-                    ) and "tools" in data:
-                        litellm.remove_index_from_tool_calls(
-                            tool_calls=data["tools"], messages=messages
-                        )
+                    elif "unknown field: parameter index is not a valid field" in str(
+                        e
+                    ):
+                        litellm.remove_index_from_tool_calls(messages=messages)
                     else:
                         raise e
         except OpenAIError as e:

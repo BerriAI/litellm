@@ -13,7 +13,7 @@ from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base
 
@@ -208,6 +208,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         error_text = e.response.text
         if should_drop_params and "Extra inputs are not permitted" in error_text:
             return True
+        elif (
+            "unknown field: parameter index is not a valid field" in error_text
+        ):  # remove index from tool calls
+            return True
         return super().should_retry_llm_api_inside_llm_translation_on_http_error(
             e=e, litellm_params=litellm_params
         )
@@ -219,5 +223,13 @@ class AzureAIStudioConfig(OpenAIConfig):
     def transform_request_on_unprocessable_entity_error(
         self, e: httpx.HTTPStatusError, request_data: dict
     ) -> dict:
+        _messages = cast(Optional[List[AllMessageValues]], request_data.get("messages"))
+        if (
+            "unknown field: parameter index is not a valid field" in e.response.text
+            and _messages is not None
+        ):
+            litellm.remove_index_from_tool_calls(
+                messages=_messages,
+            )
         data = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
         return data
