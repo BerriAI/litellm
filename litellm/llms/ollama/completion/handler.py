@@ -52,7 +52,7 @@ async def ollama_aembeddings(
 
     response = await litellm.module_level_aclient.post(url=url, json=data)
 
-    response_json = await response.json()
+    response_json = response.json()
 
     embeddings: List[List[float]] = response_json["embeddings"]
     for idx, emb in enumerate(embeddings):

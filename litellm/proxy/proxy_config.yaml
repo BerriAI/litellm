@@ -9,3 +9,23 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 litellm_settings:
   callbacks: ["datadog"]
+
+
+general_settings: 
+  alerting: ["pagerduty"]
+  alerting_args:
+    failure_threshold: 4  # Number of requests failing in a window
+    failure_threshold_window_seconds: 10  # Window in seconds
+
+    # Requests hanging threshold
+    hanging_threshold_seconds: 0.0000001  # Number of seconds of waiting for a response before a request is considered hanging
+    hanging_threshold_window_seconds: 10  # Window in seconds
+
+
+# For /fine_tuning/jobs endpoints
+finetune_settings:
+  - custom_llm_provider: "vertex_ai"
+    vertex_project: "adroit-crow-413218"
+    vertex_location: "us-central1"
+    vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
+

@@ -209,12 +209,11 @@ def test_model_info_bedrock_converse(monkeypatch):
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Load whitelist models from file
     try:
+        # Load whitelist models from file
         with open("whitelisted_bedrock_models.txt", "r") as file:
             whitelist_models = [line.strip() for line in file.readlines()]
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
     _enforce_bedrock_converse_models(
