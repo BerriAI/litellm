@@ -204,10 +204,12 @@ class InitalizeOpenAISDKClient:
                     client_id=litellm_params.get("client_id"),
                     client_secret=litellm_params.get("client_secret"),
                 )
-            if litellm_params.get("username") and litellm_params.get("password"):
+            if litellm_params.get("azure_username") and litellm_params.get(
+                "azure_password"
+            ):
                 azure_ad_token_provider = get_azure_ad_token_from_username_password(
-                    username=litellm_params.get("username"),
-                    password=litellm_params.get("password"),
+                    azure_username=litellm_params.get("azure_username"),
+                    azure_password=litellm_params.get("azure_password"),
                     client_id=litellm_params.get("client_id"),
                 )
 

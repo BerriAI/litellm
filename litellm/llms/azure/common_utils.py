@@ -141,17 +141,17 @@ def get_azure_ad_token_from_entrata_id(
 
 def get_azure_ad_token_from_username_password(
     client_id: str,
-    username: str,
-    password: str,
+    azure_username: str,
+    azure_password: str,
     scope: str = "https://cognitiveservices.azure.com/.default",
 ) -> Callable[[], str]:
     """
-    Get Azure AD token provider from `client_id`, `username`, and `password`
+    Get Azure AD token provider from `client_id`, `azure_username`, and `azure_password`
 
     Args:
         client_id: str
-        username: str
-        password: str
+        azure_username: str
+        azure_password: str
         scope: str
 
     Returns:
@@ -160,15 +160,15 @@ def get_azure_ad_token_from_username_password(
     from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
 
     verbose_logger.debug(
-        "client_id %s, username %s, password %s",
+        "client_id %s, azure_username %s, azure_password %s",
         client_id,
-        username,
-        password,
+        azure_username,
+        azure_password,
     )
     credential = UsernamePasswordCredential(
         client_id=client_id,
-        username=username,
-        password=password,
+        username=azure_username,
+        password=azure_password,
     )
 
     verbose_logger.debug("credential %s", credential)
