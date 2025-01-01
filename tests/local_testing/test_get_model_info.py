@@ -209,7 +209,6 @@ def test_model_info_bedrock_converse(monkeypatch):
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
-
     try:
         # Load whitelist models from file
         with open("whitelisted_bedrock_models.txt", "r") as file:
