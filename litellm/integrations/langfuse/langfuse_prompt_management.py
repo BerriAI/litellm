@@ -279,13 +279,21 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        standard_callback_dynamic_params = kwargs.get(
+            "standard_callback_dynamic_params"
+        )
+        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+            globalLangfuseLogger=self,
+            standard_callback_dynamic_params=standard_callback_dynamic_params,
+            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+        )
         standard_logging_object = cast(
             Optional[StandardLoggingPayload],
             kwargs.get("standard_logging_object", None),
         )
         if standard_logging_object is None:
             return
-        self._old_log_event(
+        langfuse_logger_to_use._old_log_event(
             start_time=start_time,
             end_time=end_time,
             response_obj=None,

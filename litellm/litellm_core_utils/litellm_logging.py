@@ -1969,6 +1969,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         result = None  # result sent to all loggers, init this to None incase it's not created
+
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
