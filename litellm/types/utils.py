@@ -1678,6 +1678,8 @@ all_litellm_params = [
     "azure_ad_token_provider",
     "tenant_id",
     "client_id",
+    "azure_username",
+    "azure_password",
     "client_secret",
     "user_continue_message",
     "configurable_clientside_auth_params",
