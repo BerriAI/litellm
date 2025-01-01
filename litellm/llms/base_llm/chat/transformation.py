@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 
 import httpx
 
-from litellm.exceptions import UnprocessableEntityError
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 

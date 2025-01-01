@@ -1,5 +1,4 @@
 import hashlib
-import json
 import types
 from typing import (
     Any,
@@ -33,7 +32,6 @@ from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.utils import (
     EmbeddingResponse,
-    GenericStreamingChunk,
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
