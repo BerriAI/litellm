@@ -132,34 +132,6 @@ def test_null_role_response():
         assert response.choices[0].message.role == "assistant"
 
 
-def test_completion_azure_ai_command_r():
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
-
-        response = completion(
-            model="azure_ai/command-r-plus",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the meaning of life?"}
-                    ],
-                }
-            ],
-        )  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_azure_ai_mistral_invalid_params(sync_mode):

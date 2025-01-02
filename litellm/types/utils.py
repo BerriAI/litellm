@@ -1074,10 +1074,10 @@ class EmbeddingResponse(OpenAIObject):
 
 
 class Logprobs(OpenAIObject):
-    text_offset: List[int]
-    token_logprobs: List[Union[float, None]]
-    tokens: List[str]
-    top_logprobs: List[Union[Dict[str, float], None]]
+    text_offset: Optional[List[int]]
+    token_logprobs: Optional[List[Union[float, None]]]
+    tokens: Optional[List[str]]
+    top_logprobs: Optional[List[Union[Dict[str, float], None]]]
 
 
 class TextChoices(OpenAIObject):
