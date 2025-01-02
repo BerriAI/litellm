@@ -1,5 +1,6 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
 # Secret Manager
 LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
@@ -268,6 +269,39 @@ $ litellm --config /path/to/config.yaml
 ```
 
 [Quick Test Proxy](./proxy/user_keys)
+
+
+#### How it works
+
+LiteLLM reads secrets from Hashicorp Vault's KV v2 engine using the following URL format:
+```
+{VAULT_ADDR}/v1/{NAMESPACE}/secret/data/{SECRET_NAME}
+```
+
+For example, if you have:
+- `HCP_VAULT_ADDR="https://vault.example.com:8200"`
+- `HCP_VAULT_NAMESPACE="admin"`
+- Secret name: `AZURE_API_KEY`
+
+
+LiteLLM will look up:
+```
+https://vault.example.com:8200/v1/admin/secret/data/AZURE_API_KEY
+```
+
+#### Expected Secret Format
+LiteLLM expects all secrets to be stored as a JSON object with a `key` field containing the secret value.
+
+For example, for `AZURE_API_KEY`, the secret should be stored as:
+
+```json
+{
+  "key": "sk-1234"
+}
+```
+
+<Image img={require('../img/hcorp.png')} />
+
 
 ## All Secret Manager Settings
 
