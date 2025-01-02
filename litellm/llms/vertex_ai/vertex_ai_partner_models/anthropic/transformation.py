@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import List, Optional
+from typing import List
 
 import httpx
 
