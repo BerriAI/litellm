@@ -1,4 +1,8 @@
 model_list:
+  - model_name: "openai/*"
+    litellm_params:
+      model: "openai/*"
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: "azure/*"
     litellm_params:
       model: azure/chatgpt-v-2
@@ -19,7 +23,7 @@ general_settings:
     # Requests hanging threshold
     hanging_threshold_seconds: 0.0000001  # Number of seconds of waiting for a response before a request is considered hanging
     hanging_threshold_window_seconds: 10  # Window in seconds
-
+  key_management_system: "hashicorp_vault"
 
 # For /fine_tuning/jobs endpoints
 finetune_settings:
