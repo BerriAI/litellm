@@ -1,6 +1,9 @@
 import io
 import os
+from re import M
 import sys
+
+from litellm.integrations.custom_logger import CustomLogger
 
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -392,6 +395,14 @@ async def test_datadog_payload_environment_variables():
         pytest.fail(f"Test failed with exception: {str(e)}")
 
 
+class TestDDLogger(CustomLogger):
+    def __init__(self):
+        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_object = kwargs["standard_logging_object"]
+
+
 @pytest.mark.asyncio
 async def test_datadog_payload_content_truncation():
     """
@@ -399,15 +410,13 @@ async def test_datadog_payload_content_truncation():
 
     DataDog has a limit of 1MB for the logged payload size.
     """
-    dd_logger = DataDogLogger()
+    dd_logger = TestDDLogger()
+    litellm.callbacks = [dd_logger]
 
-    # Create a standard payload with very long content
-    standard_payload = create_standard_logging_payload()
     long_content = "x" * 80_000  # Create string longer than MAX_STR_LENGTH (10_000)
 
-    # Modify payload with long content
-    standard_payload["error_str"] = long_content
-    standard_payload["messages"] = [
+    # messages with long content
+    messages = [
         {
             "role": "user",
             "content": [
@@ -421,28 +430,26 @@ async def test_datadog_payload_content_truncation():
             ],
         }
     ]
-    standard_payload["response"] = {"choices": [{"message": {"content": long_content}}]}
-
-    # Create the payload
-    dd_payload = dd_logger.create_datadog_logging_payload(
-        kwargs={"standard_logging_object": standard_payload},
-        response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+    await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        temperature=0.2,
+        mock_response=long_content,
     )
 
-    print("dd_payload", json.dumps(dd_payload, indent=2))
+    await asyncio.sleep(2)
 
-    # Parse the message back to dict to verify truncation
-    message_dict = json.loads(dd_payload["message"])
+    # Create the payload
+    standard_logging_payload = dd_logger.standard_logging_object
+
+    print("standard_logging_payload", json.dumps(standard_logging_payload, indent=2))
 
     # Verify truncation of fields
-    assert len(message_dict["error_str"]) < 10_100, "error_str not truncated correctly"
     assert (
-        len(str(message_dict["messages"])) < 10_100
+        len(str(standard_logging_payload["messages"])) < 10_100
     ), "messages not truncated correctly"
     assert (
-        len(str(message_dict["response"])) < 10_100
+        len(str(standard_logging_payload["response"])) < 10_100
     ), "response not truncated correctly"
 
 
