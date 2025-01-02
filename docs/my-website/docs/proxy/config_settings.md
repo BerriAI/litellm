@@ -390,6 +390,9 @@ router_settings:
 | GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
 | GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
 | HF_API_BASE | Base URL for Hugging Face API
+| HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_NAMESPACE | Namespace for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_TOKEN | Token for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HELICONE_API_KEY | API key for Helicone service
 | HOSTNAME | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)
 | HUGGINGFACE_API_BASE | Base URL for Hugging Face API

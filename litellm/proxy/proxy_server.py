@@ -1894,37 +1894,7 @@ class ProxyConfig:
         if general_settings:
             ### LOAD SECRET MANAGER ###
             key_management_system = general_settings.get("key_management_system", None)
-            if key_management_system is not None:
-                if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
-                    ### LOAD FROM AZURE KEY VAULT ###
-                    load_from_azure_key_vault(use_azure_key_vault=True)
-                elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
-                    ### LOAD FROM GOOGLE KMS ###
-                    load_google_kms(use_google_kms=True)
-                elif (
-                    key_management_system
-                    == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
-                ):
-                    from litellm.secret_managers.aws_secret_manager_v2 import (
-                        AWSSecretsManagerV2,
-                    )
-
-                    AWSSecretsManagerV2.load_aws_secret_manager(
-                        use_aws_secret_manager=True
-                    )
-                elif key_management_system == KeyManagementSystem.AWS_KMS.value:
-                    load_aws_kms(use_aws_kms=True)
-                elif (
-                    key_management_system
-                    == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
-                ):
-                    from litellm.secret_managers.google_secret_manager import (
-                        GoogleSecretManager,
-                    )
-
-                    GoogleSecretManager()
-                else:
-                    raise ValueError("Invalid Key Management System selected")
+            self.initialize_secret_manager(key_management_system=key_management_system)
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -2166,6 +2136,45 @@ class ProxyConfig:
                     if _logger is not None:
                         litellm.callbacks.append(_logger)
         pass
+
+    def initialize_secret_manager(self, key_management_system: Optional[str]):
+        """
+        Initialize the relevant secret manager if `key_management_system` is provided
+        """
+        if key_management_system is not None:
+            if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
+                ### LOAD FROM AZURE KEY VAULT ###
+                load_from_azure_key_vault(use_azure_key_vault=True)
+            elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
+                ### LOAD FROM GOOGLE KMS ###
+                load_google_kms(use_google_kms=True)
+            elif (
+                key_management_system
+                == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
+            ):
+                from litellm.secret_managers.aws_secret_manager_v2 import (
+                    AWSSecretsManagerV2,
+                )
+
+                AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
+            elif key_management_system == KeyManagementSystem.AWS_KMS.value:
+                load_aws_kms(use_aws_kms=True)
+            elif (
+                key_management_system == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
+            ):
+                from litellm.secret_managers.google_secret_manager import (
+                    GoogleSecretManager,
+                )
+
+                GoogleSecretManager()
+            elif key_management_system == KeyManagementSystem.HASHICORP_VAULT.value:
+                from litellm.secret_managers.hashicorp_secret_manager import (
+                    HashicorpSecretManager,
+                )
+
+                HashicorpSecretManager()
+            else:
+                raise ValueError("Invalid Key Management System selected")
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """

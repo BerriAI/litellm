@@ -257,24 +257,16 @@ def run_server(  # noqa: PLR0915
     if local:
         from proxy_server import (
             KeyManagementSettings,
-            KeyManagementSystem,
             ProxyConfig,
             app,
-            load_aws_kms,
-            load_from_azure_key_vault,
-            load_google_kms,
             save_worker_config,
         )
     else:
         try:
             from .proxy_server import (
                 KeyManagementSettings,
-                KeyManagementSystem,
                 ProxyConfig,
                 app,
-                load_aws_kms,
-                load_from_azure_key_vault,
-                load_google_kms,
                 save_worker_config,
             )
         except ImportError as e:
@@ -285,12 +277,8 @@ def run_server(  # noqa: PLR0915
                 # this is just a local/relative import error, user git cloned litellm
                 from proxy_server import (
                     KeyManagementSettings,
-                    KeyManagementSystem,
                     ProxyConfig,
                     app,
-                    load_aws_kms,
-                    load_from_azure_key_vault,
-                    load_google_kms,
                     save_worker_config,
                 )
     if version is True:
@@ -537,41 +525,7 @@ def run_server(  # noqa: PLR0915
                 key_management_system = general_settings.get(
                     "key_management_system", None
                 )
-                if key_management_system is not None:
-                    if (
-                        key_management_system
-                        == KeyManagementSystem.AZURE_KEY_VAULT.value
-                    ):
-                        ### LOAD FROM AZURE KEY VAULT ###
-                        load_from_azure_key_vault(use_azure_key_vault=True)
-                    elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
-                        ### LOAD FROM GOOGLE KMS ###
-                        load_google_kms(use_google_kms=True)
-                    elif (
-                        key_management_system
-                        == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
-                    ):
-                        from litellm.secret_managers.aws_secret_manager_v2 import (
-                            AWSSecretsManagerV2,
-                        )
-
-                        ### LOAD FROM AWS SECRET MANAGER ###
-                        AWSSecretsManagerV2.load_aws_secret_manager(
-                            use_aws_secret_manager=True
-                        )
-                    elif key_management_system == KeyManagementSystem.AWS_KMS.value:
-                        load_aws_kms(use_aws_kms=True)
-                    elif (
-                        key_management_system
-                        == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
-                    ):
-                        from litellm.secret_managers.google_secret_manager import (
-                            GoogleSecretManager,
-                        )
-
-                        GoogleSecretManager()
-                    else:
-                        raise ValueError("Invalid Key Management System selected")
+                proxy_config.initialize_secret_manager(key_management_system)
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )

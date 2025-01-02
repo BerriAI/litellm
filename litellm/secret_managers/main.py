@@ -289,6 +289,19 @@ def get_secret(  # noqa: PLR0915
                     except Exception as e:
                         print_verbose(f"An error occurred - {str(e)}")
                         raise e
+                elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
+                    try:
+                        secret = client.read_secret(secret_name)
+                        print_verbose(
+                            f"secret from hashicorp secret manager:  {secret}"
+                        )
+                        if secret is None:
+                            raise ValueError(
+                                f"No secret found in Hashicorp Secret Manager for {secret_name}"
+                            )
+                    except Exception as e:
+                        print_verbose(f"An error occurred - {str(e)}")
+                        raise e
                 elif key_manager == "local":
                     secret = os.getenv(secret_name)
                 else:  # assume the default is infisicial client
