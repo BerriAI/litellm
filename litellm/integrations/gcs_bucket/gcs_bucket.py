@@ -138,11 +138,11 @@ class GCSBucketLogger(GCSBucketBase):
                     logging_payload=logging_payload,
                 )
 
-            # Clear the queue after processing
-            self.log_queue.clear()
-
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket batch logging error: {str(e)}")
+        finally:
+            # Clear the queue after processing
+            self.log_queue.clear()
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
