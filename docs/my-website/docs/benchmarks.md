@@ -17,9 +17,12 @@ Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpo
 
 ## **Horizontal Scaling**
 
+<Image img={require('../img/instances_vs_rps.png')} />
+
+#### Key Findings
 - Single instance: 68.2 RPS @ 100ms latency
 - 10 instances: 4.3% efficiency loss (653 RPS vs expected 682 RPS), latency stable at `100ms`
-- For 10,000 RPS: Need ~153 instances @ 95.7% efficiency, `100ms latency`
+- For 10,000 RPS: Need ~154 instances @ 95.7% efficiency, `100ms latency`
 
 
 ### 2 Instances
