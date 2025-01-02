@@ -2954,6 +2954,7 @@ def test_azure_streaming_and_function_calling():
 async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
     try:
         import os
+        from litellm import stream_chunk_builder
 
         litellm.set_verbose = True
 
@@ -2968,15 +2969,21 @@ async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
             "drop_params": True,
             "stream": True,
         }
+        chunks = []
         if sync_mode:
-            response: litellm.ModelResponse = completion(**data)  # type: ignore
+            response = completion(**data)  # type: ignore
             for chunk in response:
                 print(chunk)
+                chunks.append(chunk)
         else:
-            response: litellm.ModelResponse = await litellm.acompletion(**data)  # type: ignore
+            response = await litellm.acompletion(**data)  # type: ignore
 
             async for chunk in response:
                 print(chunk)
+                chunks.append(chunk)
+        print(f"chunks: {chunks}")
+        response = stream_chunk_builder(chunks=chunks)
+        assert response.choices[0].message.content is not None
     except litellm.Timeout as e:
         pass
     except Exception as e:

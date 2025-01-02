@@ -1,21 +1,51 @@
+
+import Image from '@theme/IdealImage';
+
 # Benchmarks
 
-Benchmarks for LiteLLM Gateway (Proxy Server)
+Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.
 
-Locust Settings:
-- 2500 Users
-- 100 user Ramp Up
+## 1 Instance LiteLLM Proxy
 
 
-## Basic Benchmarks
+| Metric | Litellm Proxy (1 Instance) |
+|--------|------------------------|
+| Median Latency (ms) | 110 |
+| RPS | 68.2 |
 
-Overhead when using a Deployed Proxy vs Direct to LLM
-- Latency overhead added by LiteLLM Proxy: 107ms
+<Image img={require('../img/1_instance_proxy.png')} />
 
-| Metric | Direct to Fake Endpoint | Basic Litellm Proxy |
-|--------|------------------------|---------------------|
-| RPS | 1196 | 1133.2 |
-| Median Latency (ms) | 33 | 140 |
+## **Horizontal Scaling - 10K RPS**
+
+<Image img={require('../img/instances_vs_rps.png')} />
+
+#### Key Findings
+- Single instance: 68.2 RPS @ 100ms latency
+- 10 instances: 4.3% efficiency loss (653 RPS vs expected 682 RPS), latency stable at `100ms`
+- For 10,000 RPS: Need ~154 instances @ 95.7% efficiency, `100ms latency`
+
+
+### 2 Instances
+
+**Adding 1 instance, will double the RPS and maintain the `100ms-110ms` median latency.**
+
+| Metric | Litellm Proxy (2 Instances) |
+|--------|------------------------|
+| Median Latency (ms) | 100 |
+| RPS | 142 |
+
+
+<Image img={require('../img/2_instance_proxy.png')} />
+
+
+### 10 Instances
+
+| Metric | Litellm Proxy (10 Instances) |
+|--------|------------------------|
+| Median Latency (ms) | 110 |
+| RPS | 653 |
+
+<Image img={require('../img/10_instance_proxy.png')} />
 
 
 ## Logging Callbacks
@@ -39,3 +69,9 @@ Using LangSmith has **no impact on latency, RPS compared to Basic Litellm Proxy*
 | RPS | 1133.2 | 1135 |
 | Median Latency (ms) | 140 | 132 |
 
+
+
+## Locust Settings
+
+- 2500 Users
+- 100 user Ramp Up

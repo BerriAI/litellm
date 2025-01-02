@@ -741,6 +741,7 @@ class AnthropicConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Dict:
         if api_key is None:
             raise litellm.AuthenticationError(

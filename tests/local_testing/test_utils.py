@@ -1252,3 +1252,19 @@ def test_fireworks_ai_document_inlining():
 
     assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is True
     assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is True
+
+
+def test_logprobs_type():
+    from litellm.types.utils import Logprobs
+
+    logprobs = {
+        "text_offset": None,
+        "token_logprobs": None,
+        "tokens": None,
+        "top_logprobs": None,
+    }
+    logprobs = Logprobs(**logprobs)
+    assert logprobs.text_offset is None
+    assert logprobs.token_logprobs is None
+    assert logprobs.tokens is None
+    assert logprobs.top_logprobs is None
