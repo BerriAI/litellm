@@ -422,6 +422,8 @@ jobs:
             username: ${DOCKERHUB_USERNAME}
             password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    environment:
+      DATABASE_URL: ${PROXY_UNIT_TEST_DATABASE_URL}
 
     steps:
       - checkout
@@ -491,7 +493,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
