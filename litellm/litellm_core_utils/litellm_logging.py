@@ -3061,6 +3061,7 @@ def truncate_standard_logging_payload_content(
         verbose_logger.exception(
             "Error truncating standard logging payload - {}".format(str(e))
         )
+        return
 
 
 def _truncate_text(text: str, max_length: int) -> str:
