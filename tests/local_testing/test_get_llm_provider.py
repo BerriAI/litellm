@@ -199,4 +199,4 @@ def test_azure_global_standard_get_llm_provider():
         api_base="https://my-deployment-francecentral.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
         api_key="fake-api-key",
     )
-    assert custom_llm_provider == "azure"
+    assert custom_llm_provider == "azure_ai"

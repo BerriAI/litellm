@@ -118,6 +118,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         api_key = api_key or get_secret_str("DEEPGRAM_API_KEY")
         return {
