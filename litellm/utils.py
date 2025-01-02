@@ -2768,7 +2768,7 @@ def get_optional_params(  # noqa: PLR0915
                     new_parameters.pop("additionalProperties", None)
                 tool_function["parameters"] = new_parameters
 
-    def _check_valid_arg(supported_params):
+    def _check_valid_arg(supported_params: List[str]):
         verbose_logger.info(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
@@ -2812,13 +2812,17 @@ def get_optional_params(  # noqa: PLR0915
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
+    supported_params = get_supported_openai_params(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    if supported_params is None:
+        supported_params = get_supported_openai_params(
+            model=model, custom_llm_provider="openai"
+        )
+    _check_valid_arg(supported_params=supported_params or [])
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.AnthropicConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -2830,9 +2834,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "anthropic_text":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
         optional_params = litellm.AnthropicTextConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -2843,7 +2844,6 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.AnthropicTextConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -2857,10 +2857,6 @@ def get_optional_params(  # noqa: PLR0915
 
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         optional_params = litellm.CohereConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -2873,11 +2869,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "cohere_chat":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         optional_params = litellm.CohereChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -2890,10 +2881,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "triton":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.TritonConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -2902,11 +2889,6 @@ def get_optional_params(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "maritalk":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.MaritalkConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -2918,11 +2900,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "replicate":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
 
         optional_params = litellm.ReplicateConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -2935,10 +2912,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "predibase":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.PredibaseConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -2950,11 +2923,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "huggingface":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.HuggingfaceConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -2966,11 +2934,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "together_ai":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
 
         optional_params = litellm.TogetherAIConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -2990,12 +2953,6 @@ def get_optional_params(  # noqa: PLR0915
         or model in litellm.vertex_language_models
         or model in litellm.vertex_vision_models
     ):
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-
         optional_params = litellm.VertexGeminiConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3008,10 +2965,6 @@ def get_optional_params(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "gemini":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.GoogleAIStudioGeminiConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3025,10 +2978,6 @@ def get_optional_params(  # noqa: PLR0915
     elif custom_llm_provider == "vertex_ai_beta" or (
         custom_llm_provider == "vertex_ai" and "gemini" in model
     ):
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VertexGeminiConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3042,10 +2991,6 @@ def get_optional_params(  # noqa: PLR0915
     elif litellm.VertexAIAnthropicConfig.is_supported_model(
         model=model, custom_llm_provider=custom_llm_provider
     ):
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VertexAIAnthropicConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -3057,10 +3002,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_llama3_models:
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VertexAILlama3Config().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3072,10 +3013,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_mistral_models:
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         if "codestral" in model:
             optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
                 model=model,
@@ -3099,10 +3036,6 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
     elif custom_llm_provider == "vertex_ai" and model in litellm.vertex_ai_ai21_models:
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VertexAIAi21Config().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3114,11 +3047,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "sagemaker":
-        ## check if unsupported param passed in
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         optional_params = litellm.SagemakerConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -3131,12 +3059,8 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
         base_model = litellm.AmazonConverseConfig()._get_base_model(model)
         if base_model in litellm.bedrock_converse_models:
-            _check_valid_arg(supported_params=supported_params)
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
@@ -3150,7 +3074,6 @@ def get_optional_params(  # noqa: PLR0915
             )
 
         elif "anthropic" in model:
-            _check_valid_arg(supported_params=supported_params)
             if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
                 if model.startswith("anthropic.claude-3"):
                     optional_params = (
@@ -3165,7 +3088,6 @@ def get_optional_params(  # noqa: PLR0915
                     optional_params=optional_params,
                 )
         elif provider_config is not None:
-            _check_valid_arg(supported_params=supported_params)
             optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -3177,11 +3099,6 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
     elif custom_llm_provider == "cloudflare":
-        # https://developers.cloudflare.com/workers-ai/models/text-generation/#input
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
 
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,
@@ -3194,10 +3111,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "ollama":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
 
         optional_params = litellm.OllamaConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -3210,11 +3123,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "ollama_chat":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        _check_valid_arg(supported_params=supported_params)
 
         optional_params = litellm.OllamaChatConfig().map_openai_params(
             model=model,
@@ -3227,10 +3135,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "nlp_cloud":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.NLPCloudConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3243,10 +3147,6 @@ def get_optional_params(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "petals":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.PetalsConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3258,10 +3158,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "deepinfra":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.DeepInfraConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3273,10 +3169,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "perplexity" and provider_config is not None:
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3288,10 +3180,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.MistralConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3303,10 +3191,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "text-completion-codestral":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3319,10 +3203,6 @@ def get_optional_params(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "databricks":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.DatabricksConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3334,10 +3214,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "nvidia_nim":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.NvidiaNimConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -3349,10 +3225,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "cerebras":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.CerebrasConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3364,20 +3236,12 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "xai":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.XAIChatConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
         )
     elif custom_llm_provider == "ai21_chat" or custom_llm_provider == "ai21":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.AI21ChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3389,10 +3253,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "fireworks_ai":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.FireworksAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3404,10 +3264,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "volcengine":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VolcEngineConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3419,10 +3275,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "hosted_vllm":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.HostedVLLMChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3434,10 +3286,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "vllm":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.VLLMConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3449,11 +3297,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "groq":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-
         optional_params = litellm.GroqChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3465,11 +3308,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "deepseek":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-
         optional_params = litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3481,11 +3319,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "openrouter":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-
         optional_params = litellm.OpenrouterConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3498,10 +3331,6 @@ def get_optional_params(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "watsonx":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3519,10 +3348,6 @@ def get_optional_params(  # noqa: PLR0915
                     f"LiteLLM now defaults to Watsonx's `/text/chat` endpoint. Please use the `watsonx_text` provider instead, to call the `/text/generation` endpoint. Param: {param}"
                 )
     elif custom_llm_provider == "watsonx_text":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.IBMWatsonXAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3534,10 +3359,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "openai":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider="openai"
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -3549,10 +3370,6 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "azure":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider="azure"
-        )
-        _check_valid_arg(supported_params=supported_params)
         if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
@@ -3588,10 +3405,6 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
     else:  # assume passing in params for openai-like api
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider="custom_openai"
-        )
-        _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
