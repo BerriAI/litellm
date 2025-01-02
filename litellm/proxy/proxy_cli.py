@@ -257,24 +257,16 @@ def run_server(  # noqa: PLR0915
     if local:
         from proxy_server import (
             KeyManagementSettings,
-            KeyManagementSystem,
             ProxyConfig,
             app,
-            load_aws_kms,
-            load_from_azure_key_vault,
-            load_google_kms,
             save_worker_config,
         )
     else:
         try:
             from .proxy_server import (
                 KeyManagementSettings,
-                KeyManagementSystem,
                 ProxyConfig,
                 app,
-                load_aws_kms,
-                load_from_azure_key_vault,
-                load_google_kms,
                 save_worker_config,
             )
         except ImportError as e:
@@ -285,12 +277,8 @@ def run_server(  # noqa: PLR0915
                 # this is just a local/relative import error, user git cloned litellm
                 from proxy_server import (
                     KeyManagementSettings,
-                    KeyManagementSystem,
                     ProxyConfig,
                     app,
-                    load_aws_kms,
-                    load_from_azure_key_vault,
-                    load_google_kms,
                     save_worker_config,
                 )
     if version is True:
