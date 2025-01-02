@@ -2014,7 +2014,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
 
 @pytest.mark.asyncio()
-async def test_view_spend_per_user(prisma_client):
+async def test_aview_spend_per_user(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
