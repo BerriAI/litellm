@@ -3201,7 +3201,7 @@ async def test_team_tags(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_admin_only_routes(prisma_client):
+async def test_aadmin_only_routes(prisma_client):
     """
     Tests if setting admin_only_routes works
 
