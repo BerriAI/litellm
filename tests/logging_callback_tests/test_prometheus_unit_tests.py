@@ -17,7 +17,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.prometheus import (
     PrometheusLogger,
     UserAPIKeyLabelValues,
-    get_tag_from_metadata,
+    get_custom_labels_from_metadata,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
@@ -893,9 +893,12 @@ def test_prometheus_factory(monkeypatch, disable_end_user_tracking):
         assert returned_dict["end_user"] == "test_end_user"
 
 
-def test_get_tag_from_metadata(monkeypatch):
+def test_get_custom_labels_from_metadata(monkeypatch):
     monkeypatch.setattr(
         "litellm.custom_prometheus_metadata_labels", ["metadata.foo", "metadata.bar"]
     )
     metadata = {"foo": "bar", "bar": "baz", "taz": "qux"}
-    assert get_tag_from_metadata(metadata) == ["bar", "baz"]
+    assert get_custom_labels_from_metadata(metadata) == {
+        "metadata_foo": "bar",
+        "metadata_bar": "baz",
+    }
