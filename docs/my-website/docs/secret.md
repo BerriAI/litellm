@@ -21,6 +21,7 @@ LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
 - [Azure Key Vault](#azure-key-vault)
 - [Google Secret Manager](#google-secret-manager)
 - Google Key Management Service
+- [Hashicorp Vault](#hashicorp-vault)
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
 
@@ -52,7 +53,7 @@ general_settings:
 
 Store your proxy keys in AWS Secret Manager.
 
-### Proxy Usage
+#### Proxy Usage
 
 1. Save AWS Credentials in your environment
 ```bash
@@ -128,7 +129,7 @@ litellm.secret_manager = client
 litellm.get_secret("your-test-key")
 ``` -->
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 1. Install Proxy dependencies 
 ```bash
@@ -233,12 +234,40 @@ And in another terminal
 $ litellm --test 
 ```
 
-[Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
-
+[Quick Test Proxy](./proxy/user_keys)
 <!-- 
 ## .env Files
 If no secret manager client is specified, Litellm automatically uses the `.env` file to manage sensitive data. -->
 
+## Hashicorp Vault
+
+Read secrets from [Hashicorp Vault](https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2)
+
+Step 1. Add Hashicorp Vault details in your environment
+
+```bash
+HCP_VAULT_ADDR="https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
+HCP_VAULT_NAMESPACE="admin"
+HCP_VAULT_TOKEN="hvs.CAESIG52gL6ljBSdmq*****"
+
+# OPTIONAL
+HCP_VAULT_REFRESH_INTERVAL="86400" # defaults to 86400, frequency of cache refresh for Hashicorp Vault
+```
+
+Step 2. Add to proxy config.yaml
+
+```yaml
+general_settings:
+  key_management_system: "hashicorp_vault"
+```
+
+Step 3. Start + test proxy
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+[Quick Test Proxy](./proxy/user_keys)
 
 ## All Secret Manager Settings
 
