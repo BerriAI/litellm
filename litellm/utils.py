@@ -6056,6 +6056,32 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     return messages
 
 
+def validate_chat_completion_tool_choice(tool_choice: Optional[Union[dict, str]]):
+    """
+    Confirm the tool choice is passed in the OpenAI format.
+
+    Prevents user errors like: https://github.com/BerriAI/litellm/issues/7483
+    """
+    from litellm.types.llms.openai import (
+        ChatCompletionToolChoiceObjectParam,
+        ChatCompletionToolChoiceStringValues,
+    )
+
+    if tool_choice is None:
+        return True
+    elif isinstance(tool_choice, str):
+        return True
+    elif isinstance(tool_choice, dict):
+        if tool_choice.get("type") is None or tool_choice.get("function") is None:
+            raise Exception(
+                f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
+            )
+        return True
+    raise Exception(
+        f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
+    )
+
+
 class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915

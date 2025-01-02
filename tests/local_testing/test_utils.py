@@ -1085,6 +1085,26 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
             validate_chat_completion_user_messages(messages=messages)
 
 
+@pytest.mark.parametrize(
+    "tool_choice, expected_bool",
+    [
+        ({"type": "function", "function": {"name": "get_current_weather"}}, True),
+        ({"type": "tool", "name": "get_current_weather"}, False),
+        (None, True),
+        ("auto", True),
+        ("required", True),
+    ],
+)
+def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
+    from litellm.utils import validate_chat_completion_tool_choice
+
+    if expected_bool:
+        validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    else:
+        with pytest.raises(Exception):
+            validate_chat_completion_tool_choice(tool_choice=tool_choice)
+
+
 def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
