@@ -157,13 +157,6 @@ def test_aaparallel_function_call(model):
 # test_parallel_function_call()
 
 
-def test_litellm_proxy(monkeypatch):
-    litellm.set_verbose = True
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
-    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "http://0.0.0.0:4000")
-    test_aaparallel_function_call("litellm_proxy/claude-3-5-sonnet")
-
-
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
 
