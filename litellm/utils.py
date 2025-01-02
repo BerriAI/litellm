@@ -589,6 +589,29 @@ def function_setup(  # noqa: PLR0915
         raise e
 
 
+async def _client_async_logging_helper(
+    logging_obj: LiteLLMLoggingObject,
+    result,
+    start_time,
+    end_time,
+    is_completion_with_fallbacks: bool,
+):
+    if (
+        is_completion_with_fallbacks is False
+    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
+        print_verbose(
+            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+        )
+        # check if user does not want this to be logged
+        asyncio.create_task(
+            logging_obj.async_success_handler(result, start_time, end_time)
+        )
+        threading.Thread(
+            target=logging_obj.success_handler,
+            args=(result, start_time, end_time),
+        ).start()
+
+
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
@@ -1013,6 +1036,7 @@ def client(original_function):  # noqa: PLR0915
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
+        is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
 
         try:
             if logging_obj is None:
@@ -1115,18 +1139,15 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            print_verbose(
-                f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-            )
-            # check if user does not want this to be logged
             asyncio.create_task(
-                logging_obj.async_success_handler(result, start_time, end_time)
+                _client_async_logging_helper(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                )
             )
-            threading.Thread(
-                target=logging_obj.success_handler,
-                args=(result, start_time, end_time),
-            ).start()
-
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
