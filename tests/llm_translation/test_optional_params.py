@@ -1019,3 +1019,46 @@ def test_gemini_frequency_penalty():
     )
     assert optional_params is not None
     assert "frequency_penalty" in optional_params
+
+
+def test_litellm_proxy_claude_3_5_sonnet():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    tool_choice = "auto"
+
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet",
+        custom_llm_provider="litellm_proxy",
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    assert optional_params["tools"] == tools
+    assert optional_params["tool_choice"] == tool_choice
+
+
+def test_is_vertex_anthropic_model():
+    assert (
+        litellm.VertexAIAnthropicConfig().is_supported_model(
+            model="claude-3-5-sonnet", custom_llm_provider="litellm_proxy"
+        )
+        is False
+    )
