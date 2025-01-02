@@ -48,6 +48,7 @@ class TritonConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: Dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Dict:
         return {"Content-Type": "application/json"}
 
