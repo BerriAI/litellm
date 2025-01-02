@@ -181,7 +181,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
         "content": [
           {
             "type": "text",
-            "text": "What'\''s in this image?"
+            "text": "What's in this image?"
           }
         ]
       }
@@ -196,7 +196,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 3. Check your `/metrics` endpoint for the custom metrics  
 
 ```
-... "tag": "hello world" ...
+... "metadata_foo": "hello world" ...
 ```
 
 
