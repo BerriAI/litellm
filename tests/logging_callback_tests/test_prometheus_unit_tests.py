@@ -14,11 +14,7 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import (
-    PrometheusLogger,
-    UserAPIKeyLabelValues,
-    get_tag_from_metadata,
-)
+from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
