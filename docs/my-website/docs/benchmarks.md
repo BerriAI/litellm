@@ -15,7 +15,7 @@ Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpo
 
 <Image img={require('../img/1_instance_proxy.png')} />
 
-## **Horizontal Scaling**
+## **Horizontal Scaling - 10K RPS**
 
 <Image img={require('../img/instances_vs_rps.png')} />
 
