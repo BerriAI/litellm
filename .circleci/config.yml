@@ -422,9 +422,6 @@ jobs:
             username: ${DOCKERHUB_USERNAME}
             password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    environment:
-      DATABASE_URL: ${PROXY_UNIT_TEST_DATABASE_URL}
-
     steps:
       - checkout
 
