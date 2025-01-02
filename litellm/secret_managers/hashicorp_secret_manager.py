@@ -14,6 +14,8 @@ from litellm.proxy._types import KeyManagementSystem
 
 class HashicorpSecretManager:
     def __init__(self):
+        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")
         self.vault_token = os.getenv("HCP_VAULT_TOKEN", "")
@@ -33,6 +35,11 @@ class HashicorpSecretManager:
         self.cache = InMemoryCache(
             default_ttl=_refresh_interval
         )  # store in memory for 1 day
+
+        if premium_user is not True:
+            raise ValueError(
+                f"Hashicorp secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+            )
 
     def get_url(self, secret_name: str) -> str:
         _url = f"{self.vault_addr}/v1/"
