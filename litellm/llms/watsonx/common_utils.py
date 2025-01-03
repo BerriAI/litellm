@@ -177,7 +177,9 @@ class IBMWatsonXMixin:
             return {**default_headers, **headers}
         token = cast(
             Optional[str],
-            optional_params.get("token") or get_secret_str("WATSONX_ZENAPIKEY"),
+            optional_params.get("token")
+            or get_secret_str("WATSONX_ZENAPIKEY")
+            or get_secret_str("WATSONX_TOKEN"),
         )
         if token:
             headers["Authorization"] = f"Bearer {token}"

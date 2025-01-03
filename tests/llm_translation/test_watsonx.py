@@ -89,8 +89,11 @@ def test_watsonx_custom_auth_header(
         )
 
 
-def test_watsonx_zenapi_key(monkeypatch, watsonx_chat_completion_call):
-    monkeypatch.setenv("WATSONX_ZENAPIKEY", "my-custom-token")
+@pytest.mark.parametrize("env_var_key", ["WATSONX_ZENAPIKEY", "WATSONX_TOKEN"])
+def test_watsonx_token_in_env_var(
+    monkeypatch, watsonx_chat_completion_call, env_var_key
+):
+    monkeypatch.setenv(env_var_key, "my-custom-token")
 
     mock_post, _ = watsonx_chat_completion_call(patch_token_call=False)
 
