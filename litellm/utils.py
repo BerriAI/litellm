@@ -915,6 +915,9 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            threading.Thread(
+                target=logging_obj.success_handler, args=(result, start_time, end_time)
+            ).start()
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
@@ -1119,6 +1122,11 @@ def client(original_function):  # noqa: PLR0915
             asyncio.create_task(
                 logging_obj.async_success_handler(result, start_time, end_time)
             )
+            threading.Thread(
+                target=logging_obj.success_handler,
+                args=(result, start_time, end_time),
+            ).start()
+
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
@@ -1242,7 +1250,7 @@ def _select_tokenizer(
         custom_tokenizer = Tokenizer.from_pretrained(
             custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
-            auth_token=custom_tokenizer["auth_token"],  # type: ignore
+            auth_token=custom_tokenizer["auth_token"],
         )
         return {"type": "huggingface_tokenizer", "tokenizer": custom_tokenizer}
     return _select_tokenizer_helper(model=model)
@@ -1428,7 +1436,7 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier, revision=revision, auth_token=auth_token
         )
     except Exception as e:
         verbose_logger.error(
