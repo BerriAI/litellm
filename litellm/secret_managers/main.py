@@ -292,9 +292,6 @@ def get_secret(  # noqa: PLR0915
                 elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
                     try:
                         secret = client.read_secret(secret_name)
-                        print_verbose(
-                            f"secret from hashicorp secret manager:  {secret}"
-                        )
                         if secret is None:
                             raise ValueError(
                                 f"No secret found in Hashicorp Secret Manager for {secret_name}"
