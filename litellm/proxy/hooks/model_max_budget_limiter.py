@@ -155,8 +155,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        _litellm_params = kwargs.get("litellm_params", {})
-        _metadata = _litellm_params.get("metadata", {})
+        _litellm_params: dict = kwargs.get("litellm_params", {}) or {}
+        _metadata: dict = _litellm_params.get("metadata", {}) or {}
         user_api_key_model_max_budget: Optional[dict] = _metadata.get(
             "user_api_key_model_max_budget", None
         )
