@@ -6147,6 +6147,8 @@ class ProviderConfigManager:
             or litellm.LlmProviders.LITELLM_PROXY == provider
         ):
             return litellm.OpenAILikeChatConfig()
+        elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
+            return litellm.AiohttpOpenAIChatConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.LM_STUDIO == provider:
