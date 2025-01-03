@@ -11,8 +11,6 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.utils import GenericBudgetConfigType, GenericBudgetInfo
-
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -511,13 +509,17 @@ class ModelGroupInfo(BaseModel):
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
     mode: Optional[
-        Literal[
-            "chat",
-            "embedding",
-            "completion",
-            "image_generation",
-            "audio_transcription",
-            "rerank",
+        Union[
+            str,
+            Literal[
+                "chat",
+                "embedding",
+                "completion",
+                "image_generation",
+                "audio_transcription",
+                "rerank",
+                "moderations",
+            ],
         ]
     ] = Field(default="chat")
     tpm: Optional[int] = None

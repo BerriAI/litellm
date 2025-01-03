@@ -19,7 +19,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
@@ -142,6 +145,7 @@ class AporiaGuardrail(CustomGuardrail):
                     },
                 )
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
@@ -173,6 +177,7 @@ class AporiaGuardrail(CustomGuardrail):
 
         pass
 
+    @log_guardrail_information
     async def async_moderation_hook(  ### 👈 KEY CHANGE ###
         self,
         data: dict,

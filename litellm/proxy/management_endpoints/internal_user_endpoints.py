@@ -370,7 +370,7 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-        team_list.sort(key=lambda x: (getattr(x, "team_alias", "")))
+        team_list.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
         _user_info = (
             user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
         )

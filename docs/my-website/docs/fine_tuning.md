@@ -10,10 +10,12 @@ This is an Enterprise only endpoint [Get Started with Enterprise here](https://c
 
 :::
 
-## Supported Providers
-- Azure OpenAI
-- OpenAI
-- Vertex AI
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI | - |
+| Cost Tracking | 🟡 | [Let us know if you need this](https://github.com/BerriAI/litellm/issues) |
+| Logging | ✅ | Works across all logging integrations |
+
 
 Add `finetune_settings` and `files_settings` to your litellm config.yaml to use the fine-tuning endpoints.
 ## Example config.yaml for `finetune_settings` and `files_settings`
@@ -110,58 +112,6 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
 
 </TabItem>
 
-<TabItem value="Vertex" label="VertexAI">
-
-<Tabs>
-<TabItem value="openai" label="OpenAI Python SDK">
-
-```python
-ft_job = await client.fine_tuning.jobs.create(
-    model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
-    training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
-    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm proxy which provider to use
-)
-```
-</TabItem>
-
-<TabItem value="curl" label="curl (Unified API)">
-
-```shell
-curl http://localhost:4000/v1/fine_tuning/jobs \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
-    -d '{
-    "custom_llm_provider": "vertex_ai",
-    "model": "gemini-1.0-pro-002",
-    "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
-    }'
-```
-</TabItem>
-
-<TabItem value="curl-vtx" label="curl (VertexAI API)">
-
-:::info
-
-Use this to create Fine tuning Jobs in [the Vertex AI API Format](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning#create-tuning)
-
-:::
-
-```shell
-curl http://localhost:4000/v1/projects/tuningJobs \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer sk-1234" \
-      -d '{
-  "baseModel": "gemini-1.0-pro-002",
-  "supervisedTuningSpec" : {
-      "training_dataset_uri": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
-  }
-}'
-```
-
-</TabItem>
-</Tabs>
-
-</TabItem>
 </Tabs>
 
 ### Request Body

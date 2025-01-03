@@ -1,6 +1,6 @@
 import json
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -84,6 +84,41 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
     return _response_headers
 
 
+import re
+
+
+def extract_and_raise_litellm_exception(
+    response: Optional[Any],
+    error_str: str,
+    model: str,
+    custom_llm_provider: str,
+):
+    """
+    Covers scenario where litellm sdk calling proxy.
+
+    Enables raising the special errors raised by litellm, eg. ContextWindowExceededError.
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/7259
+    """
+    pattern = r"litellm\.\w+Error"
+
+    # Search for the exception in the error string
+    match = re.search(pattern, error_str)
+
+    # Extract the exception if found
+    if match:
+        exception_name = match.group(0)
+        exception_name = exception_name.strip().replace("litellm.", "")
+        raised_exception_obj = getattr(litellm, exception_name, None)
+        if raised_exception_obj:
+            raise raised_exception_obj(
+                message=error_str,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+            )
+
+
 def exception_type(  # type: ignore  # noqa: PLR0915
     model,
     original_exception,
@@ -113,11 +148,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
+        error_str = str(original_exception)
         if model:
             if hasattr(original_exception, "message"):
                 error_str = str(original_exception.message)
-            else:
-                error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -197,6 +231,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     litellm_debug_info=extra_information,
                 )
 
+            if (
+                custom_llm_provider == "litellm_proxy"
+            ):  # handle special case where calling litellm proxy + exception str contains error message
+                extract_and_raise_litellm_exception(
+                    response=getattr(original_exception, "response", None),
+                    error_str=error_str,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
             if (
                 custom_llm_provider == "openai"
                 or custom_llm_provider == "text-completion-openai"

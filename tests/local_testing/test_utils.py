@@ -1085,6 +1085,26 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
             validate_chat_completion_user_messages(messages=messages)
 
 
+@pytest.mark.parametrize(
+    "tool_choice, expected_bool",
+    [
+        ({"type": "function", "function": {"name": "get_current_weather"}}, True),
+        ({"type": "tool", "name": "get_current_weather"}, False),
+        (None, True),
+        ("auto", True),
+        ("required", True),
+    ],
+)
+def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
+    from litellm.utils import validate_chat_completion_tool_choice
+
+    if expected_bool:
+        validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    else:
+        with pytest.raises(Exception):
+            validate_chat_completion_tool_choice(tool_choice=tool_choice)
+
+
 def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
@@ -1240,3 +1260,31 @@ def test_token_counter_with_image_url_with_detail_high():
     )
     print("tokens", _tokens)
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
+
+
+def test_fireworks_ai_document_inlining():
+    """
+    With document inlining, all fireworks ai models are now:
+    - supports_pdf
+    - supports_vision
+    """
+    from litellm.utils import supports_pdf_input, supports_vision
+
+    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is True
+    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is True
+
+
+def test_logprobs_type():
+    from litellm.types.utils import Logprobs
+
+    logprobs = {
+        "text_offset": None,
+        "token_logprobs": None,
+        "tokens": None,
+        "top_logprobs": None,
+    }
+    logprobs = Logprobs(**logprobs)
+    assert logprobs.text_offset is None
+    assert logprobs.token_logprobs is None
+    assert logprobs.tokens is None
+    assert logprobs.top_logprobs is None

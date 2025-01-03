@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from typing import Any, Dict
 from unittest.mock import Mock
 from litellm.proxy.utils import _get_redoc_url, _get_docs_url
 import json
@@ -1104,3 +1105,150 @@ def test_proxy_config_state_post_init_callback_call():
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
+
+
+@pytest.mark.parametrize(
+    "associated_budget_table, expected_user_api_key_auth_key, expected_user_api_key_auth_value",
+    [
+        (
+            {
+                "litellm_budget_table_max_budget": None,
+                "litellm_budget_table_tpm_limit": None,
+                "litellm_budget_table_rpm_limit": 1,
+                "litellm_budget_table_model_max_budget": None,
+            },
+            "rpm_limit",
+            1,
+        ),
+        (
+            {},
+            None,
+            None,
+        ),
+        (
+            {
+                "litellm_budget_table_max_budget": None,
+                "litellm_budget_table_tpm_limit": None,
+                "litellm_budget_table_rpm_limit": None,
+                "litellm_budget_table_model_max_budget": {"gpt-4o": 100},
+            },
+            "model_max_budget",
+            {"gpt-4o": 100},
+        ),
+    ],
+)
+def test_litellm_verification_token_view_response_with_budget_table(
+    associated_budget_table,
+    expected_user_api_key_auth_key,
+    expected_user_api_key_auth_value,
+):
+    from litellm.proxy._types import LiteLLM_VerificationTokenView
+
+    args: Dict[str, Any] = {
+        "token": "78b627d4d14bc3acf5571ae9cb6834e661bc8794d1209318677387add7621ce1",
+        "key_name": "sk-...if_g",
+        "key_alias": None,
+        "soft_budget_cooldown": False,
+        "spend": 0.011441999999999997,
+        "expires": None,
+        "models": [],
+        "aliases": {},
+        "config": {},
+        "user_id": None,
+        "team_id": "test",
+        "permissions": {},
+        "max_parallel_requests": None,
+        "metadata": {},
+        "blocked": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "max_budget": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "allowed_cache_controls": [],
+        "model_spend": {},
+        "model_max_budget": {},
+        "budget_id": "my-test-tier",
+        "created_at": "2024-12-26T02:28:52.615+00:00",
+        "updated_at": "2024-12-26T03:01:51.159+00:00",
+        "team_spend": 0.012134999999999998,
+        "team_max_budget": None,
+        "team_tpm_limit": None,
+        "team_rpm_limit": None,
+        "team_models": [],
+        "team_metadata": {},
+        "team_blocked": False,
+        "team_alias": None,
+        "team_members_with_roles": [{"role": "admin", "user_id": "default_user_id"}],
+        "team_member_spend": None,
+        "team_model_aliases": None,
+        "team_member": None,
+        **associated_budget_table,
+    }
+    resp = LiteLLM_VerificationTokenView(**args)
+    if expected_user_api_key_auth_key is not None:
+        assert (
+            getattr(resp, expected_user_api_key_auth_key)
+            == expected_user_api_key_auth_value
+        )
+
+
+def test_is_allowed_to_create_key():
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _is_allowed_to_create_key,
+    )
+
+    assert (
+        _is_allowed_to_create_key(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user_id", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+            user_id="test_user_id",
+            team_id="test_team_id",
+        )
+        is True
+    )
+
+    assert (
+        _is_allowed_to_create_key(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user_id",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                team_id="litellm-dashboard",
+            ),
+            user_id="test_user_id",
+            team_id="test_team_id",
+        )
+        is True
+    )
+
+
+def test_get_model_group_info():
+    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/tts-1",
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "sk-1234",
+                },
+            },
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "sk-1234",
+                },
+            },
+        ]
+    )
+    model_list = _get_model_group_info(
+        llm_router=router,
+        all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
+        model_group="openai/tts-1",
+    )
+    assert len(model_list) == 1

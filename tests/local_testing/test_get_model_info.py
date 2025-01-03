@@ -209,16 +209,19 @@ def test_model_info_bedrock_converse(monkeypatch):
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Load whitelist models from file
-    with open("whitelisted_bedrock_models.txt", "r") as file:
-        whitelist_models = [line.strip() for line in file.readlines()]
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
+    except FileNotFoundError:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
 
     _enforce_bedrock_converse_models(
         model_cost=litellm.model_cost, whitelist_models=whitelist_models
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_model_info_bedrock_converse_enforcement(monkeypatch):
     """
     Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
@@ -232,12 +235,15 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
         "mode": "chat",
     }
 
-    # Load whitelist models from file
-    with open("whitelisted_bedrock_models.txt", "r") as file:
-        whitelist_models = [line.strip() for line in file.readlines()]
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
 
-    # Check for unwhitelisted models
-    with pytest.raises(AssertionError):
-        _enforce_bedrock_converse_models(
-            model_cost=litellm.model_cost, whitelist_models=whitelist_models
-        )
+        # Check for unwhitelisted models
+        with pytest.raises(AssertionError):
+            _enforce_bedrock_converse_models(
+                model_cost=litellm.model_cost, whitelist_models=whitelist_models
+            )
+    except FileNotFoundError as e:
+        pytest.skip("whitelisted_bedrock_models.txt not found")

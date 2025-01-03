@@ -6,7 +6,7 @@ import os
 import random
 import time
 from datetime import timedelta
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from openai import APIError
 
@@ -25,12 +25,18 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import AlertType, CallInfo, VirtualKeyEvent, WebhookEvent
-from litellm.router import Router
 from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
 from .utils import _add_langfuse_trace_id_to_alert, process_slack_alerting_variables
+
+if TYPE_CHECKING:
+    from litellm.router import Router as _Router
+
+    Router = _Router
+else:
+    Router = Any
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -465,18 +471,10 @@ class SlackAlerting(CustomBatchLogger):
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
             alerting_metadata: dict = {}
-            if (
-                request_data is not None
-                and request_data.get("litellm_status", "") != "success"
-                and request_data.get("litellm_status", "") != "fail"
-            ):
-                ## CHECK IF CACHE IS UPDATED
-                litellm_call_id = request_data.get("litellm_call_id", "")
-                status: Optional[str] = await self.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(litellm_call_id), local_only=True
-                )
-                if status is not None and (status == "success" or status == "fail"):
-                    return
+            if await self._request_is_completed(request_data=request_data) is True:
+                return
+
+            if request_data is not None:
                 if request_data.get("deployment", None) is not None and isinstance(
                     request_data["deployment"], dict
                 ):
@@ -1753,3 +1751,23 @@ Model Info:
             )
 
         return
+
+    async def _request_is_completed(self, request_data: Optional[dict]) -> bool:
+        """
+        Returns True if the request is completed - either as a success or failure
+        """
+        if request_data is None:
+            return False
+
+        if (
+            request_data.get("litellm_status", "") != "success"
+            and request_data.get("litellm_status", "") != "fail"
+        ):
+            ## CHECK IF CACHE IS UPDATED
+            litellm_call_id = request_data.get("litellm_call_id", "")
+            status: Optional[str] = await self.internal_usage_cache.async_get_cache(
+                key="request_status:{}".format(litellm_call_id), local_only=True
+            )
+            if status is not None and (status == "success" or status == "fail"):
+                return True
+        return False

@@ -283,6 +283,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError(
             "Azure OpenAI has custom logic for validating environment, as it uses the OpenAI SDK."

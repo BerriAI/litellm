@@ -8,7 +8,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
-
+from typing import Dict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -175,7 +175,7 @@ def test_get_available_deployments():
 
 def test_router_get_available_deployments():
     """
-    Test if routers 'get_available_deployments' returns the least busy deployment
+    Test if routers 'get_available_deployments' returns the lowest tpm deployment
     """
     model_list = [
         {
@@ -634,3 +634,67 @@ def test_router_caching_ttl_sync():
     assert current_ttl >= 0
 
     print(f"current_ttl: {current_ttl}")
+
+
+def test_return_potential_deployments():
+    """
+    Assert deployment at limit is filtered out
+    """
+    from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+
+    test_cache = DualCache()
+    model_list = []
+    lowest_tpm_logger = LowestTPMLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+
+    args: Dict = {
+        "healthy_deployments": [
+            {
+                "model_name": "model-test",
+                "litellm_params": {
+                    "rpm": 1,
+                    "api_key": "sk-1234",
+                    "model": "openai/gpt-3.5-turbo",
+                    "mock_response": "Hello, world!",
+                },
+                "model_info": {
+                    "id": "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d",
+                    "db_model": False,
+                },
+            },
+            {
+                "model_name": "model-test",
+                "litellm_params": {
+                    "rpm": 10,
+                    "api_key": "sk-1234",
+                    "model": "openai/o1-mini",
+                    "mock_response": "Hello, world, it's o1!",
+                },
+                "model_info": {
+                    "id": "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe",
+                    "db_model": False,
+                },
+            },
+        ],
+        "all_deployments": {
+            "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d": None,
+            "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe": None,
+            "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d:tpm:02-17": 0,
+            "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe:tpm:02-17": 0,
+        },
+        "input_tokens": 98,
+        "rpm_dict": {
+            "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d": 1,
+            "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe": None,
+        },
+    }
+
+    potential_deployments = lowest_tpm_logger._return_potential_deployments(
+        healthy_deployments=args["healthy_deployments"],
+        all_deployments=args["all_deployments"],
+        input_tokens=args["input_tokens"],
+        rpm_dict=args["rpm_dict"],
+    )
+
+    assert len(potential_deployments) == 1

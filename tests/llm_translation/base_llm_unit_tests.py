@@ -91,6 +91,40 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
+    def test_streaming(self):
+        """Check if litellm handles streaming correctly"""
+        base_completion_call_args = self.get_base_completion_call_args()
+        litellm.set_verbose = True
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello, how are you?"}],
+            }
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                stream=True,
+            )
+            assert response is not None
+            assert isinstance(response, CustomStreamWrapper)
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+        # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
+        chunks = []
+        for chunk in response:
+            print(chunk)
+            chunks.append(chunk)
+
+        resp = litellm.stream_chunk_builder(chunks=chunks)
+        print(resp)
+
+        # assert resp.usage.prompt_tokens > 0
+        # assert resp.usage.completion_tokens > 0
+        # assert resp.usage.total_tokens > 0
+
     def test_pydantic_model_input(self):
         litellm.set_verbose = True
 
@@ -154,8 +188,13 @@ class BaseLLMChatTest(ABC):
         """
         Test that the JSON response format is supported by the LLM API
         """
+        from litellm.utils import supports_response_schema
+
         base_completion_call_args = self.get_base_completion_call_args()
         litellm.set_verbose = True
+
+        if not supports_response_schema(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support response schema")
 
         messages = [
             {
@@ -225,8 +264,14 @@ class BaseLLMChatTest(ABC):
         """
         Test that the JSON response format with streaming is supported by the LLM API
         """
+        from litellm.utils import supports_response_schema
+
         base_completion_call_args = self.get_base_completion_call_args()
         litellm.set_verbose = True
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_response_schema(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support response schema")
 
         messages = [
             {

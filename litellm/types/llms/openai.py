@@ -30,6 +30,7 @@ from openai.types.chat.chat_completion_prediction_content_param import (
     ChatCompletionPredictionContentParam,
 )
 from openai.types.embedding import Embedding as OpenAIEmbedding
+from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
 from pydantic import BaseModel, Field
 from typing_extensions import Dict, Required, TypedDict, override
 
@@ -611,6 +612,9 @@ class FineTuningJobCreate(BaseModel):
 
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
+
+    class Config:
+        extra = "allow"  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]

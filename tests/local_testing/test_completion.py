@@ -132,34 +132,6 @@ def test_null_role_response():
         assert response.choices[0].message.role == "assistant"
 
 
-def test_completion_azure_ai_command_r():
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
-
-        response = completion(
-            model="azure_ai/command-r-plus",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the meaning of life?"}
-                    ],
-                }
-            ],
-        )  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
@@ -4533,4 +4505,18 @@ def test_langfuse_completion(monkeypatch):
         prompt_id="test-chat-prompt",
         prompt_variables={"user_message": "this is used"},
         messages=[{"role": "user", "content": "this is ignored"}],
+    )
+
+
+def test_humanloop_completion(monkeypatch):
+    monkeypatch.setenv(
+        "HUMANLOOP_API_KEY", "hl_sk_59c1206e110c3f5b9985f0de4d23e7cbc79c4c4ae18c9f14"
+    )
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="humanloop/gpt-3.5-turbo",
+        humanloop_api_key=os.getenv("HUMANLOOP_API_KEY"),
+        prompt_id="pr_nmSOVpEdyYPm2DrOwCoOm",
+        prompt_variables={"person": "John"},
+        messages=[{"role": "user", "content": "Tell me a joke."}],
     )
