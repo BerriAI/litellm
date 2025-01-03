@@ -1,6 +1,6 @@
 model_list:
-  - model_name: "openai_like/*"
+  - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: openai_like/*
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: openai_like/any
+      api_base: https://exampleopenaiendpoint-production.up.railway.app
       api_key: "ishaan"

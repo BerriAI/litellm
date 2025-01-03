@@ -2824,7 +2824,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 return response
             response = model_response
         elif custom_llm_provider == "openai_like":
-            response = openai_like_chat.completion(
+            response = openai_like_chat_completion.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -2834,6 +2834,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding,
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                logging_obj=logging,
+                custom_prompt_dict=custom_prompt_dict,
             )
         elif custom_llm_provider == "petals" or model in litellm.petals_models:
             api_base = api_base or litellm.api_base
