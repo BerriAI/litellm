@@ -166,13 +166,14 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
+        _json_response = await response.json()
 
         # cast to httpx.Response
         # Todo - use this until we migrate fully to aiohttp
         response = httpx.Response(
             status_code=response.status,
             headers=response.headers,
-            content=response.content,
+            json=_json_response,
         )
         return provider_config.transform_response(
             model=model,
