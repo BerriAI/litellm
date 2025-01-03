@@ -10,6 +10,9 @@ metadata:
     checksum/config: {{ toYaml .Values | sha256sum }}
 spec:
   template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: {{ .Values.migrationJob.istioInjection | quote }}
     spec:
       containers:
         - name: prisma-migrations
