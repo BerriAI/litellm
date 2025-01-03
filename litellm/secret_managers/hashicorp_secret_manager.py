@@ -26,7 +26,6 @@ class HashicorpSecretManager:
 
         # Optional config for TLS cert auth
         self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
-        self.tls_ca_cert_path = os.getenv("HCP_VAULT_CA_CERT", "")
         self.tls_key_path = os.getenv("HCP_VAULT_CLIENT_KEY", "")
 
         # Validate environment
@@ -87,7 +86,6 @@ class HashicorpSecretManager:
             resp = httpx.post(
                 login_url,
                 cert=(self.tls_cert_path, self.tls_key_path),
-                verify=self.tls_ca_cert_path,  # Add this line to specify CA certificate
             )
             resp.raise_for_status()
             token = resp.json()["auth"]["client_token"]
