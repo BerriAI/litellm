@@ -1532,6 +1532,7 @@ def completion(  # type: ignore # noqa: PLR0915
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
@@ -2852,7 +2853,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "custom_openai":
+        elif custom_llm_provider == "aiohttp_openai":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base

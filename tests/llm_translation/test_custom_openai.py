@@ -15,7 +15,7 @@ import litellm
 async def test_custom_openai():
     litellm.set_verbose = True
     response = await litellm.acompletion(
-        model="custom_openai/fake-model",
+        model="aiohttp_openai/fake-model",
         messages=[{"role": "user", "content": "Hello, world!"}],
         api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
         api_key="fake-key",

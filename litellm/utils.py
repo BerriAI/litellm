@@ -6142,12 +6142,13 @@ class ProviderConfigManager:
             return litellm.GithubChatConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
+            or litellm.LlmProviders.CUSTOM_OPENAI == provider
             or litellm.LlmProviders.OPENAI_LIKE == provider
             or litellm.LlmProviders.LITELLM_PROXY == provider
         ):
             return litellm.OpenAILikeChatConfig()
-        elif litellm.LlmProviders.CUSTOM_OPENAI == provider:
-            return litellm.CustomOpenAIChatConfig()
+        elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
+            return litellm.AiohttpOpenAIChatConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.LM_STUDIO == provider:

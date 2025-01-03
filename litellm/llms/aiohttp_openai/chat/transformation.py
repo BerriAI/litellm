@@ -1,7 +1,8 @@
 """
-Custom OpenAI chat completion transformation
+*New config* for using aiohttp to make the request to the custom OpenAI-like provider
 
-This uses aiohttp to make the request to the custom OpenAI-like provider
+This leads to 10x higher RPS than httpx
+https://github.com/BerriAI/litellm/issues/6592
 
 New config to ensure we introduce this without causing breaking changes for users
 """
@@ -22,7 +23,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class CustomOpenAIChatConfig(OpenAILikeChatConfig):
+class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     def validate_environment(
         self,
         headers: dict,
