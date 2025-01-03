@@ -1862,8 +1862,12 @@ class ProxyConfig:
                         try:
                             TeamDefaultSettings(**team_setting)
                         except Exception:
+                            if isinstance(team_setting, dict):
+                                raise Exception(
+                                    f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting.keys()}"
+                                )
                             raise Exception(
-                                f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting}"
+                                f"team_id missing from default_team_settings at index={idx}\npassed in value={type(team_setting)}"
                             )
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
