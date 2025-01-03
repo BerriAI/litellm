@@ -7,6 +7,7 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 import json
 from typing import Any, Callable, Optional, Union
 
+import aiohttp
 import httpx
 
 import litellm
@@ -160,7 +161,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         model_response: ModelResponse,
         custom_llm_provider: str,
         print_verbose: Callable,
-        client: Optional[AsyncHTTPHandler],
+        client: Optional[aiohttp.ClientSession],
         encoding,
         api_key,
         logging_obj,
@@ -171,33 +172,32 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         litellm_params=None,
         logger_fn=None,
         headers={},
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: Optional[Union[float, aiohttp.ClientTimeout]] = None,
         json_mode: bool = False,
     ) -> ModelResponse:
         if timeout is None:
-            timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+            timeout = aiohttp.ClientTimeout(total=600.0, connect=5.0)
 
         if client is None:
-            client = litellm.module_level_aclient
+            client = aiohttp.ClientSession(timeout=timeout)
 
         try:
-            response = await client.post(
-                api_base, headers=headers, data=json.dumps(data), timeout=timeout
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
+            async with client.post(
+                api_base, headers=headers, data=json.dumps(data)
+            ) as response:
+                response.raise_for_status()
+                response_data = await response.json()
+        except aiohttp.ClientResponseError as e:
             raise OpenAILikeError(
-                status_code=e.response.status_code,
-                message=e.response.text,
+                status_code=e.status,
+                message=e.message,
             )
-        except httpx.TimeoutException:
-            raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
 
         return OpenAILikeChatConfig._transform_response(
             model=model,
-            response=response,
+            response=response_data,
             model_response=model_response,
             stream=stream,
             logging_obj=logging_obj,
@@ -331,9 +331,9 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
-                    timeout=timeout,
+                    timeout=timeout,  # type: ignore
                     base_model=base_model,
-                    client=client,
+                    client=client,  # type: ignore
                 )
         else:
             ## COMPLETION CALL

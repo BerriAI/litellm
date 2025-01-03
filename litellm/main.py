@@ -474,6 +474,7 @@ async def acompletion(
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider == "cloudflare"
+            or custom_llm_provider == "openai_like"
             or custom_llm_provider in litellm.openai_compatible_providers
             or custom_llm_provider in litellm._custom_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
@@ -2822,6 +2823,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "openai_like":
+            response = openai_like_chat.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+            )
         elif custom_llm_provider == "petals" or model in litellm.petals_models:
             api_base = api_base or litellm.api_base
 
