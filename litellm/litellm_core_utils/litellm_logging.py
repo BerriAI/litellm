@@ -1005,7 +1005,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             isinstance(callback, CustomLogger)
                             and "_PROXY_" in callback.__class__.__name__
                         ):
-                            print_verbose("no-log request, skipping logging")
+                            verbose_logger.info("no-log request, skipping logging")
                             continue
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
