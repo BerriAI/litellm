@@ -1,6 +1,8 @@
 import os
 from typing import Optional
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
@@ -22,6 +24,10 @@ class HashicorpSecretManager:
         # If your KV engine is mounted somewhere other than "secret", adjust here:
         self.vault_namespace = os.getenv("HCP_VAULT_NAMESPACE", None)
 
+        # Optional config for TLS cert auth
+        self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
+        self.tls_key_path = os.getenv("HCP_VAULT_CLIENT_KEY", "")
+
         # Validate environment
         if not self.vault_token:
             raise ValueError(
@@ -41,12 +47,68 @@ class HashicorpSecretManager:
                 f"Hashicorp secret manager is only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
 
+    def _auth_via_tls_cert(self) -> str:
+        """
+        Ref: https://developer.hashicorp.com/vault/api-docs/auth/cert
+
+        Request:
+        ```
+        curl \
+            --request POST \
+            --cacert vault-ca.pem \
+            --cert cert.pem \
+            --key key.pem \
+            --data @payload.json \
+            https://127.0.0.1:8200/v1/auth/cert/login
+
+        ```
+
+        Response:
+        ```
+        {
+            "auth": {
+                "client_token": "cf95f87d-f95b-47ff-b1f5-ba7bff850425",
+                "policies": ["web", "stage"],
+                "lease_duration": 3600,
+                "renewable": true
+            }
+        }
+
+        ```
+        """
+        verbose_logger.debug("Using TLS cert auth for Hashicorp Vault")
+
+        # Vault endpoint for cert-based login, e.g. '/v1/auth/cert/login'
+        login_url = f"{self.vault_addr}/v1/auth/cert/login"
+
+        try:
+            # We use the client cert and key for mutual TLS
+            resp = httpx.post(
+                login_url,
+                cert=(self.tls_cert_path, self.tls_key_path),
+            )
+            resp.raise_for_status()
+            token = resp.json()["auth"]["client_token"]
+            _lease_duration = resp.json()["auth"]["lease_duration"]
+            verbose_logger.info("Successfully obtained Vault token via TLS cert auth.")
+            self.cache.set_cache(
+                key="hcp_vault_token", value=token, ttl=_lease_duration
+            )
+            return token
+        except Exception as e:
+            raise RuntimeError(f"Could not authenticate to Vault via TLS cert: {e}")
+
     def get_url(self, secret_name: str) -> str:
         _url = f"{self.vault_addr}/v1/"
         if self.vault_namespace:
             _url += f"{self.vault_namespace}/"
         _url += f"secret/data/{secret_name}"
         return _url
+
+    def _get_request_headers(self) -> dict:
+        if self.tls_cert_path and self.tls_key_path:
+            return {"X-Vault-Token": self._auth_via_tls_cert()}
+        return {"X-Vault-Token": self.vault_token}
 
     async def async_read_secret(self, secret_name: str) -> Optional[str]:
         """
@@ -65,9 +127,7 @@ class HashicorpSecretManager:
             _url = self.get_url(secret_name)
             url = _url
 
-            response = await async_client.get(
-                url, headers={"X-Vault-Token": self.vault_token}
-            )
+            response = await async_client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # For KV v2, the secret is in response.json()["data"]["data"]
@@ -93,12 +153,11 @@ class HashicorpSecretManager:
             # For KV v2: /v1/<mount>/data/<path>
             url = self.get_url(secret_name)
 
-            response = sync_client.get(url, headers={"X-Vault-Token": self.vault_token})
+            response = sync_client.get(url, headers=self._get_request_headers())
             response.raise_for_status()
 
             # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp = response.json()
-            verbose_logger.debug(f"Hashicorp secret manager response: {json_resp}")
             _value = self._get_secret_value_from_json_response(json_resp)
             self.cache.set_cache(secret_name, _value)
             return _value
