@@ -1319,3 +1319,82 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     ) as mock_post:
         valid_models = get_valid_models()
         assert "litellm_proxy/gpt-4o" in valid_models
+
+
+def test_get_valid_models_fireworks_ai(monkeypatch):
+    from litellm.utils import get_valid_models
+    import litellm
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
+
+    mock_response_data = {
+        "models": [
+            {
+                "name": "accounts/fireworks/models/llama-3.1-8b-instruct",
+                "displayName": "<string>",
+                "description": "<string>",
+                "createTime": "2023-11-07T05:31:56Z",
+                "createdBy": "<string>",
+                "state": "STATE_UNSPECIFIED",
+                "status": {"code": "OK", "message": "<string>"},
+                "kind": "KIND_UNSPECIFIED",
+                "githubUrl": "<string>",
+                "huggingFaceUrl": "<string>",
+                "baseModelDetails": {
+                    "worldSize": 123,
+                    "checkpointFormat": "CHECKPOINT_FORMAT_UNSPECIFIED",
+                    "parameterCount": "<string>",
+                    "moe": True,
+                    "tunable": True,
+                },
+                "peftDetails": {
+                    "baseModel": "<string>",
+                    "r": 123,
+                    "targetModules": ["<string>"],
+                },
+                "teftDetails": {},
+                "public": True,
+                "conversationConfig": {
+                    "style": "<string>",
+                    "system": "<string>",
+                    "template": "<string>",
+                },
+                "contextLength": 123,
+                "supportsImageInput": True,
+                "supportsTools": True,
+                "importedFrom": "<string>",
+                "fineTuningJob": "<string>",
+                "defaultDraftModel": "<string>",
+                "defaultDraftTokenCount": 123,
+                "precisions": ["PRECISION_UNSPECIFIED"],
+                "deployedModelRefs": [
+                    {
+                        "name": "<string>",
+                        "deployment": "<string>",
+                        "state": "STATE_UNSPECIFIED",
+                        "default": True,
+                        "public": True,
+                    }
+                ],
+                "cluster": "<string>",
+                "deprecationDate": {"year": 123, "month": 123, "day": 123},
+            }
+        ],
+        "nextPageToken": "<string>",
+        "totalSize": 123,
+    }
+
+    # Create a mock response object
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_response_data
+
+    with patch.object(
+        litellm.module_level_client, "get", return_value=mock_response
+    ) as mock_post:
+        valid_models = get_valid_models()
+        assert (
+            "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
+            in valid_models
+        )

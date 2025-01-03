@@ -223,3 +223,35 @@ class FireworksAIConfig(OpenAIGPTConfig):
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
         return model, api_base, dynamic_api_key
+
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+        api_base = (
+            api_base
+            or get_secret_str("FIREWORKS_API_BASE")
+            or "https://api.fireworks.ai/inference/v1"
+        )
+
+        account_id = get_secret_str("FIREWORKS_ACCOUNT_ID")
+        if account_id is None:
+            raise ValueError(
+                "FIREWORKS_ACCOUNT_ID is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+            )
+
+        api_key = api_key or get_secret_str("FIREWORKS_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+            )
+
+        response = litellm.module_level_client.get(
+            url=f"{api_base}/v1/accounts/{account_id}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        if response.status_code != 200:
+            raise ValueError(
+                f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
+            )
+
+        models = response.json()["models"]
+        return ["fireworks_ai/" + model["name"] for model in models]
