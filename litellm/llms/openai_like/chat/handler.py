@@ -178,8 +178,10 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         if timeout is None:
             timeout = aiohttp.ClientTimeout(total=600.0, connect=5.0)
 
+        should_close_client = False
         if client is None:
             client = aiohttp.ClientSession(timeout=timeout)
+            should_close_client = True
 
         try:
             async with client.post(
@@ -187,6 +189,26 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             ) as response:
                 response.raise_for_status()
                 response_data = await response.json()
+
+            result = OpenAILikeChatConfig._transform_response(
+                model=model,
+                response=response_data,
+                response_json=response_data,
+                model_response=model_response,
+                stream=stream,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                api_key=api_key,
+                data=data,
+                messages=messages,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                json_mode=json_mode,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model,
+            )
+
+            return result
         except aiohttp.ClientResponseError as e:
             raise OpenAILikeError(
                 status_code=e.status,
@@ -194,24 +216,9 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             )
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
-
-        return OpenAILikeChatConfig._transform_response(
-            model=model,
-            response=response_data,
-            response_json=response_data,
-            model_response=model_response,
-            stream=stream,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-            api_key=api_key,
-            data=data,
-            messages=messages,
-            print_verbose=print_verbose,
-            encoding=encoding,
-            json_mode=json_mode,
-            custom_llm_provider=custom_llm_provider,
-            base_model=base_model,
-        )
+        finally:
+            if should_close_client:
+                await client.close()
 
     def completion(
         self,

@@ -2,7 +2,7 @@ model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
       model: openai_like/any
-      api_base: https://exampleopenaiendpoint-production-c715.up.railway.app
+      api_base: https://example-openai-endpoint.onrender.com
       api_key: "ishaan"
 
 general_settings: 
