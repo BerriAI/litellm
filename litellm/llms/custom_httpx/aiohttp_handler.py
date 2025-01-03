@@ -58,21 +58,20 @@ class BaseLLMAIOHTTPHandler:
         if self.client_session is None:
             self.client_session = aiohttp.ClientSession()
 
-        async with self.client_session as session:
-            for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
-                try:
-                    response = await session.post(
-                        url=api_base,
-                        headers=headers,
-                        json=data,
-                    )
-                    if not response.ok:
-                        response.raise_for_status()
-                except aiohttp.ClientResponseError as e:
-                    raise self._handle_error(e=e, provider_config=provider_config)
-                except Exception as e:
-                    raise self._handle_error(e=e, provider_config=provider_config)
-                break
+        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+            try:
+                response = await self.client_session.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                )
+                if not response.ok:
+                    response.raise_for_status()
+            except aiohttp.ClientResponseError as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            break
 
         if response is None:
             raise provider_config.get_error_class(
