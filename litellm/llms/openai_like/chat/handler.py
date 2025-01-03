@@ -23,6 +23,8 @@ from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 from .transformation import OpenAILikeChatConfig
 
+global_aiohttp_client = None
+
 
 async def make_call(
     client: Optional[AsyncHTTPHandler],
@@ -175,16 +177,12 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         timeout: Optional[Union[float, aiohttp.ClientTimeout]] = None,
         json_mode: bool = False,
     ) -> ModelResponse:
-        if timeout is None:
-            timeout = aiohttp.ClientTimeout(total=600.0, connect=5.0)
-
-        should_close_client = False
-        if client is None:
-            client = aiohttp.ClientSession(timeout=timeout)
-            should_close_client = True
-
+        global global_aiohttp_client
+        if global_aiohttp_client is None:
+            global_aiohttp_client = aiohttp.ClientSession()
         try:
-            async with client.post(
+
+            async with global_aiohttp_client.post(
                 api_base, headers=headers, data=json.dumps(data)
             ) as response:
                 response.raise_for_status()
@@ -216,9 +214,6 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             )
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
-        finally:
-            if should_close_client:
-                await client.close()
 
     def completion(
         self,
