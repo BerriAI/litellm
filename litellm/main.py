@@ -2826,6 +2826,7 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "openai_like":
             response = openai_like_chat_completion.completion(
                 model=model,
+                acompletion=acompletion,
                 messages=messages,
                 api_base=api_base,
                 model_response=model_response,

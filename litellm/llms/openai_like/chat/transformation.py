@@ -65,6 +65,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
     def _transform_response(
         model: str,
         response: httpx.Response,
+        response_json: dict,
         model_response: ModelResponse,
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
@@ -78,7 +79,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         custom_llm_provider: str,
         base_model: Optional[str],
     ) -> ModelResponse:
-        response_json = response.json()
         logging_obj.post_call(
             input=messages,
             api_key="",

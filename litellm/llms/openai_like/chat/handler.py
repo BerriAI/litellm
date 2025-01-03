@@ -198,6 +198,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         return OpenAILikeChatConfig._transform_response(
             model=model,
             response=response_data,
+            response_json=response_data,
             model_response=model_response,
             stream=stream,
             logging_obj=logging_obj,
@@ -368,7 +369,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                         url=api_base, headers=headers, data=json.dumps(data)
                     )
                     response.raise_for_status()
-
+                    response_data = response.json()
                 except httpx.HTTPStatusError as e:
                     raise OpenAILikeError(
                         status_code=e.response.status_code,
@@ -383,6 +384,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         return OpenAILikeChatConfig._transform_response(
             model=model,
             response=response,
+            response_json=response_data,
             model_response=model_response,
             stream=stream,
             logging_obj=logging_obj,
