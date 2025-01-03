@@ -1,8 +1,9 @@
 import json
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
-import aiohttp  # Add this import
+import aiohttp
 import httpx  # type: ignore
+from aiohttp import TCPConnector
 
 import litellm
 import litellm.litellm_core_utils
@@ -25,6 +26,7 @@ else:
     LiteLLMLoggingObj = Any
 
 DEFAULT_TIMEOUT = 600
+DEFAULT_AIOHTTP_CONNECTION_LIMIT = 10000
 
 
 class BaseLLMAIOHTTPHandler:
@@ -56,7 +58,7 @@ class BaseLLMAIOHTTPHandler:
         )
 
         if self.client_session is None:
-            self.client_session = aiohttp.ClientSession()
+            self.client_session = self._init_client_session()
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
@@ -135,6 +137,12 @@ class BaseLLMAIOHTTPHandler:
             )
 
         return response
+
+    def _init_client_session(self):
+        self.client_session = aiohttp.ClientSession(
+            connector=TCPConnector(limit=10000),
+        )
+        return self.client_session
 
     async def async_completion(
         self,
