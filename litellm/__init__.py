@@ -1017,6 +1017,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
 
 from .llms.custom_llm import CustomLLM
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
+from .llms.custom_openai.chat.transformation import CustomOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
