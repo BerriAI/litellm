@@ -98,7 +98,6 @@ class HashicorpSecretManager:
 
             # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp = response.json()
-            verbose_logger.debug(f"Hashicorp secret manager response: {json_resp}")
             _value = self._get_secret_value_from_json_response(json_resp)
             self.cache.set_cache(secret_name, _value)
             return _value
