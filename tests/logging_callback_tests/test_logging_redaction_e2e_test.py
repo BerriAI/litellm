@@ -75,7 +75,7 @@ async def test_global_redaction_with_dynamic_params(turn_off_message_logging):
     )
 
     if turn_off_message_logging is True:
-        assert standard_logging_payload["response"] == "redacted-by-litellm"
+        assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
         assert (
             standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
         )
