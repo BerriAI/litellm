@@ -186,7 +186,6 @@ migrationJob:
   retries: 3
   backoffLimit: 4
   disableSchemaUpdate: false
-  annotations:
-    sidecar.istio.io/inject: "false"
+  annotations: {}
 
 
