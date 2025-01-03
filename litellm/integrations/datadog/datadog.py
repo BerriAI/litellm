@@ -256,10 +256,6 @@ class DataDogLogger(CustomBatchLogger):
         """
         import json
 
-        from litellm.litellm_core_utils.litellm_logging import (
-            truncate_standard_logging_payload_content,
-        )
-
         standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
         )
@@ -271,7 +267,7 @@ class DataDogLogger(CustomBatchLogger):
             status = DataDogStatus.ERROR
 
         # Build the initial payload
-        truncate_standard_logging_payload_content(standard_logging_object)
+        self.truncate_standard_logging_payload_content(standard_logging_object)
         json_payload = json.dumps(standard_logging_object, default=str)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
