@@ -435,74 +435,26 @@ async def acompletion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        if (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "azure"
-            or custom_llm_provider == "azure_text"
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "mistral"
-            or custom_llm_provider == "openrouter"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "groq"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "cohere_chat"
-            or custom_llm_provider == "cohere"
-            or custom_llm_provider == "cerebras"
-            or custom_llm_provider == "sambanova"
-            or custom_llm_provider == "ai21_chat"
-            or custom_llm_provider == "ai21"
-            or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "codestral"
-            or custom_llm_provider == "text-completion-codestral"
-            or custom_llm_provider == "deepseek"
-            or custom_llm_provider == "text-completion-openai"
-            or custom_llm_provider == "huggingface"
-            or custom_llm_provider == "ollama"
-            or custom_llm_provider == "ollama_chat"
-            or custom_llm_provider == "replicate"
-            or custom_llm_provider == "vertex_ai"
-            or custom_llm_provider == "vertex_ai_beta"
-            or custom_llm_provider == "gemini"
-            or custom_llm_provider == "sagemaker"
-            or custom_llm_provider == "sagemaker_chat"
-            or custom_llm_provider == "anthropic"
-            or custom_llm_provider == "anthropic_text"
-            or custom_llm_provider == "predibase"
-            or custom_llm_provider == "bedrock"
-            or custom_llm_provider == "databricks"
-            or custom_llm_provider == "triton"
-            or custom_llm_provider == "clarifai"
-            or custom_llm_provider == "watsonx"
-            or custom_llm_provider == "cloudflare"
-            or custom_llm_provider == "aiohttp_openai"
-            or custom_llm_provider in litellm.openai_compatible_providers
-            or custom_llm_provider in litellm._custom_providers
-        ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
-            init_response = await loop.run_in_executor(None, func_with_context)
-            if isinstance(init_response, dict) or isinstance(
-                init_response, ModelResponse
-            ):  ## CACHING SCENARIO
-                if isinstance(init_response, dict):
-                    response = ModelResponse(**init_response)
-                response = init_response
-            elif asyncio.iscoroutine(init_response):
-                response = await init_response
-            else:
-                response = init_response  # type: ignore
-
-            if (
-                custom_llm_provider == "text-completion-openai"
-                or custom_llm_provider == "text-completion-codestral"
-            ) and isinstance(response, TextCompletionResponse):
-                response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
-                    response_object=response,
-                    model_response_object=litellm.ModelResponse(),
-                )
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(init_response, dict) or isinstance(
+            init_response, ModelResponse
+        ):  ## CACHING SCENARIO
+            if isinstance(init_response, dict):
+                response = ModelResponse(**init_response)
+            response = init_response
+        elif asyncio.iscoroutine(init_response):
+            response = await init_response
         else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)  # type: ignore
+            response = init_response  # type: ignore
+
+        if (
+            custom_llm_provider == "text-completion-openai"
+            or custom_llm_provider == "text-completion-codestral"
+        ) and isinstance(response, TextCompletionResponse):
+            response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                response_object=response,
+                model_response_object=litellm.ModelResponse(),
+            )
         if isinstance(response, CustomStreamWrapper):
             response.set_logging_event_loop(
                 loop=loop
