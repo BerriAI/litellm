@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
