@@ -64,7 +64,7 @@ class GCSBucketLogger(GCSBucketBase):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-
+            self.truncate_standard_logging_payload_content(logging_payload)
             # Add to logging queue - this will be flushed periodically
             self.log_queue.append(
                 GCSLogQueueItem(
@@ -88,7 +88,7 @@ class GCSBucketLogger(GCSBucketBase):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-
+            self.truncate_standard_logging_payload_content(logging_payload)
             # Add to logging queue - this will be flushed periodically
             self.log_queue.append(
                 GCSLogQueueItem(
@@ -114,35 +114,37 @@ class GCSBucketLogger(GCSBucketBase):
         if not self.log_queue:
             return
 
-        try:
-            for log_item in self.log_queue:
-                logging_payload = log_item["payload"]
-                kwargs = log_item["kwargs"]
-                response_obj = log_item.get("response_obj", None) or {}
+        for log_item in self.log_queue:
+            logging_payload = log_item["payload"]
+            kwargs = log_item["kwargs"]
+            response_obj = log_item.get("response_obj", None) or {}
 
-                gcs_logging_config: GCSLoggingConfig = (
-                    await self.get_gcs_logging_config(kwargs)
-                )
-                headers = await self.construct_request_headers(
-                    vertex_instance=gcs_logging_config["vertex_instance"],
-                    service_account_json=gcs_logging_config["path_service_account"],
-                )
-                bucket_name = gcs_logging_config["bucket_name"]
-                object_name = self._get_object_name(
-                    kwargs, logging_payload, response_obj
-                )
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+                kwargs
+            )
+            headers = await self.construct_request_headers(
+                vertex_instance=gcs_logging_config["vertex_instance"],
+                service_account_json=gcs_logging_config["path_service_account"],
+            )
+            bucket_name = gcs_logging_config["bucket_name"]
+            object_name = self._get_object_name(kwargs, logging_payload, response_obj)
+
+            try:
                 await self._log_json_data_on_gcs(
                     headers=headers,
                     bucket_name=bucket_name,
                     object_name=object_name,
                     logging_payload=logging_payload,
                 )
+            except Exception as e:
+                # don't let one log item fail the entire batch
+                verbose_logger.exception(
+                    f"GCS Bucket error logging payload to GCS bucket: {str(e)}"
+                )
+                pass
 
-            # Clear the queue after processing
-            self.log_queue.clear()
-
-        except Exception as e:
-            verbose_logger.exception(f"GCS Bucket batch logging error: {str(e)}")
+        # Clear the queue after processing
+        self.log_queue.clear()
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
