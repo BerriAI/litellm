@@ -12,7 +12,7 @@ import litellm
 
 
 @pytest.mark.asyncio
-async def test_custom_openai():
+async def test_aiohttp_openai():
     litellm.set_verbose = True
     response = await litellm.acompletion(
         model="aiohttp_openai/fake-model",
@@ -21,3 +21,4 @@ async def test_custom_openai():
         api_key="fake-key",
     )
     print(response)
+    print(response.model_dump_json(indent=4))

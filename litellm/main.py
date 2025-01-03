@@ -476,6 +476,7 @@ async def acompletion(
             or custom_llm_provider == "clarifai"
             or custom_llm_provider == "watsonx"
             or custom_llm_provider == "cloudflare"
+            or custom_llm_provider == "aiohttp_openai"
             or custom_llm_provider in litellm.openai_compatible_providers
             or custom_llm_provider in litellm._custom_providers
         ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
