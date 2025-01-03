@@ -65,3 +65,38 @@ def test_hashicorp_secret_manager_get_secret():
             == "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200/v1/admin/secret/data/sample-secret-mock"
         )
         assert "X-Vault-Token" in mock_get.call_args.kwargs["headers"]
+
+
+def test_hashicorp_secret_manager_tls_cert_auth():
+    with patch("httpx.post") as mock_post:
+        # Configure the mock response for TLS auth
+        mock_auth_response = MagicMock()
+        mock_auth_response.json.return_value = {
+            "auth": {
+                "client_token": "test-client-token-12345",
+                "lease_duration": 3600,
+                "renewable": True,
+            }
+        }
+        mock_auth_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_auth_response
+
+        # Create a new instance with TLS cert config
+        test_manager = HashicorpSecretManager()
+        test_manager.tls_cert_path = "cert.pem"
+        test_manager.tls_key_path = "key.pem"
+
+        # Test the TLS auth method
+        token = test_manager._auth_via_tls_cert()
+
+        # Verify the token and request parameters
+        assert token == "test-client-token-12345"
+        mock_post.assert_called_once_with(
+            f"{test_manager.vault_addr}/v1/auth/cert/login",
+            cert=("cert.pem", "key.pem"),
+        )
+
+        # Verify the token was cached
+        assert (
+            test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
+        )
