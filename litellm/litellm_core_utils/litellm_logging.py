@@ -1005,7 +1005,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             isinstance(callback, CustomLogger)
                             and "_PROXY_" in callback.__class__.__name__
                         ):
-                            print_verbose("no-log request, skipping logging")
+                            verbose_logger.info("no-log request, skipping logging")
                             continue
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
@@ -3026,8 +3026,6 @@ def get_standard_logging_object_payload(
             ),
         )
 
-        truncate_standard_logging_payload_content(payload)
-
         return payload
     except Exception as e:
         verbose_logger.exception(
@@ -3042,26 +3040,20 @@ def truncate_standard_logging_payload_content(
     """
     Truncate error strings and message content in logging payload
 
-    Most logging integrations - DataDog / GCS Bucket / have a limit on the size of the payload. ~around(1MB)
+    Some loggers like DataDog have a limit on the size of the payload. (1MB)
 
     This function truncates the error string and the message content if they exceed a certain length.
     """
-    try:
-        MAX_STR_LENGTH = 10_000
+    MAX_STR_LENGTH = 10_000
 
-        # Truncate fields that might exceed max length
-        fields_to_truncate = ["error_str", "messages", "response"]
-        for field in fields_to_truncate:
-            _truncate_field(
-                standard_logging_object=standard_logging_object,
-                field_name=field,
-                max_length=MAX_STR_LENGTH,
-            )
-    except Exception as e:
-        verbose_logger.exception(
-            "Error truncating standard logging payload - {}".format(str(e))
+    # Truncate fields that might exceed max length
+    fields_to_truncate = ["error_str", "messages", "response"]
+    for field in fields_to_truncate:
+        _truncate_field(
+            standard_logging_object=standard_logging_object,
+            field_name=field,
+            max_length=MAX_STR_LENGTH,
         )
-        return
 
 
 def _truncate_text(text: str, max_length: int) -> str:
