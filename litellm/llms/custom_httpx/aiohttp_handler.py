@@ -1,9 +1,8 @@
 import json
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
-import aiohttp
+import aiohttp  # Add this import
 import httpx  # type: ignore
-from aiohttp import TCPConnector
 
 import litellm
 import litellm.litellm_core_utils
@@ -26,7 +25,6 @@ else:
     LiteLLMLoggingObj = Any
 
 DEFAULT_TIMEOUT = 600
-DEFAULT_AIOHTTP_CONNECTION_LIMIT = 10000
 
 
 class BaseLLMAIOHTTPHandler:
@@ -58,7 +56,7 @@ class BaseLLMAIOHTTPHandler:
         )
 
         if self.client_session is None:
-            self.client_session = self._init_client_session()
+            self.client_session = aiohttp.ClientSession()
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
@@ -138,12 +136,6 @@ class BaseLLMAIOHTTPHandler:
 
         return response
 
-    def _init_client_session(self):
-        self.client_session = aiohttp.ClientSession(
-            connector=TCPConnector(limit=10000),
-        )
-        return self.client_session
-
     async def async_completion(
         self,
         custom_llm_provider: str,
@@ -181,25 +173,7 @@ class BaseLLMAIOHTTPHandler:
         )
         _json_response = await _response.json()
 
-        # cast to httpx.Response
-        # Todo - use this until we migrate fully to aiohttp
-        response = httpx.Response(
-            status_code=_response.status,
-            headers=_response.headers,
-            json=_json_response,
-        )
-        return provider_config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-        )
+        return _json_response
 
     def completion(
         self,

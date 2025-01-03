@@ -1,8 +1,8 @@
 model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: openai/any
-      api_base: https://exampleopenaiendpoint-production.up.railway.app
+      model: aiohttp_openai/any
+      api_base: https://example-openai-endpoint.onrender.com/chat/completions
       api_key: "ishaan"
 
 general_settings: 
