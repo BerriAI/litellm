@@ -4264,6 +4264,7 @@ def _get_model_info_helper(  # noqa: PLR0915
             provider_config = ProviderConfigManager.get_provider_model_info(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
+
             if _model_info is None and provider_config is not None:
                 _model_info = cast(
                     Optional[Dict],
@@ -5707,12 +5708,12 @@ def trim_messages(
         return messages
 
 
-def get_valid_models() -> List[str]:
+def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
 
     Args:
-        None
+        check_provider_endpoint: If True, will check the provider's endpoint for valid models.
 
     Returns:
         A list of valid LLMs
@@ -5748,7 +5749,7 @@ def get_valid_models() -> List[str]:
 
             if provider == "azure":
                 valid_models.append("Azure-LLM")
-            elif provider_config is not None:
+            elif provider_config is not None and check_provider_endpoint:
                 valid_models.extend(provider_config.get_models())
             else:
                 models_for_provider = litellm.models_by_provider.get(provider, [])

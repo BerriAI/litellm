@@ -209,8 +209,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
         )
 
     def _get_openai_compatible_provider_info(
-        self, model: str, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[str, Optional[str], Optional[str]]:
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         api_base = (
             api_base
             or get_secret_str("FIREWORKS_API_BASE")
@@ -222,25 +222,21 @@ class FireworksAIConfig(OpenAIGPTConfig):
             or get_secret_str("FIREWORKSAI_API_KEY")
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
-        return model, api_base, dynamic_api_key
+        return api_base, dynamic_api_key
 
     def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
-        api_base = (
-            api_base
-            or get_secret_str("FIREWORKS_API_BASE")
-            or "https://api.fireworks.ai/inference/v1"
+        api_base, api_key = self._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
         )
+        if api_base is None or api_key is None:
+            raise ValueError(
+                "FIREWORKS_API_BASE or FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+            )
 
         account_id = get_secret_str("FIREWORKS_ACCOUNT_ID")
         if account_id is None:
             raise ValueError(
                 "FIREWORKS_ACCOUNT_ID is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
-            )
-
-        api_key = api_key or get_secret_str("FIREWORKS_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
             )
 
         response = litellm.module_level_client.get(

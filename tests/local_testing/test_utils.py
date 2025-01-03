@@ -1270,6 +1270,8 @@ def test_fireworks_ai_document_inlining():
     """
     from litellm.utils import supports_pdf_input, supports_vision
 
+    litellm._turn_on_debug()
+
     assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is True
     assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is True
 
@@ -1294,8 +1296,12 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
+    litellm._turn_on_debug()
+
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
+    monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
+    monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
 
     mock_response_data = {
         "object": "list",
@@ -1317,7 +1323,7 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     with patch.object(
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
-        valid_models = get_valid_models()
+        valid_models = get_valid_models(check_provider_endpoint=True)
         assert "litellm_proxy/gpt-4o" in valid_models
 
 
@@ -1393,8 +1399,22 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     with patch.object(
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
-        valid_models = get_valid_models()
+        valid_models = get_valid_models(check_provider_endpoint=True)
         assert (
             "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
             in valid_models
         )
+
+
+def test_get_valid_models_default(monkeypatch):
+    """
+    Ensure that the default models is used when error retrieving from model api.
+
+    Prevent regression for existing usage.
+    """
+    from litellm.utils import get_valid_models
+    import litellm
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    valid_models = get_valid_models()
+    assert len(valid_models) > 0
