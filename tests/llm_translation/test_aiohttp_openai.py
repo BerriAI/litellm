@@ -21,4 +21,3 @@ async def test_aiohttp_openai():
         api_key="fake-key",
     )
     print(response)
-    print(response.model_dump_json(indent=4))
