@@ -156,7 +156,7 @@ class BaseLLMAIOHTTPHandler:
         else:
             async_httpx_client = client
 
-        response = await self._make_common_async_call(
+        _response = await self._make_common_async_call(
             async_httpx_client=async_httpx_client,
             provider_config=provider_config,
             api_base=api_base,
@@ -166,13 +166,13 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
-        _json_response = await response.json()
+        _json_response = await _response.json()
 
         # cast to httpx.Response
         # Todo - use this until we migrate fully to aiohttp
         response = httpx.Response(
-            status_code=response.status,
-            headers=response.headers,
+            status_code=_response.status,
+            headers=_response.headers,
             json=_json_response,
         )
         return provider_config.transform_response(
