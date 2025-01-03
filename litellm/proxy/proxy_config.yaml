@@ -7,3 +7,5 @@ model_list:
 
 general_settings: 
   master_key: sk-1234 
+  alerting: ["slack"]
+  alerting_threshold: 0.0000001
