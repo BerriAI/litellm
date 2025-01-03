@@ -9,7 +9,7 @@ from litellm.types.utils import ModelInfoBase, ProviderSpecificModelInfo
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
-class FireworksAIConfig(BaseLLMModelInfo, OpenAIGPTConfig):
+class FireworksAIConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.fireworks.ai/api-reference/post-chatcompletions
 

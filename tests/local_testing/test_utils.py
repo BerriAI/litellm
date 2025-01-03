@@ -1290,8 +1290,32 @@ def test_logprobs_type():
     assert logprobs.top_logprobs is None
 
 
-def test_get_valid_models_openai_proxy():
+def test_get_valid_models_openai_proxy(monkeypatch):
     from litellm.utils import get_valid_models
+    import litellm
 
-    valid_models = get_valid_models()
-    assert "litellm_proxy/gpt-4o" in valid_models
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
+
+    mock_response_data = {
+        "object": "list",
+        "data": [
+            {
+                "id": "gpt-4o",
+                "object": "model",
+                "created": 1686935002,
+                "owned_by": "organization-owner",
+            },
+        ],
+    }
+
+    # Create a mock response object
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_response_data
+
+    with patch.object(
+        litellm.module_level_client, "get", return_value=mock_response
+    ) as mock_post:
+        valid_models = get_valid_models()
+        assert "litellm_proxy/gpt-4o" in valid_models
