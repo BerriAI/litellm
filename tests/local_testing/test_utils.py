@@ -1288,3 +1288,10 @@ def test_logprobs_type():
     assert logprobs.token_logprobs is None
     assert logprobs.tokens is None
     assert logprobs.top_logprobs is None
+
+
+def test_get_valid_models_openai_proxy():
+    from litellm.utils import get_valid_models
+
+    valid_models = get_valid_models()
+    assert "litellm_proxy/gpt-4o" in valid_models
