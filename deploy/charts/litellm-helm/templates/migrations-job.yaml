@@ -12,7 +12,9 @@ spec:
   template:
     metadata:
       annotations:
-        sidecar.istio.io/inject: {{ .Values.migrationJob.istioInjection | quote }}
+        {{- with .Values.migrationJob.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       containers:
         - name: prisma-migrations
