@@ -70,7 +70,7 @@ def perform_redaction(model_call_details: dict, result):
                     choice.delta.content = "redacted-by-litellm"
         return _result
     else:
-        return "redacted-by-litellm"
+        return {"text": "redacted-by-litellm"}
 
 
 def redact_message_input_output_from_logging(
