@@ -1954,7 +1954,7 @@
         "litellm_provider": "mistral",
         "mode": "embedding"
     },
-    "deepseek-chat": {
+    "deepseek/deepseek-chat": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -2023,7 +2023,7 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
-    "deepseek-coder": {
+    "deepseek/deepseek-coder": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
