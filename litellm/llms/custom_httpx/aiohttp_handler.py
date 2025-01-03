@@ -29,6 +29,9 @@ DEFAULT_TIMEOUT = 600
 
 class BaseLLMAIOHTTPHandler:
 
+    def __init__(self):
+        self.client_session: Optional[aiohttp.ClientSession] = None
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -52,7 +55,10 @@ class BaseLLMAIOHTTPHandler:
             )
         )
 
-        async with aiohttp.ClientSession(timeout=timeout_obj) as session:
+        if self.client_session is None:
+            self.client_session = aiohttp.ClientSession()
+
+        async with self.client_session as session:
             for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
                 try:
                     response = await session.post(
