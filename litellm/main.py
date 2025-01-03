@@ -1531,8 +1531,8 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif (
             model in litellm.open_ai_chat_completion_models
-            or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
