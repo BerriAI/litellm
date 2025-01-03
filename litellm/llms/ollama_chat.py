@@ -571,13 +571,28 @@ async def ollama_acompletion(
 
             model_response.created = int(time.time())
             model_response.model = "ollama_chat/" + data["model"]
-            prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=data["messages"]))  # type: ignore
-            completion_tokens = response_json.get(
-                "eval_count",
-                litellm.token_counter(
-                    text=response_json["message"]["content"], count_response_tokens=True
-                ),
-            )
+            prompt_tokens = response_json.get("prompt_eval_count", 0)
+            if prompt_tokens == 0:  # Only calculate if Ollama doesn't provide it
+                try:
+                    prompt_tokens = litellm.token_counter(messages=data["messages"])
+                except (ValueError, TypeError, AttributeError) as e:
+                    verbose_logger.debug(f"Error counting prompt tokens: {str(e)}")
+                    prompt_tokens = 0  # Fallback if token counting fails
+            
+            completion_tokens = response_json.get("eval_count", 0)
+            if completion_tokens == 0:
+                try:
+                    # For function calls, the content might be JSON string, since ollama 5.0
+                    response_text = (
+                        response_json["message"]["content"] 
+                        if isinstance(response_json["message"]["content"], str) 
+                        else json.dumps(response_json["message"]["content"])
+                    )
+                    completion_tokens = litellm.token_counter(text=response_text, count_response_tokens=True)
+                except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+                    verbose_logger.debug(f"Error counting completion tokens: {str(e)}")
+                    completion_tokens = 0
+
             setattr(
                 model_response,
                 "usage",
