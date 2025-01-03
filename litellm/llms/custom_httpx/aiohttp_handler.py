@@ -29,6 +29,9 @@ DEFAULT_TIMEOUT = 600
 
 class BaseLLMAIOHTTPHandler:
 
+    def __init__(self):
+        self.client_session: Optional[aiohttp.ClientSession] = None
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -52,21 +55,23 @@ class BaseLLMAIOHTTPHandler:
             )
         )
 
-        async with aiohttp.ClientSession(timeout=timeout_obj) as session:
-            for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
-                try:
-                    response = await session.post(
-                        url=api_base,
-                        headers=headers,
-                        json=data,
-                    )
-                    if not response.ok:
-                        response.raise_for_status()
-                except aiohttp.ClientResponseError as e:
-                    raise self._handle_error(e=e, provider_config=provider_config)
-                except Exception as e:
-                    raise self._handle_error(e=e, provider_config=provider_config)
-                break
+        if self.client_session is None:
+            self.client_session = aiohttp.ClientSession()
+
+        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+            try:
+                response = await self.client_session.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                )
+                if not response.ok:
+                    response.raise_for_status()
+            except aiohttp.ClientResponseError as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+            break
 
         if response is None:
             raise provider_config.get_error_class(
@@ -168,25 +173,7 @@ class BaseLLMAIOHTTPHandler:
         )
         _json_response = await _response.json()
 
-        # cast to httpx.Response
-        # Todo - use this until we migrate fully to aiohttp
-        response = httpx.Response(
-            status_code=_response.status,
-            headers=_response.headers,
-            json=_json_response,
-        )
-        return provider_config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-        )
+        return _json_response
 
     def completion(
         self,
