@@ -246,10 +246,22 @@ Read secrets from [Hashicorp Vault](https://developer.hashicorp.com/vault/docs/s
 
 Step 1. Add Hashicorp Vault details in your environment
 
+LiteLLM supports two methods of authentication:
+
+1. TLS cert authentication - `HCP_VAULT_CLIENT_CERT` and `HCP_VAULT_CLIENT_KEY`
+2. Token authentication - `HCP_VAULT_TOKEN`
+
 ```bash
 HCP_VAULT_ADDR="https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
 HCP_VAULT_NAMESPACE="admin"
+
+# Authentication via TLS cert
+HCP_VAULT_CLIENT_CERT="path/to/client.pem"
+HCP_VAULT_CLIENT_KEY="path/to/client.key"
+
+# OR - Authentication via token
 HCP_VAULT_TOKEN="hvs.CAESIG52gL6ljBSdmq*****"
+
 
 # OPTIONAL
 HCP_VAULT_REFRESH_INTERVAL="86400" # defaults to 86400, frequency of cache refresh for Hashicorp Vault
