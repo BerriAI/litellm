@@ -10,7 +10,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     GenerateKeyRequest,
-    KeyManagementSystem,
     KeyRequest,
     LiteLLM_AuditLogs,
     LiteLLM_VerificationToken,
