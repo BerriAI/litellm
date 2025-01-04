@@ -2434,21 +2434,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             langfuse_logger = LangfusePromptManagement()
             _in_memory_loggers.append(langfuse_logger)
             return langfuse_logger  # type: ignore
-        elif logging_integration == "pagerduty":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
-                    return callback
-            pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
-            _in_memory_loggers.append(pagerduty_logger)
-            return pagerduty_logger  # type: ignore
-        elif logging_integration == "humanloop":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, HumanloopLogger):
-                    return callback
-
-            humanloop_logger = HumanloopLogger()
-            _in_memory_loggers.append(humanloop_logger)
-            return humanloop_logger  # type: ignore
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error initializing custom logger: {e}"
@@ -2570,11 +2555,6 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, MlflowLogger):
                     return callback
-        elif logging_integration == "pagerduty":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
-                    return callback
-
         return None
     except Exception as e:
         verbose_logger.exception(
