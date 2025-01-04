@@ -17,6 +17,7 @@ Features:
     - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
     - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
