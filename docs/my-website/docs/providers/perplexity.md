@@ -17,7 +17,7 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="perplexity/mistral-7b-instruct", 
+    model="perplexity/llama-3.1-sonar-small-128k-online	", 
     messages=messages
 )
 print(response)
@@ -30,7 +30,7 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="perplexity/mistral-7b-instruct", 
+    model="perplexity/llama-3.1-sonar-small-128k-online	", 
     messages=messages,
     stream=True
 )
@@ -45,30 +45,16 @@ All models listed here https://docs.perplexity.ai/docs/model-cards are supported
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| pplx-7b-chat | `completion(model="perplexity/pplx-7b-chat", messages)` | 
-| pplx-70b-chat | `completion(model="perplexity/pplx-70b-chat", messages)` | 
-| pplx-7b-online | `completion(model="perplexity/pplx-7b-online", messages)` | 
-| pplx-70b-online | `completion(model="perplexity/pplx-70b-online", messages)` | 
-| codellama-34b-instruct | `completion(model="perplexity/codellama-34b-instruct", messages)` | 
-| llama-2-13b-chat | `completion(model="perplexity/llama-2-13b-chat", messages)` | 
-| llama-2-70b-chat | `completion(model="perplexity/llama-2-70b-chat", messages)` | 
-| mistral-7b-instruct | `completion(model="perplexity/mistral-7b-instruct", messages)` | 
-| openhermes-2-mistral-7b | `completion(model="perplexity/openhermes-2-mistral-7b", messages)` | 
-| openhermes-2.5-mistral-7b | `completion(model="perplexity/openhermes-2.5-mistral-7b", messages)` | 
-| pplx-7b-chat-alpha | `completion(model="perplexity/pplx-7b-chat-alpha", messages)` | 
-| pplx-70b-chat-alpha | `completion(model="perplexity/pplx-70b-chat-alpha", messages)` | 
-
-
-
-
-
+| llama-3.1-sonar-small-128k-online	 | `completion(model="perplexity/llama-3.1-sonar-small-128k-online", messages)` | 
+| llama-3.1-sonar-large-128k-online	 | `completion(model="perplexity/llama-3.1-sonar-large-128k-online", messages)` | 
+| llama-3.1-sonar-huge-128k-online	 | `completion(model="perplexity/llama-3.1-sonar-huge-128k-online", messages)` | 
 
 
 ## Return citations 
 
-Perplexity supports returning citations via `return_citations=True`. [Perplexity Docs](https://docs.perplexity.ai/reference/post_chat_completions). Note: Perplexity has this feature in **closed beta**, so you need them to grant you access to get citations from their API. 
+Perplexity returns citations for the generated answer. Prior to November 2024, this required setting `return_citations=True`, however it now returns citations by default and that parameter has no effect. [Perplexity Docs](https://docs.perplexity.ai/api-reference/chat-completions).
 
-If perplexity returns citations, LiteLLM will pass it straight through. 
+If Perplexity returns citations, LiteLLM will pass it straight through. 
 
 :::info
 
@@ -84,7 +70,7 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="perplexity/mistral-7b-instruct", 
+    model="perplexity/llama-3.1-sonar-small-128k-online", 
     messages=messages,
     return_citations=True
 )
