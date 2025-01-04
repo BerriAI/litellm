@@ -47,7 +47,7 @@ const onSubmit = async (formValues: Record<string, any>, accessToken: string | n
     const response: any = await organizationCreateCall(accessToken, formValues);
     console.log(`response for organization create call: ${response}`);
     message.success("Organization created");
-    localStorage.removeItem('organizations');
+    sessionStorage.removeItem('organizations');
     setIsModalVisible(false);
   } catch (error) {
     console.error("Error creating the organization:", error);
@@ -88,21 +88,6 @@ const OrganizationForm: React.FC<OrganizationFormProps> = ({
   const handleCancel = (): void => {
     setIsModalVisible(false);
     if (onCancel) onCancel();
-  };
-
-  const handleNumberChange = (
-    e: React.ChangeEvent<HTMLInputElement>,
-    field: keyof Pick<FormData, 'maxBudget' | 'tpmLimit' | 'rpmLimit'>
-  ): void => {
-    const value = e.target.value ? parseFloat(e.target.value) : null;
-    setFormData({ ...formData, [field]: value });
-  };
-
-  const handleModelSelection = (e: React.ChangeEvent<HTMLSelectElement>): void => {
-    const values = modelSelectionType === "multiple"
-      ? Array.from(e.target.selectedOptions, option => option.value)
-      : [e.target.value];
-    setFormData({ ...formData, models: values });
   };
 
   return (

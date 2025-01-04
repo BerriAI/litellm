@@ -7,6 +7,7 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import OrganizationForm from "@/components/organization/add_org";
+import { Select, SelectItem } from "@tremor/react";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -191,10 +192,11 @@ const Organizations: React.FC<TeamProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedOrganization, setSelectedOrganization] = useState<Organization | null>(null);
 
+
   useEffect(() => {
     if (!accessToken) return;
 
-    const storedOrganizations = localStorage.getItem('organizations');
+    const storedOrganizations = sessionStorage.getItem('organizations');
     if (storedOrganizations) {
       setOrganizations(JSON.parse(storedOrganizations));
     } else {
@@ -203,7 +205,7 @@ const Organizations: React.FC<TeamProps> = ({
         givenOrganizations = await organizationListCall(accessToken)
         console.log(`givenOrganizations: ${givenOrganizations}`)
         setOrganizations(givenOrganizations)
-        localStorage.setItem('organizations', JSON.stringify(givenOrganizations));
+        sessionStorage.setItem('organizations', JSON.stringify(givenOrganizations));
       }
       fetchData()
     }
@@ -222,6 +224,32 @@ const Organizations: React.FC<TeamProps> = ({
           availableModels={['model1', 'model2', 'model3']}
           submitButtonText="Create Organization"
         /> : null}
+        <Col numColSpan={1}>  
+        <Title level={4}>Organization Members</Title>
+          <Paragraph>
+            If you belong to multiple organizations, this setting controls which organizations'
+            members you see.
+          </Paragraph>
+          {organizations && organizations.length > 0 ? (
+            <Select defaultValue="0">
+              {organizations.map((organization: any, index) => (
+                <SelectItem
+                  key={index}
+                  value={String(index)}
+                  onClick={() => {
+                    setSelectedOrganization(organization);
+                  }}
+                >
+                  {organization["organization_alias"]}
+                </SelectItem>
+              ))}
+            </Select>
+          ) : (
+            <Paragraph>
+              No team created. <b>Defaulting to personal account.</b>
+            </Paragraph>
+          )}
+        </Col>
         {/* <Col numColSpan={1}>
           <Title level={4}>Organization Members</Title>
           {userRole ? OrganizationsTable({organizations, userRole, isDeleteModalOpen, setIsDeleteModalOpen, selectedOrganization, setSelectedOrganization}) : null}
