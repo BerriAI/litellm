@@ -9,7 +9,7 @@ class BaseLLMModelInfo(ABC):
     def get_model_info(
         self,
         model: str,
-        existing_model_info: Optional[Union[ModelInfoBase, dict]] = None,
+        existing_model_info: Optional[ModelInfoBase] = None,
     ) -> Optional[ModelInfoBase]:
         pass
 
