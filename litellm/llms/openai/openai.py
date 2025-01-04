@@ -1965,11 +1965,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[AsyncOpenAI],
-        aget_assistants: Literal[True],
-        order: Optional[str] = 'desc',
-        limit: Optional[int] = 20,
-        before: Optional[str] = None,
-        after: Optional[str] = None,
+        aget_assistants: Literal[True], 
     ) -> Coroutine[None, None, AsyncCursorPage[Assistant]]:
         ...
 
@@ -1982,11 +1978,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[OpenAI],
-        aget_assistants: Optional[Literal[False]],
-        order: Optional[str] = 'desc',
-        limit: Optional[int] = 20,
-        before: Optional[str] = None,
-        after: Optional[str] = None,
+        aget_assistants: Optional[Literal[False]], 
     ) -> SyncCursorPage[Assistant]: 
         ...
 
@@ -2014,10 +2006,6 @@ class OpenAIAssistantsAPI(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
                 client=client,
-                order=order,
-                limit=limit,
-                before=before,
-                after=after,
             )
         openai_client = self.get_openai_client(
             api_key=api_key,

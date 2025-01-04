@@ -49,7 +49,6 @@ class BaseLLMAIOHTTPHandler:
         )
 
         response: Optional[aiohttp.ClientResponse] = None
-
         if self.client_session is None:
             self.client_session = aiohttp.ClientSession()
 
