@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelInfoBase, ModelResponse
 
 from ..common_utils import OpenAIError
 
@@ -21,7 +23,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class OpenAIGPTConfig(BaseConfig):
+class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     """
     Reference: https://platform.openai.com/docs/api-reference/chat/create
 
@@ -229,3 +231,43 @@ class OpenAIGPTConfig(BaseConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError
+
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Calls OpenAI's `/v1/models` endpoint and returns the list of models.
+        """
+
+        if api_base is None:
+            api_base = "https://api.openai.com"
+        if api_key is None:
+            api_key = get_secret_str("OPENAI_API_KEY")
+
+        response = litellm.module_level_client.get(
+            url=f"{api_base}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to get models: {response.text}")
+
+        models = response.json()["data"]
+        return [model["id"] for model in models]
+
+    def get_model_info(
+        self, model: str, existing_model_info: Optional[ModelInfoBase] = None
+    ) -> ModelInfoBase:
+
+        if existing_model_info is not None:
+            return existing_model_info
+        return ModelInfoBase(
+            key=model,
+            litellm_provider="openai",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+        )
