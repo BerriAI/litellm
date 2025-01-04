@@ -131,6 +131,40 @@ async def test_hashicorp_secret_manager_write_secret():
         assert json_data["data"]["key"] == secret_value
 
 
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_delete_secret():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
+    ) as mock_delete:
+        # Configure the mock response
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_delete.return_value = mock_response
+
+        # Test the secret manager
+        secret_name = f"sample-secret-test-{uuid.uuid4()}"
+        response = await hashicorp_secret_manager.async_delete_secret(
+            secret_name=secret_name
+        )
+
+        # Verify the response
+        assert response == {
+            "status": "success",
+            "message": f"Secret {secret_name} deleted successfully",
+        }
+
+        # Verify the request was made correctly
+        mock_delete.assert_called_once()
+
+        # Verify URL
+        called_url = mock_delete.call_args[1]["url"]
+        assert secret_name in called_url
+        assert (
+            called_url
+            == f"{hashicorp_secret_manager.vault_addr}/v1/admin/secret/data/{secret_name}"
+        )
+
+
 def test_hashicorp_secret_manager_tls_cert_auth():
     with patch("httpx.post") as mock_post:
         # Configure the mock response for TLS auth
