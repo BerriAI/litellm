@@ -43,6 +43,25 @@ mock_vault_response = {
     "mount_type": "kv",
 }
 
+# Update the mock_vault_response for write operations
+mock_write_response = {
+    "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
+    "lease_id": "",
+    "renewable": False,
+    "lease_duration": 0,
+    "data": {
+        "created_time": "2025-01-04T16:58:42.684673531Z",
+        "custom_metadata": None,
+        "deletion_time": "",
+        "destroyed": False,
+        "version": 1,
+    },
+    "wrap_info": None,
+    "warnings": None,
+    "auth": None,
+    "mount_type": "kv",
+}
+
 
 def test_hashicorp_secret_manager_get_secret():
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get") as mock_get:
@@ -53,7 +72,7 @@ def test_hashicorp_secret_manager_get_secret():
         mock_get.return_value = mock_response
 
         # Test the secret manager
-        secret = hashicorp_secret_manager.read_secret("sample-secret-mock")
+        secret = hashicorp_secret_manager.sync_read_secret("sample-secret-mock")
         assert secret == "value-mock"
 
         # Verify the request was made with correct parameters
@@ -66,6 +85,50 @@ def test_hashicorp_secret_manager_get_secret():
             == "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200/v1/admin/secret/data/sample-secret-mock"
         )
         assert "X-Vault-Token" in mock_get.call_args.kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_write_secret():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+        # Configure the mock response
+        mock_response = MagicMock()
+        mock_response.json.return_value = (
+            mock_write_response  # Use the write-specific response
+        )
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        # Test the secret manager
+        secret_name = f"sample-secret-test-{uuid.uuid4()}"
+        secret_value = f"value-mock-{uuid.uuid4()}"
+        response = await hashicorp_secret_manager.async_write_secret(
+            secret_name=secret_name,
+            secret_value=secret_value,
+        )
+
+        # Verify the response and that the request was made correctly
+        assert (
+            response == mock_write_response
+        )  # Compare against write-specific response
+        mock_post.assert_called_once()
+        print("CALL ARGS=", mock_post.call_args)
+        print("call args[1]=", mock_post.call_args[1])
+
+        # Verify URL
+        called_url = mock_post.call_args[1]["url"]
+        assert secret_name in called_url
+        assert (
+            called_url
+            == f"{hashicorp_secret_manager.vault_addr}/v1/admin/secret/data/{secret_name}"
+        )
+
+        # Verify request body
+        json_data = mock_post.call_args[1]["json"]
+        assert "data" in json_data
+        assert "key" in json_data["data"]
+        assert json_data["data"]["key"] == secret_value
 
 
 def test_hashicorp_secret_manager_tls_cert_auth():
@@ -101,13 +164,3 @@ def test_hashicorp_secret_manager_tls_cert_auth():
         assert (
             test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
         )
-
-
-@pytest.mark.asyncio
-async def test_hashicorp_secret_manager_write_secret():
-    response = await hashicorp_secret_manager.async_write_secret(
-        secret_name=f"sample-secret-test-{uuid.uuid4()}",
-        secret_value=f"value-mock-{uuid.uuid4()}",
-    )
-    print(response)
-    # assert response == mock_vault_response
