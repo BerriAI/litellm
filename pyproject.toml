@@ -13,6 +13,7 @@ packages = [
 [tool.poetry.urls]
 homepage = "https://litellm.ai"
 repository = "https://github.com/BerriAI/litellm"
+Repository = "https://github.com/BerriAI/litellm"
 documentation = "https://docs.litellm.ai"
 
 [tool.poetry.dependencies]
