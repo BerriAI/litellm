@@ -49,11 +49,6 @@ class BaseLLMAIOHTTPHandler:
         )
 
         response: Optional[aiohttp.ClientResponse] = None
-        timeout_obj = aiohttp.ClientTimeout(
-            total=(
-                float(timeout) if isinstance(timeout, (int, float)) else DEFAULT_TIMEOUT
-            )
-        )
 
         if self.client_session is None:
             self.client_session = aiohttp.ClientSession()
