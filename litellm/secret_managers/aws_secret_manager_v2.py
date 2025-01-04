@@ -127,10 +127,14 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             response = sync_client.post(
                 url=endpoint_url, headers=headers, data=body.decode("utf-8")
             )
-            response.raise_for_status()
             return response.json()["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
+        except httpx.HTTPStatusError as e:
+            verbose_logger.exception(
+                "Error reading secret from AWS Secrets Manager: %s",
+                str(e.response.text),
+            )
         except Exception as e:
             verbose_logger.exception(
                 "Error reading secret from AWS Secrets Manager: %s", str(e)
