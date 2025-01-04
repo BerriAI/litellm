@@ -1928,7 +1928,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[AsyncOpenAI],
-        order: Optional[str] = 'desc',
+        order: Optional[str] = "desc",
         limit: Optional[int] = 20,
         before: Optional[str] = None,
         after: Optional[str] = None,
@@ -1949,8 +1949,8 @@ class OpenAIAssistantsAPI(BaseLLM):
             request_params["before"] = before
         if after:
             request_params["after"] = after
-            
-        response = await openai_client.beta.assistants.list(**request_params)
+
+        response = await openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
@@ -2001,7 +2001,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client=None,
         aget_assistants=None,
-        order: Optional[str] = 'desc',
+        order: Optional[str] = "desc",
         limit: Optional[int] = 20,
         before: Optional[str] = None,
         after: Optional[str] = None,
@@ -2038,8 +2038,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         if after:
             request_params["after"] = after
 
-
-        response = openai_client.beta.assistants.list(**request_params)
+        response = openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
