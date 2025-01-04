@@ -4,6 +4,7 @@ Endpoints for /organization operations
 /organization/new
 /organization/update
 /organization/delete
+/organization/member_add
 /organization/info
 /organization/list
 """

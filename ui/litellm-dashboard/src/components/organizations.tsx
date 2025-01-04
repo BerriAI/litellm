@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { organizationListCall } from "./networking";
+import { organizationListCall, organizationMemberAddCall, Member } from "./networking";
 import { Title } from "@tremor/react";
 import {
   Col,
@@ -7,6 +7,7 @@ import {
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
 import OrganizationForm from "@/components/organization/add_org";
+import AddOrgAdmin from "@/components/organization/add_org_admin";
 import { Select, SelectItem } from "@tremor/react";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -39,20 +40,8 @@ import {
 
 import DataTable from "@/components/common_components/all_view";
 import { Action } from "@/components/common_components/all_view";
-import { Typography } from "antd";
-// Interfaces for the component
-interface Organization {
-  organization_id: string;
-  organization_name: string;
-  spend: number;
-  max_budget: number | null;
-  models: string[];
-  tpm_limit: number | null;
-  rpm_limit: number | null;
-  // Incorporating the info directly into the organization
-  keys: Array<{ id: string }>;
-  members_with_roles: Array<{ id: string }>;
-}
+import { Typography, message } from "antd";
+import { Organization } from "@/components/organization/types";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -211,6 +200,25 @@ const Organizations: React.FC<TeamProps> = ({
     }
   }, [accessToken]);
 
+  const handleMemberCreate = async (formValues: Record<string, any>) => {
+    if (!selectedOrganization || !accessToken) return;
+    try {
+      let member: Member = {
+        user_email: formValues.user_email,
+        user_id: formValues.user_id,
+        role: formValues.role
+      }
+      await organizationMemberAddCall(
+        accessToken,
+        selectedOrganization["organization_id"],
+        member
+      );
+      message.success("Member added");
+    } catch (error) {
+      console.error("Error creating the team:", error);
+    }
+};
+
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -231,7 +239,7 @@ const Organizations: React.FC<TeamProps> = ({
             members you see.
           </Paragraph>
           {organizations && organizations.length > 0 ? (
-            <Select defaultValue="0">
+            <Select>
               {organizations.map((organization: any, index) => (
                 <SelectItem
                   key={index}
@@ -250,10 +258,7 @@ const Organizations: React.FC<TeamProps> = ({
             </Paragraph>
           )}
         </Col>
-        {/* <Col numColSpan={1}>
-          <Title level={4}>Organization Members</Title>
-          {userRole ? OrganizationsTable({organizations, userRole, isDeleteModalOpen, setIsDeleteModalOpen, selectedOrganization, setSelectedOrganization}) : null}
-        </Col> */}
+        {userRole == "Admin" && userID && selectedOrganization ? <AddOrgAdmin userRole={userRole} userID={userID} selectedOrganization={selectedOrganization} onMemberAdd={handleMemberCreate} /> : null}
       </Grid>
     </div>
   );
