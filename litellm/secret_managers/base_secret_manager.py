@@ -71,3 +71,25 @@ class BaseSecretManager(ABC):
             Dict[str, Any]: Response from the secret manager containing write operation details
         """
         pass
+
+    @abstractmethod
+    async def async_delete_secret(
+        self,
+        secret_name: str,
+        recovery_window_in_days: Optional[int] = 7,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Async function to delete a secret from the secret manager
+
+        Args:
+            secret_name: Name of the secret to delete
+            recovery_window_in_days: Number of days before permanent deletion (default: 7)
+            optional_params: Additional parameters specific to the secret manager
+            timeout: Request timeout
+
+        Returns:
+            dict: Response from the secret manager containing deletion details
+        """
+        pass

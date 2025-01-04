@@ -229,11 +229,11 @@ class KeyManagementEventHooks:
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
-                from litellm.secret_managers.aws_secret_manager_v2 import (
-                    AWSSecretsManagerV2,
+                from litellm.secret_managers.base_secret_manager import (
+                    BaseSecretManager,
                 )
 
-                if isinstance(litellm.secret_manager_client, AWSSecretsManagerV2):
+                if isinstance(litellm.secret_manager_client, BaseSecretManager):
                     for key in keys_being_deleted:
                         if key.key_alias is not None:
                             await litellm.secret_manager_client.async_delete_secret(
