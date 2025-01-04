@@ -186,7 +186,41 @@ class HashicorpSecretManager(BaseSecretManager):
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> Dict[str, Any]:
-        return {"status": "success"}
+        """
+        Writes a secret to Vault KV v2 using an async HTTPX client.
+
+        Args:
+            secret_name: Path inside the KV mount (e.g., 'myapp/config')
+            secret_value: Value to store
+            description: Optional description for the secret
+            optional_params: Additional parameters to include in the secret data
+            timeout: Request timeout
+
+        Returns:
+            dict: Response containing status and details of the operation
+        """
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            url = self.get_url(secret_name)
+
+            # Prepare the secret data
+            data = {"data": {"key": secret_value}}
+
+            if description:
+                data["data"]["description"] = description
+
+            response = await async_client.post(
+                url=url, headers=self._get_request_headers(), json=data
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            verbose_logger.exception(f"Error writing secret to Hashicorp Vault: {e}")
+            return {"status": "error", "message": str(e)}
 
     def _get_secret_value_from_json_response(
         self, json_resp: Optional[dict]

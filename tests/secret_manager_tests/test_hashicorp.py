@@ -13,6 +13,7 @@ sys.path.insert(
 from unittest.mock import patch, MagicMock
 import logging
 from litellm._logging import verbose_logger
+import uuid
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -100,3 +101,13 @@ def test_hashicorp_secret_manager_tls_cert_auth():
         assert (
             test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
         )
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_write_secret():
+    response = await hashicorp_secret_manager.async_write_secret(
+        secret_name=f"sample-secret-test-{uuid.uuid4()}",
+        secret_value=f"value-mock-{uuid.uuid4()}",
+    )
+    print(response)
+    # assert response == mock_vault_response
