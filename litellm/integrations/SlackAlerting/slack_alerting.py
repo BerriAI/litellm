@@ -17,6 +17,7 @@ import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
 )
@@ -1557,11 +1558,15 @@ Model Info:
                 await asyncio.sleep(interval)
         return
 
-    async def send_weekly_spend_report(self, time_range: str = "7d"):
+    async def send_weekly_spend_report(
+        self,
+        time_range: str = "7d",
+    ):
         """
         Send a spend report for a configurable time range.
 
-        :param time_range: A string specifying the time range, e.g., "1d", "7d", "30d"
+        Args:
+            time_range: A string specifying the time range for the report, e.g., "1d", "7d", "30d"
         """
         if self.alerting is None or "spend_reports" not in self.alert_types:
             return
@@ -1578,6 +1583,10 @@ Model Info:
 
             todays_date = datetime.datetime.now().date()
             start_date = todays_date - datetime.timedelta(days=days)
+
+            _event_cache_key = f"weekly_spend_report_sent_{start_date.strftime('%Y-%m-%d')}_{todays_date.strftime('%Y-%m-%d')}"
+            if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
+                return
 
             _resp = await _get_spend_report_for_time_range(
                 start_date=start_date.strftime("%Y-%m-%d"),
@@ -1610,6 +1619,13 @@ Model Info:
                 alert_type=AlertType.spend_reports,
                 alerting_metadata={},
             )
+
+            await self.internal_usage_cache.async_set_cache(
+                key=_event_cache_key,
+                value="SENT",
+                ttl=duration_in_seconds(time_range),
+            )
+
         except ValueError as ve:
             verbose_proxy_logger.error(f"Invalid time range format: {ve}")
         except Exception as e:
@@ -1630,6 +1646,10 @@ Model Info:
             last_day_of_month = first_day_of_month + datetime.timedelta(
                 days=last_day_of_month - 1
             )
+
+            _event_cache_key = f"monthly_spend_report_sent_{first_day_of_month.strftime('%Y-%m-%d')}_{last_day_of_month.strftime('%Y-%m-%d')}"
+            if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
+                return
 
             _resp = await _get_spend_report_for_time_range(
                 start_date=first_day_of_month.strftime("%Y-%m-%d"),
@@ -1669,6 +1689,13 @@ Model Info:
                 alert_type=AlertType.spend_reports,
                 alerting_metadata={},
             )
+
+            await self.internal_usage_cache.async_set_cache(
+                key=_event_cache_key,
+                value="SENT",
+                ttl=(30 * 24 * 60 * 60),  # 1 month
+            )
+
         except Exception as e:
             verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
 
