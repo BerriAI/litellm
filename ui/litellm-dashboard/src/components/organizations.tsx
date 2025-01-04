@@ -1,34 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, organizationListCall } from "./networking";
+import { organizationListCall } from "./networking";
+import { Title } from "@tremor/react";
 import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  Select as Select2,
-  InputNumber,
-  message,
-  Tooltip
-} from "antd";
-import { Select, SelectItem, Title } from "@tremor/react";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TextInput,
-  Card,
-  Icon,
-  Button,
-  Badge,
   Col,
-  Text,
   Grid,
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
+import OrganizationForm from "@/components/organization/add_org";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -60,7 +38,7 @@ import {
 
 import DataTable from "@/components/common_components/all_view";
 import { Action } from "@/components/common_components/all_view";
-
+import { Typography } from "antd";
 // Interfaces for the component
 interface Organization {
   organization_id: string;
@@ -80,6 +58,10 @@ interface OrganizationsTableProps {
   userRole?: string;
   onEdit?: (organization: Organization) => void;
   onDelete?: (organization: Organization) => void;
+  isDeleteModalOpen: boolean;
+  setIsDeleteModalOpen: (value: boolean) => void;
+  selectedOrganization: Organization | null;
+  setSelectedOrganization: (value: Organization | null) => void;
 }
 
 
@@ -89,8 +71,13 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   organizations,
   userRole,
   onEdit,
-  onDelete
+  onDelete,
+  isDeleteModalOpen,
+  setIsDeleteModalOpen,
+  selectedOrganization,
+  setSelectedOrganization
 }) => {
+  
   const columns = [
     {
       header: "Organization Name",
@@ -168,9 +155,6 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
     }] : [])
   ];
 
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = React.useState(false);
-  const [selectedOrganization, setSelectedOrganization] = React.useState<Organization | null>(null);
-
   return (
     <DataTable
       data={organizations}
@@ -203,6 +187,9 @@ const Organizations: React.FC<TeamProps> = ({
   userRole,
 }) => {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const { Title, Paragraph } = Typography;
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [selectedOrganization, setSelectedOrganization] = useState<Organization | null>(null);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -227,8 +214,18 @@ const Organizations: React.FC<TeamProps> = ({
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <Title level={4}>All Organizations</Title>
-          {userRole ? OrganizationsTable({organizations, userRole}) : null}
+          {userRole ? OrganizationsTable({organizations, userRole, isDeleteModalOpen, setIsDeleteModalOpen, selectedOrganization, setSelectedOrganization}) : null}
         </Col>
+        {userRole == "Admin" && accessToken ? <OrganizationForm
+          title="Organization"
+          accessToken={accessToken}
+          availableModels={['model1', 'model2', 'model3']}
+          submitButtonText="Create Organization"
+        /> : null}
+        {/* <Col numColSpan={1}>
+          <Title level={4}>Organization Members</Title>
+          {userRole ? OrganizationsTable({organizations, userRole, isDeleteModalOpen, setIsDeleteModalOpen, selectedOrganization, setSelectedOrganization}) : null}
+        </Col> */}
       </Grid>
     </div>
   );
