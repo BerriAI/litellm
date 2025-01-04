@@ -29,8 +29,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import KeyManagementSystem
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
+from .base_secret_manager import BaseSecretManager
 
-class AWSSecretsManagerV2(BaseAWSLLM):
+
+class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     @classmethod
     def validate_environment(cls):
         if "AWS_REGION_NAME" not in os.environ:
@@ -146,7 +148,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         secret_name: str,
         secret_value: str,
         description: Optional[str] = None,
-        client_request_token: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
@@ -157,7 +158,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             secret_name: Name of the secret
             secret_value: Value to store (can be a JSON string)
             description: Optional description for the secret
-            client_request_token: Optional unique identifier to ensure idempotency
             optional_params: Additional AWS parameters
             timeout: Request timeout
         """
