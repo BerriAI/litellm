@@ -3,7 +3,6 @@ import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
 # Secret Manager
-LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
 
 :::info
 
@@ -15,6 +14,8 @@ LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
 
 :::
 
+LiteLLM supports **reading secrets (eg. `OPENAI_API_KEY`)** and **writing secrets (eg. Virtual Keys)** from Azure Key Vault, Google Secret Manager, Hashicorp Vault, and AWS Secret Manager.
+
 ## Supported Secret Managers
 
 - AWS Key Management Service
@@ -23,36 +24,16 @@ LiteLLM supports reading secrets from Azure Key Vault, Google Secret Manager
 - [Google Secret Manager](#google-secret-manager)
 - Google Key Management Service
 - [Hashicorp Vault](#hashicorp-vault)
-- [Infisical Secret Manager](#infisical-secret-manager)
-- [.env Files](#env-files)
-
-## AWS Key Management V1
-
-:::tip
-
-[BETA] AWS Key Management v2 is on the enterprise tier. Go [here for docs](./proxy/enterprise.md#beta-aws-key-manager---key-decryption)
-
-:::
-
-Use AWS KMS to storing a hashed copy of your Proxy Master Key in the environment. 
-
-```bash
-export LITELLM_MASTER_KEY="djZ9xjVaZ..." # 👈 ENCRYPTED KEY
-export AWS_REGION_NAME="us-west-2"
-```
-
-```yaml
-general_settings:
-  key_management_system: "aws_kms"
-  key_management_settings:
-    hosted_keys: ["LITELLM_MASTER_KEY"] # 👈 WHICH KEYS ARE STORED ON KMS
-```
-
-[**See Decryption Code**](https://github.com/BerriAI/litellm/blob/a2da2a8f168d45648b61279d4795d647d94f90c9/litellm/utils.py#L10182)
 
 ## AWS Secret Manager
 
 Store your proxy keys in AWS Secret Manager.
+
+
+| Feature | Support | Description |
+|---------|----------|-------------|
+| Reading Secrets | ✅ | Read secrets e.g `OPENAI_API_KEY` |
+| Writing Secrets | ✅ | Store secrets e.g `Virtual Keys` |
 
 #### Proxy Usage
 
@@ -242,6 +223,12 @@ If no secret manager client is specified, Litellm automatically uses the `.env` 
 
 ## Hashicorp Vault
 
+
+| Feature | Support | Description |
+|---------|----------|-------------|
+| Reading Secrets | ✅ | Read secrets e.g `OPENAI_API_KEY` |
+| Writing Secrets | ✅ | Store secrets e.g `Virtual Keys` |
+
 Read secrets from [Hashicorp Vault](https://developer.hashicorp.com/vault/docs/secrets/kv/kv-v2)
 
 Step 1. Add Hashicorp Vault details in your environment
@@ -315,7 +302,31 @@ For example, for `AZURE_API_KEY`, the secret should be stored as:
 <Image img={require('../img/hcorp.png')} />
 
 
-## All Secret Manager Settings
+## AWS Key Management V1
+
+:::tip
+
+[BETA] AWS Key Management v2 is on the enterprise tier. Go [here for docs](./proxy/enterprise.md#beta-aws-key-manager---key-decryption)
+
+:::
+
+Use AWS KMS to storing a hashed copy of your Proxy Master Key in the environment. 
+
+```bash
+export LITELLM_MASTER_KEY="djZ9xjVaZ..." # 👈 ENCRYPTED KEY
+export AWS_REGION_NAME="us-west-2"
+```
+
+```yaml
+general_settings:
+  key_management_system: "aws_kms"
+  key_management_settings:
+    hosted_keys: ["LITELLM_MASTER_KEY"] # 👈 WHICH KEYS ARE STORED ON KMS
+```
+
+[**See Decryption Code**](https://github.com/BerriAI/litellm/blob/a2da2a8f168d45648b61279d4795d647d94f90c9/litellm/utils.py#L10182)
+
+## *All Secret Manager Settings*
 
 All settings related to secret management
 
