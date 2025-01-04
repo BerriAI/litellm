@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
+import { teamDeleteCall, teamUpdateCall, organizationListCall } from "./networking";
 import {
   Button as Button2,
   Modal,
@@ -11,7 +11,7 @@ import {
   message,
   Tooltip
 } from "antd";
-import { Select, SelectItem } from "@tremor/react";
+import { Select, SelectItem, Title } from "@tremor/react";
 import {
   Table,
   TableBody,
@@ -58,16 +58,43 @@ import {
   teamListCall
 } from "./networking";
 
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import DataTable from "@/components/common_components/all_view";
 import { Action } from "@/components/common_components/all_view";
 
+// Interfaces for the component
+interface Organization {
+  organization_id: string;
+  organization_name: string;
+  spend: number;
+  max_budget: number | null;
+  models: string[];
+  tpm_limit: number | null;
+  rpm_limit: number | null;
+  // Incorporating the info directly into the organization
+  keys: Array<{ id: string }>;
+  members_with_roles: Array<{ id: string }>;
+}
+
+interface OrganizationsTableProps {
+  organizations: Organization[];
+  userRole?: string;
+  onEdit?: (organization: Organization) => void;
+  onDelete?: (organization: Organization) => void;
+}
+
+
+
 // Inside your Teams component
-const OrganizationsTable = (perOrganizationInfo: any) => {
+const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
+  organizations,
+  userRole,
+  onEdit,
+  onDelete
+}) => {
   const columns = [
     {
       header: "Organization Name",
-      accessor: "organization_name",
+      accessor: "organization_alias",
       width: "4px",
       style: {
         whiteSpace: "pre-wrap",
@@ -92,7 +119,7 @@ const OrganizationsTable = (perOrganizationInfo: any) => {
     {
       header: "Budget (USD)",
       accessor: "max_budget",
-      cellRenderer: (value: any) => 
+      cellRenderer: (value: number | null) => 
         value !== null && value !== undefined ? value : "No limit"
     },
     {
@@ -102,647 +129,105 @@ const OrganizationsTable = (perOrganizationInfo: any) => {
     {
       header: "TPM / RPM Limits",
       accessor: "limits",
-      cellRenderer: (value: any, row: any) => (
-        <Text>
-          TPM: {row.tpm_limit ? row.tpm_limit : "Unlimited"}{" "}
+      cellRenderer: (value: any, row: Organization) => (
+        <div className="text-sm">
+          <span>TPM: {row.tpm_limit ? row.tpm_limit : "Unlimited"}</span>
           <br />
-          RPM: {row.rpm_limit ? row.rpm_limit : "Unlimited"}
-        </Text>
+          <span>RPM: {row.rpm_limit ? row.rpm_limit : "Unlimited"}</span>
+        </div>
       )
     },
     {
       header: "Info",
       accessor: "info",
-      cellRenderer: (value: any, row: any) => (
-        <>
-          <Text>
-            {perOrganizationInfo[row.organization_id]?.keys?.length || 0} Keys
-          </Text>
-          <Text>
-            {perOrganizationInfo[row.organization_id]?.members_with_roles?.length || 0} Members
-          </Text>
-        </>
+      cellRenderer: (value: any, row: Organization) => (
+        <div className="space-y-1">
+          <div className="text-sm">
+            {row.keys?.length || 0} Keys
+          </div>
+          <div className="text-sm">
+            {row.members_with_roles?.length || 0} Members
+          </div>
+        </div>
       )
     }
   ];
 
-  // const actions = [
-  //   {
-  //     icon: PencilAltIcon,
-  //     onClick: handleEditClick,
-  //     condition: () => userRole === "Admin",
-  //     tooltip: "Edit team"
-  //   },
-  //   {
-  //     icon: TrashIcon,
-  //     onClick: handleDelete,
-  //     condition: () => userRole === "Admin",
-  //     tooltip: "Delete team"
-  //   }
-  // ];
+  const actions: Action[] = [
+    ...(onEdit && userRole === "Admin" ? [{
+      icon: undefined, // Replace with your PencilAltIcon
+      onClick: (org: Organization) => onEdit(org),
+      condition: () => userRole === "Admin",
+      tooltip: "Edit organization"
+    }] : []),
+    ...(onDelete && userRole === "Admin" ? [{
+      icon: undefined, // Replace with your TrashIcon
+      onClick: (org: Organization) => onDelete(org),
+      condition: () => userRole === "Admin",
+      tooltip: "Delete organization"
+    }] : [])
+  ];
 
-  const actions: Action[] = []
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = React.useState(false);
+  const [selectedOrganization, setSelectedOrganization] = React.useState<Organization | null>(null);
+
   return (
     <DataTable
-      data={[]}
+      data={organizations}
       columns={columns}
       actions={actions}
-      cardTitle="All Organizations"
       emptyMessage="No organizations available"
       deleteModal={{
-        isOpen: false,
-        onConfirm: () => {},
-        onCancel: () => {},
-        title: "Delete Team",
-        message: "Are you sure you want to delete this team?"
+        isOpen: isDeleteModalOpen,
+        onConfirm: () => {
+          if (selectedOrganization && onDelete) {
+            onDelete(selectedOrganization);
+          }
+          setIsDeleteModalOpen(false);
+          setSelectedOrganization(null);
+        },
+        onCancel: () => {
+          setIsDeleteModalOpen(false);
+          setSelectedOrganization(null);
+        },
+        title: "Delete Organization",
+        message: "Are you sure you want to delete this organization?"
       }}
     />
   );
 };
 
 const Organizations: React.FC<TeamProps> = ({
-  teams,
-  searchParams,
   accessToken,
-  setTeams,
   userID,
   userRole,
 }) => {
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
 
   useEffect(() => {
-    console.log(`inside useeffect - ${teams}`)
-    if (teams === null && accessToken) {
-      // Call your function here
-      const fetchData = async () => {
-        let givenTeams;
-        if (userRole != "Admin" && userRole != "Admin Viewer") {
-          givenTeams = await teamListCall(accessToken, userID)
-        } else {
-          givenTeams = await teamListCall(accessToken)
-        }
-        
-        console.log(`givenTeams: ${givenTeams}`)
+    if (!accessToken) return;
 
-        setTeams(givenTeams)
+    const storedOrganizations = localStorage.getItem('organizations');
+    if (storedOrganizations) {
+      setOrganizations(JSON.parse(storedOrganizations));
+    } else {
+      const fetchData = async () => {
+        let givenOrganizations;
+        givenOrganizations = await organizationListCall(accessToken)
+        console.log(`givenOrganizations: ${givenOrganizations}`)
+        setOrganizations(givenOrganizations)
+        localStorage.setItem('organizations', JSON.stringify(givenOrganizations));
       }
       fetchData()
     }
-  }, [teams]);
+  }, [accessToken]);
 
-  const [form] = Form.useForm();
-  const [memberForm] = Form.useForm();
-  const { Title, Paragraph } = Typography;
-  const [value, setValue] = useState("");
-  const [editModalVisible, setEditModalVisible] = useState(false);
-
-  const [selectedTeam, setSelectedTeam] = useState<null | any>(
-    teams ? teams[0] : null
-  );
-
-  const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
-  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
-  const [userModels, setUserModels] = useState([]);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
-
-  // store team info as {"team_id": team_info_object}
-  const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
-
-  const EditTeamModal: React.FC<EditTeamModalProps> = ({
-    visible,
-    onCancel,
-    team,
-    onSubmit,
-  }) => {
-    const [form] = Form.useForm();
-
-    const handleOk = () => {
-      form
-        .validateFields()
-        .then((values) => {
-          const updatedValues = { ...values, team_id: team.team_id };
-          onSubmit(updatedValues);
-          form.resetFields();
-        })
-        .catch((error) => {
-          console.error("Validation failed:", error);
-        });
-    };
-
-    return (
-      <Modal
-        title="Edit Team"
-        visible={visible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={onCancel}
-      >
-        <Form
-          form={form}
-          onFinish={handleEditSubmit}
-          initialValues={team} // Pass initial values here
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item
-              label="Team Name"
-              name="team_alias"
-              rules={[{ required: true, message: "Please input a team name" }]}
-            >
-              <TextInput />
-            </Form.Item>
-            <Form.Item label="Models" name="models">
-              <Select2
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-              >
-                <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                  {"All Proxy Models"}
-                </Select2.Option>
-                {userModels &&
-                  userModels.map((model) => (
-                    <Select2.Option key={model} value={model}>
-                      {model}
-                    </Select2.Option>
-                  ))}
-              </Select2>
-            </Form.Item>
-            <Form.Item label="Max Budget (USD)" name="max_budget">
-              <InputNumber step={0.01} precision={2} width={200} />
-            </Form.Item>
-            <Form.Item
-              className="mt-8"
-              label="Reset Budget"
-              name="budget_duration"
-            >
-              <Select2 defaultValue={null} placeholder="n/a">
-                <Select2.Option value="24h">daily</Select2.Option>
-                <Select2.Option value="7d">weekly</Select2.Option>
-                <Select2.Option value="30d">monthly</Select2.Option>
-              </Select2>
-            </Form.Item>
-            <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-              <InputNumber step={1} width={400} />
-            </Form.Item>
-            <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-              <InputNumber step={1} width={400} />
-            </Form.Item>
-            <Form.Item
-              label="Requests per minute Limit (RPM)"
-              name="team_id"
-              hidden={true}
-            ></Form.Item>
-          </>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Edit Team</Button2>
-          </div>
-        </Form>
-      </Modal>
-    );
-  };
-
-  const handleEditClick = (team: any) => {
-    setSelectedTeam(team);
-    setEditModalVisible(true);
-  };
-
-  const handleEditCancel = () => {
-    setEditModalVisible(false);
-    setSelectedTeam(null);
-  };
-
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
-    // Call API to update team with teamId and values
-    const teamId = formValues.team_id; // get team_id
-
-    console.log("handleEditSubmit:", formValues);
-    if (accessToken == null) {
-      return;
-    }
-
-    let newTeamValues = await teamUpdateCall(accessToken, formValues);
-
-    // Update the teams state with the updated team data
-    if (teams) {
-      const updatedTeams = teams.map((team) =>
-        team.team_id === teamId ? newTeamValues.data : team
-      );
-      setTeams(updatedTeams);
-    }
-    message.success("Team updated successfully");
-
-    setEditModalVisible(false);
-    setSelectedTeam(null);
-  };
-
-  const handleOk = () => {
-    setIsTeamModalVisible(false);
-    form.resetFields();
-  };
-
-  const handleMemberOk = () => {
-    setIsAddMemberModalVisible(false);
-    memberForm.resetFields();
-  };
-
-  const handleCancel = () => {
-    setIsTeamModalVisible(false);
-    form.resetFields();
-  };
-
-  const handleMemberCancel = () => {
-    setIsAddMemberModalVisible(false);
-    memberForm.resetFields();
-  };
-
-  const handleDelete = async (team_id: string) => {
-    // Set the team to delete and open the confirmation modal
-    setTeamToDelete(team_id);
-    setIsDeleteModalOpen(true);
-  };
-
-  const confirmDelete = async () => {
-    if (teamToDelete == null || teams == null || accessToken == null) {
-      return;
-    }
-
-    try {
-      await teamDeleteCall(accessToken, teamToDelete);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
-      const filteredData = teams.filter(
-        (item) => item.team_id !== teamToDelete
-      );
-      setTeams(filteredData);
-    } catch (error) {
-      console.error("Error deleting the team:", error);
-      // Handle any error situations, such as displaying an error message to the user.
-    }
-
-    // Close the confirmation modal and reset the teamToDelete
-    setIsDeleteModalOpen(false);
-    setTeamToDelete(null);
-  };
-
-  const cancelDelete = () => {
-    // Close the confirmation modal and reset the teamToDelete
-    setIsDeleteModalOpen(false);
-    setTeamToDelete(null);
-  };
-
-  useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null) {
-          return;
-        }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
-      } catch (error) {
-        console.error("Error fetching user models:", error);
-      }
-    };
-
-    const fetchTeamInfo = async () => {
-      try {
-        if (userID === null || userRole === null || accessToken === null) {
-          return;
-        }
-
-        if (teams === null) {
-          return;
-        }
-
-        let _team_id_to_info: Record<string, any> = {};
-        let teamList;
-        if (userRole != "Admin" && userRole != "Admin Viewer") {
-          teamList = await teamListCall(accessToken, userID)
-        } else {
-          teamList = await teamListCall(accessToken)
-        }
-        
-        for (let i = 0; i < teamList.length; i++) {
-          let team = teamList[i];
-          let _team_id = team.team_id;
-      
-          // Use the team info directly from the teamList
-          if (team !== null) {
-              _team_id_to_info = { ..._team_id_to_info, [_team_id]: team };
-          }
-        }
-        setPerTeamInfo(_team_id_to_info);
-      } catch (error) {
-        console.error("Error fetching team info:", error);
-      }
-    };
-
-    fetchUserModels();
-    fetchTeamInfo();
-  }, [accessToken, userID, userRole, teams]);
-
-  const handleCreate = async (formValues: Record<string, any>) => {
-    try {
-      if (accessToken != null) {
-        const newTeamAlias = formValues?.team_alias;
-        const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
-
-        if (existingTeamAliases.includes(newTeamAlias)) {
-          throw new Error(
-            `Team alias ${newTeamAlias} already exists, please pick another alias`
-          );
-        }
-
-        message.info("Creating Team");
-        const response: any = await teamCreateCall(accessToken, formValues);
-        if (teams !== null) {
-          setTeams([...teams, response]);
-        } else {
-          setTeams([response]);
-        }
-        console.log(`response for team create call: ${response}`);
-        message.success("Team created");
-        setIsTeamModalVisible(false);
-      }
-    } catch (error) {
-      console.error("Error creating the team:", error);
-      message.error("Error creating the team: " + error, 20);
-    }
-  };
-
-  const is_team_admin = (team: any) => {
-    for (let i = 0; i < team.members_with_roles.length; i++) {
-      let member = team.members_with_roles[i];
-      if (member.user_id == userID && member.role == "admin") {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  const handleMemberCreate = async (formValues: Record<string, any>) => {
-    try {
-      if (accessToken != null && teams != null) {
-        message.info("Adding Member");
-        const user_role: Member = {
-          role: formValues.role,
-          user_email: formValues.user_email,
-          user_id: formValues.user_id,
-        };
-        const response: any = await teamMemberAddCall(
-          accessToken,
-          selectedTeam["team_id"],
-          user_role
-        );
-        message.success("Member added");
-        console.log(`response for team create call: ${response["data"]}`);
-        // Checking if the team exists in the list and updating or adding accordingly
-        const foundIndex = teams.findIndex((team) => {
-          console.log(
-            `team.team_id=${team.team_id}; response.data.team_id=${response.data.team_id}`
-          );
-          return team.team_id === response.data.team_id;
-        });
-        console.log(`foundIndex: ${foundIndex}`);
-        if (foundIndex !== -1) {
-          // If the team is found, update it
-          const updatedTeams = [...teams]; // Copy the current state
-          updatedTeams[foundIndex] = response.data; // Update the specific team
-          setTeams(updatedTeams); // Set the new state
-          setSelectedTeam(response.data);
-        }
-        setIsAddMemberModalVisible(false);
-        
-      }
-    } catch (error) {
-      console.error("Error creating the team:", error);
-    }
-  };
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <Title level={4}>All Organizations</Title>
-          {OrganizationsTable([])}
-        </Col>
-        {userRole == "Admin"? (
-          <Col numColSpan={1}>
-            <Button
-            className="mx-auto"
-            onClick={() => setIsTeamModalVisible(true)}
-          >
-            + Create New Team
-          </Button>
-          <Modal
-            title="Create Team"
-            visible={isTeamModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleOk}
-            onCancel={handleCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleCreate}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-            >
-              <>
-                <Form.Item
-                  label="Team Name"
-                  name="team_alias"
-                  rules={[
-                    { required: true, message: "Please input a team name" },
-                  ]}
-                >
-                  <TextInput placeholder="" />
-                </Form.Item>
-                <Form.Item label="Models" name="models">
-                  <Select2
-                    mode="multiple"
-                    placeholder="Select models"
-                    style={{ width: "100%" }}
-                  >
-                    <Select2.Option
-                      key="all-proxy-models"
-                      value="all-proxy-models"
-                    >
-                      All Proxy Models
-                    </Select2.Option>
-                    {userModels.map((model) => (
-                      <Select2.Option key={model} value={model}>
-                        {model}
-                      </Select2.Option>
-                    ))}
-                  </Select2>
-                </Form.Item>
-
-                <Form.Item label="Max Budget (USD)" name="max_budget">
-                  <InputNumber step={0.01} precision={2} width={200} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-8"
-                  label="Reset Budget"
-                  name="budget_duration"
-                >
-                  <Select2 defaultValue={null} placeholder="n/a">
-                    <Select2.Option value="24h">daily</Select2.Option>
-                    <Select2.Option value="7d">weekly</Select2.Option>
-                    <Select2.Option value="30d">monthly</Select2.Option>
-                  </Select2>
-                </Form.Item>
-                <Form.Item
-                  label="Tokens per minute Limit (TPM)"
-                  name="tpm_limit"
-                >
-                  <InputNumber step={1} width={400} />
-                </Form.Item>
-                <Form.Item
-                  label="Requests per minute Limit (RPM)"
-                  name="rpm_limit"
-                >
-                  <InputNumber step={1} width={400} />
-                </Form.Item>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Create Team</Button2>
-              </div>
-            </Form>
-          </Modal>
-          </Col>
-        ) : null}
-        <Col numColSpan={1}>
-          <Title level={4}>Team Members</Title>
-          <Paragraph>
-            If you belong to multiple teams, this setting controls which teams
-            members you see.
-          </Paragraph>
-          {teams && teams.length > 0 ? (
-            <Select defaultValue="0">
-              {teams.map((team: any, index) => (
-                <SelectItem
-                  key={index}
-                  value={String(index)}
-                  onClick={() => {
-                    setSelectedTeam(team);
-                  }}
-                >
-                  {team["team_alias"]}
-                </SelectItem>
-              ))}
-            </Select>
-          ) : (
-            <Paragraph>
-              No team created. <b>Defaulting to personal account.</b>
-            </Paragraph>
-          )}
-        </Col>
-        <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Member Name</TableHeaderCell>
-                  <TableHeaderCell>Role</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {selectedTeam
-                  ? selectedTeam["members_with_roles"].map(
-                      (member: any, index: number) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            {member["user_email"]
-                              ? member["user_email"]
-                              : member["user_id"]
-                                ? member["user_id"]
-                                : null}
-                          </TableCell>
-                          <TableCell>{member["role"]}</TableCell>
-                        </TableRow>
-                      )
-                    )
-                  : null}
-              </TableBody>
-            </Table>
-          </Card>
-          {selectedTeam && (
-            <EditTeamModal
-              visible={editModalVisible}
-              onCancel={handleEditCancel}
-              team={selectedTeam}
-              onSubmit={handleEditSubmit}
-            />
-          )}
-        </Col>
-        <Col numColSpan={1}>
-          {userRole == "Admin" || (selectedTeam && is_team_admin(selectedTeam)) ? (
-            <Button
-              className="mx-auto mb-5"
-              onClick={() => setIsAddMemberModalVisible(true)}
-            >
-              + Add member
-            </Button>
-          ) : null}
-          <Modal
-            title="Add member"
-            visible={isAddMemberModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleMemberOk}
-            onCancel={handleMemberCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleMemberCreate}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-              initialValues={{
-                role: "user",
-              }}
-            >
-              <>
-                <Form.Item label="Email" name="user_email" className="mb-4">
-                  <Input
-                    name="user_email"
-                    className="px-3 py-2 border rounded-md w-full"
-                  />
-                </Form.Item>
-                <div className="text-center mb-4">OR</div>
-                <Form.Item label="User ID" name="user_id" className="mb-4">
-                  <Input
-                    name="user_id"
-                    className="px-3 py-2 border rounded-md w-full"
-                  />
-                </Form.Item>
-                <Form.Item label="Member Role" name="role" className="mb-4">
-                  <Select2 defaultValue="user">
-                    <Select2.Option value="admin">admin</Select2.Option>
-                    <Select2.Option value="user">user</Select2.Option>
-                  </Select2>
-                </Form.Item>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Add member</Button2>
-              </div>
-            </Form>
-          </Modal>
+          {userRole ? OrganizationsTable({organizations, userRole}) : null}
         </Col>
       </Grid>
     </div>

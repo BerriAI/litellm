@@ -22,11 +22,11 @@ interface Column {
   style?: React.CSSProperties;
 }
 
-interface Action {
-  icon: React.ComponentType;
-  onClick: (row: any) => void;
-  condition?: (row: any) => boolean;
-  tooltip?: string;
+interface Action<T = any> {
+    icon?: React.ComponentType<any>;
+    onClick: (item: T) => void;
+    condition?: () => boolean;
+    tooltip?: string;
 }
 
 interface DeleteModalProps {
@@ -41,7 +41,6 @@ interface DataTableProps {
   data: any[];
   columns: Column[];
   actions?: Action[];
-  cardTitle?: string;
   emptyMessage?: string;
   deleteModal?: DeleteModalProps;
 }
@@ -50,7 +49,6 @@ const DataTable: React.FC<DataTableProps> = ({
   data,
   columns,
   actions,
-  cardTitle,
   emptyMessage = "No data available",
   deleteModal
 }) => {
@@ -94,7 +92,6 @@ const DataTable: React.FC<DataTableProps> = ({
 
   return (
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-      {/* {cardTitle && <h4 className="mb-4">{cardTitle}</h4>} */}
       <Table>
         <TableHead>
           <TableRow>
