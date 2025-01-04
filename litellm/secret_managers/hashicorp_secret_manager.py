@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -13,8 +13,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
+from .base_secret_manager import BaseSecretManager
 
-class HashicorpSecretManager:
+
+class HashicorpSecretManager(BaseSecretManager):
     def __init__(self):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
@@ -110,7 +112,12 @@ class HashicorpSecretManager:
             return {"X-Vault-Token": self._auth_via_tls_cert()}
         return {"X-Vault-Token": self.vault_token}
 
-    async def async_read_secret(self, secret_name: str) -> Optional[str]:
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using an async HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -140,7 +147,12 @@ class HashicorpSecretManager:
             verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
 
-    def read_secret(self, secret_name: str) -> Optional[str]:
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using a sync HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -165,6 +177,16 @@ class HashicorpSecretManager:
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
+
+    async def async_write_secret(
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Dict[str, Any]:
+        return {"status": "success"}
 
     def _get_secret_value_from_json_response(
         self, json_resp: Optional[dict]
