@@ -139,6 +139,7 @@ $ litellm --config /path/to/config.yaml
 
 #### How it works
 
+**Reading Secrets**
 LiteLLM reads secrets from Hashicorp Vault's KV v2 engine using the following URL format:
 ```
 {VAULT_ADDR}/v1/{NAMESPACE}/secret/data/{SECRET_NAME}
@@ -167,6 +168,21 @@ For example, for `AZURE_API_KEY`, the secret should be stored as:
 ```
 
 <Image img={require('../img/hcorp.png')} />
+
+**Writing Secrets**
+
+When a Virtual Key is Created / Deleted on LiteLLM, LiteLLM will automatically create / delete the secret in Hashicorp Vault.
+
+- Create Virtual Key on LiteLLM either through the LiteLLM Admin UI or API
+
+<Image img={require('../img/hcorp_create_virtual_key.png')} />
+
+
+- Check Hashicorp Vault for secret
+
+LiteLLM stores secret under the `prefix_for_stored_virtual_keys` path (default: `litellm/`)
+
+<Image img={require('../img/hcorp_virtual_key.png')} />
 
 
 ## Azure Key Vault
