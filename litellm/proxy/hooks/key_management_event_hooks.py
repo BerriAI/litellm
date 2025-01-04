@@ -195,20 +195,27 @@ class KeyManagementEventHooks:
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
-                from litellm.secret_managers.aws_secret_manager_v2 import (
-                    AWSSecretsManagerV2,
+                from litellm.secret_managers.base_secret_manager import (
+                    BaseSecretManager,
                 )
 
                 # store the key in the secret manager
-                if (
-                    litellm._key_management_system
-                    == KeyManagementSystem.AWS_SECRET_MANAGER
-                    and isinstance(litellm.secret_manager_client, AWSSecretsManagerV2)
-                ):
+                if isinstance(litellm.secret_manager_client, BaseSecretManager):
                     await litellm.secret_manager_client.async_write_secret(
-                        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{secret_name}",
+                        secret_name=KeyManagementEventHooks._get_secret_name(
+                            secret_name
+                        ),
                         secret_value=secret_token,
                     )
+
+    @staticmethod
+    def _get_secret_name(secret_name: str) -> str:
+        if litellm._key_management_settings.prefix_for_stored_virtual_keys.endswith(
+            "/"
+        ):
+            return f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{secret_name}"
+        else:
+            return f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{secret_name}"
 
     @staticmethod
     async def _delete_virtual_keys_from_secret_manager(
@@ -230,7 +237,9 @@ class KeyManagementEventHooks:
                     for key in keys_being_deleted:
                         if key.key_alias is not None:
                             await litellm.secret_manager_client.async_delete_secret(
-                                secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key.key_alias}"
+                                secret_name=KeyManagementEventHooks._get_secret_name(
+                                    key.key_alias
+                                )
                             )
                         else:
                             verbose_proxy_logger.warning(
