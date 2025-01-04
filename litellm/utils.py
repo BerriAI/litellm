@@ -4223,6 +4223,7 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
+            provider_config: Optional[BaseLLMModelInfo] = None
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
@@ -4261,9 +4262,11 @@ def _get_model_info_helper(  # noqa: PLR0915
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            provider_config = ProviderConfigManager.get_provider_model_info(
-                model=model, provider=LlmProviders(custom_llm_provider)
-            )
+
+            if custom_llm_provider:
+                provider_config = ProviderConfigManager.get_provider_model_info(
+                    model=model, provider=LlmProviders(custom_llm_provider)
+                )
 
             if _model_info is None and provider_config is not None:
                 _model_info = cast(
