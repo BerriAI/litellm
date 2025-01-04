@@ -3561,7 +3561,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     # read from the secret manager
 
     result = await aws_secret_manager_client.async_read_secret(
-        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
+        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{key_alias}"
     )
 
     # Assert the correct key is stored in the secret manager
@@ -3582,7 +3582,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     # Assert the key is deleted from the secret manager
 
     result = await aws_secret_manager_client.async_read_secret(
-        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
+        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{key_alias}"
     )
     assert result is None
 
