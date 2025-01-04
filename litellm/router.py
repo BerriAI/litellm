@@ -1356,6 +1356,67 @@ class Router:
                 llm_provider="openai",
             )
 
+    async def _schedule_factory(
+        self,
+        model: str,
+        priority: int,
+        original_function: Callable,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ):
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+        ### FLOW ITEM ###
+        _request_id = str(uuid.uuid4())
+        item = FlowItem(
+            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
+            request_id=_request_id,  # 👈 SET REQUEST ID
+            model_name=model,  # 👈 SAME as 'Router'
+        )
+        ### [fin] ###
+
+        ## ADDS REQUEST TO QUEUE ##
+        await self.scheduler.add_request(request=item)
+
+        ## POLL QUEUE
+        end_time = time.time() + self.timeout
+        curr_time = time.time()
+        poll_interval = self.scheduler.polling_interval  # poll every 3ms
+        make_request = False
+
+        while curr_time < end_time:
+            _healthy_deployments, _ = await self._async_get_healthy_deployments(
+                model=model, parent_otel_span=parent_otel_span
+            )
+            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
+                id=item.request_id,
+                model_name=item.model_name,
+                health_deployments=_healthy_deployments,
+            )
+            if make_request:  ## IF TRUE -> MAKE REQUEST
+                break
+            else:  ## ELSE -> loop till default_timeout
+                await asyncio.sleep(poll_interval)
+                curr_time = time.time()
+
+        if make_request:
+            try:
+                _response = await original_function(*args, **kwargs)
+                if isinstance(_response._hidden_params, dict):
+                    _response._hidden_params.setdefault("additional_headers", {})
+                    _response._hidden_params["additional_headers"].update(
+                        {"x-litellm-request-prioritization-used": True}
+                    )
+                return _response
+            except Exception as e:
+                setattr(e, "priority", priority)
+                raise e
+        else:
+            raise litellm.Timeout(
+                message="Request timed out while polling queue",
+                model=model,
+                llm_provider="openai",
+            )
+
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
             kwargs["model"] = model
@@ -1844,10 +1905,19 @@ class Router:
         is_async: Optional[bool] = False,
         **kwargs,
     ):
+        if kwargs.get("priority", None) is not None:
+            return await self._schedule_factory(
+                model=model,
+                priority=kwargs.pop("priority"),
+                original_function=self.atext_completion,
+                args=(model, prompt),
+                kwargs=kwargs,
+            )
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._atext_completion
+
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
