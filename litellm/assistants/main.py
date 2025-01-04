@@ -131,10 +131,6 @@ def get_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
-            order=getattr(optional_params, "order", "desc"),
-            limit=getattr(optional_params, "limit", 20),
-            before=getattr(optional_params, "before", None),
-            after=getattr(optional_params, "after", None),
             client=client,
             aget_assistants=aget_assistants,  # type: ignore
         )  # type: ignore
