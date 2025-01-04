@@ -1928,6 +1928,10 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[AsyncOpenAI],
+        order: Optional[str] = "desc",
+        limit: Optional[int] = 20,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
     ) -> AsyncCursorPage[Assistant]:
         openai_client = self.async_get_openai_client(
             api_key=api_key,
@@ -1937,8 +1941,16 @@ class OpenAIAssistantsAPI(BaseLLM):
             organization=organization,
             client=client,
         )
+        request_params = {
+            "order": order,
+            "limit": limit,
+        }
+        if before:
+            request_params["before"] = before
+        if after:
+            request_params["after"] = after
 
-        response = await openai_client.beta.assistants.list()
+        response = await openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
@@ -1981,6 +1993,10 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client=None,
         aget_assistants=None,
+        order: Optional[str] = "desc",
+        limit: Optional[int] = 20,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
     ):
         if aget_assistants is not None and aget_assistants is True:
             return self.async_get_assistants(
@@ -2000,7 +2016,17 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.assistants.list()
+        request_params = {
+            "order": order,
+            "limit": limit,
+        }
+
+        if before:
+            request_params["before"] = before
+        if after:
+            request_params["after"] = after
+
+        response = openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
