@@ -4434,10 +4434,6 @@ async def get_assistants(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    order: Optional[str] = Query(None, description="Sort order by the created_at timestamp of the objects. asc for ascending order and desc for descending order."),
-    limit: Optional[int] = Query(None, description="A limit on the number of objects to be returned. Limit can range between 1 and 100, and the default is 20."),
-    after: Optional[str] = Query(None, description="A cursor for use in pagination. after is an object ID that defines your place in the list. For instance, if you make a list request and receive 100 objects, ending with obj_foo, your subsequent call can include after=obj_foo in order to fetch the next page of the list."),
-    before: Optional[str] = Query(None, description="A cursor for use in pagination. before is an object ID that defines your place in the list. For instance, if you make a list request and receive 100 objects, starting with obj_foo, your subsequent call can include before=obj_foo in order to fetch the previous page of the list."),
 ):
     """
     Returns a list of assistants.
@@ -4459,28 +4455,6 @@ async def get_assistants(
             version=version,
             proxy_config=proxy_config,
         )
-
-        # Validate `order` parameter
-        if order and order not in ["asc", "desc"]:
-            raise HTTPException(
-                status_code=400, detail={"error": "order must be 'asc' or 'desc'"}
-            )
-        if order:
-            data["order"] = order
-
-        # Validate `limit` parameter
-        if limit is not None:
-            if not (1 <= limit <= 100):
-                raise HTTPException(
-                    status_code=400, detail={"error": "limit must be between 1 and 100"}
-                )
-            data["limit"] = limit
-
-        # Add pagination cursors if provided
-        if after:
-            data["after"] = after
-        if before:
-            data["before"] = before
 
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
