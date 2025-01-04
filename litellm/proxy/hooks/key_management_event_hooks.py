@@ -143,7 +143,7 @@ class KeyManagementEventHooks:
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True:
+        if litellm.store_audit_logs is True and data.keys is not None:
             # make an audit log for each team deleted
             for key in data.keys:
                 key_row = await prisma_client.get_data(  # type: ignore
