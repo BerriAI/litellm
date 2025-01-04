@@ -1,14 +1,6 @@
 import React, { useState, useEffect } from "react";
-import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
 import {
   Button as Button2,
   Modal,
@@ -65,6 +57,108 @@ import {
   modelAvailableCall,
   teamListCall
 } from "./networking";
+
+import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import DataTable from "@/components/common_components/all_view";
+import { Action } from "@/components/common_components/all_view";
+
+// Inside your Teams component
+const OrganizationsTable = (perOrganizationInfo: any) => {
+  const columns = [
+    {
+      header: "Organization Name",
+      accessor: "organization_name",
+      width: "4px",
+      style: {
+        whiteSpace: "pre-wrap",
+        overflow: "hidden"
+      }
+    },
+    {
+      header: "Organization ID",
+      accessor: "organization_id",
+      width: "4px",
+      style: {
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        fontSize: "0.75em"
+      }
+    },
+    {
+      header: "Spend (USD)",
+      accessor: "spend"
+    },
+    {
+      header: "Budget (USD)",
+      accessor: "max_budget",
+      cellRenderer: (value: any) => 
+        value !== null && value !== undefined ? value : "No limit"
+    },
+    {
+      header: "Models",
+      accessor: "models"
+    },
+    {
+      header: "TPM / RPM Limits",
+      accessor: "limits",
+      cellRenderer: (value: any, row: any) => (
+        <Text>
+          TPM: {row.tpm_limit ? row.tpm_limit : "Unlimited"}{" "}
+          <br />
+          RPM: {row.rpm_limit ? row.rpm_limit : "Unlimited"}
+        </Text>
+      )
+    },
+    {
+      header: "Info",
+      accessor: "info",
+      cellRenderer: (value: any, row: any) => (
+        <>
+          <Text>
+            {perOrganizationInfo[row.organization_id]?.keys?.length || 0} Keys
+          </Text>
+          <Text>
+            {perOrganizationInfo[row.organization_id]?.members_with_roles?.length || 0} Members
+          </Text>
+        </>
+      )
+    }
+  ];
+
+  // const actions = [
+  //   {
+  //     icon: PencilAltIcon,
+  //     onClick: handleEditClick,
+  //     condition: () => userRole === "Admin",
+  //     tooltip: "Edit team"
+  //   },
+  //   {
+  //     icon: TrashIcon,
+  //     onClick: handleDelete,
+  //     condition: () => userRole === "Admin",
+  //     tooltip: "Delete team"
+  //   }
+  // ];
+
+  const actions: Action[] = []
+  return (
+    <DataTable
+      data={[]}
+      columns={columns}
+      actions={actions}
+      cardTitle="All Organizations"
+      emptyMessage="No organizations available"
+      deleteModal={{
+        isOpen: false,
+        onConfirm: () => {},
+        onCancel: () => {},
+        title: "Delete Team",
+        message: "Are you sure you want to delete this team?"
+      }}
+    />
+  );
+};
 
 const Organizations: React.FC<TeamProps> = ({
   teams,
@@ -441,216 +535,8 @@ const Organizations: React.FC<TeamProps> = ({
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <Title level={4}>All Teams</Title>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Team Name</TableHeaderCell>
-                  <TableHeaderCell>Team ID</TableHeaderCell>
-                  <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                  <TableHeaderCell>Budget (USD)</TableHeaderCell>
-                  <TableHeaderCell>Models</TableHeaderCell>
-                  <TableHeaderCell>TPM / RPM Limits</TableHeaderCell>
-                  <TableHeaderCell>Info</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {teams && teams.length > 0
-                  ? teams.map((team: any) => (
-                      <TableRow key={team.team_id}>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {team["team_alias"]}
-                        </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            fontSize: "0.75em", // or any smaller size as needed
-                          }}
-                        >
-                          <Tooltip title={team.team_id}>
-                          {team.team_id}
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {team["spend"]}
-                        </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {team["max_budget"] !== null && team["max_budget"] !== undefined ? team["max_budget"] : "No limit"}
-                        </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "8-x",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {Array.isArray(team.models) ? (
-                            <div
-                              style={{
-                                display: "flex",
-                                flexDirection: "column",
-                              }}
-                            >
-                              {team.models.length === 0 ? (
-                                <Badge size={"xs"} className="mb-1" color="red">
-                                  <Text>All Proxy Models</Text>
-                                </Badge>
-                              ) : (
-                                team.models.map(
-                                  (model: string, index: number) =>
-                                    model === "all-proxy-models" ? (
-                                      <Badge
-                                        key={index}
-                                        size={"xs"}
-                                        className="mb-1"
-                                        color="red"
-                                      >
-                                        <Text>All Proxy Models</Text>
-                                      </Badge>
-                                    ) : (
-                                      <Badge
-                                        key={index}
-                                        size={"xs"}
-                                        className="mb-1"
-                                        color="blue"
-                                      >
-                                        <Text>
-                                          {model.length > 30
-                                            ? `${model.slice(0, 30)}...`
-                                            : model}
-                                        </Text>
-                                      </Badge>
-                                    )
-                                )
-                              )}
-                            </div>
-                          ) : null}
-                        </TableCell>
-
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "pre-wrap",
-                            overflow: "hidden",
-                          }}
-                        >
-                          <Text>
-                            TPM: {team.tpm_limit ? team.tpm_limit : "Unlimited"}{" "}
-                            <br></br>RPM:{" "}
-                            {team.rpm_limit ? team.rpm_limit : "Unlimited"}
-                          </Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text>
-                            {perTeamInfo &&
-                              team.team_id &&
-                              perTeamInfo[team.team_id] &&
-                              perTeamInfo[team.team_id].keys &&
-                              perTeamInfo[team.team_id].keys.length}{" "}
-                            Keys
-                          </Text>
-                          <Text>
-                            {perTeamInfo &&
-                              team.team_id &&
-                              perTeamInfo[team.team_id] &&
-                              perTeamInfo[team.team_id].members_with_roles &&
-                              perTeamInfo[team.team_id].members_with_roles.length}{" "}
-                            Members
-                          </Text>
-                        </TableCell>
-                        <TableCell>
-                          {userRole == "Admin" ? (
-                            <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => handleEditClick(team)}
-                            />
-                            <Icon
-                              onClick={() => handleDelete(team.team_id)}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                            </>
-                          ) : null}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  : null}
-              </TableBody>
-            </Table>
-            {isDeleteModalOpen && (
-              <div className="fixed z-10 inset-0 overflow-y-auto">
-                <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                  <div
-                    className="fixed inset-0 transition-opacity"
-                    aria-hidden="true"
-                  >
-                    <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-                  </div>
-
-                  {/* Modal Panel */}
-                  <span
-                    className="hidden sm:inline-block sm:align-middle sm:h-screen"
-                    aria-hidden="true"
-                  >
-                    &#8203;
-                  </span>
-
-                  {/* Confirmation Modal Content */}
-                  <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                    <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                      <div className="sm:flex sm:items-start">
-                        <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                          <h3 className="text-lg leading-6 font-medium text-gray-900">
-                            Delete Team
-                          </h3>
-                          <div className="mt-2">
-                            <p className="text-sm text-gray-500">
-                              Are you sure you want to delete this team ?
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                      <Button
-                        onClick={confirmDelete}
-                        color="red"
-                        className="ml-2"
-                      >
-                        Delete
-                      </Button>
-                      <Button onClick={cancelDelete}>Cancel</Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
+          <Title level={4}>All Organizations</Title>
+          {OrganizationsTable([])}
         </Col>
         {userRole == "Admin"? (
           <Col numColSpan={1}>
