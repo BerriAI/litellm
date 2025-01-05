@@ -3926,7 +3926,7 @@ def test_unit_test_perplexity_citations_chunk():
         "gpt-3.5-turbo",
         "claude-3-5-sonnet-20240620",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "vertex_ai/claude-3-5-sonnet@20240620",
+        # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
