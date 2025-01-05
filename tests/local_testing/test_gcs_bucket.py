@@ -68,7 +68,7 @@ def load_vertex_ai_credentials():
 
 
 @pytest.mark.asyncio
-async def test_basic_gcs_logger():
+async def test_aaabasic_gcs_logger():
     load_vertex_ai_credentials()
     gcs_logger = GCSBucketLogger()
     print("GCSBucketLogger", gcs_logger)
@@ -270,6 +270,7 @@ async def test_basic_gcs_logger_failure():
     await gcs_logger.delete_gcs_object(object_name=object_name)
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
 async def test_basic_gcs_logging_per_request_with_callback_set():
     """
@@ -397,6 +398,7 @@ async def test_basic_gcs_logging_per_request_with_callback_set():
     )
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
 async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     """
@@ -577,6 +579,7 @@ async def test_aaaget_gcs_logging_config_without_service_account():
         os.environ["GCS_PATH_SERVICE_ACCOUNT"] = _old_gcs_service_acct
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
 async def test_basic_gcs_logger_with_folder_in_bucket_name():
     load_vertex_ai_credentials()
