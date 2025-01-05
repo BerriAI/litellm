@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { organizationListCall, organizationMemberAddCall, Member } from "./networking";
-import { Title } from "@tremor/react";
 import {
   Col,
   Grid,
 } from "@tremor/react";
-import { CogIcon } from "@heroicons/react/outline";
 import OrganizationForm from "@/components/organization/add_org";
 import AddOrgAdmin from "@/components/organization/add_org_admin";
+import MemberListTable from "@/components/organization/view_members_of_org";
 import { Select, SelectItem } from "@tremor/react";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -23,25 +22,11 @@ interface TeamProps {
   userRole: string | null;
 }
 
-interface EditTeamModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  team: any; // Assuming TeamType is a type representing your team object
-  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
-}
-
-import {
-  teamCreateCall,
-  teamMemberAddCall,
-  Member,
-  modelAvailableCall,
-  teamListCall
-} from "./networking";
 
 import DataTable from "@/components/common_components/all_view";
 import { Action } from "@/components/common_components/all_view";
 import { Typography, message } from "antd";
-import { Organization } from "@/components/organization/types";
+import { Organization, EditModalProps } from "@/components/organization/types";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -54,6 +39,15 @@ interface OrganizationsTableProps {
   setSelectedOrganization: (value: Organization | null) => void;
 }
 
+
+const EditOrganizationModal: React.FC<EditModalProps> = ({
+  visible,
+  onCancel,
+  entity,
+  onSubmit
+}) => {
+  return <div>EditOrganizationModal</div>;
+};
 
 
 // Inside your Teams component
@@ -120,10 +114,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       cellRenderer: (value: any, row: Organization) => (
         <div className="space-y-1">
           <div className="text-sm">
-            {row.keys?.length || 0} Keys
-          </div>
-          <div className="text-sm">
-            {row.members_with_roles?.length || 0} Members
+            {row.members?.length || 0} Members
           </div>
         </div>
       )
@@ -185,19 +176,14 @@ const Organizations: React.FC<TeamProps> = ({
   useEffect(() => {
     if (!accessToken) return;
 
-    const storedOrganizations = sessionStorage.getItem('organizations');
-    if (storedOrganizations) {
-      setOrganizations(JSON.parse(storedOrganizations));
-    } else {
-      const fetchData = async () => {
-        let givenOrganizations;
-        givenOrganizations = await organizationListCall(accessToken)
-        console.log(`givenOrganizations: ${givenOrganizations}`)
-        setOrganizations(givenOrganizations)
-        sessionStorage.setItem('organizations', JSON.stringify(givenOrganizations));
-      }
-      fetchData()
+    const fetchData = async () => {
+      let givenOrganizations;
+      givenOrganizations = await organizationListCall(accessToken)
+      console.log(`givenOrganizations: ${givenOrganizations}`)
+      setOrganizations(givenOrganizations)
+      sessionStorage.setItem('organizations', JSON.stringify(givenOrganizations));
     }
+    fetchData()
   }, [accessToken]);
 
   const handleMemberCreate = async (formValues: Record<string, any>) => {
@@ -216,6 +202,7 @@ const Organizations: React.FC<TeamProps> = ({
       message.success("Member added");
     } catch (error) {
       console.error("Error creating the team:", error);
+      message.error("Error creating the organization: " + error);
     }
 };
 
@@ -259,6 +246,7 @@ const Organizations: React.FC<TeamProps> = ({
           )}
         </Col>
         {userRole == "Admin" && userID && selectedOrganization ? <AddOrgAdmin userRole={userRole} userID={userID} selectedOrganization={selectedOrganization} onMemberAdd={handleMemberCreate} /> : null}
+        {userRole == "Admin" && userID && selectedOrganization ? <MemberListTable  selectedEntity={selectedOrganization} onEditSubmit={() => {}} editModalComponent={EditOrganizationModal} entityType="organization" /> : null}
       </Grid>
     </div>
   );

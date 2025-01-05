@@ -2294,7 +2294,7 @@ export const organizationMemberAddCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
@@ -2302,7 +2302,7 @@ export const organizationMemberAddCall = async (
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to create organization member:", error);
     throw error;
   }
 };

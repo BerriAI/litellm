@@ -231,7 +231,9 @@ async def list_organization(
             status_code=400,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
-    response = await prisma_client.db.litellm_organizationtable.find_many()
+    response = await prisma_client.db.litellm_organizationtable.find_many(
+        include={"members": True}
+    )
 
     return response
 
