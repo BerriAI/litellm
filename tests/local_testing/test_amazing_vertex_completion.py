@@ -1873,6 +1873,7 @@ async def test_gemini_pro_async_function_calling():
 # asyncio.run(gemini_pro_async_function_calling())
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -1914,6 +1915,7 @@ async def test_vertexai_embedding(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding():
     load_vertex_ai_credentials()
@@ -1977,6 +1979,7 @@ async def test_vertexai_multimodal_embedding():
         print("Response:", response)
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_text_input():
     load_vertex_ai_credentials()
@@ -2032,6 +2035,7 @@ async def test_vertexai_multimodal_embedding_text_input():
         print("Response:", response)
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_image_in_input():
     load_vertex_ai_credentials()
@@ -2088,6 +2092,7 @@ async def test_vertexai_multimodal_embedding_image_in_input():
         print("Response:", response)
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_base64image_in_input():
     import base64
@@ -2178,6 +2183,7 @@ def test_vertexai_embedding_embedding_latest():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.flaky(retries=3, delay=1)
 def test_vertexai_embedding_embedding_latest_input_type():
     try:
@@ -2197,6 +2203,7 @@ def test_vertexai_embedding_embedding_latest_input_type():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_vertexai_aembedding():
