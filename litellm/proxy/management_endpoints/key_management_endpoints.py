@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -34,6 +35,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
+    PrismaClient,
     _hash_token_if_needed,
     duration_in_seconds,
     handle_exception_on_proxy,
@@ -772,6 +774,7 @@ async def delete_key_fn(
 
     Parameters::
     - keys (List[str]): A list of keys or hashed keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
+    - key_aliases (List[str]): A list of key aliases to delete. Can be passed instead of `keys`.Example {"key_aliases": ["alias1", "alias2"]}
 
     Returns:
     - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
@@ -795,15 +798,6 @@ async def delete_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        keys = data.keys
-        if len(keys) == 0:
-            raise ProxyException(
-                message=f"No keys provided, passed in: keys={keys}",
-                type=ProxyErrorTypes.auth_error,
-                param="keys",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-
         ## only allow user to delete keys they own
         user_id = user_api_key_dict.user_id
         verbose_proxy_logger.debug(
@@ -815,9 +809,28 @@ async def delete_key_fn(
         ):
             user_id = None  # unless they're admin
 
-        number_deleted_keys, _keys_being_deleted = await delete_verification_token(
-            tokens=keys, user_id=user_id
-        )
+        num_keys_to_be_deleted = 0
+        deleted_keys = []
+        if data.keys:
+            number_deleted_keys, _keys_being_deleted = await delete_verification_token(
+                tokens=data.keys,
+                user_api_key_cache=user_api_key_cache,
+                user_id=user_id,
+            )
+            num_keys_to_be_deleted = len(data.keys)
+            deleted_keys = data.keys
+        elif data.key_aliases:
+            number_deleted_keys, _keys_being_deleted = await delete_key_aliases(
+                key_aliases=data.key_aliases,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id=user_id,
+            )
+            num_keys_to_be_deleted = len(data.key_aliases)
+            deleted_keys = data.key_aliases
+        else:
+            raise ValueError("Invalid request type")
+
         if number_deleted_keys is None:
             raise ProxyException(
                 message="Failed to delete keys got None response from delete_verification_token",
@@ -830,20 +843,14 @@ async def delete_key_fn(
         )
 
         try:
-            assert len(keys) == number_deleted_keys["deleted_keys"]
+            assert num_keys_to_be_deleted == number_deleted_keys["deleted_keys"]
         except Exception:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={len(keys)}, Deleted keys ={number_deleted_keys['deleted_keys']}"
+                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={num_keys_to_be_deleted}, Deleted keys ={number_deleted_keys['deleted_keys']}"
                 },
             )
-
-        for key in keys:
-            user_api_key_cache.delete_cache(key)
-            # remove hash token from cache
-            hashed_token = hash_token(key)
-            user_api_key_cache.delete_cache(hashed_token)
 
         verbose_proxy_logger.debug(
             f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
@@ -859,8 +866,13 @@ async def delete_key_fn(
             )
         )
 
-        return {"deleted_keys": keys}
+        return {"deleted_keys": deleted_keys}
     except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {}".format(
+                str(e)
+            )
+        )
         raise handle_exception_on_proxy(e)
 
 
@@ -1277,7 +1289,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
 
 
 async def delete_verification_token(
-    tokens: List, user_id: Optional[str] = None
+    tokens: List,
+    user_api_key_cache: DualCache,
+    user_id: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
@@ -1327,14 +1341,37 @@ async def delete_verification_token(
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.delete_verification_token(): Exception occured - {}".format(
                 str(e)
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
+
+    for key in tokens:
+        user_api_key_cache.delete_cache(key)
+        # remove hash token from cache
+        hashed_token = hash_token(key)
+        user_api_key_cache.delete_cache(hashed_token)
+
     return deleted_tokens, _keys_being_deleted
+
+
+async def delete_key_aliases(
+    key_aliases: List[str],
+    user_api_key_cache: DualCache,
+    prisma_client: PrismaClient,
+    user_id: Optional[str] = None,
+) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
+    _keys_being_deleted = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"key_alias": {"in": key_aliases}}
+    )
+
+    tokens = [key.token for key in _keys_being_deleted]
+    return await delete_verification_token(
+        tokens=tokens, user_api_key_cache=user_api_key_cache, user_id=user_id
+    )
 
 
 @router.post(
