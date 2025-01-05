@@ -2144,6 +2144,69 @@ class OpenAIAssistantsAPI(BaseLLM):
         response = openai_client.beta.assistants.delete(assistant_id=assistant_id)
         return response
 
+    # Modify Assistant
+    async def async_modify_assistants(
+        self,
+        assistant_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        client: Optional[AsyncOpenAI],
+        modify_assistant_data: dict,
+    ) -> Assistant:
+        openai_client = self.async_get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+        
+        response = await openai_client.beta.assistants.update(assistant_id, **modify_assistant_data)
+
+        return response
+
+
+    def modify_assistants(
+        self,
+        assistant_id: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        modify_assistant_data: dict,
+        client=None,
+        async_modify_assistants=None,
+    ):
+        if async_modify_assistants is not None and async_modify_assistants is True:
+            return self.async_modify_assistants(
+                assistant_id=assistant_id,
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                client=client,
+                modify_assistant_data=modify_assistant_data,
+            )
+
+        openai_client = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+        )
+
+        response = openai_client.beta.assistants.update(assistant_id, **modify_assistant_data)
+        return response
+
+
     ### MESSAGES ###
 
     async def a_add_message(

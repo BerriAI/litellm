@@ -567,6 +567,7 @@ class Router:
         self.a_add_message = self.factory_function(litellm.a_add_message)
         self.aget_messages = self.factory_function(litellm.aget_messages)
         self.arun_thread = self.factory_function(litellm.arun_thread)
+        self.amodify_assistants = self.factory_function(litellm.amodify_assistants)
 
     def validate_fallbacks(self, fallback_param: Optional[List]):
         """
