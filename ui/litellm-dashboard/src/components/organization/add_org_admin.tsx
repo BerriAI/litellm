@@ -5,7 +5,8 @@ import React, { FC } from 'react';
 import {
     Button,
     Select, 
-    Col
+    Col,
+    Text
 } from "@tremor/react";
 import {
     Button as Button2,
@@ -14,8 +15,6 @@ import {
     Form,
     Input,
 } from "antd";
-
-import {Member} from "@/components/networking";
 import { Organization } from "@/components/organization/types";
 interface AddOrgAdminProps {
     userRole: string;
@@ -63,7 +62,7 @@ const AddOrgAdmin: FC<AddOrgAdminProps> = ({
             + Add member
             </Button>
         ) : null}
-        
+
         <Modal
             title="Add member"
             visible={isAddMemberModalVisible}
@@ -72,6 +71,9 @@ const AddOrgAdmin: FC<AddOrgAdminProps> = ({
             onOk={handleMemberOk}
             onCancel={handleMemberCancel}
         >
+            <Text className='mb-2'>
+                User must exist in proxy. Get User ID from 'Users' tab.
+            </Text>
             <Form
                 form={form}
                 onFinish={onMemberAdd}

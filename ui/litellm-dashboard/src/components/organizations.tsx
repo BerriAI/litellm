@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { organizationListCall, organizationMemberAddCall, Member } from "./networking";
+import { organizationListCall, organizationMemberAddCall, Member, modelAvailableCall } from "./networking";
 import {
   Col,
   Grid,
@@ -46,7 +46,7 @@ const EditOrganizationModal: React.FC<EditModalProps> = ({
   entity,
   onSubmit
 }) => {
-  return <div>EditOrganizationModal</div>;
+  return <div/>;
 };
 
 
@@ -171,10 +171,27 @@ const Organizations: React.FC<TeamProps> = ({
   const { Title, Paragraph } = Typography;
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedOrganization, setSelectedOrganization] = useState<Organization | null>(null);
-
+  const [userModels, setUserModels] = useState([]);
 
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || !userID || !userRole) return;
+
+    const fetchUserModels = async () => {
+      try {
+        const model_available = await modelAvailableCall(
+          accessToken,
+          userID,
+          userRole
+        );
+        let available_model_names = model_available["data"].map(
+          (element: { id: string }) => element.id
+        );
+        console.log("available_model_names:", available_model_names);
+        setUserModels(available_model_names);
+      } catch (error) {
+        console.error("Error fetching user models:", error);
+      }
+    };
 
     const fetchData = async () => {
       let givenOrganizations;
@@ -183,6 +200,7 @@ const Organizations: React.FC<TeamProps> = ({
       setOrganizations(givenOrganizations)
       sessionStorage.setItem('organizations', JSON.stringify(givenOrganizations));
     }
+    fetchUserModels()
     fetchData()
   }, [accessToken]);
 
@@ -216,7 +234,7 @@ const Organizations: React.FC<TeamProps> = ({
         {userRole == "Admin" && accessToken ? <OrganizationForm
           title="Organization"
           accessToken={accessToken}
-          availableModels={['model1', 'model2', 'model3']}
+          availableModels={userModels}
           submitButtonText="Create Organization"
         /> : null}
         <Col numColSpan={1}>  

@@ -76,8 +76,9 @@ const OrganizationForm: React.FC<OrganizationFormProps> = ({
     rpmLimit: initialValues.rpmLimit || null
   });
 
+  console.log(`availableModels: ${availableModels}`)
+
   const handleSubmit = async (formValues: Record<string, any>) => {
-    message.info("handleSubmit clicked, accessToken: " + accessToken);
     if (accessToken == null) {
       return;
     }
