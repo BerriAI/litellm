@@ -286,7 +286,6 @@ class LiteLLMProxyRequestSetup:
     def add_key_level_controls(
         key_metadata: dict, data: dict, _metadata_variable_name: str
     ):
-        data = data.copy()
         if "cache" in key_metadata:
             data["cache"] = {}
             if isinstance(key_metadata["cache"], dict):
