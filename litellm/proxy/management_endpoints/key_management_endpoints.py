@@ -810,7 +810,7 @@ async def delete_key_fn(
             user_id = None  # unless they're admin
 
         num_keys_to_be_deleted = 0
-
+        deleted_keys = []
         if data.keys:
             number_deleted_keys, _keys_being_deleted = await delete_verification_token(
                 tokens=data.keys,
@@ -818,6 +818,7 @@ async def delete_key_fn(
                 user_id=user_id,
             )
             num_keys_to_be_deleted = len(data.keys)
+            deleted_keys = data.keys
         elif data.key_aliases:
             number_deleted_keys, _keys_being_deleted = await delete_key_aliases(
                 key_aliases=data.key_aliases,
@@ -826,6 +827,7 @@ async def delete_key_fn(
                 user_id=user_id,
             )
             num_keys_to_be_deleted = len(data.key_aliases)
+            deleted_keys = data.key_aliases
         else:
             raise ValueError("Invalid request type")
 
@@ -864,7 +866,7 @@ async def delete_key_fn(
             )
         )
 
-        return {"deleted_keys": number_deleted_keys["deleted_keys"]}
+        return {"deleted_keys": deleted_keys}
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {}".format(
