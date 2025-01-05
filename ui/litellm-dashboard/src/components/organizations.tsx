@@ -3,6 +3,7 @@ import { organizationListCall, organizationMemberAddCall, Member, modelAvailable
 import {
   Col,
   Grid,
+  Text
 } from "@tremor/react";
 import OrganizationForm from "@/components/organization/add_org";
 import AddOrgAdmin from "@/components/organization/add_org_admin";
@@ -20,6 +21,7 @@ interface TeamProps {
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
   userID: string | null;
   userRole: string | null;
+  premiumUser: boolean;
 }
 
 
@@ -166,6 +168,7 @@ const Organizations: React.FC<TeamProps> = ({
   accessToken,
   userID,
   userRole,
+  premiumUser
 }) => {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const { Title, Paragraph } = Typography;
@@ -200,8 +203,10 @@ const Organizations: React.FC<TeamProps> = ({
       setOrganizations(givenOrganizations)
       sessionStorage.setItem('organizations', JSON.stringify(givenOrganizations));
     }
-    fetchUserModels()
-    fetchData()
+    if (premiumUser) {
+      fetchUserModels()
+      fetchData()
+    }
   }, [accessToken]);
 
   const handleMemberCreate = async (formValues: Record<string, any>) => {
@@ -228,15 +233,17 @@ const Organizations: React.FC<TeamProps> = ({
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <Title level={4}>All Organizations</Title>
+          <Title level={4}>✨ All Organizations</Title>
+          <Text className="mb-2">This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <a href="https://www.litellm.ai/#trial" className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer">here</a></Text>
           {userRole ? OrganizationsTable({organizations, userRole, isDeleteModalOpen, setIsDeleteModalOpen, selectedOrganization, setSelectedOrganization}) : null}
         </Col>
-        {userRole == "Admin" && accessToken ? <OrganizationForm
+        {userRole == "Admin" && accessToken && premiumUser ? <OrganizationForm
           title="Organization"
           accessToken={accessToken}
           availableModels={userModels}
           submitButtonText="Create Organization"
         /> : null}
+        {premiumUser ? 
         <Col numColSpan={1}>  
         <Title level={4}>Organization Members</Title>
           <Paragraph>
@@ -262,9 +269,9 @@ const Organizations: React.FC<TeamProps> = ({
               No team created. <b>Defaulting to personal account.</b>
             </Paragraph>
           )}
-        </Col>
-        {userRole == "Admin" && userID && selectedOrganization ? <AddOrgAdmin userRole={userRole} userID={userID} selectedOrganization={selectedOrganization} onMemberAdd={handleMemberCreate} /> : null}
-        {userRole == "Admin" && userID && selectedOrganization ? <MemberListTable  selectedEntity={selectedOrganization} onEditSubmit={() => {}} editModalComponent={EditOrganizationModal} entityType="organization" /> : null}
+        </Col> : null}
+        {userRole == "Admin" && userID && selectedOrganization && premiumUser ? <AddOrgAdmin userRole={userRole} userID={userID} selectedOrganization={selectedOrganization} onMemberAdd={handleMemberCreate} /> : null}
+        {userRole == "Admin" && userID && selectedOrganization && premiumUser ? <MemberListTable  selectedEntity={selectedOrganization} onEditSubmit={() => {}} editModalComponent={EditOrganizationModal} entityType="organization" /> : null}
       </Grid>
     </div>
   );
