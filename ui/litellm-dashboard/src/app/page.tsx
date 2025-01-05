@@ -248,6 +248,7 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
+              premiumUser={premiumUser}
             />
           ) : page == "admin-panel" ? (
             <AdminPanel
