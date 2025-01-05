@@ -56,6 +56,7 @@ model LiteLLM_OrganizationTable {
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     teams LiteLLM_TeamTable[] 
     users LiteLLM_UserTable[]
+    members LiteLLM_OrganizationMembership[] @relation("OrganizationToMembership")
 }
 
 // Model info for teams, just has model aliases for now.
@@ -253,8 +254,11 @@ model LiteLLM_OrganizationMembership {
 
   // relations
   user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
+  organization LiteLLM_OrganizationTable @relation("OrganizationToMembership", fields: [organization_id], references: [organization_id])
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   
+  
+
   @@id([user_id, organization_id])
   @@unique([user_id, organization_id])
 }
