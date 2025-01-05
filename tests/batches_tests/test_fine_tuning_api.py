@@ -491,7 +491,7 @@ async def test_create_vertex_fine_tune_jobs():
         model="gemini-1.0-pro-002",
         custom_llm_provider="vertex_ai",
         training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
-        vertex_project="adroit-crow-413218",
+        vertex_project="pathrise-convert-1606954137718",
         vertex_location="us-central1",
         vertex_credentials=vertex_credentials,
     )
