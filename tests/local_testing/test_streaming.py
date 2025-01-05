@@ -1113,7 +1113,7 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "adroit-crow-413218"
+    litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
     test_models = ["gemini-1.5-pro"]
