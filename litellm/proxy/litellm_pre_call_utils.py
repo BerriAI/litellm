@@ -602,7 +602,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     verbose_proxy_logger.debug(
-        f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+        "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
 
     ## ENFORCED PARAMS CHECK
