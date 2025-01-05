@@ -1,6 +1,6 @@
 {
     "sample_spec": {
-        "max_tokens": "set to max_output_tokens if provider specifies it. IF not set to max_tokens provider specifies", 
+        "max_tokens": "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to max_input_tokens, if provider specifies it.", 
         "max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens",
         "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens", 
         "input_cost_per_token": 0.0000,
@@ -16,75 +16,23 @@
         "supports_response_schema": true,
         "supports_system_messages": true
     },
-    "sambanova/Meta-Llama-3.1-8B-Instruct": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000002,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
+    "omni-moderation-latest": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": "moderation"
     },
-    "sambanova/Meta-Llama-3.1-70B-Instruct": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000, 
-        "input_cost_per_token": 0.0000006,
-        "output_cost_per_token": 0.0000012,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Meta-Llama-3.1-405B-Instruct": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.000005,
-        "output_cost_per_token": 0.000010,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Meta-Llama-3.2-1B-Instruct": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000008,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Meta-Llama-3.2-3B-Instruct": {
-        "max_tokens": 4000,
-        "max_input_tokens": 4000,
-        "max_output_tokens": 4000, 
-        "input_cost_per_token": 0.0000008,
-        "output_cost_per_token": 0.0000016,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Qwen2.5-Coder-32B-Instruct": {
-        "max_tokens": 8000,
-        "max_input_tokens": 8000,
-        "max_output_tokens": 8000, 
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000003,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Qwen2.5-72B-Instruct": {
-        "max_tokens": 8000,
-        "max_input_tokens": 8000,
-        "max_output_tokens": 8000, 
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000004,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
+    "omni-moderation-2024-09-26": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": "moderation"
     },
     "gpt-4": {
         "max_tokens": 4096, 
@@ -7830,5 +7778,75 @@
         "mode": "embedding",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."}
-    }
+    },
+    "sambanova/Meta-Llama-3.1-8B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.1-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.1-405B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.2-1B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000008,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.2-3B-Instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "max_output_tokens": 4000, 
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000016,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Qwen2.5-Coder-32B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Qwen2.5-72B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
 }

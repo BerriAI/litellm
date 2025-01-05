@@ -2702,3 +2702,21 @@ def test_select_model_name_for_cost_calc():
 
     return_model = _select_model_name_for_cost_calc(**args)
     assert return_model == "azure_ai/mistral-large"
+
+
+def test_moderations():
+    from litellm import moderation
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+
+    assert "omni-moderation-latest" in litellm.model_cost
+    print(
+        f"litellm.model_cost['omni-moderation-latest']: {litellm.model_cost['omni-moderation-latest']}"
+    )
+    assert "omni-moderation-latest" in litellm.open_ai_chat_completion_models
+
+    response = moderation("I am a bad person", model="omni-moderation-latest")
+    cost = completion_cost(response, model="omni-moderation-latest")
+    assert cost == 0
