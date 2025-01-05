@@ -4234,6 +4234,17 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "command-r7b-12-2024": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000000375,
+        "litellm_provider": "cohere_chat",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://docs.cohere.com/v2/docs/command-r7b"
+    },
     "command-light": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,

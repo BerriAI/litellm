@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Any, Dict, Optional, Union
 
 import httpx
 
@@ -13,8 +13,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
+from .base_secret_manager import BaseSecretManager
 
-class HashicorpSecretManager:
+
+class HashicorpSecretManager(BaseSecretManager):
     def __init__(self):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
@@ -110,7 +112,12 @@ class HashicorpSecretManager:
             return {"X-Vault-Token": self._auth_via_tls_cert()}
         return {"X-Vault-Token": self.vault_token}
 
-    async def async_read_secret(self, secret_name: str) -> Optional[str]:
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using an async HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -140,7 +147,12 @@ class HashicorpSecretManager:
             verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
 
-    def read_secret(self, secret_name: str) -> Optional[str]:
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
         """
         Reads a secret from Vault KV v2 using a sync HTTPX client.
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
@@ -165,6 +177,95 @@ class HashicorpSecretManager:
         except Exception as e:
             verbose_logger.exception(f"Error reading secret from Hashicorp Vault: {e}")
             return None
+
+    async def async_write_secret(
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Writes a secret to Vault KV v2 using an async HTTPX client.
+
+        Args:
+            secret_name: Path inside the KV mount (e.g., 'myapp/config')
+            secret_value: Value to store
+            description: Optional description for the secret
+            optional_params: Additional parameters to include in the secret data
+            timeout: Request timeout
+
+        Returns:
+            dict: Response containing status and details of the operation
+        """
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            url = self.get_url(secret_name)
+
+            # Prepare the secret data
+            data = {"data": {"key": secret_value}}
+
+            if description:
+                data["data"]["description"] = description
+
+            response = await async_client.post(
+                url=url, headers=self._get_request_headers(), json=data
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            verbose_logger.exception(f"Error writing secret to Hashicorp Vault: {e}")
+            return {"status": "error", "message": str(e)}
+
+    async def async_delete_secret(
+        self,
+        secret_name: str,
+        recovery_window_in_days: Optional[int] = 7,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Async function to delete a secret from Hashicorp Vault.
+        In KV v2, this marks the latest version of the secret as deleted.
+
+        Args:
+            secret_name: Name of the secret to delete
+            recovery_window_in_days: Not used for Vault (Vault handles this internally)
+            optional_params: Additional parameters specific to the secret manager
+            timeout: Request timeout
+
+        Returns:
+            dict: Response containing status and details of the operation
+        """
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            # For KV v2 delete: /v1/<mount>/data/<path>
+            url = self.get_url(secret_name)
+
+            response = await async_client.delete(
+                url=url, headers=self._get_request_headers()
+            )
+            response.raise_for_status()
+
+            # Clear the cache for this secret
+            self.cache.delete_cache(secret_name)
+
+            return {
+                "status": "success",
+                "message": f"Secret {secret_name} deleted successfully",
+            }
+        except Exception as e:
+            verbose_logger.exception(f"Error deleting secret from Hashicorp Vault: {e}")
+            return {"status": "error", "message": str(e)}
 
     def _get_secret_value_from_json_response(
         self, json_resp: Optional[dict]

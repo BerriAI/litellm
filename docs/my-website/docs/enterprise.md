@@ -21,7 +21,7 @@ This covers:
         - ✅ [Audit Logs with retention policy](./proxy/enterprise#audit-logs)
         - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
         - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](./proxy/enterprise#control-available-public-private-routes)
-        - ✅ [**Secret Managers** AWS Key Manager, Google Secret Manager, Azure Key](./secret)
+        - ✅ [**Secret Managers** AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](./secret)
         - ✅ IP address‑based access control lists
         - ✅ Track Request IP Address
         - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](./proxy/pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
