@@ -288,7 +288,7 @@ async def test_basic_gcs_logging_per_request_with_callback_set():
     print("GCSBucketLogger", gcs_logger)
     litellm.callbacks = [gcs_logger]
 
-    GCS_BUCKET_NAME = "key-logging-project1"
+    GCS_BUCKET_NAME = "example-bucket-1-litellm"
     standard_callback_dynamic_params: StandardCallbackDynamicParams = (
         StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
     )
@@ -416,7 +416,7 @@ async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     load_vertex_ai_credentials()
     gcs_logger = GCSBucketLogger()
 
-    GCS_BUCKET_NAME = "key-logging-project1"
+    GCS_BUCKET_NAME = "example-bucket-1-litellm"
     standard_callback_dynamic_params: StandardCallbackDynamicParams = (
         StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
     )
