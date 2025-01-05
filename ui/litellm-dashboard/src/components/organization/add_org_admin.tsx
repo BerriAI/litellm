@@ -102,8 +102,38 @@ const AddOrgAdmin: FC<AddOrgAdminProps> = ({
 
             <Form.Item label="Member Role" name="role" className="mb-4">
                 <Select2 defaultValue="user">
-                <Select2.Option value="org_admin">org_admin</Select2.Option>
-                <Select2.Option value="internal_user">internal_user</Select2.Option>
+                <Select2.Option value="org_admin"><div className="flex">
+                        Org Admin{" "}
+                        <p
+                          className="ml-2"
+                          style={{ color: "gray", fontSize: "12px" }}
+                        >
+                          Can add and remove members, and change their roles.
+                        </p>
+                      </div>
+                    </Select2.Option>
+                <Select2.Option value="internal_user">
+                    <div className="flex">
+                        Internal User{" "}
+                        <p
+                            className="ml-2"
+                            style={{ color: "gray", fontSize: "12px" }}
+                        >
+                            Can view/create keys for themselves within organization.
+                        </p>
+                    </div>
+                </Select2.Option>
+                <Select2.Option value="internal_user_viewer">
+                    <div className="flex">
+                        Internal User Viewer{" "}
+                        <p
+                            className="ml-2"
+                            style={{ color: "gray", fontSize: "12px" }}
+                        >
+                            Can only view their keys within organization.
+                        </p>
+                    </div>
+                </Select2.Option>
                 </Select2>
             </Form.Item>
 
