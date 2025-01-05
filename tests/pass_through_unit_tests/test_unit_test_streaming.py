@@ -34,7 +34,7 @@ async def aiter_mock(iterable):
     [
         (
             EndpointType.VERTEX_AI,
-            "v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent",
+            "v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent",
         ),
         (EndpointType.ANTHROPIC, "/v1/messages"),
     ],
