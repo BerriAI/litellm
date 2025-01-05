@@ -655,9 +655,9 @@ const Team: React.FC<TeamProps> = ({
         {userRole == "Admin"? (
           <Col numColSpan={1}>
             <Button
-            className="mx-auto"
-            onClick={() => setIsTeamModalVisible(true)}
-          >
+              className="mx-auto"
+              onClick={() => setIsTeamModalVisible(true)}
+            >
             + Create New Team
           </Button>
           <Modal
