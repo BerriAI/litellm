@@ -3275,6 +3275,38 @@ async def model_list(
     )
 
 
+simple_router = Router(
+    model_list=[
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {
+                "model": "aiohttp_openai/any",
+                "api_key": "my-key",
+                "api_base": "https://example-openai-endpoint.onrender.com/v1/chat/completions",
+            },
+        }
+    ]
+)
+
+
+@router.post("/lite/chat/completions")
+@router.post("/lite/v1/chat/completions")
+async def lite_completion(request: Request):
+    # Get the raw request body
+    body = await request.json()
+    body.pop("model", None)
+
+    # Get the authorization header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    response = await simple_router.acompletion(
+        model="fake-openai-endpoint",
+        **body,
+    )
+    return response
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
