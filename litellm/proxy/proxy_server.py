@@ -3289,9 +3289,11 @@ simple_router = Router(
 )
 
 
-@router.post("/lite/chat/completions")
-@router.post("/lite/v1/chat/completions")
-async def lite_completion(request: Request):
+@router.post("/lite/chat/completions", dependencies=[Depends(user_api_key_auth)])
+@router.post("/lite/v1/chat/completions", dependencies=[Depends(user_api_key_auth)])
+async def lite_completion(
+    request: Request, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
     # Get the raw request body
     body = await request.json()
     body.pop("model", None)
