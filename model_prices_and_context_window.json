@@ -7390,6 +7390,18 @@
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v3": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing"
+    },
+
     "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
