@@ -3294,17 +3294,28 @@ simple_router = Router(
 async def lite_completion(
     request: Request, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
 ):
+    global general_settings, user_debug, proxy_logging_obj, llm_model_list
     # Get the raw request body
-    body = await request.json()
-    body.pop("model", None)
+    data = await request.json()
+    data.pop("model", None)
 
     # Get the authorization header
     auth_header = request.headers.get("Authorization")
     if not auth_header:
         raise HTTPException(status_code=401, detail="Authorization header missing")
+
+    data = await add_litellm_data_to_request(
+        data=data,
+        request=request,
+        general_settings=general_settings,
+        user_api_key_dict=user_api_key_dict,
+        version=version,
+        proxy_config=proxy_config,
+    )
+
     response = await simple_router.acompletion(
         model="fake-openai-endpoint",
-        **body,
+        **data,
     )
     return response
 
