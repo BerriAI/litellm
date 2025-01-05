@@ -418,12 +418,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     # Include original request and headers in the data
-    data["proxy_server_request"] = {
-        "url": str(request.url),
-        "method": request.method,
-        "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
-    }
+    # data["proxy_server_request"] = {
+    #     "url": str(request.url),
+    #     "method": request.method,
+    #     "headers": _headers,
+    #     "body": copy.copy(data),  # use copy instead of deepcopy
+    # }
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
     try:
@@ -602,7 +602,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     verbose_proxy_logger.debug(
-        f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+        "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
 
     ## ENFORCED PARAMS CHECK
