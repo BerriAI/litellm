@@ -7848,5 +7848,5 @@
         "litellm_provider": "sambanova",
         "supports_function_calling": true,
         "mode": "chat"
-    },
+    }
 }

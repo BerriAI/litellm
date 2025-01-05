@@ -543,11 +543,11 @@ def completion_cost(  # noqa: PLR0915
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
             if isinstance(completion_response, dict):
-                usage_obj = completion_response.get("usage", {})
-            else:
-                usage_obj: Optional[Union[dict, Usage]] = getattr(
-                    completion_response, "usage", {}
+                usage_obj: Optional[Union[dict, Usage]] = completion_response.get(
+                    "usage", {}
                 )
+            else:
+                usage_obj = getattr(completion_response, "usage", {})
             if isinstance(usage_obj, BaseModel) and not isinstance(
                 usage_obj, litellm.Usage
             ):
