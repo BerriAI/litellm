@@ -36,7 +36,7 @@ DEFAULT_COOLDOWN_TIME_SECONDS = 5
 
 def _should_run_cooldown_logic(
     litellm_router_instance: LitellmRouter,
-    deployment: Optional[str],
+    deployment_id: Optional[str],
     exception_status: Union[str, int],
     original_exception: Any,
 ) -> bool:
@@ -46,25 +46,25 @@ def _should_run_cooldown_logic(
 
     Does not run cooldown logic when:
     - router.disable_cooldowns is True
-    - deployment is None
+    - deployment_id is None
     - _is_cooldown_required() returns False
-    - deployment is in litellm_router_instance.provider_default_deployment_ids
+    - deployment_id is in litellm_router_instance.provider_default_deployment_ids
     - exception_status is not one that should be immediately retried (e.g. 401)
     """
     if litellm_router_instance.disable_cooldowns:
         return False
 
-    if deployment is None:
+    if deployment_id is None:
         return False
 
     if not litellm_router_instance._is_cooldown_required(
-        model_id=deployment,
+        model_id=deployment_id,
         exception_status=exception_status,
         exception_str=str(original_exception),
     ):
         return False
 
-    if deployment in litellm_router_instance.provider_default_deployment_ids:
+    if deployment_id in litellm_router_instance.provider_default_deployment_ids:
         return False
 
     return True
@@ -72,7 +72,7 @@ def _should_run_cooldown_logic(
 
 def _should_cooldown_deployment(
     litellm_router_instance: LitellmRouter,
-    deployment: str,
+    deployment_id: str,
     exception_status: Union[str, int],
     original_exception: Any,
 ) -> bool:
@@ -102,10 +102,10 @@ def _should_cooldown_deployment(
         is False
     ):
         num_successes_this_minute = get_deployment_successes_for_current_minute(
-            litellm_router_instance=litellm_router_instance, deployment_id=deployment
+            litellm_router_instance=litellm_router_instance, deployment_id=deployment_id
         )
         num_fails_this_minute = get_deployment_failures_for_current_minute(
-            litellm_router_instance=litellm_router_instance, deployment_id=deployment
+            litellm_router_instance=litellm_router_instance, deployment_id=deployment_id
         )
 
         total_requests_this_minute = num_successes_this_minute + num_fails_this_minute
@@ -115,8 +115,8 @@ def _should_cooldown_deployment(
                 num_successes_this_minute + num_fails_this_minute
             )
         verbose_router_logger.debug(
-            "percent fails for deployment = %s, percent fails = %s, num successes = %s, num fails = %s",
-            deployment,
+            "percent fails for deployment_id = %s, percent fails = %s, num successes = %s, num fails = %s",
+            deployment_id,
             percent_fails,
             num_successes_this_minute,
             num_fails_this_minute,
@@ -143,7 +143,7 @@ def _should_cooldown_deployment(
     else:
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
-            deployment=deployment,
+            deployment_id=deployment_id,
             original_exception=original_exception,
         )
 
@@ -154,7 +154,7 @@ def _set_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     original_exception: Any,
     exception_status: Union[str, int],
-    deployment: Optional[str] = None,
+    deployment_id: Optional[str] = None,
     time_to_cooldown: Optional[float] = None,
 ) -> bool:
     """
@@ -170,25 +170,25 @@ def _set_cooldown_deployments(
     """
     if (
         _should_run_cooldown_logic(
-            litellm_router_instance, deployment, exception_status, original_exception
+            litellm_router_instance, deployment_id, exception_status, original_exception
         )
         is False
-        or deployment is None
+        or deployment_id is None
     ):
         return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
 
-    verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
+    verbose_router_logger.debug(f"Attempting to add {deployment_id} to cooldown list")
     cooldown_time = litellm_router_instance.cooldown_time or 1
     if time_to_cooldown is not None:
         cooldown_time = time_to_cooldown
 
     if _should_cooldown_deployment(
-        litellm_router_instance, deployment, exception_status, original_exception
+        litellm_router_instance, deployment_id, exception_status, original_exception
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(
-            model_id=deployment,
+            model_id=deployment_id,
             original_exception=original_exception,
             exception_status=exception_status_int,
             cooldown_time=cooldown_time,
@@ -198,7 +198,7 @@ def _set_cooldown_deployments(
         asyncio.create_task(
             router_cooldown_event_callback(
                 litellm_router_instance=litellm_router_instance,
-                deployment_id=deployment,
+                deployment_id=deployment_id,
                 exception_status=exception_status,
                 cooldown_time=cooldown_time,
             )
@@ -284,7 +284,7 @@ def _get_cooldown_deployments(
 
 def should_cooldown_based_on_allowed_fails_policy(
     litellm_router_instance: LitellmRouter,
-    deployment: str,
+    deployment_id: str,
     original_exception: Any,
 ) -> bool:
     """
@@ -304,14 +304,14 @@ def should_cooldown_based_on_allowed_fails_policy(
         litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
     )
 
-    current_fails = litellm_router_instance.failed_calls.get_cache(key=deployment) or 0
+    current_fails = litellm_router_instance.failed_calls.get_cache(key=deployment_id) or 0
     updated_fails = current_fails + 1
 
     if updated_fails > allowed_fails:
         return True
     else:
         litellm_router_instance.failed_calls.set_cache(
-            key=deployment, value=updated_fails, ttl=cooldown_time
+            key=deployment_id, value=updated_fails, ttl=cooldown_time
         )
 
     return False
