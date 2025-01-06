@@ -207,6 +207,30 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
             user_api_key_dict, cache, data, call_type
         )
 
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        headers: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[
+        str,
+        List[AllMessageValues],
+        dict,
+    ]:
+        return await super().async_get_chat_completion_prompt(
+            model,
+            messages,
+            non_default_params,
+            headers,
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
+        )
+
     def get_chat_completion_prompt(
         self,
         model: str,
