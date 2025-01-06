@@ -1800,6 +1800,9 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     NOVITA = "novita"
+    AIOHTTP_OPENAI = "aiohttp_openai"
+    LANGFUSE = "langfuse"
+    HUMANLOOP = "humanloop"
 
 
 class LiteLLMLoggingBaseClass:

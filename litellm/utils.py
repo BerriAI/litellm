@@ -915,9 +915,12 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            threading.Thread(
-                target=logging_obj.success_handler, args=(result, start_time, end_time)
-            ).start()
+            executor.submit(
+                logging_obj.success_handler,
+                result,
+                start_time,
+                end_time,
+            )
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
@@ -1122,11 +1125,12 @@ def client(original_function):  # noqa: PLR0915
             asyncio.create_task(
                 logging_obj.async_success_handler(result, start_time, end_time)
             )
-            threading.Thread(
-                target=logging_obj.success_handler,
-                args=(result, start_time, end_time),
-            ).start()
-
+            executor.submit(
+                logging_obj.success_handler,
+                result,
+                start_time,
+                end_time,
+            )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
@@ -4223,6 +4227,7 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
+            provider_config: Optional[BaseLLMModelInfo] = None
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
@@ -4261,16 +4266,20 @@ def _get_model_info_helper(  # noqa: PLR0915
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and ProviderConfigManager.get_provider_model_info(
-                model=model, provider=LlmProviders(custom_llm_provider)
-            ):
+
+            if custom_llm_provider:
                 provider_config = ProviderConfigManager.get_provider_model_info(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
-                if provider_config is not None:
-                    _model_info = cast(
-                        dict, provider_config.get_model_info(model=model)
-                    )
+
+            if _model_info is None and provider_config is not None:
+                _model_info = cast(
+                    Optional[Dict],
+                    provider_config.get_model_info(
+                        model=model, existing_model_info=_model_info
+                    ),
+                )
+                if key is None:
                     key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
@@ -5716,12 +5725,12 @@ def trim_messages(
         return messages
 
 
-def get_valid_models() -> List[str]:
+def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
 
     Args:
-        None
+        check_provider_endpoint: If True, will check the provider's endpoint for valid models.
 
     Returns:
         A list of valid LLMs
@@ -5735,22 +5744,36 @@ def get_valid_models() -> List[str]:
 
         for provider in litellm.provider_list:
             # edge case litellm has together_ai as a provider, it should be togetherai
-            provider = provider.replace("_", "")
+            env_provider_1 = provider.replace("_", "")
+            env_provider_2 = provider
 
             # litellm standardizes expected provider keys to
             # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-            expected_provider_key = f"{provider.upper()}_API_KEY"
-            if expected_provider_key in environ_keys:
+            expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
+            expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
+            if (
+                expected_provider_key_1 in environ_keys
+                or expected_provider_key_2 in environ_keys
+            ):
                 # key is set
                 valid_providers.append(provider)
+
         for provider in valid_providers:
+            provider_config = ProviderConfigManager.get_provider_model_info(
+                model=None,
+                provider=LlmProviders(provider),
+            )
+
             if provider == "azure":
                 valid_models.append("Azure-LLM")
+            elif provider_config is not None and check_provider_endpoint:
+                valid_models.extend(provider_config.get_models())
             else:
                 models_for_provider = litellm.models_by_provider.get(provider, [])
                 valid_models.extend(models_for_provider)
         return valid_models
-    except Exception:
+    except Exception as e:
+        verbose_logger.debug(f"Error getting valid models: {e}")
         return []  # NON-Blocking
 
 
@@ -6072,6 +6095,34 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     return messages
 
 
+def validate_chat_completion_tool_choice(
+    tool_choice: Optional[Union[dict, str]]
+) -> Optional[Union[dict, str]]:
+    """
+    Confirm the tool choice is passed in the OpenAI format.
+
+    Prevents user errors like: https://github.com/BerriAI/litellm/issues/7483
+    """
+    from litellm.types.llms.openai import (
+        ChatCompletionToolChoiceObjectParam,
+        ChatCompletionToolChoiceStringValues,
+    )
+
+    if tool_choice is None:
+        return tool_choice
+    elif isinstance(tool_choice, str):
+        return tool_choice
+    elif isinstance(tool_choice, dict):
+        if tool_choice.get("type") is None or tool_choice.get("function") is None:
+            raise Exception(
+                f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
+            )
+        return tool_choice
+    raise Exception(
+        f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
+    )
+
+
 class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
@@ -6133,6 +6184,8 @@ class ProviderConfigManager:
             or litellm.LlmProviders.LITELLM_PROXY == provider
         ):
             return litellm.OpenAILikeChatConfig()
+        elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
+            return litellm.AiohttpOpenAIChatConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.LM_STUDIO == provider:
@@ -6273,11 +6326,14 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_model_info(
-        model: str,
+        model: Optional[str],
         provider: LlmProviders,
     ) -> Optional[BaseLLMModelInfo]:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.LITELLM_PROXY == provider:
+            return litellm.LiteLLMProxyChatConfig()
+
         return None
 
 

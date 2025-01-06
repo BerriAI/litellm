@@ -41,11 +41,27 @@ def squash_payloads(queue):
     return squashed
 
 
+def _print_alerting_payload_warning(
+    payload: dict, slackAlertingInstance: SlackAlertingType
+):
+    """
+    Print the payload to the console when
+    slackAlertingInstance.alerting_args.log_to_console is True
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/7372
+    """
+    if slackAlertingInstance.alerting_args.log_to_console is True:
+        verbose_proxy_logger.warning(payload)
+
+
 async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count):
+    """
+    Send a single slack alert to the webhook
+    """
     import json
 
+    payload = item.get("payload", {})
     try:
-        payload = item["payload"]
         if count > 1:
             payload["text"] = f"[Num Alerts: {count}]\n\n{payload['text']}"
 
@@ -60,3 +76,7 @@ async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count)
             )
     except Exception as e:
         verbose_proxy_logger.debug(f"Error sending slack alert: {str(e)}")
+    finally:
+        _print_alerting_payload_warning(
+            payload, slackAlertingInstance=slackAlertingInstance
+        )

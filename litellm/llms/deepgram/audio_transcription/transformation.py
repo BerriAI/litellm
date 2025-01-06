@@ -106,7 +106,9 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         stream: Optional[bool] = None,
     ) -> str:
         if api_base is None:
-            api_base = "https://api.deepgram.com/v1"
+            api_base = (
+                get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
+            )
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         return f"{api_base}/listen?model={model}"

@@ -8,6 +8,7 @@ Run experiments or change the specific model (e.g. from gpt-4o to gpt4o-mini fin
 
 Supported Integrations:
 - [Langfuse](https://langfuse.com/docs/prompts/get-started)
+- [Humanloop](../observability/humanloop)
 
 ## Quick Start
 
@@ -171,7 +172,6 @@ model_list:
 ## What is 'prompt_variables'?
 
 - `prompt_variables`: A dictionary of variables that will be used to replace parts of the prompt.
-
 
 
 ## What is 'prompt_id'?

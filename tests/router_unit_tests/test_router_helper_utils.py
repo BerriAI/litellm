@@ -167,6 +167,49 @@ async def test_router_schedule_acompletion(model_list):
 
 
 @pytest.mark.asyncio
+async def test_router_schedule_atext_completion(model_list):
+    """Test if the 'schedule_atext_completion' function is working correctly"""
+    from litellm.types.utils import TextCompletionResponse
+
+    router = Router(model_list=model_list)
+    with patch.object(
+        router, "_atext_completion", AsyncMock()
+    ) as mock_atext_completion:
+        mock_atext_completion.return_value = TextCompletionResponse()
+        response = await router.atext_completion(
+            model="gpt-3.5-turbo",
+            prompt="Hello, how are you?",
+            priority=1,
+        )
+        mock_atext_completion.assert_awaited_once()
+        assert "priority" not in mock_atext_completion.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_router_schedule_factory(model_list):
+    """Test if the 'schedule_atext_completion' function is working correctly"""
+    from litellm.types.utils import TextCompletionResponse
+
+    router = Router(model_list=model_list)
+    with patch.object(
+        router, "_atext_completion", AsyncMock()
+    ) as mock_atext_completion:
+        mock_atext_completion.return_value = TextCompletionResponse()
+        response = await router._schedule_factory(
+            model="gpt-3.5-turbo",
+            args=(
+                "gpt-3.5-turbo",
+                "Hello, how are you?",
+            ),
+            priority=1,
+            kwargs={},
+            original_function=router.atext_completion,
+        )
+        mock_atext_completion.assert_awaited_once()
+        assert "priority" not in mock_atext_completion.call_args.kwargs
+
+
+@pytest.mark.asyncio
 async def test_router_arealtime(model_list):
     """Test if the '_arealtime' function is working correctly"""
     import litellm

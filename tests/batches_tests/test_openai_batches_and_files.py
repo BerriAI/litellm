@@ -34,7 +34,7 @@ def load_vertex_ai_credentials():
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
+    vertex_key_path = filepath + "/pathrise-convert-1606954137718.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
