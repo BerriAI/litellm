@@ -187,5 +187,17 @@ migrationJob:
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
-
-
+  image:
+    # Use "ghcr.io/berriai/litellm-database" for optimized image with database
+    repository: ghcr.io/berriai/litellm-database
+    pullPolicy: Always
+    # Overrides the image tag whose default is the chart appVersion.
+    # tag: "main-latest"
+    tag: ""
+  securityContext: {}
+    # capabilities:
+    #   drop:
+    #     - ALL
+    # readOnlyRootFilesystem: false
+    # runAsNonRoot: true
+    # runAsUser: 1000
