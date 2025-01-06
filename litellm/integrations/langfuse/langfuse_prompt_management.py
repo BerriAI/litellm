@@ -212,7 +212,6 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -221,11 +220,10 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         List[AllMessageValues],
         dict,
     ]:
-        return await super().async_get_chat_completion_prompt(
+        return self.get_chat_completion_prompt(
             model,
             messages,
             non_default_params,
-            headers,
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
@@ -236,7 +234,6 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
