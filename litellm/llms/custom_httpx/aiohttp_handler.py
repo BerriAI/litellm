@@ -40,7 +40,9 @@ class BaseLLMAIOHTTPHandler:
         elif self.client_session:
             return self.client_session
         else:
-            return aiohttp.ClientSession()
+            # init client session, and then return new session
+            self.client_session = aiohttp.ClientSession()
+            return self.client_session
 
     async def _make_common_async_call(
         self,
