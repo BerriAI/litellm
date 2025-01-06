@@ -560,9 +560,9 @@ ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 
 ## LiteLLM without Internet Connection
 
-By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
+By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). LiteLLM also uses `tiktoken` for tracking the number of tokens in a given user input (for openai models). This might cause errors when running without internet connection.
 
-Use this docker image to deploy litellm with pre-generated prisma binaries.
+Use this docker image to deploy litellm with pre-generated prisma binaries, and pre-downloaded tiktoken tokenizer files.
 
 ```bash
 docker pull ghcr.io/berriai/litellm-non_root:main-stable
