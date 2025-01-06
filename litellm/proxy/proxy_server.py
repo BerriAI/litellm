@@ -3304,14 +3304,14 @@ async def lite_completion(
     if not auth_header:
         raise HTTPException(status_code=401, detail="Authorization header missing")
 
-    data = await add_litellm_data_to_request(
-        data=data,
-        request=request,
-        general_settings=general_settings,
-        user_api_key_dict=UserAPIKeyAuth(token="", api_key=""),
-        version=version,
-        proxy_config=proxy_config,
-    )
+    # data = await add_litellm_data_to_request(
+    #     data=data,
+    #     request=request,
+    #     general_settings=general_settings,
+    #     user_api_key_dict=UserAPIKeyAuth(token="", api_key=""),
+    #     version=version,
+    #     proxy_config=proxy_config,
+    # )
 
     response = await simple_router.acompletion(
         model="fake-openai-endpoint",
