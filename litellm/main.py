@@ -895,7 +895,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 model=model,
                 messages=messages,
                 non_default_params=non_default_params,
-                headers=headers,
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
             )

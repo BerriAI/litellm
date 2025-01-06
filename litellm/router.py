@@ -804,6 +804,11 @@ class Router:
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority = kwargs.get("priority") or self.default_priority
             start_time = time.time()
+            if self._is_prompt_management_model(model):
+                response = await self._prompt_management_factory(
+                    model=model,
+                    **kwargs,
+                )
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
@@ -1416,6 +1421,38 @@ class Router:
                 model=model,
                 llm_provider="openai",
             )
+
+    def _is_prompt_management_model(self, model: str) -> bool:
+        model_list = self.get_model_list()
+        if model_list is None:
+            return False
+        if len(model_list) != 1:
+            return False
+
+        litellm_model = model_list[0]["litellm_params"].get("model", None)
+        if litellm_model is None:
+            return False
+
+        if "/" in litellm_model:
+            split_litellm_model = litellm_model.split("/")[0]
+            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
+                return True
+        return False
+
+    async def _prompt_management_factory(
+        self,
+        model: str,
+        original_function: Callable,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ):
+        prompt_management_deployment = self.get_available_deployment(
+            model=model,
+            messages=[{"role": "user", "content": "prompt"}],
+            specific_deployment=kwargs.pop("specific_deployment", None),
+        )
+
+        raise NotImplementedError("Prompt management is not implemented")
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
