@@ -35,6 +35,10 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
+# Download tiktoken for offline usage of image, see https://stackoverflow.com/a/76107077. Let tiktoken itself download the file, to ensure correct naming
+ENV TIKTOKEN_CACHE_DIR="/tiktoken"
+RUN mkdir /tiktoken && python -c "import tiktoken; tiktoken.get_encoding('cl100k_base'); print('tiktoken imported successfully')" 
+
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
@@ -49,6 +53,10 @@ RUN ls -la /app
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
+
+# Copy tiktoken from build stage, and set env variable to stop tiktoken from downloading file
+COPY --from=builder /tiktoken /tiktoken
+ENV CUSTOM_TIKTOKEN_CACHE_DIR="/tiktoken"
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
