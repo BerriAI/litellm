@@ -67,6 +67,7 @@ LITELLM_CHAT_PROVIDERS = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "novita",
 ]
 
 OPENAI_CHAT_COMPLETION_PARAMS = [

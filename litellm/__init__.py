@@ -147,6 +147,7 @@ cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+novita_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -481,7 +482,7 @@ anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
-
+novita_models: List = []
 
 def add_known_models():
     for key, value in model_cost.items():
@@ -593,6 +594,8 @@ def add_known_models():
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova_models":
             sambanova_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            novita_models.append(key)
 
 
 add_known_models()
@@ -858,6 +861,7 @@ model_list = (
     + galadriel_models
     + sambanova_models
     + azure_text_models
+    + novita_models
 )
 
 
@@ -910,6 +914,7 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
+    "novita": novita_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1049,6 +1054,7 @@ from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI2
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
 from .llms.cloudflare.chat.transformation import CloudflareChatConfig
+from .llms.novita.chat.transformation import NovitaConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes

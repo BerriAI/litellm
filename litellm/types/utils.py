@@ -1799,6 +1799,7 @@ class LlmProviders(str, Enum):
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    NOVITA = "novita"
 
 
 class LiteLLMLoggingBaseClass:
