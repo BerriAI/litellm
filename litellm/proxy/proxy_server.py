@@ -3289,10 +3289,10 @@ simple_router = Router(
 )
 
 
-@router.post("/lite/chat/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/lite/v1/chat/completions", dependencies=[Depends(user_api_key_auth)])
+@router.post("/lite/chat/completions")
+@router.post("/lite/v1/chat/completions")
 async def lite_completion(
-    request: Request, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+    request: Request,
 ):
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     # Get the raw request body
@@ -3308,7 +3308,7 @@ async def lite_completion(
         data=data,
         request=request,
         general_settings=general_settings,
-        user_api_key_dict=user_api_key_dict,
+        user_api_key_dict=UserAPIKeyAuth(token="", api_key=""),
         version=version,
         proxy_config=proxy_config,
     )
