@@ -7,6 +7,7 @@ import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.llms.bedrock.common_utils import ModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
@@ -197,6 +198,7 @@ def completion(  # noqa: PLR0915
         client_options = {
             "api_endpoint": f"{vertex_location}-aiplatform.googleapis.com"
         }
+        fake_stream = False
         if (
             model in litellm.vertex_language_models
             or model in litellm.vertex_vision_models
@@ -220,6 +222,7 @@ def completion(  # noqa: PLR0915
             )
             mode = "text"
             request_str += f"llm_model = CodeGenerationModel.from_pretrained({model})\n"
+            fake_stream = True
         elif model in litellm.vertex_code_chat_models:  # vertex_code_llm_models
             llm_model = _vertex_llm_model_object or CodeChatModel.from_pretrained(model)
             mode = "chat"
@@ -275,17 +278,22 @@ def completion(  # noqa: PLR0915
             return async_completion(**data)
 
         completion_response = None
+
+        stream = optional_params.pop(
+            "stream", None
+        )  # See note above on handling streaming for vertex ai
         if mode == "chat":
             chat = llm_model.start_chat()
             request_str += "chat = llm_model.start_chat()\n"
 
-            if "stream" in optional_params and optional_params["stream"] is True:
+            if fake_stream is not True and stream is True:
                 # NOTE: VertexAI does not accept stream=True as a param and raises an error,
                 # we handle this by removing 'stream' from optional params and sending the request
                 # after we get the response we add optional_params["stream"] = True, since main.py needs to know it's a streaming response to then transform it for the OpenAI format
                 optional_params.pop(
                     "stream", None
                 )  # vertex ai raises an error when passing stream in optional params
+
                 request_str += (
                     f"chat.send_message_streaming({prompt}, **{optional_params})\n"
                 )
@@ -298,6 +306,7 @@ def completion(  # noqa: PLR0915
                         "request_str": request_str,
                     },
                 )
+
                 model_response = chat.send_message_streaming(prompt, **optional_params)
 
                 return model_response
@@ -314,10 +323,8 @@ def completion(  # noqa: PLR0915
             )
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
-            if "stream" in optional_params and optional_params["stream"] is True:
-                optional_params.pop(
-                    "stream", None
-                )  # See note above on handling streaming for vertex ai
+
+            if fake_stream is not True and stream is True:
                 request_str += (
                     f"llm_model.predict_streaming({prompt}, **{optional_params})\n"
                 )
@@ -384,7 +391,7 @@ def completion(  # noqa: PLR0915
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            if "stream" in optional_params and optional_params["stream"] is True:
+            if stream is True:
                 response = TextStreamer(completion_response)
                 return response
         elif mode == "private":
@@ -413,7 +420,7 @@ def completion(  # noqa: PLR0915
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            if "stream" in optional_params and optional_params["stream"] is True:
+            if stream is True:
                 response = TextStreamer(completion_response)
                 return response
 
@@ -465,6 +472,9 @@ def completion(  # noqa: PLR0915
                 total_tokens=prompt_tokens + completion_tokens,
             )
         setattr(model_response, "usage", usage)
+
+        if fake_stream is True and stream is True:
+            return ModelResponseIterator(model_response)
         return model_response
     except Exception as e:
         if isinstance(e, VertexAIError):
