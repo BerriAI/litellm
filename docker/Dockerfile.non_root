@@ -23,7 +23,7 @@ WORKDIR /app
 # Switch to root so we can install packages
 USER root
 RUN apk update && \
-    apk add --no-cache gcc python3-dev libc-dev
+    apk add --no-cache gcc python3-dev
 
 # Upgrade pip and install build
 RUN pip install --upgrade pip build
