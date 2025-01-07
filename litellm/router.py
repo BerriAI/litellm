@@ -1493,7 +1493,7 @@ class Router:
             raise ValueError(
                 f"Custom logger is not initialized. Got={custom_logger_compatible_callback}"
             )
-        model, messages, non_default_params = (
+        model, messages, optional_params = (
             await custom_logger.async_get_chat_completion_prompt(
                 model=split_litellm_model,
                 messages=messages,
@@ -1504,7 +1504,7 @@ class Router:
             )
         )
 
-        kwargs = {**kwargs, **non_default_params}
+        kwargs = {**kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
 
