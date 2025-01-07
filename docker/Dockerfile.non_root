@@ -9,16 +9,13 @@ FROM $LITELLM_BUILD_IMAGE AS builder
 # Set the working directory to /app
 WORKDIR /app
 
-USER root
-
-# Install essential system utilities first
-
-SHELL ["/usr/bin/env", "sh", "-c"]
-
 # Install build dependencies
-RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+# Install build dependencies using apk
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    python3-dev \
+    build-base
 
 RUN pip install --upgrade pip && \
     pip install build
