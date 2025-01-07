@@ -9,11 +9,7 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, ca
 from packaging.version import Version
 from typing_extensions import TypeAlias
 
-from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
-from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
