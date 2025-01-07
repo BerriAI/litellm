@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.13.1-slim
+ARG LITELLM_BUILD_IMAGE=3.14.0a3-slim
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.13.1-slim
+ARG LITELLM_RUNTIME_IMAGE=3.14.0a3-slim
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
