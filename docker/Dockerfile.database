@@ -10,7 +10,7 @@ FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get clean && apt-get update && \
+RUN apt-get clean && apt-get update -y && \
     apt-get install -y \
         gcc \
         python3-dev \
