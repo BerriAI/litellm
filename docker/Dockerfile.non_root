@@ -12,12 +12,8 @@ WORKDIR /app
 USER root
 
 # Install essential system utilities first
-SHELL ["/bin/bash", "-c"]
-RUN mkdir -p /usr/share/man/man1 && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-    bash \
-    && rm -rf /var/lib/apt/lists/*
+
+SHELL ["/usr/bin/env", "sh", "-c"]
 
 # Install build dependencies
 RUN apt-get clean && apt-get update && \
