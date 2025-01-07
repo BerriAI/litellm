@@ -3200,6 +3200,8 @@ def test_vertexai_code_gecko():
     response = completion(
         model="vertex_ai/code-gecko@002",
         messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
     )
 
-    print(response)
+    for chunk in response:
+        print(chunk)
