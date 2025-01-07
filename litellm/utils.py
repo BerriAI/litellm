@@ -144,6 +144,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    all_litellm_params,
 )
 
 with resources.open_text(
@@ -6448,3 +6449,12 @@ def _add_path_to_api_base(api_base: str, ending_path: str) -> str:
 
     # Re-add the original query parameters
     return str(modified_url.copy_with(params=original_url.params))
+
+
+def get_non_default_completion_params(kwargs: dict) -> dict:
+    openai_params = litellm.OPENAI_CHAT_COMPLETION_PARAMS
+    default_params = openai_params + all_litellm_params
+    non_default_params = {
+        k: v for k, v in kwargs.items() if k not in default_params
+    }  # model-specific params - pass them straight to the model/provider
+    return non_default_params
