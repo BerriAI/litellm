@@ -1418,3 +1418,11 @@ def test_get_valid_models_default(monkeypatch):
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
+
+
+def test_supports_vision_gemini():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    from litellm.utils import supports_vision
+
+    assert supports_vision("gemini-1.5-pro") is True

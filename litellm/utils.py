@@ -144,6 +144,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    all_litellm_params,
 )
 
 with resources.open_text(
@@ -4228,6 +4229,7 @@ def _get_model_info_helper(  # noqa: PLR0915
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
             provider_config: Optional[BaseLLMModelInfo] = None
+
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
@@ -4267,7 +4269,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
 
-            if custom_llm_provider:
+            if custom_llm_provider and custom_llm_provider in [
+                provider.value for provider in LlmProviders
+            ]:
+                # Check if the provider string exists in LlmProviders enum
                 provider_config = ProviderConfigManager.get_provider_model_info(
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
@@ -6460,3 +6465,12 @@ def _add_path_to_api_base(api_base: str, ending_path: str) -> str:
 
     # Re-add the original query parameters
     return str(modified_url.copy_with(params=original_url.params))
+
+
+def get_non_default_completion_params(kwargs: dict) -> dict:
+    openai_params = litellm.OPENAI_CHAT_COMPLETION_PARAMS
+    default_params = openai_params + all_litellm_params
+    non_default_params = {
+        k: v for k, v in kwargs.items() if k not in default_params
+    }  # model-specific params - pass them straight to the model/provider
+    return non_default_params

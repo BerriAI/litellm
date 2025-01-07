@@ -141,12 +141,13 @@ async def test_check_blocked_team():
         ("proxy_admin_viewer", "proxy_admin_viewer"),
     ],
 )
-def test_returned_user_api_key_auth(user_role, expected_role):
+@pytest.mark.asyncio
+async def test_returned_user_api_key_auth(user_role, expected_role):
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
     from datetime import datetime
 
-    new_obj = _return_user_api_key_auth_obj(
+    new_obj = await _return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(
             user_role=user_role, user_id="", max_budget=None, user_email=""
         ),

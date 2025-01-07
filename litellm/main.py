@@ -79,6 +79,7 @@ from litellm.utils import (
     create_tokenizer,
     get_api_key,
     get_llm_provider,
+    get_non_default_completion_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_optional_params_transcription,
@@ -881,12 +882,8 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    openai_params = litellm.OPENAI_CHAT_COMPLETION_PARAMS
-    default_params = openai_params + all_litellm_params
+    non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
-    non_default_params = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
     ## PROMPT MANAGEMENT HOOKS ##
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
@@ -895,7 +892,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 model=model,
                 messages=messages,
                 non_default_params=non_default_params,
-                headers=headers,
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
             )
@@ -1481,6 +1477,43 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
                 encoding=encoding,
+            )
+        elif custom_llm_provider == "aiohttp_openai":
+            # NEW aiohttp provider for 10-100x higher RPS
+            api_base = (
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or get_secret("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or get_secret("OPENAI_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+            response = base_llm_aiohttp_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
             )
         elif (
             model in litellm.open_ai_chat_completion_models
@@ -2847,43 +2880,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
             ## LOGGING
             logging.post_call(
-                input=messages, api_key=openai.api_key, original_response=response
-            )
-        elif custom_llm_provider == "aiohttp_openai":
-            api_base = (
-                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
-                or litellm.api_base
-                or get_secret("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or get_secret("OPENAI_API_KEY")
-            )
-
-            headers = headers or litellm.headers
-
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-            response = base_llm_aiohttp_handler.completion(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                timeout=timeout,
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                encoding=encoding,
-                stream=stream,
+                input=messages, api_key=api_key, original_response=response
             )
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
