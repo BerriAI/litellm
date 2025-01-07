@@ -9,7 +9,7 @@ New config to ensure we introduce this without causing breaking changes for user
 
 from typing import TYPE_CHECKING, Any, List, Optional
 
-import httpx
+from aiohttp import ClientResponse
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -51,10 +51,10 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     ) -> dict:
         return {"Authorization": f"Bearer {api_key}"}
 
-    def transform_response(
+    async def transform_response(  # type: ignore
         self,
         model: str,
-        raw_response: httpx.Response,
+        raw_response: ClientResponse,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
@@ -65,4 +65,5 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        return ModelResponse(**raw_response.json())
+        _json_response = await raw_response.json()
+        return ModelResponse(**_json_response)
