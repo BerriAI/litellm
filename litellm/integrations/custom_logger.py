@@ -63,12 +63,28 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     #### PROMPT MANAGEMENT HOOKS ####
 
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
     def get_chat_completion_prompt(
         self,
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
