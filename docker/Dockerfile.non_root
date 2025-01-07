@@ -18,6 +18,9 @@ RUN apk update && \
 RUN pip install --upgrade pip && \
     pip install build
 
+# (Optional) Switch back to nonroot after installing + cleaning up
+USER nonroot
+
 # Copy the current directory contents into the container at /app
 COPY . .
 
