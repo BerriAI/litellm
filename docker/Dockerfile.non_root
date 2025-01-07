@@ -20,6 +20,8 @@ WORKDIR /app
 #   - python3-dev
 #   - musl-dev (often needed for C extensions on Alpine/Wolfi)
 #   - nodejs/npm if you need to build an admin UI with node-based tooling
+# Switch to root so we can install packages
+USER root
 RUN apk update && \
     apk add --no-cache gcc python3-dev musl-dev nodejs npm
 
