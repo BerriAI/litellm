@@ -4818,6 +4818,7 @@ def transcription(
         api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
+            custom_llm_provider=custom_llm_provider,
             audio_file=file,
             optional_params=optional_params,
             model_response=model_response,

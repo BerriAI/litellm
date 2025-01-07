@@ -64,7 +64,10 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
-        return litellm.GroqChatConfig().get_supported_openai_params(model=model)
+        if request_type == "transcription":
+            return litellm.GroqSTTConfig().get_supported_openai_params(model=model)
+        else:
+            return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":
