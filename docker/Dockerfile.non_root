@@ -1,87 +1,115 @@
-# Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python
+# syntax=docker/dockerfile:1
 
-# Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python
-# Builder stage
-FROM $LITELLM_BUILD_IMAGE AS builder
+###
+# 1) Set up build arguments
+###
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest
 
-# Set the working directory to /app
+###
+# 2) Builder Stage: uses the "latest-dev" image so we can install packages
+###
+FROM ${LITELLM_BUILD_IMAGE} AS builder
+
+# Switch to /app
 WORKDIR /app
 
-# Install build dependencies
-# Install build dependencies using apk
-RUN apk add --no-cache \
-    gcc \
-    musl-dev \
-    python3-dev \
-    build-base
+# Install build dependencies using apk (Wolfi's package manager).
+# Typical dev packages for building Python extensions:
+#   - gcc
+#   - python3-dev
+#   - musl-dev (often needed for C extensions on Alpine/Wolfi)
+#   - nodejs/npm if you need to build an admin UI with node-based tooling
+RUN apk update && \
+    apk add --no-cache gcc python3-dev musl-dev nodejs npm
 
-RUN pip install --upgrade pip && \
-    pip install build
+# Upgrade pip and install build
+RUN pip install --upgrade pip build
 
-# Copy the current directory contents into the container at /app
+# Copy your entire project into the container
 COPY . .
 
-# Build Admin UI
+# (Optional) If your build_admin_ui.sh requires a shell, it should work here
+# because :latest-dev includes a minimal shell (ash).
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-# Build the package
+# Build the Python package into a wheel
 RUN rm -rf dist/* && python -m build
 
-# There should be only one wheel file now, assume the build only creates one
+# There should be only one wheel file now; verify it exists
 RUN ls -1 dist/*.whl | head -1
 
-# Install the package
+# Install the just-built wheel so we can gather transitive dependencies below
 RUN pip install dist/*.whl
 
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+# “pip wheel” all dependencies into /wheels so we can copy them into the final image
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements.txt
 
-# Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE AS runtime
+###
+# 3) Runtime Stage: use the minimal production image
+###
+FROM ${LITELLM_RUNTIME_IMAGE} AS runtime
 
+# By default, this image has no shell or package manager installed.
+# We rely entirely on copying wheels/artifacts from the builder stage.
 
 WORKDIR /app
-# Copy the current directory contents into the container at /app
+
+# Copy your entire app code again if you need it for reference or runtime scripts
 COPY . .
-RUN ls -la /app
 
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
+# Copy wheels from builder stage
+COPY --from=builder /wheels /wheels
 COPY --from=builder /app/dist/*.whl .
-COPY --from=builder /wheels/ /wheels/
 
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+# Install from wheels locally. Even though "latest" is distroless-like,
+# it still includes pip so that you can install local wheels into site-packages.
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && \
+    rm -f *.whl && rm -rf /wheels
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
+# Install semantic-cache or pinned redisvl without installing dependencies
+# (as in your original Dockerfile)
 RUN pip install redisvl==0.0.7 --no-deps
 
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
+# Remove jwt libraries if needed, then reinstall PyJWT pinned to a version
+RUN pip uninstall -y jwt || true
+RUN pip uninstall -y PyJWT || true
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# If your admin UI build needs to run in production as well (less common):
+# Typically you'd do this only in builder stage, then copy built static assets over.
+# If you DO need to re-run it here, note that the production image does NOT have a shell.
+# So you either skip this step here, or ensure your script is purely python-based or adapt accordingly.
+RUN chmod +x docker/build_admin_ui.sh
+# This might fail if your script uses /bin/sh or /bin/bash; adapt to a Python script or remove:
+# RUN ./docker/build_admin_ui.sh
 
-# Generate prisma client
+# (Optional) Prisma generation. If your code needs Prisma at runtime, 
+# you either do it in the builder stage or carefully add nodejs in dev 
+# and copy over the generated output. But for an example:
 ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
-RUN mkdir -p /.cache
-RUN chmod -R 777 /.cache
+
+# By default, Chainguard python:latest doesn't have a shell for “mkdir -p” or “chmod”.
+# Adjust as needed. Some folks run these steps in the builder stage. 
+# If you truly need them in production, consider making them Python calls or 
+# referencing the BusyBox or Wolfi debug image. For illustration, we rely on Python’s os calls:
+RUN python -c "import os; os.makedirs('/.cache', exist_ok=True)"
+RUN python -c "import os; os.system('chmod -R 777 /.cache')"
+
+# If you absolutely need node/prisma here, you can do pip install for a Python-wrapped version:
 RUN pip install nodejs-bin
 RUN pip install prisma
 RUN prisma generate
 
+# Ensure your entrypoint scripts are executable
 RUN chmod +x docker/entrypoint.sh
 RUN chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
-# # Set your entrypoint and command
-
+# By default, cgr.dev/chainguard/python:latest has /usr/bin/python as an ENTRYPOINT.
+# If you want to run your own script, set the ENTRYPOINT explicitly:
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
-# CMD ["--port", "4000", "--detailed_debug"]
+# Append your usual arguments
 CMD ["--port", "4000"]
