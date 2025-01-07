@@ -1,5 +1,5 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python::3.13.1-slim
+ARG LITELLM_BUILD_IMAGE=python:3.13.1-slim
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=python:3.13.1-slim
