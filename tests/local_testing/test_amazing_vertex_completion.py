@@ -3192,3 +3192,14 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.completion_tokens == 109
     assert response.usage.prompt_tokens == 63
     assert response.usage.total_tokens == 172
+
+
+def test_vertexai_code_gecko():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    response = completion(
+        model="vertex_ai/code-gecko@002",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    print(response)
