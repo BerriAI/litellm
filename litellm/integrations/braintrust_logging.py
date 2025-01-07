@@ -2,7 +2,6 @@
 ## Log success + failure events to Braintrust
 
 import copy
-import json
 import os
 from datetime import datetime
 from typing import Optional
