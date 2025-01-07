@@ -172,9 +172,19 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
-        _json_response = await _response.json()
-
-        return _json_response
+        _transformed_response = await provider_config.transform_response(  # type: ignore
+            model=model,
+            raw_response=_response,  # type: ignore
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+        )
+        return _transformed_response
 
     def completion(
         self,
