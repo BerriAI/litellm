@@ -2132,9 +2132,9 @@ def get_optional_params_transcription(
     if custom_llm_provider == "openai" or custom_llm_provider == "azure":
         optional_params = non_default_params
     elif custom_llm_provider == "groq":
-        supported_params = litellm.GroqSTTConfig().get_supported_openai_params_stt()
+        supported_params = litellm.GroqSTTConfig().get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.GroqSTTConfig().map_openai_params_stt(
+        optional_params = litellm.GroqSTTConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,

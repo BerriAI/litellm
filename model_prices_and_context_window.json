@@ -2279,6 +2279,24 @@
         "supports_function_calling": true,
         "supports_response_schema": true
     },
+    "groq/whisper-large-v3": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00003083,
+        "output_cost_per_second": 0,
+        "litellm_provider": "groq"
+    },
+    "groq/whisper-large-v3-turbo": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00001111,
+        "output_cost_per_second": 0,
+        "litellm_provider": "groq"
+    },
+    "groq/distil-whisper-large-v3-en": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00000556,
+        "output_cost_per_second": 0,
+        "litellm_provider": "groq"
+    },
     "cerebras/llama3.1-8b": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
