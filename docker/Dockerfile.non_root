@@ -39,6 +39,9 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
+# Ensure nonroot owns the /wheels directory and its contents
+RUN chown -R nonroot:nonroot /wheels
+
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
