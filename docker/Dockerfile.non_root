@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.14.0a3-slim
+ARG LITELLM_BUILD_IMAGE=python:3.14.0a3-slim-bookworm
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.14.0a3-slim
+ARG LITELLM_RUNTIME_IMAGE=python:3.14.0a3-slim-bookworm
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -11,8 +11,7 @@ WORKDIR /app
 
 # Install build dependencies
 RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc python3-dev curl build-essential && \
-    apt-get install -y --no-install-recommends rustc cargo && \
+    apt-get install -y gcc python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Verify Rust installation
