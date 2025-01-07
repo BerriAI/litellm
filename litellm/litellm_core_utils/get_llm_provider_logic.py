@@ -208,11 +208,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
-                    elif endpoint == "inference.friendli.ai/v1":
+                    elif endpoint == "https://api.friendli.ai/serverless/v1":
                         custom_llm_provider = "friendliai"
-                        dynamic_api_key = get_secret_str(
-                            "FRIENDLIAI_API_KEY"
-                        ) or get_secret("FRIENDLI_TOKEN")
+                        dynamic_api_key = get_secret_str("FRIENDLIAI_API_KEY") or get_secret("FRIENDLI_TOKEN")
                     elif endpoint == "api.galadriel.com/v1":
                         custom_llm_provider = "galadriel"
                         dynamic_api_key = get_secret_str("GALADRIEL_API_KEY")
@@ -488,11 +486,10 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (
-            model,
             api_base,
             dynamic_api_key,
         ) = litellm.FireworksAIConfig()._get_openai_compatible_provider_info(
-            model=model, api_base=api_base, api_key=api_key
+            api_base=api_base, api_key=api_key
         )
     elif custom_llm_provider == "azure_ai":
         (
@@ -551,7 +548,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret("FRIENDLI_API_BASE")
-            or "https://inference.friendli.ai/v1"
+            or "https://api.friendli.ai/serverless/v1"
         )  # type: ignore
         dynamic_api_key = (
             api_key

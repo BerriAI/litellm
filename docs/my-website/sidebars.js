@@ -44,7 +44,6 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
-            "proxy/pass_through",
             "proxy/spending_monitoring",
         ],
         },
@@ -303,6 +302,7 @@ const sidebars = {
         "realtime",
         "fine_tuning",
         "moderation",
+        "proxy/pass_through",
       ],
     },
     {
@@ -390,6 +390,7 @@ const sidebars = {
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",
+        "observability/humanloop",
         "observability/scrub_data",
         "observability/braintrust",
         "observability/sentry",

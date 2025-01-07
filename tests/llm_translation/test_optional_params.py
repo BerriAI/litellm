@@ -1062,3 +1062,13 @@ def test_is_vertex_anthropic_model():
         )
         is False
     )
+
+def test_groq_response_format_json_schema():
+    optional_params = get_optional_params(
+        model="llama-3.1-70b-versatile",
+        custom_llm_provider="groq",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params is not None
+    assert "response_format" in optional_params
+    assert optional_params["response_format"]["type"] == "json_object"

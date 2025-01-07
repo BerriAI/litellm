@@ -67,10 +67,11 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["litellm"]
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs 
 CMD ["--port", "4000"]

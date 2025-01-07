@@ -148,11 +148,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
+        error_str = str(original_exception)
         if model:
             if hasattr(original_exception, "message"):
                 error_str = str(original_exception.message)
-            else:
-                error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:

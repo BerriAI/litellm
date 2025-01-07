@@ -115,6 +115,7 @@ class AmazonInvokeMixin:
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError(
             "validate_environment not implemented for config. Done in invoke_handler.py"

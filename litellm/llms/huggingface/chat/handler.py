@@ -724,12 +724,14 @@ class Huggingface(BaseLLM):
                 token_logprob = token["logprob"]
 
                 # Add the token information to the 'token_info' list
-                _logprob.tokens.append(token_text)
-                _logprob.token_logprobs.append(token_logprob)
+                cast(List[str], _logprob.tokens).append(token_text)
+                cast(List[float], _logprob.token_logprobs).append(token_logprob)
 
                 # stub this to work with llm eval harness
                 top_alt_tokens = {"": -1.0, "": -2.0, "": -3.0}  # noqa: F601
-                _logprob.top_logprobs.append(top_alt_tokens)
+                cast(List[Dict[str, float]], _logprob.top_logprobs).append(
+                    top_alt_tokens
+                )
 
             # For each element in the 'tokens' list, extract the relevant information
             for i, token in enumerate(response_details["tokens"]):
@@ -751,13 +753,15 @@ class Huggingface(BaseLLM):
                     top_alt_tokens[text] = logprob
 
                 # Add the token information to the 'token_info' list
-                _logprob.tokens.append(token_text)
-                _logprob.token_logprobs.append(token_logprob)
-                _logprob.top_logprobs.append(top_alt_tokens)
+                cast(List[str], _logprob.tokens).append(token_text)
+                cast(List[float], _logprob.token_logprobs).append(token_logprob)
+                cast(List[Dict[str, float]], _logprob.top_logprobs).append(
+                    top_alt_tokens
+                )
 
                 # Add the text offset of the token
                 # This is computed as the sum of the lengths of all previous tokens
-                _logprob.text_offset.append(
+                cast(List[int], _logprob.text_offset).append(
                     sum(len(t["text"]) for t in response_details["tokens"][:i])
                 )
 

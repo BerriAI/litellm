@@ -2014,7 +2014,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
 
 @pytest.mark.asyncio()
-async def test_view_spend_per_user(prisma_client):
+async def test_aview_spend_per_user(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -3201,7 +3201,7 @@ async def test_team_tags(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_admin_only_routes(prisma_client):
+async def test_aadmin_only_routes(prisma_client):
     """
     Tests if setting admin_only_routes works
 
@@ -3561,7 +3561,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     # read from the secret manager
 
     result = await aws_secret_manager_client.async_read_secret(
-        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
+        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{key_alias}"
     )
 
     # Assert the correct key is stored in the secret manager
@@ -3582,7 +3582,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     # Assert the key is deleted from the secret manager
 
     result = await aws_secret_manager_client.async_read_secret(
-        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
+        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{key_alias}"
     )
     assert result is None
 

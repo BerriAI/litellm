@@ -690,7 +690,17 @@ class RegenerateKeyRequest(GenerateKeyRequest):
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
-    keys: List[str]
+    keys: Optional[List[str]] = None
+    key_aliases: Optional[List[str]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_at_least_one(cls, values):
+        if not values.get("keys") and not values.get("key_aliases"):
+            raise ValueError(
+                "At least one of 'keys' or 'key_aliases' must be provided."
+            )
+        return values
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
@@ -1146,6 +1156,7 @@ class KeyManagementSystem(enum.Enum):
     AZURE_KEY_VAULT = "azure_key_vault"
     AWS_SECRET_MANAGER = "aws_secret_manager"
     GOOGLE_SECRET_MANAGER = "google_secret_manager"
+    HASHICORP_VAULT = "hashicorp_vault"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
 

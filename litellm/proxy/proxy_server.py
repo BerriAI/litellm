@@ -1,4 +1,3 @@
-import ast
 import asyncio
 import copy
 import inspect
@@ -536,7 +535,13 @@ async def proxy_startup_event(app: FastAPI):
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
+    ## [Optional] Initialize dd tracer
+    ProxyStartupEvent._init_dd_tracer()
+
+    # End of startup event
     yield
+
+    # Shutdown event
     await proxy_shutdown_event()
 
 
@@ -1862,8 +1867,12 @@ class ProxyConfig:
                         try:
                             TeamDefaultSettings(**team_setting)
                         except Exception:
+                            if isinstance(team_setting, dict):
+                                raise Exception(
+                                    f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting.keys()}"
+                                )
                             raise Exception(
-                                f"team_id missing from default_team_settings at index={idx}\npassed in value={team_setting}"
+                                f"team_id missing from default_team_settings at index={idx}\npassed in value={type(team_setting)}"
                             )
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -1894,37 +1903,7 @@ class ProxyConfig:
         if general_settings:
             ### LOAD SECRET MANAGER ###
             key_management_system = general_settings.get("key_management_system", None)
-            if key_management_system is not None:
-                if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
-                    ### LOAD FROM AZURE KEY VAULT ###
-                    load_from_azure_key_vault(use_azure_key_vault=True)
-                elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
-                    ### LOAD FROM GOOGLE KMS ###
-                    load_google_kms(use_google_kms=True)
-                elif (
-                    key_management_system
-                    == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
-                ):
-                    from litellm.secret_managers.aws_secret_manager_v2 import (
-                        AWSSecretsManagerV2,
-                    )
-
-                    AWSSecretsManagerV2.load_aws_secret_manager(
-                        use_aws_secret_manager=True
-                    )
-                elif key_management_system == KeyManagementSystem.AWS_KMS.value:
-                    load_aws_kms(use_aws_kms=True)
-                elif (
-                    key_management_system
-                    == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
-                ):
-                    from litellm.secret_managers.google_secret_manager import (
-                        GoogleSecretManager,
-                    )
-
-                    GoogleSecretManager()
-                else:
-                    raise ValueError("Invalid Key Management System selected")
+            self.initialize_secret_manager(key_management_system=key_management_system)
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -2166,6 +2145,45 @@ class ProxyConfig:
                     if _logger is not None:
                         litellm.callbacks.append(_logger)
         pass
+
+    def initialize_secret_manager(self, key_management_system: Optional[str]):
+        """
+        Initialize the relevant secret manager if `key_management_system` is provided
+        """
+        if key_management_system is not None:
+            if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
+                ### LOAD FROM AZURE KEY VAULT ###
+                load_from_azure_key_vault(use_azure_key_vault=True)
+            elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
+                ### LOAD FROM GOOGLE KMS ###
+                load_google_kms(use_google_kms=True)
+            elif (
+                key_management_system
+                == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
+            ):
+                from litellm.secret_managers.aws_secret_manager_v2 import (
+                    AWSSecretsManagerV2,
+                )
+
+                AWSSecretsManagerV2.load_aws_secret_manager(use_aws_secret_manager=True)
+            elif key_management_system == KeyManagementSystem.AWS_KMS.value:
+                load_aws_kms(use_aws_kms=True)
+            elif (
+                key_management_system == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value
+            ):
+                from litellm.secret_managers.google_secret_manager import (
+                    GoogleSecretManager,
+                )
+
+                GoogleSecretManager()
+            elif key_management_system == KeyManagementSystem.HASHICORP_VAULT.value:
+                from litellm.secret_managers.hashicorp_secret_manager import (
+                    HashicorpSecretManager,
+                )
+
+                HashicorpSecretManager()
+            else:
+                raise ValueError("Invalid Key Management System selected")
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
@@ -3206,6 +3224,19 @@ class ProxyStartupEvent:
             await prisma_client.health_check()
         return prisma_client
 
+    @classmethod
+    def _init_dd_tracer(cls):
+        """
+        Initialize dd tracer - if `USE_DDTRACE=true` in .env
+
+        DD tracer is used to trace Python applications.
+        Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
+        """
+        if get_secret_bool("USE_DDTRACE", False) is True:
+            import ddtrace
+
+            ddtrace.patch_all(logging=True)
+
 
 #### API ENDPOINTS ####
 @router.get(
@@ -3326,13 +3357,7 @@ async def chat_completion(  # noqa: PLR0915
 
     data = {}
     try:
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except Exception:
-            data = json.loads(body_str)
-
+        data = await _read_request_body(request=request)
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
@@ -3599,12 +3624,7 @@ async def completion(  # noqa: PLR0915
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
     try:
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except Exception:
-            data = json.loads(body_str)
+        data = await _read_request_body(request=request)
 
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -5337,12 +5357,7 @@ async def anthropic_response(  # noqa: PLR0915
     litellm.adapters = [{"id": "anthropic", "adapter": anthropic_adapter}]
 
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
-    body = await request.body()
-    body_str = body.decode()
-    try:
-        request_data: dict = ast.literal_eval(body_str)
-    except Exception:
-        request_data = json.loads(body_str)
+    request_data = await _read_request_body(request=request)
     data: dict = {**request_data, "adapter_id": "anthropic"}
     try:
         data["model"] = (

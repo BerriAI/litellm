@@ -1,29 +1,13 @@
 model_list:
-  - model_name: "azure/*"
+  - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      client_id: os.environ/AZURE_CLIENT_ID
-      azure_username: os.environ/AZURE_USERNAME
-      azure_password: os.environ/AZURE_PASSWORD
-litellm_settings:
-  callbacks: ["datadog"]
+      model: aiohttp_openai/any
+      api_base: https://example-openai-endpoint.onrender.com/chat/completions
+      api_key: "ishaan"
 
-
-general_settings: 
-  alerting: ["pagerduty"]
-  alerting_args:
-    failure_threshold: 4  # Number of requests failing in a window
-    failure_threshold_window_seconds: 10  # Window in seconds
-
-    # Requests hanging threshold
-    hanging_threshold_seconds: 0.0000001  # Number of seconds of waiting for a response before a request is considered hanging
-    hanging_threshold_window_seconds: 10  # Window in seconds
-
-
-# For /fine_tuning/jobs endpoints
-finetune_settings:
-  - custom_llm_provider: "vertex_ai"
-    vertex_project: "adroit-crow-413218"
-    vertex_location: "us-central1"
-    vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
+general_settings:
+  key_management_system: "hashicorp_vault" # 👈 KEY CHANGE
+  key_management_settings: 
+    store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
+    prefix_for_stored_virtual_keys: "litellm/" # OPTIONAL. If set, this prefix will be used for stored virtual keys in the secret manager
+    access_mode: "write_only" # Literal["read_only", "write_only", "read_and_write"]
