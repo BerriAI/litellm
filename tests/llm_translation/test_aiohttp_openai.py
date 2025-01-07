@@ -11,7 +11,7 @@ sys.path.insert(
 import litellm
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_aiohttp_openai():
     litellm.set_verbose = True
     response = await litellm.acompletion(
@@ -23,7 +23,7 @@ async def test_aiohttp_openai():
     print(response)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_aiohttp_openai_gpt_4o():
     litellm.set_verbose = True
     response = await litellm.acompletion(
