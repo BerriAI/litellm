@@ -21,3 +21,13 @@ async def test_aiohttp_openai():
         api_key="fake-key",
     )
     print(response)
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_openai_gpt_4o():
+    litellm.set_verbose = True
+    response = await litellm.acompletion(
+        model="aiohttp_openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+    print(response)

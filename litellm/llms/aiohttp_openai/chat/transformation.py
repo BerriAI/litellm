@@ -24,6 +24,22 @@ else:
 
 
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Ensure - /v1/chat/completions is at the end of the url
+
+        """
+
+        if not api_base.endswith("/chat/completions"):
+            api_base += "/chat/completions"
+        return api_base
+
     def validate_environment(
         self,
         headers: dict,
@@ -33,7 +49,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return {}
+        return {"Authorization": f"Bearer {api_key}"}
 
     def transform_response(
         self,
