@@ -1810,8 +1810,19 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000009,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
+    },
+    "mistral/mistral-large-2411": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_function_calling": true,
@@ -1838,6 +1849,30 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true
+    },
+    "mistral/pixtral-large-latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_vision": true
+    },
+    "mistral/pixtral-large-2411": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_vision": true
     },
     "mistral/pixtral-12b-2409": {
         "max_tokens": 128000,
