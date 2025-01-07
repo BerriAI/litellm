@@ -57,8 +57,6 @@ def test_braintrust_logging_specific_project_id():
 
     litellm.set_verbose = True
 
-    http_client = HTTPHandler()
-
     with patch.object(
         litellm.integrations.braintrust_logging.global_braintrust_sync_http_handler,
         "post",
