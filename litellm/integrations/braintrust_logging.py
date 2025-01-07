@@ -2,6 +2,7 @@
 ## Log success + failure events to Braintrust
 
 import copy
+import json
 import os
 from datetime import datetime
 from typing import Optional
@@ -204,7 +205,7 @@ class BraintrustLogger(CustomLogger):
                 "span_attributes": {"name": "Chat Completion", "type": "llm"},
             }
             if choices is not None:
-                request_data["output"] = [choice.json() for choice in choices]
+                request_data["output"] = [choice.dict() for choice in choices]
             else:
                 request_data["output"] = output
 
@@ -328,7 +329,7 @@ class BraintrustLogger(CustomLogger):
                 "span_attributes": {"name": "Chat Completion", "type": "llm"},
             }
             if choices is not None:
-                request_data["output"] = [choice.json() for choice in choices]
+                request_data["output"] = [choice.dict() for choice in choices]
             else:
                 request_data["output"] = output
 
