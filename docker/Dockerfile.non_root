@@ -17,6 +17,12 @@ RUN apt-get clean && apt-get update && \
 RUN pip install --upgrade pip && \
     pip install build
 
+# 2. Install Rust + Cargo via rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# 3. Add cargo (Rust) to PATH
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 # Copy the current directory contents into the container at /app
 COPY . .
 
