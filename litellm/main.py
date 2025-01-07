@@ -79,6 +79,7 @@ from litellm.utils import (
     create_tokenizer,
     get_api_key,
     get_llm_provider,
+    get_non_default_completion_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_optional_params_transcription,
@@ -881,12 +882,8 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    openai_params = litellm.OPENAI_CHAT_COMPLETION_PARAMS
-    default_params = openai_params + all_litellm_params
+    non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
-    non_default_params = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
     ## PROMPT MANAGEMENT HOOKS ##
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and prompt_id is not None:
