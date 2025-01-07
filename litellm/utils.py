@@ -915,12 +915,12 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            # executor.submit(
+            #     logging_obj.success_handler,
+            #     result,
+            #     start_time,
+            #     end_time,
+            # )
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
@@ -1125,12 +1125,12 @@ def client(original_function):  # noqa: PLR0915
             asyncio.create_task(
                 logging_obj.async_success_handler(result, start_time, end_time)
             )
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            # executor.submit(
+            #     logging_obj.success_handler,
+            #     result,
+            #     start_time,
+            #     end_time,
+            # )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
