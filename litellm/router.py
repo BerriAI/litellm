@@ -815,10 +815,9 @@ class Router:
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
             if _is_prompt_management_model:
-                response = await self._prompt_management_factory(
+                return await self._prompt_management_factory(
                     model=model,
                     messages=messages,
-                    original_function=self.acompletion,
                     kwargs=kwargs,
                 )
             if request_priority is not None and isinstance(request_priority, int):
@@ -1456,7 +1455,6 @@ class Router:
         self,
         model: str,
         messages: List[AllMessageValues],
-        original_function: Callable,
         kwargs: Dict[str, Any],
     ):
         prompt_management_deployment = self.get_available_deployment(
@@ -1506,7 +1504,16 @@ class Router:
             )
         )
 
-        raise NotImplementedError("Prompt management is not implemented")
+        kwargs = {**kwargs, **non_default_params}
+        kwargs["model"] = model
+        kwargs["messages"] = messages
+
+        _model_list = self.get_model_list(model_name=model)
+        if _model_list is None or len(_model_list) == 0:  # if direct call to model
+            kwargs.pop("original_function")
+            return await litellm.acompletion(**kwargs)
+
+        return await self.async_function_with_fallbacks(**kwargs)
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
