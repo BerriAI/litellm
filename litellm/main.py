@@ -3274,6 +3274,7 @@ def embedding(  # noqa: PLR0915
                 "stream_response": {},
                 "cooldown_time": cooldown_time,
             },
+            custom_llm_provider=custom_llm_provider,
         )
         if azure is True or custom_llm_provider == "azure":
             # azure configs
