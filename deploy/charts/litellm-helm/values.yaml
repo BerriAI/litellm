@@ -182,7 +182,7 @@ redis:
 
 # Prisma migration job settings
 migrationJob:
-  enabled: true # Enable or disable the schema migration Job
+  enabled: false # Enable or disable the schema migration Job
   retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
