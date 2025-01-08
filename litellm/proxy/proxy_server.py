@@ -5606,6 +5606,7 @@ async def token_counter(request: TokenCountRequest):
     _tokenizer_used = litellm.utils._select_tokenizer(
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
+
     tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,
