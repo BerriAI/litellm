@@ -2702,3 +2702,30 @@ def test_select_model_name_for_cost_calc():
 
     return_model = _select_model_name_for_cost_calc(**args)
     assert return_model == "azure_ai/mistral-large"
+
+
+def test_cost_calculator_azure_embedding():
+    from litellm.cost_calculator import response_cost_calculator
+    from litellm.types.utils import EmbeddingResponse, Usage
+
+    kwargs = {
+        "response_object": EmbeddingResponse(
+            model="text-embedding-3-small",
+            data=[{"embedding": [1, 2, 3]}],
+            usage=Usage(prompt_tokens=10, completion_tokens=10),
+        ),
+        "model": "text-embedding-3-small",
+        "cache_hit": None,
+        "custom_llm_provider": None,
+        "base_model": "azure/text-embedding-3-small",
+        "call_type": "aembedding",
+        "optional_params": {},
+        "custom_pricing": False,
+        "prompt": "Hello, world!",
+    }
+
+    try:
+        response_cost_calculator(**kwargs)
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error: {e}")
