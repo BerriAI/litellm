@@ -89,6 +89,51 @@ litellm_settings:
   redact_messages_in_exceptions: True
 ```
 
+### Soft Budget Alerts for Virtual Keys
+
+Use this to send an alert when a key/team is close to it's budget running out
+
+Step 1. Create a virtual key with a soft budget
+
+Set the `soft_budget` to 0.001
+
+```shell
+curl -X 'POST' \
+  'http://localhost:4000/key/generate' \
+  -H 'accept: application/json' \
+  -H 'x-goog-api-key: sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "key_alias": "prod-app1",
+  "team_id": "113c1a22-e347-4506-bfb2-b320230ea414",
+  "soft_budget": 0.001
+}'
+```
+
+Step 2. Send a request to the proxy with the virtual key
+
+```shell
+curl http://0.0.0.0:4000/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer sk-Nb5eCf427iewOlbxXIH4Ow" \
+-d '{
+  "model": "openai/gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "this is a test request, write a short poem"
+    }
+  ]
+}'
+
+```
+
+Step 3. Check slack for Expected Alert
+
+<Image img={require('../../img/soft_budget_alert.png')}/>
+
+
+
 
 ### Add Metadata to alerts 
 
@@ -119,7 +164,7 @@ response = client.chat.completions.create(
 
 <Image img={require('../../img/alerting_metadata.png')}/>
 
-### Opting into specific alert types
+### Select specific alert types
 
 Set `alert_types` if you want to Opt into only specific alert types. When alert_types is not set, all Default Alert Types are enabled.
 
@@ -141,7 +186,7 @@ general_settings:
   ] 
 ```
 
-### Set specific slack channels per alert type
+### Map slack channels to alert type
 
 Use this if you want to set specific channels per alert type
 
@@ -239,7 +284,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 ```
 
 
-### Using MS Teams Webhooks
+### MS Teams Webhooks
 
 MS Teams provides a slack compatible webhook url that you can use for alerting
 
@@ -281,7 +326,7 @@ curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
 
 <Image img={require('../../img/ms_teams_alerting.png')}/>
 
-### Using Discord Webhooks
+### Discord Webhooks
 
 Discord provides a slack compatible webhook url that you can use for alerting
 
