@@ -1,8 +1,17 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Batching Completion()
 LiteLLM allows you to:
 * Send many completion calls to 1 model
 * Send 1 completion call to many models: Return Fastest Response
 * Send 1 completion call to many models: Return All Responses
+
+:::info
+
+Trying to do batch completion on LiteLLM Proxy ? Go here: https://docs.litellm.ai/docs/proxy/user_keys#beta-batch-completions---pass-model-as-list
+
+:::
 
 ## Send multiple completion calls to 1 model
 
@@ -45,6 +54,9 @@ This makes parallel calls to the specified `models` and returns the first respon
 
 Use this to reduce latency
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ### Example Code
 ```python
 import litellm
@@ -62,8 +74,93 @@ response = batch_completion_models(
 print(result)
 ```
 
+
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+[how to setup proxy config](#example-setup)
+
+Just pass a comma-separated string of model names and the flag `fastest_response=True`.
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+
+curl -X POST 'http://localhost:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \ 
+-D '{
+    "model": "gpt-4o, groq-llama", # 👈 Comma-separated models
+    "messages": [
+      {
+        "role": "user",
+        "content": "What's the weather like in Boston today?"
+      }
+    ],
+    "stream": true,
+    "fastest_response": true # 👈 FLAG
+}
+
+'
+```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI SDK">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-4o, groq-llama", # 👈 Comma-separated models
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={"fastest_response": true} # 👈 FLAG
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+### Example Setup: 
+
+```yaml 
+model_list: 
+- model_name: groq-llama
+  litellm_params:
+    model: groq/llama3-8b-8192
+    api_key: os.environ/GROQ_API_KEY
+- model_name: gpt-4o
+  litellm_params:
+    model: gpt-4o
+    api_key: os.environ/OPENAI_API_KEY
+```
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
+
 ### Output
-Returns the first response
+Returns the first response in OpenAI format. Cancels other LLM API calls. 
 ```json
 {
   "object": "chat.completion",
@@ -88,6 +185,7 @@ Returns the first response
   }
 }
 ```
+
 
 ## Send 1 completion call to many models: Return All Responses
 This makes parallel calls to the specified models and returns all responses

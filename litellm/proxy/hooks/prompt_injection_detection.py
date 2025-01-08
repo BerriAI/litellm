@@ -7,18 +7,21 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
-from typing import Optional, Literal
-import litellm
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLMPromptInjectionParams
-from litellm.integrations.custom_logger import CustomLogger
-from litellm._logging import verbose_proxy_logger
-from litellm.utils import get_formatted_prompt
-from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
-from fastapi import HTTPException
-import json, traceback, re
 from difflib import SequenceMatcher
-from typing import List
+from typing import List, Literal, Optional
+
+from fastapi import HTTPException
+
+import litellm
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    prompt_injection_detection_default_pt,
+)
+from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
+from litellm.router import Router
+from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
@@ -28,7 +31,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
     ):
         self.prompt_injection_params = prompt_injection_params
-        self.llm_router: Optional[litellm.Router] = None
+        self.llm_router: Optional[Router] = None
 
         self.verbs = [
             "Ignore",
@@ -70,12 +73,12 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa
 
-    def update_environment(self, router: Optional[litellm.Router] = None):
+    def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router
 
         if (
             self.prompt_injection_params is not None
-            and self.prompt_injection_params.llm_api_check == True
+            and self.prompt_injection_params.llm_api_check is True
         ):
             if self.llm_router is None:
                 raise Exception(
@@ -142,16 +145,17 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             - check if user id part of call
             - check if user id part of blocked list
             """
-            self.print_verbose(f"Inside Prompt Injection Detection Pre-Call Hook")
+            self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
             try:
                 assert call_type in [
                     "completion",
+                    "text_completion",
                     "embeddings",
                     "image_generation",
                     "moderation",
                     "audio_transcription",
                 ]
-            except Exception as e:
+            except Exception:
                 self.print_verbose(
                     f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
                 )
@@ -162,11 +166,11 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
             if self.prompt_injection_params is not None:
                 # 1. check if heuristics check turned on
-                if self.prompt_injection_params.heuristics_check == True:
+                if self.prompt_injection_params.heuristics_check is True:
                     is_prompt_attack = self.check_user_input_similarity(
                         user_input=formatted_prompt
                     )
-                    if is_prompt_attack == True:
+                    if is_prompt_attack is True:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -174,14 +178,14 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                             },
                         )
                 # 2. check if vector db similarity check turned on [TODO] Not Implemented yet
-                if self.prompt_injection_params.vector_db_check == True:
+                if self.prompt_injection_params.vector_db_check is True:
                     pass
             else:
                 is_prompt_attack = self.check_user_input_similarity(
                     user_input=formatted_prompt
                 )
 
-            if is_prompt_attack == True:
+            if is_prompt_attack is True:
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -192,22 +196,41 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return data
 
         except HTTPException as e:
+
+            if (
+                e.status_code == 400
+                and isinstance(e.detail, dict)
+                and "error" in e.detail  # type: ignore
+                and self.prompt_injection_params is not None
+                and self.prompt_injection_params.reject_as_response
+            ):
+                return e.detail.get("error")
             raise e
         except Exception as e:
-            traceback.print_exc()
+            verbose_proxy_logger.exception(
+                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
 
-    async def async_moderation_hook(
+    async def async_moderation_hook(  # type: ignore
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal["completion", "embeddings", "image_generation"],
-    ):
+        call_type: Literal[
+            "completion",
+            "embeddings",
+            "image_generation",
+            "moderation",
+            "audio_transcription",
+        ],
+    ) -> Optional[bool]:
         self.print_verbose(
             f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}"
         )
 
         if self.prompt_injection_params is None:
-            return
+            return None
 
         formatted_prompt = get_formatted_prompt(data=data, call_type=call_type)  # type: ignore
         is_prompt_attack = False
@@ -220,7 +243,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
         # 3. check if llm api check turned on
         if (
-            self.prompt_injection_params.llm_api_check == True
+            self.prompt_injection_params.llm_api_check is True
             and self.prompt_injection_params.llm_api_name is not None
             and self.llm_router is not None
         ):
@@ -246,7 +269,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
                     is_prompt_attack = True
 
-        if is_prompt_attack == True:
+        if is_prompt_attack is True:
             raise HTTPException(
                 status_code=400,
                 detail={

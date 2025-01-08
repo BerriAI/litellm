@@ -1,0 +1,42 @@
+# Use the provided base image
+FROM ghcr.io/berriai/litellm:litellm_fwd_server_root_path-dev
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Install Node.js and npm (adjust version as needed)
+RUN apt-get update && apt-get install -y nodejs npm
+
+# Copy the UI source into the container
+COPY ./ui/litellm-dashboard /app/ui/litellm-dashboard
+
+# Set an environment variable for UI_BASE_PATH
+# This can be overridden at build time
+# set UI_BASE_PATH to "<your server root path>/ui"
+ENV UI_BASE_PATH="/prod/ui"
+
+# Build the UI with the specified UI_BASE_PATH
+WORKDIR /app/ui/litellm-dashboard
+RUN npm install
+RUN UI_BASE_PATH=$UI_BASE_PATH npm run build
+
+# Create the destination directory
+RUN mkdir -p /app/litellm/proxy/_experimental/out
+
+# Move the built files to the appropriate location
+# Assuming the build output is in ./out directory
+RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
+    mv ./out/* /app/litellm/proxy/_experimental/out/
+
+# Switch back to the main app directory
+WORKDIR /app
+
+# Make sure your docker/entrypoint.sh is executable
+RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/prod_entrypoint.sh
+
+# Expose the necessary port
+EXPOSE 4000/tcp
+
+# Override the CMD instruction with your desired command and arguments
+CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]

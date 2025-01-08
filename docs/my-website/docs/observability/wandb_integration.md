@@ -1,6 +1,16 @@
 import Image from '@theme/IdealImage';
 
 # Weights & Biases - Logging LLM Input/Output
+
+
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
+
 Weights & Biases helps AI developers build better models faster https://wandb.ai
 
 <Image img={require('../../img/wandb.png')} />

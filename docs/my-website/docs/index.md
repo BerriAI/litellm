@@ -5,19 +5,46 @@ import TabItem from '@theme/TabItem';
 
 https://github.com/BerriAI/litellm
 
-## **Call 100+ LLMs using the same Input/Output Format**
+## **Call 100+ LLMs using the OpenAI Input/Output Format**
 
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
-- Track spend & set budgets per project [OpenAI Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
+- Track spend & set budgets per project [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 ## How to use LiteLLM
 You can use litellm through either:
-1. [OpenAI proxy Server](#openai-proxy) - Server to call 100+ LLMs, load balance, cost tracking across projects
+1. [LiteLLM Proxy Server](#litellm-proxy-server-llm-gateway) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
 2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
-## LiteLLM Python SDK
+### **When to use LiteLLM Proxy Server (LLM Gateway)**
+
+:::tip
+
+Use LiteLLM Proxy Server if you want a **central service (LLM Gateway) to access multiple LLMs**
+
+Typically used by Gen AI Enablement /  ML PLatform Teams
+
+:::
+
+  - LiteLLM Proxy gives you a unified interface to access multiple LLMs (100+ LLMs)
+  - Track LLM Usage and setup guardrails
+  - Customize Logging, Guardrails, Caching per project
+
+### **When to use LiteLLM Python SDK**
+
+:::tip
+
+  Use LiteLLM Python SDK if you want to use LiteLLM in your **python code**
+
+Typically used by developers building llm projects
+
+:::
+
+  - LiteLLM SDK gives you a unified interface to access multiple LLMs (100+ LLMs) 
+  - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
+
+## **LiteLLM Python SDK**
 
 ### Basic usage 
 
@@ -40,7 +67,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="openai/gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -56,7 +83,7 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2",
+  model="anthropic/claude-3-sonnet-20240229",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -74,7 +101,7 @@ os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
 os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -153,6 +180,42 @@ response = completion(
 
 </Tabs>
 
+### Response Format (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
+    "created": 1734366691,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 43,
+        "prompt_tokens": 13,
+        "total_tokens": 56,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+            "audio_tokens": null,
+            "cached_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+    }
+}
+```
+
 ### Streaming
 Set `stream=True` in the `completion` args. 
 
@@ -167,7 +230,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="openai/gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -184,7 +247,7 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2",
+  model="anthropic/claude-3-sonnet-20240229",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -203,7 +266,7 @@ os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
 os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -287,6 +350,32 @@ response = completion(
 
 </Tabs>
 
+### Streaming Response Format (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
+    "created": 1734366925,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion.chunk",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": null,
+            "index": 0,
+            "delta": {
+                "content": "Hello",
+                "role": "assistant",
+                "function_call": null,
+                "tool_calls": null,
+                "audio": null
+            },
+            "logprobs": null
+        }
+    ]
+}
+```
+
 ### Exception handling 
 
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
@@ -310,6 +399,7 @@ LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone
 from litellm import completion
 
 ## set env variables for logging tools
+os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
@@ -317,7 +407,7 @@ os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse"] # log input/output to lunary, langfuse, supabase
+litellm.success_callback = ["lunary", "langfuse", "helicone"] # log input/output to lunary, langfuse, supabase, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
@@ -356,7 +446,7 @@ response = completion(
 )
 ```
 
-## OpenAI Proxy
+## **LiteLLM Proxy Server (LLM Gateway)**
 
 Track spend across multiple projects/people
 
@@ -371,6 +461,8 @@ The proxy provides:
 
 ### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
+Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/docker_quick_start.md)
+
 ### Quick Start Proxy - CLI
 
 ```shell
@@ -379,11 +471,50 @@ pip install 'litellm[proxy]'
 
 #### Step 1: Start litellm proxy
 
+<Tabs>
+
+<TabItem label="pip package" value="pip">
+
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
 #INFO: Proxy running on http://0.0.0.0:4000
 ```
+
+</TabItem>
+
+<TabItem label="Docker container" value="docker">
+
+
+Step 1. CREATE config.yaml 
+
+Example `litellm_config.yaml` 
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-azure-model-deployment>
+      api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
+      api_key: os.environ/AZURE_API_KEY # runs os.getenv("AZURE_API_KEY")
+      api_version: "2023-07-01-preview"
+```
+
+Step 2. RUN Docker Image
+
+```shell
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e AZURE_API_KEY=d6*********** \
+    -e AZURE_API_BASE=https://openai-***********/ \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+```
+
+</TabItem>
+
+</Tabs>
 
 #### Step 2: Make ChatCompletions Request to Proxy
 
@@ -405,4 +536,5 @@ print(response)
 
 - [exception mapping](./exception_mapping.md)
 - [retries + model fallbacks for completion()](./completion/reliable_completions.md)
-- [proxy virtual keys & spend management](./tutorials/fallbacks.md)
+- [proxy virtual keys & spend management](./proxy/virtual_keys.md)
+- [E2E Tutorial for LiteLLM Proxy Server](./proxy/docker_quick_start.md)

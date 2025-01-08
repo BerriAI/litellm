@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # OpenAI (Text Completion)
 
 LiteLLM supports OpenAI text completion models

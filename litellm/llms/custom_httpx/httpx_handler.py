@@ -1,5 +1,15 @@
 from typing import Optional
+
 import httpx
+
+try:
+    from litellm._version import version
+except Exception:
+    version = "0.0.0"
+
+headers = {
+    "User-Agent": f"litellm/{version}",
+}
 
 
 class HTTPHandler:
@@ -9,7 +19,8 @@ class HTTPHandler:
             limits=httpx.Limits(
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
-            )
+            ),
+            headers=headers,
         )
 
     async def close(self):

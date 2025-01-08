@@ -17,11 +17,7 @@ async def log_event(request: Request):
         # For now, just printing the received data
 
         return {"message": "Request received successfully"}
-    except Exception as e:
-        print(f"Error processing request: {str(e)}")
-        import traceback
-
-        traceback.print_exc()
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 

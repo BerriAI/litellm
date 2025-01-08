@@ -1,20 +1,64 @@
 import React, { useState, useEffect } from "react";
-import { Button, Modal, Form, Input, message, Select, InputNumber } from "antd";
-import { Button as Button2 } from "@tremor/react";
-import { userCreateCall, modelAvailableCall } from "./networking";
+import { useRouter } from "next/navigation";
+import {
+  Button,
+  Modal,
+  Form,
+  Input,
+  message,
+  Select,
+  InputNumber,
+  Select as Select2,
+} from "antd";
+import { Button as Button2, Text, TextInput, SelectItem } from "@tremor/react";
+import OnboardingModal from "./onboarding_link";
+import { InvitationLink } from "./onboarding_link";
+import {
+  userCreateCall,
+  modelAvailableCall,
+  invitationCreateCall,
+  getProxyUISettings,
+} from "./networking";
 const { Option } = Select;
 
 interface CreateuserProps {
   userID: string;
   accessToken: string;
+  teams: any[] | null;
+  possibleUIRoles: null | Record<string, Record<string, string>>;
 }
 
-const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
+// Define an interface for the UI settings
+interface UISettings {
+  PROXY_BASE_URL: string | null;
+  PROXY_LOGOUT_URL: string | null;
+  DEFAULT_TEAM_DISABLED: boolean;
+  SSO_ENABLED: boolean;
+}
+
+const Createuser: React.FC<CreateuserProps> = ({
+  userID,
+  accessToken,
+  teams,
+  possibleUIRoles,
+}) => {
+  const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<string | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
-
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
+    useState(false);
+  const [invitationLinkData, setInvitationLinkData] =
+    useState<InvitationLink | null>(null);
+  const router = useRouter();
+  const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal != true) {
+    console.log = function() {};
+  }
+  const [baseUrl, setBaseUrl] = useState(
+    isLocal ? "http://localhost:4000" : ""
+  );
   // get all models
   useEffect(() => {
     const fetchData = async () => {
@@ -36,13 +80,29 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
 
         // Assuming modelDataResponse.data contains an array of model names
         setUserModels(availableModels);
+
+        // get ui settings 
+        const uiSettingsResponse = await getProxyUISettings(accessToken);
+        console.log("uiSettingsResponse:", uiSettingsResponse);
+        
+        setUISettings(uiSettingsResponse);
       } catch (error) {
         console.error("Error fetching model data:", error);
       }
     };
 
+    
+
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
+
+  useEffect(() => {
+    if (router) {
+      const { protocol, host } = window.location;
+      const baseUrl = `${protocol}/${host}`;
+      setBaseUrl(baseUrl);
+    }
+  }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -59,9 +119,37 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
       message.info("Making API Call");
       setIsModalVisible(true);
       console.log("formValues in create user:", formValues);
-      const response = await userCreateCall(accessToken, userID, formValues);
+      const response = await userCreateCall(accessToken, null, formValues);
       console.log("user create Response:", response);
       setApiuser(response["key"]);
+      const user_id = response.data?.user_id || response.user_id;
+      
+      // only do invite link flow if sso is not enabled
+      if (!uiSettings?.SSO_ENABLED) {
+        invitationCreateCall(accessToken, user_id).then((data) => {
+          data.has_user_setup_sso = false;
+          setInvitationLinkData(data);
+          setIsInvitationLinkModalVisible(true);
+        });
+      } else {
+        // create an InvitationLink Object for this user for the SSO flow 
+        // for SSO the invite link is the proxy base url since the User just needs to login
+        const invitationLink: InvitationLink = {
+          id: crypto.randomUUID(), // Generate a unique ID
+          user_id: user_id,
+          is_accepted: false,
+          accepted_at: null,
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Set expiry to 7 days from now
+          created_at: new Date(),
+          created_by: userID, // Assuming userID is the current user creating the invitation
+          updated_at: new Date(),
+          updated_by: userID,
+          has_user_setup_sso: true,
+        };
+        setInvitationLinkData(invitationLink);
+        setIsInvitationLinkModalVisible(true);
+      }
+
       message.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
@@ -72,17 +160,18 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
 
   return (
     <div>
-      <Button2 className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        + Create New User
+      <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
+        + Invite User
       </Button2>
       <Modal
-        title="Create User"
+        title="Invite User"
         visible={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
       >
+        <Text className="mb-1">Create a User who can own keys</Text>
         <Form
           form={form}
           onFinish={handleCreate}
@@ -90,38 +179,45 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <Form.Item label="User ID" name="user_id">
-            <Input placeholder="Enter User ID" />
+          <Form.Item label="User Email" name="user_email">
+            <TextInput placeholder="" />
+          </Form.Item>
+          <Form.Item label="User Role" name="user_role">
+            <Select2>
+              {possibleUIRoles &&
+                Object.entries(possibleUIRoles).map(
+                  ([role, { ui_label, description }]) => (
+                    <SelectItem key={role} value={role} title={ui_label}>
+                      <div className="flex">
+                        {ui_label}{" "}
+                        <p
+                          className="ml-2"
+                          style={{ color: "gray", fontSize: "12px" }}
+                        >
+                          {description}
+                        </p>
+                      </div>
+                    </SelectItem>
+                  )
+                )}
+            </Select2>
           </Form.Item>
           <Form.Item label="Team ID" name="team_id">
-            <Input placeholder="ai_team" />
-          </Form.Item>
-          <Form.Item label="Models" name="models">
-            <Select
-              mode="multiple"
-              placeholder="Select models"
-              style={{ width: "100%" }}
-            >
-              {userModels.map((model) => (
-                <Option key={model} value={model}>
-                  {model}
+            <Select placeholder="Select Team ID" style={{ width: "100%" }}>
+              {teams ? (
+                teams.map((team: any) => (
+                  <Option key={team.team_id} value={team.team_id}>
+                    {team.team_alias}
+                  </Option>
+                ))
+              ) : (
+                <Option key="default" value={null}>
+                  Default Team
                 </Option>
-              ))}
+              )}
             </Select>
           </Form.Item>
 
-          <Form.Item label="Max Budget (USD)" name="max_budget">
-            <InputNumber step={0.01} precision={2} width={200} />
-          </Form.Item>
-          <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-            <InputNumber step={1} width={400} />
-          </Form.Item>
-          <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-            <InputNumber step={1} width={400} />
-          </Form.Item>
-          <Form.Item label="Duration (eg: 30s, 30h, 30d)" name="duration">
-            <Input />
-          </Form.Item>
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
@@ -131,25 +227,12 @@ const Createuser: React.FC<CreateuserProps> = ({ userID, accessToken }) => {
         </Form>
       </Modal>
       {apiuser && (
-        <Modal
-          title="Save Your User"
-          visible={isModalVisible}
-          onOk={handleOk}
-          onCancel={handleCancel}
-          footer={null}
-        >
-          <p>
-            Please save this secret user somewhere safe and accessible. For
-            security reasons, <b>you will not be able to view it again</b>{" "}
-            through your LiteLLM account. If you lose this secret user, you will
-            need to generate a new one.
-          </p>
-          <p>
-            {apiuser != null
-              ? `API user: ${apiuser}`
-              : "User being created, this might take 30s"}
-          </p>
-        </Modal>
+        <OnboardingModal
+          isInvitationLinkModalVisible={isInvitationLinkModalVisible}
+          setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
+          baseUrl={baseUrl}
+          invitationLinkData={invitationLinkData}
+        />
       )}
     </div>
   );

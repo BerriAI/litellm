@@ -195,7 +195,7 @@ async def test_add_and_delete_models():
         try:
             await chat_completion(session=session, key=key, model=model_name)
             pytest.fail(f"Expected call to fail.")
-        except:
+        except Exception:
             pass
 
 
@@ -246,6 +246,33 @@ async def get_model_info_v2(session, key):
             raise Exception(f"Request did not return a 200 status code: {status}")
 
 
+async def get_specific_model_info_v2(session, key, model_name):
+    url = "http://0.0.0.0:4000/v2/model/info?debug=True&model=" + model_name
+    print("running /model/info check for model=", model_name)
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+        print("response from v2/model/info")
+        print(response_text)
+        print()
+
+        _json_response = await response.json()
+        print("JSON response from /v2/model/info?model=", model_name, _json_response)
+
+        _model_info = _json_response["data"]
+        assert len(_model_info) == 1, f"Expected 1 model, got {len(_model_info)}"
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return _model_info[0]
+
+
 async def get_model_health(session, key, model_name):
     url = "http://0.0.0.0:4000/health?model=" + model_name
     headers = {
@@ -280,10 +307,16 @@ async def test_add_model_run_health():
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
         key = key_gen["key"]
+        master_key = "sk-1234"
         model_id = str(uuid.uuid4())
         model_name = f"azure-model-health-check-{model_id}"
         print("adding model", model_name)
         await add_model_for_health_checking(session=session, model_id=model_id)
+        _old_model_info = await get_specific_model_info_v2(
+            session=session, key=key, model_name=model_name
+        )
+        print("model info before test", _old_model_info)
+
         await asyncio.sleep(30)
         print("calling /model/info")
         await get_model_info(session=session, key=key)
@@ -295,7 +328,7 @@ async def test_add_model_run_health():
 
         print("calling /health?model=", model_name)
         _health_info = await get_model_health(
-            session=session, key=key, model_name=model_name
+            session=session, key=master_key, model_name=model_name
         )
         _healthy_endpooint = _health_info["healthy_endpoints"][0]
 
@@ -303,6 +336,29 @@ async def test_add_model_run_health():
         assert (
             _healthy_endpooint["model"] == "azure/chatgpt-v-2"
         )  # this is the model that got added
+
+        # assert httpx client is is unchanges
+
+        await asyncio.sleep(10)
+
+        _model_info_after_test = await get_specific_model_info_v2(
+            session=session, key=key, model_name=model_name
+        )
+
+        print("model info after test", _model_info_after_test)
+        old_openai_client = _old_model_info["openai_client"]
+        new_openai_client = _model_info_after_test["openai_client"]
+        print("old openai client", old_openai_client)
+        print("new openai client", new_openai_client)
+
+        """
+        PROD TEST - This is extremly important 
+        The OpenAI client used should be the same after 30 seconds
+        It is a serious bug if the openai client does not match here
+        """
+        assert (
+            old_openai_client == new_openai_client
+        ), "OpenAI client does not match for the same model after 30 seconds"
 
         # cleanup
         await delete_model(session=session, model_id=model_id)

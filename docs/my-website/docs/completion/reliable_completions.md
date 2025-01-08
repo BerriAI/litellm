@@ -31,9 +31,15 @@ response = completion(
         )
 ```
 
-## Fallbacks 
+## Fallbacks (SDK)
 
-### Context Window Fallbacks
+:::info
+
+[See how to do on PROXY](../proxy/reliability.md)
+
+:::
+
+### Context Window Fallbacks (SDK)
 ```python 
 from litellm import completion
 
@@ -43,7 +49,7 @@ messages = [{"content": "how does a court case get to the Supreme Court?" * 500,
 completion(model="gpt-3.5-turbo", messages=messages, context_window_fallback_dict=ctx_window_fallback_dict)
 ```
 
-### Fallbacks - Switch Models/API Keys/API Bases
+### Fallbacks - Switch Models/API Keys/API Bases (SDK)
 
 LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
@@ -69,7 +75,7 @@ response = completion(model="azure/gpt-4", messages=messages, api_key=api_key,
 
 [Check out this section for implementation details](#fallbacks-1)
 
-## Implementation Details 
+## Implementation Details (SDK)
 
 ### Fallbacks
 #### Output from calls

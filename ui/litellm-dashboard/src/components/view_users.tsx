@@ -19,12 +19,32 @@ import {
   TabPanel,
   Select,
   SelectItem,
+  Dialog,
+  DialogPanel,
+  Icon,
+  TextInput,
 } from "@tremor/react";
-import { userInfoCall, adminTopEndUsersCall } from "./networking";
+
+import { message } from "antd";
+import { Modal } from "antd";
+
+import {
+  userInfoCall,
+  userUpdateUserCall,
+  getPossibleUserRoles,
+} from "./networking";
 import { Badge, BadgeDelta, Button } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
+import EditUserModal from "./edit_user";
 import Paragraph from "antd/es/skeleton/Paragraph";
+import {
+  PencilAltIcon,
+  InformationCircleIcon,
+  TrashIcon,
+} from "@heroicons/react/outline";
+
+import { userDeleteCall } from "./networking";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -32,7 +52,22 @@ interface ViewUserDashboardProps {
   keys: any[] | null;
   userRole: string | null;
   userID: string | null;
+  teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+}
+
+interface UserListResponse {
+  users: any[] | null;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal != true) {
+  console.log = function() {};
 }
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
@@ -41,12 +76,89 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   keys,
   userRole,
   userID,
+  teams,
   setKeys,
 }) => {
+  const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
-  const [currentPage, setCurrentPage] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
+  const [selectedItem, setSelectedItem] = useState<null | any>(null);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<string | null>(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<
+    Record<string, Record<string, string>>
+  >({});
   const defaultPageSize = 25;
+
+  // check if window is not undefined
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", function () {
+      // Clear session storage
+      sessionStorage.clear();
+    });
+  }
+
+  const handleDelete = (userId: string) => {
+    setUserToDelete(userId);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (userToDelete && accessToken) {
+      try {
+        await userDeleteCall(accessToken, [userToDelete]);
+        message.success("User deleted successfully");
+        // Update the user list after deletion
+        if (userData) {
+          const updatedUserData = userData.filter(user => user.user_id !== userToDelete);
+          setUserData(updatedUserData);
+        }
+      } catch (error) {
+        console.error("Error deleting user:", error);
+        message.error("Failed to delete user");
+      }
+    }
+    setIsDeleteModalOpen(false);
+    setUserToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
+    setUserToDelete(null);
+  };
+
+  const handleEditCancel = async () => {
+    setSelectedUser(null);
+    setEditModalVisible(false);
+  };
+
+  const handleEditSubmit = async (editedUser: any) => {
+    console.log("inside handleEditSubmit:", editedUser);
+
+    if (!accessToken || !token || !userRole || !userID) {
+      return;
+    }
+
+    try {
+      await userUpdateUserCall(accessToken, editedUser, null);
+      message.success(`User ${editedUser.user_id} updated successfully`);
+    } catch (error) {
+      console.error("There was an error updating the user", error);
+    }
+    if (userData) {
+      const updatedUserData = userData.map((user) =>
+        user.user_id === editedUser.user_id ? editedUser : user
+      );
+      setUserData(updatedUserData);
+    }
+    setSelectedUser(null);
+    setEditModalVisible(false);
+    // Close the modal
+  };
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
@@ -54,17 +166,42 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        // Replace with your actual API call for model data
-        const userDataResponse = await userInfoCall(
-          accessToken,
-          null,
-          userRole,
-          true,
-          currentPage,
-          defaultPageSize
-        );
-        console.log("user data response:", userDataResponse);
-        setUserData(userDataResponse);
+        // Check session storage first
+        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
+        if (cachedUserData) {
+          const parsedData = JSON.parse(cachedUserData);
+          setUserListResponse(parsedData);
+          setUserData(parsedData.users || []);
+        } else {
+          // Fetch from API if not in cache
+          const userDataResponse = await userInfoCall(
+            accessToken,
+            null,
+            userRole,
+            true,
+            currentPage,
+            defaultPageSize
+          );
+
+          // Store in session storage
+          sessionStorage.setItem(
+            `userList_${currentPage}`,
+            JSON.stringify(userDataResponse)
+          );
+
+          setUserListResponse(userDataResponse);
+          setUserData(userDataResponse.users || []);
+        }
+
+        // Fetch roles if not cached
+        const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+        if (cachedRoles) {
+          setPossibleUIRoles(JSON.parse(cachedRoles));
+        } else {
+          const availableUserRoles = await getPossibleUserRoles(accessToken);
+          sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+          setPossibleUIRoles(availableUserRoles);
+        }
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -74,22 +211,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       fetchData();
     }
 
-    const fetchEndUserSpend = async () => {
-      try {
-        const topEndUsers = await adminTopEndUsersCall(accessToken, null);
-        console.log("user data response:", topEndUsers);
-        setEndUsers(topEndUsers);
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-    if (
-      userRole &&
-      (userRole == "Admin" || userRole == "Admin Viewer") &&
-      !endUsers
-    ) {
-      fetchEndUserSpend();
-    }
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
@@ -100,40 +221,34 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return <div>Loading...</div>;
   }
 
-  const onKeyClick = async (keyToken: String) => {
-    try {
-      const topEndUsers = await adminTopEndUsersCall(accessToken, keyToken);
-      console.log("user data response:", topEndUsers);
-      setEndUsers(topEndUsers);
-    } catch (error) {
-      console.error("There was an error fetching the model data", error);
-    }
-  };
-
   function renderPagination() {
     if (!userData) return null;
 
-    const totalPages = Math.ceil(userData.length / defaultPageSize);
+    const totalPages = userListResponse?.total_pages || 0;
+
+    const handlePageChange = (newPage: number) => {
+      setUserData([]); // Clear current users
+      setCurrentPage(newPage);
+    };
+  
 
     return (
       <div className="flex justify-between items-center">
         <div>
-          Showing Page {currentPage+1} of {totalPages}
+          Showing Page {currentPage } of {totalPages}
         </div>
         <div className="flex">
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 0}
-            onClick={() => setCurrentPage(currentPage - 1)}
+            disabled={currentPage === 1}
+            onClick={() => handlePageChange(currentPage - 1)}
           >
             &larr; Prev
           </button>
           <button
             className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            // disabled={currentPage === totalPages}
-            onClick={() => {
-              setCurrentPage(currentPage + 1);
-            }}
+            disabled={currentPage === totalPages}
+            onClick={() => handlePageChange(currentPage + 1)}
           >
             Next &rarr;
           </button>
@@ -144,41 +259,74 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[75vh] w-full mt-8">
-        <CreateUser userID={userID} accessToken={accessToken} />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4">
+      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
+        <CreateUser
+          userID={userID}
+          accessToken={accessToken}
+          teams={teams}
+          possibleUIRoles={possibleUIRoles}
+        />
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
+          <div className="mb-4 mt-1"></div>
           <TabGroup>
-            <TabList variant="line" defaultValue="1">
-              <Tab value="1">Key Owners</Tab>
-              <Tab value="2">End-Users</Tab>
-            </TabList>
             <TabPanels>
               <TabPanel>
                 <Table className="mt-5">
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Role</TableHeaderCell>
-                      <TableHeaderCell>User Models</TableHeaderCell>
+                      <TableHeaderCell>User Email</TableHeaderCell>
+                      <TableHeaderCell>Role</TableHeaderCell>
                       <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
                       <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+                      <TableHeaderCell>API Keys</TableHeaderCell>
+                      <TableHeaderCell></TableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {userData.map((user: any) => (
                       <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id}</TableCell>
+                        <TableCell>{user.user_id || "-"}</TableCell>
+                        <TableCell>{user.user_email || "-"}</TableCell>
                         <TableCell>
-                          {user.user_role ? user.user_role : "app_owner"}
+                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
                         </TableCell>
                         <TableCell>
-                          {user.models && user.models.length > 0
-                            ? user.models
-                            : "All Models"}
+                          {user.spend ? user.spend?.toFixed(2) : "-"}
                         </TableCell>
-                        <TableCell>{user.spend ? user.spend : 0}</TableCell>
                         <TableCell>
-                          {user.max_budget ? user.max_budget : "Unlimited"}
+                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
+                        </TableCell>
+                        <TableCell>
+                          <Grid numItems={2}>
+                            {user.key_count > 0 ? (
+                              <Badge size={"xs"} color={"indigo"}>
+                                {user.key_count} Keys
+                              </Badge>
+                            ) : (
+                              <Badge size={"xs"} color={"gray"}>
+                                No Keys
+                              </Badge>
+                            )}
+                            {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
+                          </Grid>
+                        </TableCell>
+                        <TableCell>
+                          <Icon
+                            icon={PencilAltIcon}
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setEditModalVisible(true);
+                            }}
+                          >
+                            View Keys
+                          </Icon>
+                          <Icon
+                            icon={TrashIcon}
+                            onClick={() => handleDelete(user.user_id)}
+                          >
+                            Delete
+                          </Icon>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -188,51 +336,65 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               <TabPanel>
                 <div className="flex items-center">
                   <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center">
-                    <Text className="w-1/4 mr-2 text-right">Key</Text>
-                    <Select defaultValue="1" className="w-3/4">
-                      {keys?.map((key: any, index: number) => {
-                        if (
-                          key &&
-                          key["key_name"] !== null &&
-                          key["key_name"].length > 0
-                        ) {
-                          return (
-                            <SelectItem
-                              key={index}
-                              value={String(index)}
-                              onClick={() => onKeyClick(key["token"])}
-                            >
-                              {key["key_name"]}
-                            </SelectItem>
-                          );
-                        }
-                      })}
-                    </Select>
-                  </div>
+                  <div className="flex-1 flex justify-between items-center"></div>
                 </div>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>End User</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell>Total Events</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {endUsers?.map((user: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>{user.end_user}</TableCell>
-                        <TableCell>{user.total_spend}</TableCell>
-                        <TableCell>{user.total_events}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
               </TabPanel>
             </TabPanels>
           </TabGroup>
+          <EditUserModal
+            visible={editModalVisible}
+            possibleUIRoles={possibleUIRoles}
+            onCancel={handleEditCancel}
+            user={selectedUser}
+            onSubmit={handleEditSubmit}
+          />
+          {isDeleteModalOpen && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 transition-opacity"
+              aria-hidden="true"
+            >
+              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
+
+            {/* Modal Panel */}
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
+
+            {/* Confirmation Modal Content */}
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="sm:flex sm:items-start">
+                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      Delete User
+                    </h3>
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-500">
+                        Are you sure you want to delete this user?
+                      </p>
+                      <p className="text-sm font-medium text-gray-900 mt-2">
+                        User ID: {userToDelete}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <Button onClick={confirmDelete} color="red" className="ml-2">
+                  Delete
+                </Button>
+                <Button onClick={cancelDelete}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
         </Card>
         {renderPagination()}
       </Grid>

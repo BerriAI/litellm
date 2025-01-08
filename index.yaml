@@ -1,0 +1,108 @@
+apiVersion: v1
+entries:
+  litellm-helm:
+  - apiVersion: v2
+    appVersion: v1.43.18
+    created: "2024-08-19T23:58:25.331689+08:00"
+    dependencies:
+    - condition: db.deployStandalone
+      name: postgresql
+      repository: oci://registry-1.docker.io/bitnamicharts
+      version: '>=13.3.0'
+    - condition: redis.enabled
+      name: redis
+      repository: oci://registry-1.docker.io/bitnamicharts
+      version: '>=18.0.0'
+    description: Call all LLM APIs using the OpenAI format
+    digest: 0411df3dc42868be8af3ad3e00cb252790e6bd7ad15f5b77f1ca5214573a8531
+    name: litellm-helm
+    type: application
+    urls:
+    - https://berriai.github.io/litellm/litellm-helm-0.2.3.tgz
+    version: 0.2.3
+  postgresql:
+  - annotations:
+      category: Database
+      images: |
+        - name: os-shell
+          image: docker.io/bitnami/os-shell:12-debian-12-r16
+        - name: postgres-exporter
+          image: docker.io/bitnami/postgres-exporter:0.15.0-debian-12-r14
+        - name: postgresql
+          image: docker.io/bitnami/postgresql:16.2.0-debian-12-r6
+      licenses: Apache-2.0
+    apiVersion: v2
+    appVersion: 16.2.0
+    created: "2024-08-19T23:58:25.335716+08:00"
+    dependencies:
+    - name: common
+      repository: oci://registry-1.docker.io/bitnamicharts
+      tags:
+      - bitnami-common
+      version: 2.x.x
+    description: PostgreSQL (Postgres) is an open source object-relational database
+      known for reliability and data integrity. ACID-compliant, it supports foreign
+      keys, joins, views, triggers and stored procedures.
+    digest: 3c8125526b06833df32e2f626db34aeaedb29d38f03d15349db6604027d4a167
+    home: https://bitnami.com
+    icon: https://bitnami.com/assets/stacks/postgresql/img/postgresql-stack-220x234.png
+    keywords:
+    - postgresql
+    - postgres
+    - database
+    - sql
+    - replication
+    - cluster
+    maintainers:
+    - name: VMware, Inc.
+      url: https://github.com/bitnami/charts
+    name: postgresql
+    sources:
+    - https://github.com/bitnami/charts/tree/main/bitnami/postgresql
+    urls:
+    - https://berriai.github.io/litellm/charts/postgresql-14.3.1.tgz
+    version: 14.3.1
+  redis:
+  - annotations:
+      category: Database
+      images: |
+        - name: kubectl
+          image: docker.io/bitnami/kubectl:1.29.2-debian-12-r3
+        - name: os-shell
+          image: docker.io/bitnami/os-shell:12-debian-12-r16
+        - name: redis
+          image: docker.io/bitnami/redis:7.2.4-debian-12-r9
+        - name: redis-exporter
+          image: docker.io/bitnami/redis-exporter:1.58.0-debian-12-r4
+        - name: redis-sentinel
+          image: docker.io/bitnami/redis-sentinel:7.2.4-debian-12-r7
+      licenses: Apache-2.0
+    apiVersion: v2
+    appVersion: 7.2.4
+    created: "2024-08-19T23:58:25.339392+08:00"
+    dependencies:
+    - name: common
+      repository: oci://registry-1.docker.io/bitnamicharts
+      tags:
+      - bitnami-common
+      version: 2.x.x
+    description: Redis(R) is an open source, advanced key-value store. It is often
+      referred to as a data structure server since keys can contain strings, hashes,
+      lists, sets and sorted sets.
+    digest: b2fa1835f673a18002ca864c54fadac3c33789b26f6c5e58e2851b0b14a8f984
+    home: https://bitnami.com
+    icon: https://bitnami.com/assets/stacks/redis/img/redis-stack-220x234.png
+    keywords:
+    - redis
+    - keyvalue
+    - database
+    maintainers:
+    - name: VMware, Inc.
+      url: https://github.com/bitnami/charts
+    name: redis
+    sources:
+    - https://github.com/bitnami/charts/tree/main/bitnami/redis
+    urls:
+    - https://berriai.github.io/litellm/charts/redis-18.19.1.tgz
+    version: 18.19.1
+generated: "2024-08-19T23:58:25.322532+08:00"

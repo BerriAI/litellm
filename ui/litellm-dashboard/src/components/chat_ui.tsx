@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Card,
@@ -13,22 +13,22 @@ import {
   TabGroup,
   TabList,
   TabPanel,
+  TabPanels,
   Metric,
   Col,
   Text,
   SelectItem,
   TextInput,
-  TabPanels,
   Button,
 } from "@tremor/react";
-
-
 
 import { message, Select } from "antd";
 import { modelAvailableCall } from "./networking";
 import openai from "openai";
+import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Typography } from "antd";
+import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -38,13 +38,16 @@ interface ChatUIProps {
 }
 
 async function generateModelResponse(
-  inputMessage: string,
-  updateUI: (chunk: string) => void,
+  chatHistory: { role: string; content: string }[],
+  updateUI: (chunk: string, model: string) => void,
   selectedModel: string,
   accessToken: string
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
+  if (isLocal !== true) {
+    console.log = function () {};
+  }
   console.log("isLocal:", isLocal);
   const proxyBaseUrl = isLocal
     ? "http://localhost:4000"
@@ -59,18 +62,13 @@ async function generateModelResponse(
     const response = await client.chat.completions.create({
       model: selectedModel,
       stream: true,
-      messages: [
-        {
-          role: "user",
-          content: inputMessage,
-        },
-      ],
+      messages: chatHistory as ChatCompletionMessageParam[],
     });
 
     for await (const chunk of response) {
       console.log(chunk);
       if (chunk.choices[0].delta.content) {
-        updateUI(chunk.choices[0].delta.content);
+        updateUI(chunk.choices[0].delta.content, chunk.model);
       }
     }
   } catch (error) {
@@ -78,27 +76,27 @@ async function generateModelResponse(
   }
 }
 
-
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
   token,
   userRole,
   userID,
 }) => {
+  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>('session');
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
     undefined
   );
-  const [modelInfo, setModelInfo] = useState<any[]>([]);// Declare modelInfo at the component level
+  const [modelInfo, setModelInfo] = useState<any[]>([]);
+
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
-
-    
 
     // Fetch model info and set the default selected model
     const fetchModelInfo = async () => {
@@ -112,21 +110,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("model_info:", fetchedAvailableModels);
   
         if (fetchedAvailableModels?.data.length > 0) {
-          const options = fetchedAvailableModels["data"].map((item: { id: string }) => ({
-            value: item.id,
-            label: item.id
-          }));
-  
-          // Now, 'options' contains the list you wanted
-          console.log(options); // You can log it to verify the list
+          // Create a Map to store unique models using the model ID as key
+          const uniqueModelsMap = new Map();
           
-          // setModelInfo(options) should be inside the if block to avoid setting it when no data is available
-          setModelInfo(options);
-          setSelectedModel(fetchedAvailableModels.data[0].id);
+          fetchedAvailableModels["data"].forEach((item: { id: string }) => {
+            uniqueModelsMap.set(item.id, {
+              value: item.id,
+              label: item.id
+            });
+          });
+
+          // Convert Map values back to array
+          const uniqueModels = Array.from(uniqueModelsMap.values());
+
+          // Sort models alphabetically
+          uniqueModels.sort((a, b) => a.label.localeCompare(b.label));
+
+          setModelInfo(uniqueModels);
+          setSelectedModel(uniqueModels[0].value);
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
-        // Handle error as needed
       }
     };
   
@@ -134,40 +138,62 @@ const ChatUI: React.FC<ChatUIProps> = ({
   }, [accessToken, userID, userRole]);
   
 
-  const updateUI = (role: string, chunk: string) => {
+  useEffect(() => {
+    // Scroll to the bottom of the chat whenever chatHistory updates
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatHistory]);
+
+  const updateUI = (role: string, chunk: string, model?: string) => {
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
 
       if (lastMessage && lastMessage.role === role) {
         return [
           ...prevHistory.slice(0, prevHistory.length - 1),
-          { role, content: lastMessage.content + chunk },
+          { role, content: lastMessage.content + chunk, model },
         ];
       } else {
-        return [...prevHistory, { role, content: chunk }];
+        return [...prevHistory, { role, content: chunk, model }];
       }
     });
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      handleSendMessage();
+    }
   };
 
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
-    if (!apiKey || !token || !userRole || !userID) {
+    if (!token || !userRole || !userID) {
       return;
     }
 
-    setChatHistory((prevHistory) => [
-      ...prevHistory,
-      { role: "user", content: inputMessage },
-    ]);
+    const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+
+    if (!effectiveApiKey) {
+      message.error("Please provide an API key or select Current UI Session");
+      return;
+    }
+
+
+    const newUserMessage = { role: "user", content: inputMessage };
+
+    const updatedChatHistory = [...chatHistory, newUserMessage];
+
+    setChatHistory(updatedChatHistory);
 
     try {
       if (selectedModel) {
         await generateModelResponse(
-          inputMessage,
-          (chunk) => updateUI("assistant", chunk),
+          updatedChatHistory,
+          (chunk, model) => updateUI("assistant", chunk, model),
           selectedModel,
-          apiKey
+          effectiveApiKey
         );
       }
     } catch (error) {
@@ -178,7 +204,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setInputMessage("");
   };
 
-  if (userRole && userRole == "Admin Viewer") {
+  const clearChatHistory = () => {
+    setChatHistory([]);
+    message.success("Chat history cleared.");
+  };
+
+  if (userRole && userRole === "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
       <div>
@@ -201,34 +232,52 @@ const ChatUI: React.FC<ChatUIProps> = ({
           <TabGroup>
             <TabList>
               <Tab>Chat</Tab>
-              <Tab>API Reference</Tab>
             </TabList>
-
             <TabPanels>
               <TabPanel>
-              <div className="sm:max-w-2xl">
-          <Grid numItems={2}>
-            <Col>
-            <Text>API Key</Text>
-              <TextInput placeholder="Type API Key here" type="password" onValueChange={setApiKey} value={apiKey}/>
-            </Col>
-            <Col className="mx-2">
-            <Text>Select Model:</Text>
+                <div className="sm:max-w-2xl">
+                  <Grid numItems={2}>
+                    <Col>
+                      <Text>API Key Source</Text>
+                      <Select
+                        defaultValue="session"
+                        style={{ width: "100%" }}
+                        onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                        options={[
+                          { value: 'session', label: 'Current UI Session' },
+                          { value: 'custom', label: 'Virtual Key' },
+                        ]}
+                      />
+                      {apiKeySource === 'custom' && (
+                        <TextInput
+                          className="mt-2"
+                          placeholder="Enter custom API key"
+                          type="password"
+                          onValueChange={setApiKey}
+                          value={apiKey}
+                        />
+                      )}
+                    </Col>
+                    <Col className="mx-2">
+                      <Text>Select Model:</Text>
+                      <Select
+                        placeholder="Select a Model"
+                        onChange={onChange}
+                        options={modelInfo}
+                        style={{ width: "350px" }}
+                        showSearch={true}
+                      />
+                    </Col>
+                  </Grid>
 
-            <Select
-                placeholder="Select a Model"
-                onChange={onChange}
-                options={modelInfo}
-                style={{ width: "200px" }}
-                
-                
-               
-              />
-            </Col>
-          </Grid>
-        
-          
-        </div>
+                  {/* Clear Chat Button */}
+                  <Button
+                    onClick={clearChatHistory}
+                    className="mt-4"
+                  >
+                    Clear Chat
+                  </Button>
+                </div>
                 <Table
                   className="mt-5"
                   style={{
@@ -247,20 +296,79 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <TableBody>
                     {chatHistory.map((message, index) => (
                       <TableRow key={index}>
-                        <TableCell>{`${message.role}: ${message.content}`}</TableCell>
+                        <TableCell>
+                          <div style={{ 
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            marginBottom: '4px'
+                          }}>
+                            <strong>{message.role}</strong>
+                            {message.role === "assistant" && message.model && (
+                              <span style={{
+                                fontSize: '12px',
+                                color: '#666',
+                                backgroundColor: '#f5f5f5',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontWeight: 'normal'
+                              }}>
+                                {message.model}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ 
+                            whiteSpace: "pre-wrap", 
+                            wordBreak: "break-word",
+                            maxWidth: "100%"
+                          }}>
+                            <ReactMarkdown
+                              components={{
+                                code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                                  inline?: boolean;
+                                  node?: any;
+                                }) {
+                                  const match = /language-(\w+)/.exec(className || '');
+                                  return !inline && match ? (
+                                    <SyntaxHighlighter
+                                      style={coy as any}
+                                      language={match[1]}
+                                      PreTag="div"
+                                      {...props}
+                                    >
+                                      {String(children).replace(/\n$/, '')}
+                                    </SyntaxHighlighter>
+                                  ) : (
+                                    <code className={className} {...props}>
+                                      {children}
+                                    </code>
+                                  );
+                                }
+                              }}
+                            >
+                              {message.content}
+                            </ReactMarkdown>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
+                    <TableRow>
+                      <TableCell>
+                        <div ref={chatEndRef} />
+                      </TableCell>
+                    </TableRow>
                   </TableBody>
                 </Table>
                 <div
                   className="mt-3"
                   style={{ position: "absolute", bottom: 5, width: "95%" }}
                 >
-                  <div className="flex">
+                  <div className="flex" style={{ marginTop: "16px" }}>
                     <TextInput
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyDown={handleKeyDown}
                       placeholder="Type your message..."
                     />
                     <Button
@@ -272,124 +380,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   </div>
                 </div>
               </TabPanel>
-              <TabPanel>
-                <TabGroup>
-                  <TabList>
-                    <Tab>OpenAI Python SDK</Tab>
-                    <Tab>LlamaIndex</Tab>
-                    <Tab>Langchain Py</Tab>
-                  </TabList>
-                  <TabPanels>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
-import openai
-client = openai.OpenAI(
-    api_key="your_api_key",
-    base_url="http://0.0.0.0:4000" # proxy base url
-)
-
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo", # model to use from Models Tab
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "generation_name": "ishaan-generation-openai-client",
-            "generation_id": "openai-client-gen-id22",
-            "trace_id": "openai-client-trace-id22",
-            "trace_user_id": "openai-client-user-id2"
-        }
-    }
-)
-
-print(response)
-            `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
-import os, dotenv
-
-from llama_index.llms import AzureOpenAI
-from llama_index.embeddings import AzureOpenAIEmbedding
-from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
-
-llm = AzureOpenAI(
-    engine="azure-gpt-3.5",               # model_name on litellm proxy
-    temperature=0.0,
-    azure_endpoint="http://0.0.0.0:4000", # litellm proxy endpoint
-    api_key="sk-1234",                    # litellm proxy API Key
-    api_version="2023-07-01-preview",
-)
-
-embed_model = AzureOpenAIEmbedding(
-    deployment_name="azure-embedding-model",
-    azure_endpoint="http://0.0.0.0:4000",
-    api_key="sk-1234",
-    api_version="2023-07-01-preview",
-)
-
-
-documents = SimpleDirectoryReader("llama_index_data").load_data()
-service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
-index = VectorStoreIndex.from_documents(documents, service_context=service_context)
-
-query_engine = index.as_query_engine()
-response = query_engine.query("What did the author do growing up?")
-print(response)
-
-            `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "generation_name": "ishaan-generation-langchain-client",
-            "generation_id": "langchain-client-gen-id22",
-            "trace_id": "langchain-client-trace-id22",
-            "trace_user_id": "langchain-client-user-id2"
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-
-            `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                  </TabPanels>
-                </TabGroup>
-              </TabPanel>
+              
             </TabPanels>
           </TabGroup>
         </Card>

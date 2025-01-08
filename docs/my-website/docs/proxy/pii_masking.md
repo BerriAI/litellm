@@ -1,6 +1,14 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-# PII Masking
+# PII Masking - LiteLLM Gateway (Deprecated Version)
+
+:::warning
+
+This is deprecated, please use [our new Presidio pii masking integration](./guardrails/pii_masking_v2)
+
+:::
 
 LiteLLM supports [Microsoft Presidio](https://github.com/microsoft/presidio/) for PII masking. 
 
@@ -179,4 +187,60 @@ chat_completion = client.chat.completions.create(
   },
   "_response_ms": 1753.426
 }
+```
+
+
+## Turn on for logging only
+
+Only apply PII Masking before logging to Langfuse, etc.
+
+Not on the actual llm api request / response.
+
+:::note
+This is currently only applied for 
+- `/chat/completion` requests
+- on 'success' logging
+
+:::
+
+1. Setup config.yaml
+```yaml
+litellm_settings:
+  presidio_logging_only: true 
+
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hi, my name is Jane!"
+    }
+  ]
+  }'
+```
+
+
+**Expected Logged Response**
+
+```
+Hi, my name is <PERSON>!
 ```

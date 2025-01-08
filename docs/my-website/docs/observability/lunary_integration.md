@@ -1,5 +1,13 @@
 # Lunary - Logging and tracing LLM input/output
 
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
+
 [Lunary](https://lunary.ai/) is an open-source AI developer platform providing observability, prompt management, and evaluation tools for AI developers.
 
 <video controls width='900' >

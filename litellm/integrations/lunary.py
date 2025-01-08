@@ -1,14 +1,10 @@
 #### What this does ####
 #    On success + failure, log events to lunary.ai
-from datetime import datetime, timezone
-import traceback
-import dotenv
 import importlib
-import sys
+import traceback
+from datetime import datetime, timezone
 
 import packaging
-
-dotenv.load_dotenv()
 
 
 # convert to {completion: xx, tokens: xx}
@@ -19,12 +15,33 @@ def parse_usage(usage):
     }
 
 
+def parse_tool_calls(tool_calls):
+    if tool_calls is None:
+        return None
+
+    def clean_tool_call(tool_call):
+
+        serialized = {
+            "type": tool_call.type,
+            "id": tool_call.id,
+            "function": {
+                "name": tool_call.function.name,
+                "arguments": tool_call.function.arguments,
+            },
+        }
+
+        return serialized
+
+    return [clean_tool_call(tool_call) for tool_call in tool_calls]
+
+
 def parse_messages(input):
+
     if input is None:
         return None
 
     def clean_message(message):
-        # if is strin, return as is
+        # if is string, return as is
         if isinstance(message, str):
             return message
 
@@ -38,9 +55,7 @@ def parse_messages(input):
 
         # Only add tool_calls and function_call to res if they are set
         if message.get("tool_calls"):
-            serialized["tool_calls"] = message.get("tool_calls")
-        if message.get("function_call"):
-            serialized["function_call"] = message.get("function_call")
+            serialized["tool_calls"] = parse_tool_calls(message.get("tool_calls"))
 
         return serialized
 
@@ -59,17 +74,19 @@ class LunaryLogger:
         try:
             import lunary
 
-            version = importlib.metadata.version("lunary")
+            version = importlib.metadata.version("lunary")  # type: ignore
             # if version < 0.1.43 then raise ImportError
-            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
-                print(
+            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):  # type: ignore
+                print(  # noqa
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
                 raise ImportError
 
             self.lunary_client = lunary
         except ImportError:
-            print("Lunary not installed. Please install it using 'pip install lunary'")
+            print(  # noqa
+                "Lunary not installed. Please install it using 'pip install lunary'"
+            )  # noqa
             raise ImportError
 
     def log_event(
@@ -80,7 +97,7 @@ class LunaryLogger:
         run_id,
         model,
         print_verbose,
-        extra=None,
+        extra={},
         input=None,
         user_id=None,
         response_obj=None,
@@ -88,14 +105,18 @@ class LunaryLogger:
         end_time=datetime.now(timezone.utc),
         error=None,
     ):
-        # Method definition
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")
 
+            template_id = None
             litellm_params = kwargs.get("litellm_params", {})
+            optional_params = kwargs.get("optional_params", {})
             metadata = litellm_params.get("metadata", {}) or {}
 
-            tags = litellm_params.pop("tags", None) or []
+            if optional_params:
+                extra = {**extra, **optional_params}
+
+            tags = metadata.get("tags", None)
 
             if extra:
                 extra.pop("extra_body", None)
@@ -104,10 +125,10 @@ class LunaryLogger:
 
             # keep only serializable types
             for param, value in extra.items():
-                if not isinstance(value, (str, int, bool, float)):
+                if not isinstance(value, (str, int, bool, float)) and param != "tools":
                     try:
                         extra[param] = str(value)
-                    except:
+                    except Exception:
                         pass
 
             if response_obj:
@@ -128,7 +149,7 @@ class LunaryLogger:
             else:
                 error_obj = None
 
-            self.lunary_client.track_event(
+            self.lunary_client.track_event(  # type: ignore
                 type,
                 "start",
                 run_id,
@@ -140,10 +161,10 @@ class LunaryLogger:
                 metadata=metadata,
                 runtime="litellm",
                 tags=tags,
-                extra=extra,
+                params=extra,
             )
 
-            self.lunary_client.track_event(
+            self.lunary_client.track_event(  # type: ignore
                 type,
                 event,
                 run_id,
@@ -154,7 +175,6 @@ class LunaryLogger:
                 token_usage=usage,
             )
 
-        except:
-            # traceback.print_exc()
+        except Exception:
             print_verbose(f"Lunary Logging Error - {traceback.format_exc()}")
             pass

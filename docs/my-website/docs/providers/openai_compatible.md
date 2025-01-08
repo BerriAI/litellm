@@ -7,7 +7,7 @@ To call models hosted behind an openai proxy, make 2 changes:
 
 1. For `/chat/completions`: Put `openai/` in front of your model name, so litellm knows you're trying to call an openai `/chat/completions` endpoint. 
 
-2. For `/completions`: Put `text-completion-openai/` in front of your model name, so litellm knows you're trying to call an openai `/completions` endpoint. 
+2. For `/completions`: Put `text-completion-openai/` in front of your model name, so litellm knows you're trying to call an openai `/completions` endpoint. [NOT REQUIRED for `openai/` endpoints called via `/v1/completions` route].
 
 2. **Do NOT** add anything additional to the base url e.g. `/v1/embedding`. LiteLLM uses the openai-client to make these calls, and that automatically adds the relevant endpoints. 
 
@@ -18,7 +18,7 @@ import litellm
 import os
 
 response = litellm.completion(
-    model="openai/mistral,               # add `openai/` prefix to model so litellm knows to route to OpenAI
+    model="openai/mistral",               # add `openai/` prefix to model so litellm knows to route to OpenAI
     api_key="sk-1234",                  # api key to your openai compatible endpoint
     api_base="http://0.0.0.0:4000",     # set API Base of your Custom OpenAI Endpoint
     messages=[
@@ -62,6 +62,14 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
         api_base: <model-api-base>       # add api base for OpenAI compatible provider
         api_key: api-key                 # api key to send your model
   ```
+
+  :::info
+
+  If you see `Not Found Error` when testing make sure your `api_base` has the `/v1` postfix
+
+  Example: `http://vllm-endpoint.xyz/v1`
+
+  :::
 
 2. Start the proxy 
 
@@ -115,3 +123,18 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   </TabItem>
 
   </Tabs>
+
+
+### Advanced - Disable System Messages
+
+Some VLLM models (e.g. gemma) don't support system messages. To map those requests to 'user' messages, use the `supports_system_message` flag. 
+
+```yaml
+model_list:
+- model_name: my-custom-model
+   litellm_params:
+      model: openai/google/gemma
+      api_base: http://my-custom-base
+      api_key: "" 
+      supports_system_message: False # 👈 KEY CHANGE
+```

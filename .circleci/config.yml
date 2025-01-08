@@ -1,8 +1,14 @@
 version: 2.1
+orbs:
+  codecov: codecov/codecov@4.0.1
+
 jobs:
   local_testing:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -13,15 +19,6 @@ jobs:
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
 
-      - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
-          command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
-            else
-              echo "No changes to litellm or pyproject.toml. Skipping tests."
-              circleci step halt
-            fi
       - restore_cache:
           keys:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
@@ -31,7 +28,9 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
             pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
@@ -40,15 +39,22 @@ jobs:
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
-            pip install "langfuse==2.7.3"
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.45.0"
+            pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install traceloop-sdk==0.0.69
-            pip install openai
-            pip install prisma            
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.54.0 
+            pip install prisma==0.11.0   
+            pip install "detect_secrets==1.5.0"         
             pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
             pip install fastapi
             pip install "gunicorn==21.2.0"
-            pip install "anyio==3.7.1"
+            pip install "anyio==4.2.0"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "apscheduler==3.10.4"
@@ -58,16 +64,22 @@ jobs:
             pip install python-multipart
             pip install google-cloud-aiplatform
             pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+            pip install "pytest-xdist==3.6.1"
+            pip install "websockets==10.4"
       - save_cache:
           paths:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
-          name: Run prisma ./entrypoint.sh
+          name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
-            chmod +x entrypoint.sh
-            ./entrypoint.sh
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
             set -e
       - run:
           name: Black Formatting
@@ -86,7 +98,6 @@ jobs:
               exit 1
             fi
             cd ..
-  
 
       # Run pytest and generate JUnit XML report
       - run:
@@ -94,16 +105,751 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml local_testing_coverage.xml
+            mv .coverage local_testing_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - local_testing_coverage.xml
+            - local_testing_coverage
+  langfuse_logging_unit_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install mypy
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.45.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.54.0 
+            pip install prisma==0.11.0   
+            pip install "detect_secrets==1.5.0"         
+            pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml langfuse_coverage.xml
+            mv .coverage langfuse_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - langfuse_coverage.xml
+            - langfuse_coverage
+  caching_unit_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install mypy
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.45.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.54.0 
+            pip install prisma==0.11.0   
+            pip install "detect_secrets==1.5.0"         
+            pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "caching or cache"
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml caching_coverage.xml
+            mv .coverage caching_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - caching_coverage.xml
+            - caching_coverage
+  auth_ui_unit_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/proxy_admin_ui_tests -x --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml auth_ui_unit_tests_coverage.xml
+            mv .coverage auth_ui_unit_tests_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      
+      - persist_to_workspace:
+          root: .
+          paths:
+            - auth_ui_unit_tests_coverage.xml
+            - auth_ui_unit_tests_coverage
+  litellm_router_testing: # Runs all tests with the "router" keyword
+    docker:
+        - image: cimg/python:3.11
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest tests/local_testing tests/router_unit_tests --cov=litellm --cov-report=xml -vv -k "router" -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_router_coverage.xml
+            mv .coverage litellm_router_coverage
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_router_coverage.xml
+            - litellm_router_coverage
+  litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
+    docker:
+        - image: cimg/python:3.11
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    steps:
+      - checkout
+
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install mypy
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install lunary==0.2.5
+            pip install "azure-identity==1.16.1"
+            pip install "langfuse==2.45.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install traceloop-sdk==0.21.1
+            pip install opentelemetry-api==1.25.0
+            pip install opentelemetry-sdk==1.25.0
+            pip install opentelemetry-exporter-otlp==1.25.0
+            pip install openai==1.54.0 
+            pip install prisma==0.11.0   
+            pip install "detect_secrets==1.5.0"         
+            pip install "httpx==0.24.1"
+            pip install "respx==0.21.1"
+            pip install fastapi
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==4.2.0"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "apscheduler==3.10.4"
+            pip install "PyGithub==1.59.1"
+            pip install argon2-cffi
+            pip install "pytest-mock==3.12.0"
+            pip install python-multipart
+            pip install google-cloud-aiplatform
+            pip install prometheus-client==0.20.0
+            pip install "pydantic==2.7.1"
+            pip install "diskcache==5.6.1"
+            pip install "Pillow==10.3.0"
+            pip install "jsonschema==4.22.0"
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest tests/proxy_unit_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_proxy_unit_tests_coverage.xml
+            mv .coverage litellm_proxy_unit_tests_coverage
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_proxy_unit_tests_coverage.xml
+            - litellm_proxy_unit_tests_coverage
+  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
+    docker:
+        - image: cimg/python:3.11
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.21.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest tests/local_testing/ -vv -k "assistants" --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_assistants_api_coverage.xml
+            mv .coverage litellm_assistants_api_coverage
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_assistants_api_coverage.xml
+            - litellm_assistants_api_coverage
+  load_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/load_tests -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
       # Store test results
       - store_test_results:
           path: test-results
+  llm_translation_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
 
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml llm_translation_coverage.xml
+            mv .coverage llm_translation_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - llm_translation_coverage.xml
+            - llm_translation_coverage
+  batches_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "respx==0.21.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml batches_coverage.xml
+            mv .coverage batches_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - batches_coverage.xml
+            - batches_coverage
+  secret_manager_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "respx==0.21.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/secret_manager_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml secret_manager_coverage.xml
+            mv .coverage secret_manager_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - secret_manager_coverage.xml
+            - secret_manager_coverage
+
+  pass_through_unit_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml pass_through_unit_tests_coverage.xml
+            mv .coverage pass_through_unit_tests_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - pass_through_unit_tests_coverage.xml
+            - pass_through_unit_tests_coverage
+  image_gen_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.21.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/image_gen_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml image_gen_coverage.xml
+            mv .coverage image_gen_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - image_gen_coverage.xml
+            - image_gen_coverage
+  logging_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install pytest-mock
+            pip install "respx==0.21.1"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install "mlflow==2.17.2"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml logging_coverage.xml
+            mv .coverage logging_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - logging_coverage.xml
+            - logging_coverage
   installing_litellm_on_python:
     docker:
       - image: circleci/python:3.8
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -116,17 +862,116 @@ jobs:
             pip install pytest
             pip install tiktoken
             pip install aiohttp
-            pip install click
-            pip install jinja2
-            pip install tokenizers
             pip install openai
+            pip install click
+            pip install "boto3==1.34.34"
+            pip install jinja2
+            pip install tokenizers=="0.20.0"
+            pip install jsonschema
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/test_python_38.py
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  
+  installing_litellm_on_python_3_13:
+    docker:
+      - image: cimg/python:3.13.1
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
 
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/local_testing/test_basic_python_version.py
+
+  check_code_and_doc_quality:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project/litellm
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            pip install ruff
+            pip install pylint
+            pip install pyright
+            pip install .
+            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+      - run: ruff check ./litellm
+      # - run: python ./tests/documentation_tests/test_general_setting_keys.py
+      - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/test_router_strategy_async.py
+      - run: python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
+      - run: python ./tests/documentation_tests/test_env_keys.py
+      - run: python ./tests/documentation_tests/test_router_settings.py
+      - run: python ./tests/documentation_tests/test_api_docs.py
+      - run: python ./tests/code_coverage_tests/ensure_async_clients_test.py
+      - run: python ./tests/code_coverage_tests/enforce_llms_folder_style.py
+      - run: python ./tests/documentation_tests/test_circular_imports.py
+      - run: helm lint ./deploy/charts/litellm-helm
+
+  db_migration_disable_update_check:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t myapp . -f ./docker/Dockerfile.database
+      - run:
+          name: Run Docker container
+          command: |
+            docker run --name my-app \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DISABLE_SCHEMA_UPDATE="True" \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
+              -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
+              myapp:latest \
+              --config /app/config.yaml \
+              --port 4000 > docker_output.log 2>&1 || true
+      - run:
+          name: Display Docker logs
+          command: cat docker_output.log
+      - run:
+          name: Check for expected error
+          command: |
+            if grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two" docker_output.log; then
+              echo "Expected error found. Test passed."
+            else
+              echo "Expected error not found. Test failed."
+              cat docker_output.log
+              exit 1
+            fi
+            
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -156,10 +1001,10 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
-            pip install openai
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install mypy
@@ -170,35 +1015,44 @@ jobs:
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
+            pip install "logfire==0.29.0"
             pip install numpydoc
             pip install prisma            
             pip install fastapi            
+            pip install jsonschema   
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
             pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
+            pip install "openai==1.54.0 "
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
-          command: docker build -t my-app:latest -f Dockerfile.database .
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
           name: Run Docker container
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
               -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
               -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e GROQ_API_KEY=$GROQ_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e AUTO_INFER_REGION=True \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
@@ -208,9 +1062,7 @@ jobs:
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
-              --num_workers 8 \
               --detailed_debug \
-              --run_gunicorn \
       - run:
           name: Install curl and dockerize
           command: |
@@ -223,20 +1075,443 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run: 
+      - run:
           name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 1m
+          command: dockerize -wait http://localhost:4000 -timeout 5m
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results
       - store_test_results:
           path: test-results
+  e2e_openai_misc_endpoints:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "jsonlines==4.0.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            pip install "openai==1.54.0 "
+            # Run pytest and generate JUnit XML report
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e AZURE_API_KEY=$AZURE_BATCHES_API_KEY \
+              -e AZURE_API_BASE=$AZURE_BATCHES_API_BASE \
+              -e AZURE_API_VERSION="2024-05-01-preview" \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              -e MISTRAL_API_KEY=$MISTRAL_API_KEY \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e GROQ_API_KEY=$GROQ_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e AUTO_INFER_REGION=True \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
+              -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
+              -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
+              -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -s -vv tests/openai_misc_endpoints_tests --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+  proxy_logging_guardrails_model_info_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.34.34"
+            pip install "aioboto3==12.3.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            pip install "openai==1.54.0 "
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          # intentionally give bad redis credentials here
+          # the OTEL test - should get this as a trace
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e OTEL_EXPORTER="in_memory" \
+              -e APORIA_API_BASE_2=$APORIA_API_BASE_2 \
+              -e APORIA_API_KEY_2=$APORIA_API_KEY_2 \
+              -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e GCS_FLUSH_INTERVAL="1" \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+           # Clean up first container
+      - run:
+          name: Stop and remove first container
+          command: |
+            docker stop my-app
+            docker rm my-app
+
+      # Second Docker Container Run with Different Config
+      # NOTE: We intentionally pass a "bad" license here. We need to ensure proxy starts and serves request even with bad license
+      - run:
+          name: Run Second Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE="bad-license" \
+              --name my-app-3 \
+              -v $(pwd)/litellm/proxy/example_config_yaml/enterprise_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+
+      - run:
+          name: Start outputting logs for second container
+          command: docker logs -f my-app-2
+          background: true
+
+      - run:
+          name: Wait for second app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+
+      - run:
+          name: Run second round of tests
+          command: |
+            python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+  proxy_pass_through_endpoint_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install aiohttp
+            pip install "openai==1.54.0 "
+            python -m pip install --upgrade pip
+            pip install "pydantic==2.7.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "boto3==1.34.34"
+            pip install mypy
+            pip install pyarrow
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "anyio==3.7.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            pip install "google-cloud-aiplatform==1.59.0"
+            pip install anthropic
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e GEMINI_API_KEY=$GEMINI_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/custom_auth_basic.py:/app/custom_auth_basic.py \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      # New steps to run Node.js test
+      - run:
+          name: Install Node.js
+          command: |
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            node --version
+            npm --version
+
+      - run:
+          name: Install Node.js dependencies
+          command: |
+            npm install @google-cloud/vertexai
+            npm install @google/generative-ai
+            npm install --save-dev jest
+
+      - run:
+          name: Run Vertex AI, Google AI Studio Node.js tests
+          command: |
+            npx jest tests/pass_through_tests --verbose
+          no_output_timeout: 30m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/pass_through_tests/ -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+  upload-coverage:
+    docker:
+      - image: cimg/python:3.9
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      # Check file locations
+      - run:
+          name: Check coverage file location
+          command: |
+            echo "Current directory:"
+            ls -la
+            echo "\nContents of tests/llm_translation:"
+            ls -la tests/llm_translation
+      - run:
+          name: Combine Coverage
+          command: |
+            python -m venv venv
+            . venv/bin/activate
+            pip install coverage
+            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage
+            coverage xml
+      - codecov/upload:
+          file: ./coverage.xml
+
 
   publish_to_pypi:
     docker:
@@ -253,16 +1528,17 @@ jobs:
           name: Copy model_prices_and_context_window File to model_prices_and_context_window_backup
           command: |
             cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-      
+
       - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
+          name: Check if litellm dir, tests dir, or pyproject.toml was modified
           command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/|tests/')" ]; then
+              echo "litellm, tests, or pyproject.toml updated"
             else
-              echo "No changes to litellm or pyproject.toml. Skipping PyPI publish."
+              echo "No changes to litellm, tests, or pyproject.toml. Skipping PyPI publish."
               circleci step halt
             fi
+
 
       - run:
           name: Checkout code
@@ -297,7 +1573,7 @@ jobs:
                 circleci step halt
             fi
       - run:
-          name: Trigger Github Action for new Docker Container
+          name: Trigger Github Action for new Docker Container + Trigger Stable Release Testing
           command: |
             echo "Install TOML package."
             python3 -m pip install toml
@@ -308,6 +1584,137 @@ jobs:
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
               -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+            echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
+            curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
+
+  e2e_ui_testing:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            npm install -D @playwright/test
+            npm install @google-cloud/vertexai
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            pip install "openai==1.54.0 "
+            python -m pip install --upgrade pip
+            pip install "pydantic==2.7.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install pyarrow
+            pip install numpydoc
+            pip install prisma            
+            pip install fastapi            
+            pip install jsonschema   
+            pip install "httpx==0.24.1"
+            pip install "anyio==3.7.1"
+            pip install "asyncio==3.4.3"
+      - run:
+          name: Install Playwright Browsers
+          command: |
+            npx playwright install
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$SMALL_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e UI_USERNAME="admin" \
+              -e UI_PASSWORD="gm" \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run Playwright Tests
+          command: |
+            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
+          no_output_timeout: 120m
+      - store_test_results:
+          path: test-results
+
+  test_bad_database_url:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t myapp . -f ./docker/Dockerfile.non_root
+      - run:
+          name: Run Docker container with bad DATABASE_URL
+          command: |
+            docker run --name my-app \
+              -p 4000:4000 \
+              -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
+              myapp:latest \
+              --port 4000 > docker_output.log 2>&1 || true
+      - run:
+          name: Display Docker logs
+          command: cat docker_output.log
+      - run:
+          name: Check for expected error
+          command: |
+            if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
+               grep -q "httpx.ConnectError: All connection attempts failed" docker_output.log && \
+               grep -q "ERROR:    Application startup failed. Exiting." docker_output.log; then
+              echo "Expected error found. Test passed."
+            else
+              echo "Expected error not found. Test failed."
+              cat docker_output.log
+              exit 1
+            fi
 
 workflows:
   version: 2
@@ -319,7 +1726,130 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - langfuse_logging_unit_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - caching_unit_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_proxy_unit_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_assistants_api_testing:
+          filters:
+              branches:
+                only:
+                  - main
+                  - /litellm_.*/
+      - litellm_router_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - check_code_and_doc_quality:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - auth_ui_unit_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - e2e_ui_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - e2e_openai_misc_endpoints:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - proxy_logging_guardrails_model_info_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - proxy_pass_through_endpoint_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - llm_translation_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - batches_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - secret_manager_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - pass_through_unit_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - image_gen_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - logging_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - upload-coverage:
+          requires:
+            - llm_translation_testing
+            - batches_testing
+            - secret_manager_testing
+            - pass_through_unit_testing
+            - image_gen_testing
+            - logging_testing
+            - litellm_router_testing
+            - caching_unit_tests
+            - litellm_proxy_unit_testing
+            - langfuse_logging_unit_tests
+            - local_testing
+            - litellm_assistants_api_testing
+            - auth_ui_unit_tests
+      - db_migration_disable_update_check:
           filters:
             branches:
               only:
@@ -331,11 +1861,52 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - publish_to_pypi:
-          requires:
-            - local_testing
-            - build_and_test
+      - installing_litellm_on_python_3_13:
           filters:
             branches:
               only:
                 - main
+                - /litellm_.*/
+      - load_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - test_bad_database_url:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - publish_to_pypi:
+          requires:
+            - local_testing
+            - build_and_test
+            - e2e_openai_misc_endpoints
+            - load_testing
+            - test_bad_database_url
+            - llm_translation_testing
+            - batches_testing
+            - secret_manager_testing
+            - pass_through_unit_testing
+            - image_gen_testing
+            - logging_testing
+            - litellm_router_testing
+            - caching_unit_tests
+            - langfuse_logging_unit_tests
+            - litellm_assistants_api_testing
+            - auth_ui_unit_tests
+            - db_migration_disable_update_check
+            - e2e_ui_testing
+            - litellm_proxy_unit_testing
+            - installing_litellm_on_python
+            - installing_litellm_on_python_3_13
+            - proxy_logging_guardrails_model_info_tests
+            - proxy_pass_through_endpoint_tests
+            - check_code_and_doc_quality
+          filters:
+            branches:
+              only:
+                - main
+      

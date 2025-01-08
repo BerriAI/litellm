@@ -1,26 +1,66 @@
-import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric } from "@tremor/react";
+import { BarChart, BarList, Card, Title, Table, TableHead, TableHeaderCell, TableRow, TableCell, TableBody, Metric, Subtitle } from "@tremor/react";
 
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "./view_user_spend";
-import { Grid, Col, Text, LineChart, TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { ProxySettings } from "./user_dashboard";
+import { 
+  Grid, Col, Text, 
+  LineChart, TabPanel, TabPanels, 
+  TabGroup, TabList, Tab, Select, SelectItem, 
+  DateRangePicker, DateRangePickerValue, 
+  DonutChart,
+  AreaChart,
+  Callout,
+  Button,
+  MultiSelect,
+  MultiSelectItem,
+} from "@tremor/react";
+
+import {
+  Select as Select2
+} from "antd";
+
 import {
   userSpendLogsCall,
   keyInfoCall,
   adminSpendLogsCall,
   adminTopKeysCall,
   adminTopModelsCall,
+  adminTopEndUsersCall,
   teamSpendLogsCall,
-  tagsSpendLogsCall
+  tagsSpendLogsCall,
+  allTagNamesCall,
+  modelMetricsCall,
+  modelAvailableCall,
+  adminspendByProvider,
+  adminGlobalActivity,
+  adminGlobalActivityPerModel,
+  getProxyUISettings
 } from "./networking";
 import { start } from "repl";
+console.log("process.env.NODE_ENV", process.env.NODE_ENV);
+const isLocal = process.env.NODE_ENV === "development";
+const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
+if (isLocal !== true) {
+  console.log = function() {};
+}
 
 interface UsagePageProps {
   accessToken: string | null;
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  keys: any[] | null;
+  premiumUser: boolean;
 }
+
+interface GlobalActivityData {
+  sum_api_requests: number;
+  sum_total_tokens: number;
+  daily_data: { date: string; api_requests: number; total_tokens: number }[];
+}
+
 
 type CustomTooltipTypeBar = {
   payload: any;
@@ -92,47 +132,22 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
 }
 type DataDict = { [key: string]: unknown };
 type UserData = { user_id: string; spend: number };
-function getTopUsers(data: Array<DataDict>): UserData[] {
-  const userSpend: { [key: string]: number } = {};
 
-  data.forEach((dict) => {
-    const payload: DataDict = dict["users"] as DataDict;
-    Object.entries(payload).forEach(([user_id, value]) => {
-      if (
-        user_id === "" ||
-        user_id === undefined ||
-        user_id === null ||
-        user_id == "None"
-      ) {
-        return;
-      }
 
-      if (!userSpend[user_id]) {
-        userSpend[user_id] = 0;
-      }
-      userSpend[user_id] += value as number;
-    });
-  });
+const isAdminOrAdminViewer = (role: string | null): boolean => {
+  if (role === null) return false;
+  return role === 'Admin' || role === 'Admin Viewer';
+};
 
-  const spendUsers: UserData[] = Object.entries(userSpend).map(
-    ([user_id, spend]) => ({
-      user_id,
-      spend,
-    })
-  );
 
-  spendUsers.sort((a, b) => b.spend - a.spend);
-
-  const topKeys = spendUsers.slice(0, 5);
-  console.log(`topKeys: ${Object.values(topKeys[0])}`);
-  return topKeys;
-}
 
 const UsagePage: React.FC<UsagePageProps> = ({
   accessToken,
   token,
   userRole,
   userID,
+  keys,
+  premiumUser,
 }) => {
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
@@ -141,8 +156,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [teamSpendData, setTeamSpendData] = useState<any[]>([]);
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
+  const [allTagNames, setAllTagNames] = useState<string[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
+  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
+  const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
+  const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
+  const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), 
+    to: new Date(),
+  });
+  const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -157,6 +183,91 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
+
+  console.log("keys in usage", keys);
+  console.log("premium user in usage", premiumUser);
+
+  function valueFormatterNumbers(number: number) {
+    const formatter = new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0,
+      notation: 'compact',
+      compactDisplay: 'short',
+    });
+  
+    return formatter.format(number);
+  }
+
+
+  const fetchProxySettings = async () => {
+    if (accessToken) {
+      try {
+        const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
+        console.log("usage tab: proxy_settings", proxy_settings);
+        return proxy_settings;
+      } catch (error) {
+        console.error("Error fetching proxy settings:", error);
+      }
+    }
+  };
+
+  useEffect(() => {
+    updateTagSpendData(dateValue.from, dateValue.to);
+  }, [dateValue, selectedTags]);
+  
+
+  const updateEndUserData = async (startTime:  Date | undefined, endTime:  Date | undefined, uiSelectedKey: string | null) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
+    console.log("uiSelectedKey", uiSelectedKey);
+
+    let newTopUserData = await adminTopEndUsersCall(
+      accessToken,
+      uiSelectedKey,
+      startTime.toISOString(),
+      endTime.toISOString()
+    )
+    console.log("End user data updated successfully", newTopUserData);
+    setTopUsers(newTopUserData);
+  
+  }
+
+  const updateTagSpendData = async (startTime:  Date | undefined, endTime:  Date | undefined) => {
+    if (!startTime || !endTime || !accessToken) {
+      return;
+    }
+
+    
+    // we refetch because the state variable can be None when the user refreshes the page
+    const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+
+    if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+      return;  // Don't run expensive DB queries - return out when SpendLogs has more than 1M rows
+    }
+
+    // the endTime put it to the last hour of the selected date
+    endTime.setHours(23, 59, 59, 999);
+
+    // startTime put it to the first hour of the selected date
+    startTime.setHours(0, 0, 0, 0);
+
+    let top_tags = await tagsSpendLogsCall(
+      accessToken, 
+      startTime.toISOString(), 
+      endTime.toISOString(),
+      selectedTags.length === 0 ? undefined : selectedTags
+    );
+    setTopTagsData(top_tags.spend_per_tag);
+    console.log("Tag spend data updated successfully");
+
+  }
 
   function formatDate(date: Date) {
     const year = date.getFullYear();
@@ -176,115 +287,219 @@ const UsagePage: React.FC<UsagePageProps> = ({
   const valueFormatter = (number: number) =>
     `$ ${new Intl.NumberFormat("us").format(number).toString()}`;
 
-  useEffect(() => {
-    if (accessToken && token && userRole && userID) {
-      const fetchData = async () => {
-        try {
-          /**
-           * If user is Admin - query the global views endpoints
-           * If user is App Owner - use the normal spend logs call
-           */
-          console.log(`user role: ${userRole}`);
-          if (userRole == "Admin" || userRole == "Admin Viewer") {
-            const overall_spend = await adminSpendLogsCall(accessToken);
-            setKeySpendData(overall_spend);
-            const top_keys = await adminTopKeysCall(accessToken);
-            const filtered_keys = top_keys.map((k: any) => ({
-              key: (k["key_name"] || k["key_alias"] || k["api_key"]).substring(
-                0,
-                10
-              ),
-              spend: k["total_spend"],
-            }));
-            setTopKeys(filtered_keys);
-            const top_models = await adminTopModelsCall(accessToken);
-            const filtered_models = top_models.map((k: any) => ({
-              key: k["model"],
-              spend: k["total_spend"],
-            }));
-            setTopModels(filtered_models);
-
-            const teamSpend = await teamSpendLogsCall(accessToken);
-            console.log("teamSpend", teamSpend);
-            setTeamSpendData(teamSpend.daily_spend);
-            setUniqueTeamIds(teamSpend.teams)
-
-            let total_spend_per_team = teamSpend.total_spend_per_team;
-            // in total_spend_per_team, replace null team_id with "" and replace null total_spend with 0
-
-            total_spend_per_team = total_spend_per_team.map((tspt: any) => {
-              tspt["name"] = tspt["team_id"] || "";
-              tspt["value"] = tspt["total_spend"] || 0;
-              return tspt;
-            })
-
-            setTotalSpendPerTeam(total_spend_per_team);
-
-            //get top tags
-            const top_tags = await tagsSpendLogsCall(accessToken);
-            setTopTagsData(top_tags.top_10_tags);
-          } else if (userRole == "App Owner") {
-            await userSpendLogsCall(
-              accessToken,
-              token,
-              userRole,
-              userID,
-              startTime,
-              endTime
-            ).then(async (response) => {
-              console.log("result from spend logs call", response);
-              if ("daily_spend" in response) {
-                // this is from clickhouse analytics
-                //
-                let daily_spend = response["daily_spend"];
-                console.log("daily spend", daily_spend);
-                setKeySpendData(daily_spend);
-                let topApiKeys = response.top_api_keys;
-                setTopKeys(topApiKeys);
-              } else {
-                const topKeysResponse = await keyInfoCall(
-                  accessToken,
-                  getTopKeys(response)
-                );
-                const filtered_keys = topKeysResponse["info"].map((k: any) => ({
-                  key: (
-                    k["key_name"] ||
-                    k["key_alias"]
-                  ).substring(0, 10),
-                  spend: k["spend"],
-                }));
-                setTopKeys(filtered_keys);
-                setTopUsers(getTopUsers(response));
-                setKeySpendData(response);
-              }
-            });
-          }
-        } catch (error) {
-          console.error("There was an error fetching the data", error);
-          // Optionally, update your UI to reflect the error state here as well
-        }
-      };
-      fetchData();
+  const fetchAndSetData = async (
+    fetchFunction: () => Promise<any>,
+    setStateFunction: React.Dispatch<React.SetStateAction<any>>,
+    errorMessage: string
+  ) => {
+    try {
+      const data = await fetchFunction();
+      setStateFunction(data);
+    } catch (error) {
+      console.error(errorMessage, error);
+      // Optionally, update UI to reflect error state for this specific data
     }
+  };
+
+  const fetchOverallSpend = () => fetchAndSetData(
+    () => accessToken ? adminSpendLogsCall(accessToken) : Promise.reject("No access token"),
+    setKeySpendData,
+    "Error fetching overall spend"
+  );
+
+  const fetchProviderSpend = () => fetchAndSetData(
+    () => accessToken && token ? adminspendByProvider(accessToken, token, startTime, endTime) : Promise.reject("No access token or token"),
+    setSpendByProvider,
+    "Error fetching provider spend"
+  );
+
+  const fetchTopKeys = async () => {
+    if (!accessToken) return;
+    await fetchAndSetData(
+      async () => {
+        const top_keys = await adminTopKeysCall(accessToken);
+        return top_keys.map((k: any) => ({
+          key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(0, 10),
+          spend: k["total_spend"],
+        }));
+      },
+      setTopKeys,
+      "Error fetching top keys"
+    );
+  };
+
+  const fetchTopModels = async () => {
+    if (!accessToken) return;
+    await fetchAndSetData(
+      async () => {
+        const top_models = await adminTopModelsCall(accessToken);
+        return top_models.map((k: any) => ({
+          key: k["model"],
+          spend: k["total_spend"],
+        }));
+      },
+      setTopModels,
+      "Error fetching top models"
+    );
+  };
+
+  const fetchTeamSpend = async () => {
+    if (!accessToken) return;
+    await fetchAndSetData(
+      async () => {
+        const teamSpend = await teamSpendLogsCall(accessToken);
+        setTeamSpendData(teamSpend.daily_spend);
+        setUniqueTeamIds(teamSpend.teams);
+        return teamSpend.total_spend_per_team.map((tspt: any) => ({
+          name: tspt["team_id"] || "",
+          value: (tspt["total_spend"] || 0).toFixed(2),
+        }));
+      },
+      setTotalSpendPerTeam,
+      "Error fetching team spend"
+    );
+  };
+
+  const fetchTagNames = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      async () => {
+        const all_tag_names = await allTagNamesCall(accessToken);
+        return all_tag_names.tag_names;
+      },
+      setAllTagNames,
+      "Error fetching tag names"
+    );
+  };
+
+  const fetchTopTags = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => tagsSpendLogsCall(accessToken, dateValue.from?.toISOString(), dateValue.to?.toISOString(), undefined),
+      (data) => setTopTagsData(data.spend_per_tag),
+      "Error fetching top tags"
+    );
+  };
+
+  const fetchTopEndUsers = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => adminTopEndUsersCall(accessToken, null, undefined, undefined),
+      setTopUsers,
+      "Error fetching top end users"
+    );
+  };
+
+  const fetchGlobalActivity = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => adminGlobalActivity(accessToken, startTime, endTime),
+      setGlobalActivity,
+      "Error fetching global activity"
+    );
+  };
+
+  const fetchGlobalActivityPerModel = () => {
+    if (!accessToken) return;
+    fetchAndSetData(
+      () => adminGlobalActivityPerModel(accessToken, startTime, endTime),
+      setGlobalActivityPerModel,
+      "Error fetching global activity per model"
+    );
+  };
+
+  useEffect(() => {
+    const initlizeUsageData = async () => {
+      if (accessToken && token && userRole && userID) {
+        const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
+        if (proxy_settings) {
+          setProxySettings(proxy_settings); // saved in state so it can be used when rendering UI
+          if (proxy_settings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+            return;  // Don't run expensive UI queries - return out of initlizeUsageData at this point
+          }
+        }
+        
+
+        console.log("fetching data - valiue of proxySettings", proxySettings);
+
+
+        fetchOverallSpend();
+        fetchProviderSpend();
+        fetchTopKeys();
+        fetchTopModels();
+        fetchGlobalActivity();
+        fetchGlobalActivityPerModel();
+
+        if (isAdminOrAdminViewer(userRole)) {
+          fetchTeamSpend();
+          fetchTagNames();
+          fetchTopTags();
+          fetchTopEndUsers();
+        }
+      }
+  };
+
+  initlizeUsageData();
   }, [accessToken, token, userRole, userID, startTime, endTime]);
 
+
+  if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
+    return (
+      <div style={{ width: "100%" }} className="p-8">      
+        <Card>
+          <Title>Database Query Limit Reached</Title>
+          <Text className="mt-4">
+            SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows. 
+            <br></br>
+            Please follow our guide to view usage when SpendLogs has more than 1M rows.
+          </Text>
+          <Button className="mt-4">
+            <a href="https://docs.litellm.ai/docs/proxy/spending_monitoring" target="_blank">
+              View Usage Guide
+            </a>
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      <ViewUserSpend
+    <div style={{ width: "100%" }} className="p-8">      
+      <TabGroup>
+        <TabList className="mt-2">
+          <Tab>All Up</Tab>
+          
+          {isAdminOrAdminViewer(userRole) ? (
+            <>
+              <Tab>Team Based Usage</Tab>
+              <Tab>Customer Usage</Tab>
+              <Tab>Tag Based Usage</Tab>
+            </>
+          ) : (
+            <><div></div>
+            </>
+          )}
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+
+          <TabGroup>
+            <TabList variant="solid" className="mt-1">
+            <Tab>Cost</Tab>
+            <Tab>Activity</Tab>
+          </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+            <ViewUserSpend
             userID={userID}
             userRole={userRole}
             accessToken={accessToken}
             userSpend={null}
+            selectedTeam={null}
+            userMaxBudget={null}
           />
-      <TabGroup>
-        <TabList className="mt-2">
-          <Tab>All Up</Tab>
-          <Tab>Team Based Usage</Tab>
-           <Tab>Tag Based Usage</Tab>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
@@ -318,23 +533,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                 </Card>
               </Col>
               <Col numColSpan={1}>
-                <Card>
-                  <Title>Top Users</Title>
-                  <BarChart
-                    className="mt-4 h-40"
-                    data={topUsers}
-                    index="user_id"
-                    categories={["spend"]}
-                    colors={["blue"]}
-                    yAxisWidth={200}
-                    layout="vertical"
-                    showXAxis={false}
-                    showLegend={false}
-                  />
-                </Card>
-              </Col>
-              <Col numColSpan={1}>
-                <Card>
+              <Card>
                   <Title>Top Models</Title>
                   <BarChart
                     className="mt-4 h-40"
@@ -348,8 +547,204 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     showLegend={false}
                   />
                 </Card>
+               
               </Col>
+              <Col numColSpan={1}>
+                
+              </Col>
+              <Col numColSpan={2}>
+              <Card className="mb-2">
+                <Title>✨ Spend by Provider</Title>
+                {
+                  premiumUser ? (
+                    <>
+                    <Grid numItems={2}>
+                  <Col numColSpan={1}>
+                    <DonutChart
+                      className="mt-4 h-40"
+                      variant="pie"
+                      data={spendByProvider}
+                      index="provider"
+                      category="spend"
+                    />
+                  </Col>
+                  <Col numColSpan={1}>
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Provider</TableHeaderCell>
+                          <TableHeaderCell>Spend</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {spendByProvider.map((provider) => (
+                          <TableRow key={provider.provider}>
+                            <TableCell>{provider.provider}</TableCell>
+                            <TableCell>
+                              {parseFloat(provider.spend.toFixed(2)) < 0.00001
+                                ? "less than 0.00"
+                                : provider.spend.toFixed(2)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Col>
+                </Grid>
+                    </>
+                  ) : (
+                    <div>
+                    <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
+                    <Button variant="primary" className="mb-2">
+                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                            Get Free Trial
+                          </a>
+                        </Button>
+                    </div>
+                  )
+                }
+                
+              </Card>
+            </Col>
             </Grid>
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={1} className="gap-2 h-[75vh] w-full">
+                <Card>
+                <Title>All Up</Title>
+                <Grid numItems={2}>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests { valueFormatterNumbers(globalActivity.sum_api_requests)}</Subtitle>
+                <AreaChart
+                    className="h-40"
+                    data={globalActivity.daily_data}
+                    valueFormatter={valueFormatterNumbers}
+                    index="date"
+                    colors={['cyan']}
+                    categories={['api_requests']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+
+                </Col>
+                <Col>
+                <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens { valueFormatterNumbers(globalActivity.sum_total_tokens)}</Subtitle>
+                <BarChart
+                    className="h-40"
+                    data={globalActivity.daily_data}
+                    valueFormatter={valueFormatterNumbers}
+                    index="date"
+                    colors={['cyan']}
+                    categories={['total_tokens']}
+                    onValueChange={(v) => console.log(v)}
+                  />
+                </Col>
+                </Grid>
+                
+
+                </Card>
+
+                {
+                  premiumUser ? ( 
+                    <>
+                    {globalActivityPerModel.map((globalActivity, index) => (
+                <Card key={index}>
+                  <Title>{globalActivity.model}</Title>
+                  <Grid numItems={2}>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}</Subtitle>
+                      <AreaChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['api_requests']}
+                        valueFormatter={valueFormatterNumbers}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                    <Col>
+                      <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}</Subtitle>
+                      <BarChart
+                        className="h-40"
+                        data={globalActivity.daily_data}
+                        index="date"
+                        colors={['cyan']}
+                        categories={['total_tokens']}
+                        valueFormatter={valueFormatterNumbers}
+                        onValueChange={(v) => console.log(v)}
+                      />
+                    </Col>
+                  </Grid>
+                </Card>
+              ))}
+                    </>
+                  ) : 
+                  <>
+                  {globalActivityPerModel && globalActivityPerModel.length > 0 &&
+                    globalActivityPerModel.slice(0, 1).map((globalActivity, index) => (
+                      <Card key={index}>
+                        <Title>✨ Activity by Model</Title>
+                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see analytics for all models</p>
+                        <Button variant="primary" className="mb-2">
+                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                            Get Free Trial
+                          </a>
+                        </Button>
+                        <Card>
+                        <Title>{globalActivity.model}</Title>
+                        <Grid numItems={2}>
+                          <Col>
+                            <Subtitle
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: "normal",
+                                color: "#535452",
+                              }}
+                            >
+                              API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
+                            </Subtitle>
+                            <AreaChart
+                              className="h-40"
+                              data={globalActivity.daily_data}
+                              index="date"
+                              colors={['cyan']}
+                              categories={['api_requests']}
+                              valueFormatter={valueFormatterNumbers}
+                              onValueChange={(v) => console.log(v)}
+                            />
+                          </Col>
+                          <Col>
+                            <Subtitle
+                              style={{
+                                fontSize: "15px",
+                                fontWeight: "normal",
+                                color: "#535452",
+                              }}
+                            >
+                              Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
+                            </Subtitle>
+                            <BarChart
+                              className="h-40"
+                              data={globalActivity.daily_data}
+                              index="date"
+                              colors={['cyan']}
+                              valueFormatter={valueFormatterNumbers}
+                              categories={['total_tokens']}
+                              onValueChange={(v) => console.log(v)}
+                            />
+                          </Col>
+                          
+                        </Grid>
+                        </Card>
+                      </Card>
+                    ))}
+                </>
+                }              
+              </Grid>
+            </TabPanel>
+            </TabPanels>
+            </TabGroup>
+
             </TabPanel>
             <TabPanel>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full">
@@ -358,6 +753,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
               <Title>Total Spend Per Team</Title>
                 <BarList
                   data={totalSpendPerTeam}
+                  
                 />
               </Card>
               <Card>
@@ -369,8 +765,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   showLegend={true}
                   index="date"
                   categories={uniqueTeamIds}
-                  yAxisWidth={80}
-                  
+                  yAxisWidth={80}                  
                   stack={true}
                 />
               </Card>
@@ -380,46 +775,199 @@ const UsagePage: React.FC<UsagePageProps> = ({
             </Grid>
             </TabPanel>
             <TabPanel>
+            <p className="mb-2 text-gray-500 italic text-[12px]">Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">docs here</a></p>
+              <Grid numItems={2}>
+                <Col>
+                <Text>Select Time Range</Text>
+       
+              <DateRangePicker 
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateEndUserData(value.from, value.to, null); // Call updateModelMetrics with the new date range
+                  }}
+                />
+                         </Col>
+                         <Col>
+                  <Text>Select Key</Text>
+                  <Select defaultValue="all-keys">
+                  <SelectItem
+                    key="all-keys"
+                    value="all-keys"
+                    onClick={() => {
+                      updateEndUserData(dateValue.from, dateValue.to, null);
+                    }}
+                  >
+                    All Keys
+                  </SelectItem>
+                    {keys?.map((key: any, index: number) => {
+                      if (
+                        key &&
+                        key["key_alias"] !== null &&
+                        key["key_alias"].length > 0
+                      ) {
+                        return (
+                          
+                          <SelectItem
+                            key={index}
+                            value={String(index)}
+                            onClick={() => {
+                              updateEndUserData(dateValue.from, dateValue.to, key["token"]);
+                            }}
+                          >
+                            {key["key_alias"]}
+                          </SelectItem>
+                        );
+                      }
+                      return null; // Add this line to handle the case when the condition is not met
+                    })}
+                  </Select>
+                  </Col>
+
+              </Grid>
+            
+                
+                
+              <Card className="mt-4">
+
+
+             
+              <Table className="max-h-[70vh] min-h-[500px]">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>Customer</TableHeaderCell>
+                      <TableHeaderCell>Spend</TableHeaderCell>
+                      <TableHeaderCell>Total Events</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+
+                  <TableBody>
+                    {topUsers?.map((user: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell>{user.end_user}</TableCell>
+                        <TableCell>{user.total_spend?.toFixed(4)}</TableCell>
+                        <TableCell>{user.total_count}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+              </Card>
+
+            </TabPanel>
+            <TabPanel>
+              <Grid numItems={2}>
+              <Col numColSpan={1}>
+            <DateRangePicker 
+                  className="mb-4"
+                  enableSelect={true} 
+                  value={dateValue} 
+                  onValueChange={(value) => {
+                    setDateValue(value);
+                    updateTagSpendData(value.from, value.to); // Call updateModelMetrics with the new date range
+                  }}
+              />
+
+              </Col>
+
+              <Col>
+                  {
+                    premiumUser ? (
+                      <div>
+                        <MultiSelect
+                            value={selectedTags}
+                            onValueChange={(value) => setSelectedTags(value as string[])}
+                          >
+                        <MultiSelectItem
+                          key={"all-tags"}
+                          value={"all-tags"}
+                          onClick={() => setSelectedTags(["all-tags"])}
+                        >
+                          All Tags
+                        </MultiSelectItem>
+                        {allTagNames &&
+                          allTagNames
+                            .filter((tag) => tag !== "all-tags")
+                            .map((tag: any, index: number) => {
+                              return (
+                                <MultiSelectItem
+                                  key={tag}
+                                  value={String(tag)}
+                                >
+                                  {tag}
+                                </MultiSelectItem>
+                              );
+                            })}
+                      </MultiSelect>
+
+                      </div>
+
+                    ) : (
+                      <div>
+
+<MultiSelect
+                            value={selectedTags}
+                            onValueChange={(value) => setSelectedTags(value as string[])}
+                          >
+                        <MultiSelectItem
+                          key={"all-tags"}
+                          value={"all-tags"}
+                          onClick={() => setSelectedTags(["all-tags"])}
+                        >
+                          All Tags
+                        </MultiSelectItem>
+                        {allTagNames &&
+                          allTagNames
+                            .filter((tag) => tag !== "all-tags")
+                            .map((tag: any, index: number) => {
+                              return (
+                                <SelectItem
+                                  key={tag}
+                                  value={String(tag)}
+                                  // @ts-ignore
+                                  disabled={true} 
+                                >
+                                  ✨ {tag} (Enterprise only Feature)
+                                </SelectItem>
+                              );
+                            })}
+                      </MultiSelect>
+
+
+
+
+                      </div>
+                    )
+                  }
+  
+              </Col>
+
+              </Grid>
             <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
+            
+
               <Col numColSpan={2}>
 
               <Card>
-              <Title>Spend Per Tag - Last 30 Days</Title>
-              <Text>Get Started Tracking cost per tag <a href="https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags" target="_blank">here</a></Text>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Tag</TableHeaderCell>
-                    <TableHeaderCell>Spend</TableHeaderCell>
-                    <TableHeaderCell>Requests</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {topTagsData.map((tag) => (
-                    <TableRow key={tag.name}>
-                      <TableCell>{tag.name}</TableCell>
-                      <TableCell>{tag.value}</TableCell>
-                      <TableCell>{tag.log_count}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-                {/* <BarChart
-                  className="h-72"
-                  data={teamSpendData}
-                  showLegend={true}
-                  index="date"
-                  categories={uniqueTeamIds}
-                  yAxisWidth={80}
-                  
-                  stack={true}
-                /> */}
+              <Title>Spend Per Tag</Title>
+              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">here</a></Text>
+             <BarChart
+              className="h-72"
+              data={topTagsData}
+              index="name"
+              categories={["spend"]}
+              colors={["blue"]}
+             >
+
+             </BarChart>
               </Card>
               </Col>
               <Col numColSpan={2}>
               </Col>
             </Grid>
             </TabPanel>
+            
         </TabPanels>
       </TabGroup>
     </div>

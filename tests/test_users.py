@@ -5,6 +5,8 @@ import asyncio
 import aiohttp
 import time
 from openai import AsyncOpenAI
+from test_team import list_teams
+from typing import Optional
 
 
 async def new_user(session, i, user_id=None, budget=None, budget_duration=None):
@@ -45,11 +47,14 @@ async def test_user_new():
         await asyncio.gather(*tasks)
 
 
-async def get_user_info(session, get_user, call_user):
+async def get_user_info(session, get_user, call_user, view_all: Optional[bool] = None):
     """
     Make sure only models user has access to are returned
     """
-    url = f"http://0.0.0.0:4000/user/info?user_id={get_user}"
+    if view_all is True:
+        url = "http://0.0.0.0:4000/user/info"
+    else:
+        url = f"http://0.0.0.0:4000/user/info?user_id={get_user}"
     headers = {
         "Authorization": f"Bearer {call_user}",
         "Content-Type": "application/json",
@@ -83,9 +88,15 @@ async def test_user_info():
         key_gen = await new_user(session, 0, user_id=get_user)
         key = key_gen["key"]
         ## as admin ##
-        await get_user_info(session=session, get_user=get_user, call_user="sk-1234")
+        resp = await get_user_info(
+            session=session, get_user=get_user, call_user="sk-1234"
+        )
+        assert isinstance(resp["user_info"], dict)
+        assert len(resp["user_info"]) > 0
         ## as user themself ##
-        await get_user_info(session=session, get_user=get_user, call_user=key)
+        resp = await get_user_info(session=session, get_user=get_user, call_user=key)
+        assert isinstance(resp["user_info"], dict)
+        assert len(resp["user_info"]) > 0
         # as random user #
         key_gen = await new_user(session=session, i=0)
         random_key = key_gen["key"]
@@ -135,7 +146,7 @@ async def test_users_budgets_reset():
             try:
                 assert reset_at_init_value != reset_at_new_value
                 break
-            except:
+            except Exception:
                 i + 1
         assert reset_at_init_value != reset_at_new_value
 

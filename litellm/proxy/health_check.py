@@ -1,18 +1,26 @@
 # This file runs a health check for the LLM, used on litellm/proxy
 
 import asyncio
+import logging
 import random
-from typing import Optional
+from typing import List, Optional
 
 import litellm
-import logging
-from litellm._logging import print_verbose
-
 
 logger = logging.getLogger(__name__)
 
 
-ILLEGAL_DISPLAY_PARAMS = ["messages", "api_key", "prompt", "input"]
+ILLEGAL_DISPLAY_PARAMS = [
+    "messages",
+    "api_key",
+    "prompt",
+    "input",
+    "vertex_credentials",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+]
+
+MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 
 
 def _get_random_llm_message():
@@ -24,14 +32,37 @@ def _get_random_llm_message():
     return [{"role": "user", "content": random.choice(messages)}]
 
 
-def _clean_litellm_params(litellm_params: dict):
+def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
     """
-    Clean the litellm params for display to users.
+    Clean the endpoint data for display to users.
     """
-    return {k: v for k, v in litellm_params.items() if k not in ILLEGAL_DISPLAY_PARAMS}
+    return (
+        {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
+        if details is not False
+        else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
+    )
 
 
-async def _perform_health_check(model_list: list):
+def filter_deployments_by_id(
+    model_list: List,
+) -> List:
+    seen_ids = set()
+    filtered_deployments = []
+
+    for deployment in model_list:
+        _model_info = deployment.get("model_info") or {}
+        _id = _model_info.get("id") or None
+        if _id is None:
+            continue
+
+        if _id not in seen_ids:
+            seen_ids.add(_id)
+            filtered_deployments.append(deployment)
+
+    return filtered_deployments
+
+
+async def _perform_health_check(model_list: list, details: Optional[bool] = True):
     """
     Perform a health check for each model in the list.
     """
@@ -56,20 +87,27 @@ async def _perform_health_check(model_list: list):
     unhealthy_endpoints = []
 
     for is_healthy, model in zip(results, model_list):
-        cleaned_litellm_params = _clean_litellm_params(model["litellm_params"])
+        litellm_params = model["litellm_params"]
 
         if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            healthy_endpoints.append({**cleaned_litellm_params, **is_healthy})
+            healthy_endpoints.append(
+                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            )
         elif isinstance(is_healthy, dict):
-            unhealthy_endpoints.append({**cleaned_litellm_params, **is_healthy})
+            unhealthy_endpoints.append(
+                _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            )
         else:
-            unhealthy_endpoints.append(cleaned_litellm_params)
+            unhealthy_endpoints.append(_clean_endpoint_data(litellm_params, details))
 
     return healthy_endpoints, unhealthy_endpoints
 
 
 async def perform_health_check(
-    model_list: list, model: Optional[str] = None, cli_model: Optional[str] = None
+    model_list: list,
+    model: Optional[str] = None,
+    cli_model: Optional[str] = None,
+    details: Optional[bool] = True,
 ):
     """
     Perform a health check on the system.
@@ -93,6 +131,11 @@ async def perform_health_check(
             _new_model_list = [x for x in model_list if x["model_name"] == model]
         model_list = _new_model_list
 
-    healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
+    model_list = filter_deployments_by_id(
+        model_list=model_list
+    )  # filter duplicate deployments (e.g. when model alias'es are used)
+    healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+        model_list, details
+    )
 
     return healthy_endpoints, unhealthy_endpoints

@@ -1,22 +1,27 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [BETA] JWT-based Auth 
+# JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 
 :::info
 
-This is a new feature, and subject to changes based on feedback.
+✨ JWT-based Auth  is on LiteLLM Enterprise
 
-*UPDATE*: This will be moving to the [enterprise tier](./enterprise.md), once it's out of beta (~by end of April).
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
 :::
+
 
 ## Usage
 
 ### Step 1. Setup Proxy
 
 - `JWT_PUBLIC_KEY_URL`: This is the public keys endpoint of your OpenID provider. Typically it's `{openid-provider-base-url}/.well-known/openid-configuration/jwks`. For Keycloak it's `{keycloak_base_url}/realms/{your-realm}/protocol/openid-connect/certs`.
+- `JWT_AUDIENCE`: This is the audience used for decoding the JWT. If not set, the decode step will not verify the audience. 
 
 ```bash
 export JWT_PUBLIC_KEY_URL="" # "https://demo.duendesoftware.com/.well-known/openid-configuration/jwks"
@@ -109,7 +114,7 @@ general_settings:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-## Advanced - Spend Tracking (User / Team / Org)
+## Advanced - Spend Tracking (End-Users / Internal Users / Team / Org)
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
@@ -122,6 +127,7 @@ general_settings:
     team_id_jwt_field: "client_id" # 👈 CAN BE ANY FIELD
     user_id_jwt_field: "sub" # 👈 CAN BE ANY FIELD
     org_id_jwt_field: "org_id" # 👈 CAN BE ANY FIELD
+    end_user_id_jwt_field: "customer_id" # 👈 CAN BE ANY FIELD
 ```
 
 Expected JWT: 
@@ -130,7 +136,7 @@ Expected JWT:
 {
   "client_id": "my-unique-team",
   "sub": "my-unique-user",
-  "org_id": "my-unique-org"
+  "org_id": "my-unique-org",
 }
 ```
 
@@ -241,3 +247,17 @@ curl --location 'http://0.0.0.0:4000/team/unblock' \
 }'
 ```
 
+
+## Advanced - Upsert Users + Allowed Email Domains 
+
+Allow users who belong to a specific email domain, automatic access to the proxy.
+ 
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_email_jwt_field: "email" # 👈 checks 'email' field in jwt payload
+    user_allowed_email_domain: "my-co.com" # allows user@my-co.com to call proxy
+    user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
+```

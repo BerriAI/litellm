@@ -1,0 +1,75 @@
+model_list:
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamA"]
+   model_info:
+     id: "team-a-model"
+ - model_name: fake-openai-endpoint
+   litellm_params:
+     model: openai/fake
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app/
+     tags: ["teamB"]
+   model_info:
+     id: "team-b-model"
+ - model_name: rerank-english-v3.0
+   litellm_params:
+     model: cohere/rerank-english-v3.0
+     api_key: os.environ/COHERE_API_KEY
+ - model_name: fake-azure-endpoint
+   litellm_params:
+     model: openai/429
+     api_key: fake-key
+     api_base: https://exampleopenaiendpoint-production.up.railway.app
+ - model_name: llava-hf
+   litellm_params:
+     model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
+     api_base: http://localhost:8000
+     api_key: fake-key
+   model_info:
+     supports_vision: True
+
+
+
+litellm_settings:
+  cache: true
+  callbacks: ["otel", "prometheus"]
+  disable_end_user_cost_tracking_prometheus_only: True
+
+guardrails:
+  - guardrail_name: "aporia-pre-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_1
+      api_base: os.environ/APORIA_API_BASE_1
+  - guardrail_name: "aporia-post-guard"
+    litellm_params:
+      guardrail: aporia  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      api_key: os.environ/APORIA_API_KEY_2
+      api_base: os.environ/APORIA_API_BASE_2
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+  - guardrail_name: "custom-pre-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "pre_call"
+  - guardrail_name: "custom-during-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail  
+      mode: "during_call"
+  - guardrail_name: "custom-post-guard"
+    litellm_params:
+      guardrail: custom_guardrail.myCustomGuardrail
+      mode: "post_call"
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change

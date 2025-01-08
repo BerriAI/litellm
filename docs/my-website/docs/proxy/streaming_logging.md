@@ -1,4 +1,4 @@
-# Track Token Usage
+# Custom Callback
 
 ### Step 1 - Create your custom `litellm` callback class
 We use `litellm.integrations.custom_logger` for this, **more details about litellm custom callbacks [here](https://docs.litellm.ai/docs/observability/custom_callback)**
@@ -8,6 +8,7 @@ Define your custom callback class in a python file.
 ```python
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
+import logging
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
@@ -25,9 +26,9 @@ class MyCustomHandler(CustomLogger):
                     datefmt='%Y-%m-%d %H:%M:%S'
             )
 
-            response_cost = litellm.completion_cost(completion_response=completion_response)
+            response_cost: Optional[float] = kwargs.get("response_cost", None)
             print("regular response_cost", response_cost)
-            logging.info(f"Model {completion_response.model} Cost: ${response_cost:.8f}")
+            logging.info(f"Model {response_obj.model} Cost: ${response_cost:.8f}")
         except:
             pass
 

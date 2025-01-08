@@ -18,13 +18,13 @@
     "fs": "^0.0.1-security",
     "jsonwebtoken": "^9.0.2",
     "jwt-decode": "^4.0.0",
-    "next": "14.1.0",
+    "next": "^14.2.15",
     "openai": "^4.28.0",
     "react": "^18",
     "react-copy-to-clipboard": "^5.1.0",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
-    "react-syntax-highlighter": "^15.5.0"
+    "react-syntax-highlighter": "^15.6.1"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.7",
@@ -37,6 +37,7 @@
     "eslint": "^8",
     "eslint-config-next": "14.1.0",
     "postcss": "^8.4.33",
+    "prettier": "3.2.5",
     "tailwindcss": "^3.4.1",
     "typescript": "5.3.3"
   }

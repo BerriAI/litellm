@@ -1,11 +1,12 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
-import dotenv, os
-import requests
+import os
+import traceback
+
 from pydantic import BaseModel
 
-dotenv.load_dotenv()  # Loading env variables using dotenv
-import traceback
+import litellm
+
 
 class PromptLayerLogger:
     # Class variables or attributes
@@ -32,7 +33,11 @@ class PromptLayerLogger:
                     tags = kwargs["litellm_params"]["metadata"]["pl_tags"]
 
                 # Remove "pl_tags" from metadata
-                metadata = {k:v for k, v in kwargs["litellm_params"]["metadata"].items() if k != "pl_tags"}
+                metadata = {
+                    k: v
+                    for k, v in kwargs["litellm_params"]["metadata"].items()
+                    if k != "pl_tags"
+                }
 
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
@@ -42,7 +47,7 @@ class PromptLayerLogger:
             if isinstance(response_obj, BaseModel):
                 response_obj = response_obj.model_dump()
 
-            request_response = requests.post(
+            request_response = litellm.module_level_client.post(
                 "https://api.promptlayer.com/rest/track-request",
                 json={
                     "function_name": "openai.ChatCompletion.create",
@@ -69,7 +74,7 @@ class PromptLayerLogger:
 
             if "request_id" in response_json:
                 if metadata:
-                    response = requests.post(
+                    response = litellm.module_level_client.post(
                         "https://api.promptlayer.com/rest/track-metadata",
                         json={
                             "request_id": response_json["request_id"],
@@ -81,6 +86,6 @@ class PromptLayerLogger:
                         f"Prompt Layer Logging: success - metadata post response object: {response.text}"
                     )
 
-        except:
+        except Exception:
             print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")
             pass

@@ -7,11 +7,14 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import os, json, time
+import json
+import os
+import threading
+import time
+from typing import Literal, Optional
+
 import litellm
 from litellm.utils import ModelResponse
-import requests, threading
-from typing import Optional, Union, Literal
 
 
 class BudgetManager:
@@ -35,7 +38,7 @@ class BudgetManager:
                 import logging
 
                 logging.info(print_statement)
-        except:
+        except Exception:
             pass
 
     def load_data(self):
@@ -52,9 +55,10 @@ class BudgetManager:
         elif self.client_type == "hosted":
             # Load the user_dict from hosted db
             url = self.api_base + "/get_budget"
-            headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name}
-            response = requests.post(url, headers=self.headers, json=data)
+            response = litellm.module_level_client.post(
+                url, headers=self.headers, json=data
+            )
             response = response.json()
             if response["status"] == "error":
                 self.user_dict = (
@@ -210,8 +214,9 @@ class BudgetManager:
             return {"status": "success"}
         elif self.client_type == "hosted":
             url = self.api_base + "/set_budget"
-            headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = requests.post(url, headers=self.headers, json=data)
+            response = litellm.module_level_client.post(
+                url, headers=self.headers, json=data
+            )
             response = response.json()
             return response

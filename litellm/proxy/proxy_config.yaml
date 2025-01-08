@@ -1,26 +1,13 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: "*"
-    litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
+      model: openai/gpt-4o
 
-
-litellm_settings:
-  default_team_settings: 
-    - team_id: team-1
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PROJECT1_PUBLIC # Project 1
-      langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET # Project 1
-    - team_id: team-2
-      success_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
-      langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
-
-general_settings:
-  store_model_in_db: true
-  master_key: sk-1234
+general_settings:    
+    alerting: ["slack"]
+    alert_to_webhook_url: {
+      "budget_alerts": ["https://hooks.slack.com/services/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"]
+    }
+    alerting_args:
+       budget_alert_ttl: 10
+       log_to_console: true

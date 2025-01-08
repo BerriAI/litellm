@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Ollama 
 LiteLLM supports all models from [Ollama](https://github.com/ollama/ollama)
 
@@ -84,6 +87,120 @@ response = completion(
 )
 ```
 
+## Example Usage - Tool Calling 
+
+To use ollama tool calling, pass `tools=[{..}]` to `litellm.completion()` 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import litellm 
+
+## [OPTIONAL] REGISTER MODEL - not all ollama models support function calling, litellm defaults to json mode tool calls if native tool calling not supported.
+
+# litellm.register_model(model_cost={
+#                 "ollama_chat/llama3.1": { 
+#                   "supports_function_calling": true
+#                 },
+#             })
+
+tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA",
+          },
+          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+        },
+        "required": ["location"],
+      },
+    }
+  }
+]
+
+messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+
+response = completion(
+  model="ollama_chat/llama3.1",
+  messages=messages,
+  tools=tools
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "llama3.1"             
+    litellm_params:
+      model: "ollama_chat/llama3.1"
+    model_info:
+      supports_function_calling: true
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "llama3.1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What'\''s the weather like in Boston today?"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "stream": true
+}'
+```
+</TabItem>
+</Tabs>
+
 ## Using ollama `api/chat` 
 In order to send ollama requests to `POST /api/chat` on your ollama server, set the model prefix to `ollama_chat`
 
@@ -101,13 +218,19 @@ Ollama supported models: https://github.com/ollama/ollama
 
 | Model Name           | Function Call                                                                     |
 |----------------------|-----------------------------------------------------------------------------------
-| Mistral    | `completion(model='ollama/mistral', messages, api_base="http://localhost:11434", stream=True)` | 
+| Mistral    | `completion(model='ollama/mistral', messages, api_base="http://localhost:11434", stream=True)` |
+| Mistral-7B-Instruct-v0.1 | `completion(model='ollama/mistral-7B-Instruct-v0.1', messages, api_base="http://localhost:11434", stream=False)` |
+| Mistral-7B-Instruct-v0.2 | `completion(model='ollama/mistral-7B-Instruct-v0.2', messages, api_base="http://localhost:11434", stream=False)` |
+| Mixtral-8x7B-Instruct-v0.1 | `completion(model='ollama/mistral-8x7B-Instruct-v0.1', messages, api_base="http://localhost:11434", stream=False)` |
+| Mixtral-8x22B-Instruct-v0.1 | `completion(model='ollama/mixtral-8x22B-Instruct-v0.1', messages, api_base="http://localhost:11434", stream=False)` |
 | Llama2 7B            | `completion(model='ollama/llama2', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 13B           | `completion(model='ollama/llama2:13b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 70B           | `completion(model='ollama/llama2:70b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` | 
 | Code Llama    | `completion(model='ollama/codellama', messages, api_base="http://localhost:11434", stream=True)` | 
-| Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` | 
+| Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` |
+|Meta LLaMa3 8B | `completion(model='ollama/llama3', messages, api_base="http://localhost:11434", stream=False)` |
+| Meta LLaMa3 70B | `completion(model='ollama/llama3:70b', messages, api_base="http://localhost:11434", stream=False)` |
 | Orca Mini            | `completion(model='ollama/orca-mini', messages, api_base="http://localhost:11434", stream=True)` |
 | Vicuna               | `completion(model='ollama/vicuna', messages, api_base="http://localhost:11434", stream=True)` |
 | Nous-Hermes          | `completion(model='ollama/nous-hermes', messages, api_base="http://localhost:11434", stream=True)` |

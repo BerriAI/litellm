@@ -9,12 +9,3 @@ Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
 
-## Stable Version
-
-If you're running into problems with installation / Usage 
-Use the stable version of litellm 
-
-```shell
-pip install litellm==0.1.819
-```
-

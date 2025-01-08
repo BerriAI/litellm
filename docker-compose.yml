@@ -1,16 +1,56 @@
-version: "3.9"
+version: "3.11"
 services:
   litellm:
     build:
       context: .
       args:
         target: runtime
-    image: ghcr.io/berriai/litellm:main-latest
+    image: ghcr.io/berriai/litellm:main-stable
+    #########################################
+    ## Uncomment these lines to start proxy with a config.yaml file ##
+    # volumes:
+    #  - ./config.yaml:/app/config.yaml <<- this is missing in the docker-compose file currently
+    # command:
+    #  - "--config=/app/config.yaml"
+    ##############################################
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
+    environment:
+        DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+        STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+    env_file:
+      - .env # Load local .env file
+
+ 
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+  
+  prometheus:
+    image: prom/prometheus
     volumes:
-      - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
-    # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
-    command: [ "--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8" ]
+      - prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    restart: always
+
+volumes:
+  prometheus_data:
+    driver: local
+
 
 # ...rest of your docker-compose config if any

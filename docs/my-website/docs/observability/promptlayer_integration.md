@@ -1,4 +1,15 @@
+import Image from '@theme/IdealImage';
+
 # Promptlayer Tutorial
+
+
+:::tip
+
+This is community maintained, Please make an issue if you run into a bug
+https://github.com/BerriAI/litellm
+
+:::
+
 
 Promptlayer is a platform for prompt engineers. Log OpenAI requests. Search usage history. Track performance. Visually manage prompt templates.
 

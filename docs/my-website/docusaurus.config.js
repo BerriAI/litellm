@@ -11,7 +11,7 @@ const config = {
   favicon: '/img/favicon.ico', 
 
   // Set the production url of your site here
-  url: 'https://litellm.vercel.app/',
+  url: 'https://docs.litellm.ai/',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
@@ -26,7 +26,6 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
-
   plugins: [
     [
       '@docusaurus/plugin-ideal-image',
@@ -38,9 +37,17 @@ const config = {
         disableInDev: false,
       },
     ],
-    [ require.resolve('docusaurus-lunr-search'), {
-      languages: ['en'] // language codes
-    }],
+    [
+      '@docusaurus/plugin-content-blog',
+      {
+        id: 'release_notes', 
+        path: './release_notes', // Folder where your release notes are stored
+        routeBasePath: '/release_notes', // URL path for the release notes
+        include: ['**/*.md', '**/*.mdx'], // Files to include
+        // Other blog options
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -68,7 +75,6 @@ const config = {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
-        blog: false, // Optional: disable the blog plugin
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
@@ -90,6 +96,15 @@ const config = {
     ({
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.png',
+      algolia: {
+        // The application ID provided by Algolia
+        appId: 'NU85Y4NU0B',
+  
+        // Public API key: it is safe to commit it
+        apiKey: '4e0cf8c3020d0c876ad9174cea5c01fb',
+  
+        indexName: 'litellm',
+      },
       navbar: {
         title: '🚅 LiteLLM',
         items: [
@@ -106,6 +121,18 @@ const config = {
             to: "docs/enterprise"
           },
           {
+            sidebarId: 'tutorialSidebar',
+            position: 'left',
+            label: 'Hosted',
+            to: "docs/hosted"
+          },
+          { to: '/release_notes', label: 'Release Notes', position: 'left' },
+          {
+            href: 'https://models.litellm.ai/',
+            label: '💸 LLM Model Cost Map',
+            position: 'right',
+          },
+          {
             href: 'https://github.com/BerriAI/litellm',
             label: 'GitHub',
             position: 'right',
@@ -114,15 +141,7 @@ const config = {
             href: 'https://discord.com/invite/wuPM9dRgDw',
             label: 'Discord',
             position: 'right',
-          },
-          {
-            type: 'html',
-            position: 'right',
-            value:
-              `<a href=# class=navbar__link data-fr-widget>
-                I'm Confused
-              </a>`
-          },
+          }
         ],
       },
       footer: {
@@ -132,8 +151,8 @@ const config = {
             title: 'Docs',
             items: [
               {
-                label: 'Tutorial',
-                to: '/docs/index',
+                label: 'Getting Started',
+                to: 'https://docs.litellm.ai/docs/',
               },
             ],
           },

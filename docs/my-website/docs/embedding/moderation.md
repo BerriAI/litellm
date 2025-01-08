@@ -1,4 +1,4 @@
-# Moderation
+# litellm.moderation()
 LiteLLM supports the moderation endpoint for OpenAI
 
 ## Usage
