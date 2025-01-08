@@ -551,3 +551,81 @@ async def test_auth_with_form_data_and_model():
     # Test user_api_key_auth with form data request
     response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
     assert response.models == ["gpt-4"], "Model from virtual key should be preserved"
+
+
+@pytest.mark.asyncio
+async def test_soft_budget_alert():
+    """
+    Test that when a token's spend exceeds soft_budget, it triggers a budget alert but allows the request
+    """
+    import asyncio
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    # Setup
+    user_key = "sk-12345"
+    soft_budget = 10
+    current_spend = 15  # Spend exceeds soft budget
+
+    # Create a valid token with soft budget
+    valid_token = UserAPIKeyAuth(
+        token=hash_token(user_key),
+        soft_budget=soft_budget,
+        spend=current_spend,
+        last_refreshed_at=time.time(),
+    )
+
+    # Store in cache
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    # Mock proxy server settings
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
+
+    # Create request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    # Track if budget_alerts was called
+    alert_called = False
+    original_budget_alerts = litellm.proxy.proxy_server.proxy_logging_obj.budget_alerts
+
+    async def mock_budget_alerts(*args, **kwargs):
+        nonlocal alert_called
+        if kwargs.get("type") == "soft_budget":
+            alert_called = True
+        return await original_budget_alerts(*args, **kwargs)
+
+    # Patch the budget_alerts method
+    setattr(
+        litellm.proxy.proxy_server.proxy_logging_obj,
+        "budget_alerts",
+        mock_budget_alerts,
+    )
+
+    try:
+        # Call user_api_key_auth
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + user_key
+        )
+
+        # Assert the request was allowed (no exception raised)
+        assert response is not None
+        # Assert the alert was triggered
+        await asyncio.sleep(3)
+        assert alert_called == True, "Soft budget alert should have been triggered"
+
+    finally:
+        # Restore original budget_alerts
+        setattr(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "budget_alerts",
+            original_budget_alerts,
+        )
