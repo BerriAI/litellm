@@ -6,7 +6,7 @@ model_list:
 general_settings:    
     alerting: ["slack"]
     alert_to_webhook_url: {
-      "budget_alerts": ["https://hooks.slack.com/services/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"]
+      "budget_alerts": ["https://hooks.slack.com/services/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"]
     }
     alerting_args:
        budget_alert_ttl: 10
