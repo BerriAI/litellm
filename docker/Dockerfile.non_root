@@ -2,22 +2,21 @@
 ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest
+
 # Builder stage
-FROM $LITELLM_BUILD_IMAGE AS builder
+FROM ${LITELLM_BUILD_IMAGE} AS builder
 
 # Set the working directory to /app
 WORKDIR /app
 
 USER root
 
-# Install build dependencies
 RUN apk update && \
     apk add --no-cache gcc python3-dev
 
 RUN pip install --upgrade pip && \
     pip install build
-
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -37,14 +36,14 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
-# Ensure nonroot owns the /wheels directory and its contents
-RUN chown -R nonroot:nonroot /wheels
+# **Change Ownership of /wheels to root**
+# Since the runtime stage will run as root, ensure /wheels is owned by root
+RUN chown -R root:root /wheels
 
 # Runtime stage
-FROM $LITELLM_RUNTIME_IMAGE AS runtime
+FROM ${LITELLM_RUNTIME_IMAGE} AS runtime
 
 WORKDIR /app
-# Copy the current directory contents into the container at /app
 COPY . .
 RUN ls -la /app
 
@@ -52,37 +51,45 @@ RUN ls -la /app
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+# Ensure runtime stage runs as root
+USER root
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
+# Install the built wheel using pip and clean up
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && \
+    rm -f *.whl && rm -rf /wheels
+
+# **Switch Back to nonroot for Security**
+USER nonroot
+
+# Install semantic-cache without dependencies
 RUN pip install redisvl==0.0.7 --no-deps
 
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
+# Ensure PyJWT is used instead of jwt
+RUN pip uninstall -y jwt PyJWT || true
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
-
-# Generate prisma client
+# **Handle Prisma Client Generation**
 ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
-RUN mkdir -p /.cache
-RUN chmod -R 777 /.cache
+
+# Use Python to create and modify directories (avoiding shell commands)
+RUN python -c "import os; os.makedirs('/.cache', exist_ok=True)"
+RUN python -c "import os; os.chmod('/.cache', 0o777)"
+
+# Install Node.js tools if needed
 RUN pip install nodejs-bin
 RUN pip install prisma
 RUN prisma generate
 
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
+# **Ensure Entrypoint Scripts Are Executable on Host or Switch to root Temporarily**
+# Assuming executable permissions are set on host, you can remove chmod here
+# Otherwise, run as root to chmod
+USER root
+RUN chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh
+USER nonroot
 
+# Expose port 4000
 EXPOSE 4000/tcp
 
-# # Set your entrypoint and command
-
+# Set the entrypoint and command
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
-
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
-# CMD ["--port", "4000", "--detailed_debug"]
 CMD ["--port", "4000"]
