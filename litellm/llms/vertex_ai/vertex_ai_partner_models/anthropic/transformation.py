@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import List, Optional
+from typing import List
 
 import httpx
 
@@ -65,13 +65,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         return data
 
     @classmethod
-    def is_supported_model(
-        cls, model: str, custom_llm_provider: Optional[str] = None
-    ) -> bool:
+    def is_supported_model(cls, model: str, custom_llm_provider: str) -> bool:
         """
         Check if the model is supported by the VertexAI Anthropic API.
         """
-        if custom_llm_provider == "vertex_ai" and "claude" in model.lower():
+        if (
+            custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "vertex_ai_beta"
+        ):
+            return False
+        if "claude" in model.lower():
             return True
         elif model in litellm.vertex_anthropic_models:
             return True
