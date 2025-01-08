@@ -432,7 +432,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 
 class Message(OpenAIObject):
     content: Optional[str]
-    role: Literal["assistant", "user", "system", "tool", "function"]
+    role: Literal["assistant", "user", "system", "tool", "function", "developer"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
@@ -440,7 +440,7 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
-        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
+        role: Literal["assistant", "user", "system", "tool", "function", "developer"] = "assistant",
         function_call: Optional[FunctionCall] = None,
         tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
