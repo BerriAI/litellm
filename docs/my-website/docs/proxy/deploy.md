@@ -97,11 +97,6 @@ Here's how you can run the docker image and start litellm on port 8002 with `num
 docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
 
-### Terraform
-
-s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
-
-👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
 
 ### Use litellm as a base image
 
@@ -127,6 +122,74 @@ EXPOSE 4000/tcp
 
 CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 ```
+
+### Build from litellm `pip` package
+
+Follow these instructons to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
+
+Dockerfile 
+
+```shell
+FROM cgr.dev/chainguard/python:latest-dev
+
+USER root
+WORKDIR /app
+
+ENV HOME=/home/litellm
+ENV PATH="${HOME}/venv/bin:$PATH"
+
+# Install runtime dependencies
+RUN apk update && \
+    apk add --no-cache gcc python3-dev openssl openssl-dev
+
+RUN python -m venv ${HOME}/venv
+RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=${HOME}/.cache/pip \
+    ${HOME}/venv/bin/pip install -r requirements.txt
+
+EXPOSE 4000/tcp
+
+ENTRYPOINT ["litellm"]
+CMD ["--port", "4000"]
+```
+
+
+Example `requirements.txt`
+
+```shell
+litellm[proxy]==1.57.3 # Specify the litellm version you want to use
+prometheus_client
+langfuse
+prisma
+```
+
+Build the docker image
+
+```shell
+docker build \
+  -f Dockerfile.build_from_pip \
+  -t litellm-proxy-with-pip-5 .
+```
+
+Run the docker image
+
+```shell
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e OPENAI_API_KEY="sk-1222" \
+    -e DATABASE_URL="postgresql://xxxxxxxxx \
+    -p 4000:4000 \
+    litellm-proxy-with-pip-5 \
+    --config /app/config.yaml --detailed_debug
+```
+
+### Terraform
+
+s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
+
+👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
 
 ### Kubernetes
 
