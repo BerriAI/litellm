@@ -4,7 +4,7 @@
 import copy
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 
 import httpx
 from pydantic import BaseModel
@@ -45,6 +45,7 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
+        self._project_id_cache: Dict[str, str] = {}  # Cache mapping project names to IDs
 
     def validate_environment(self, api_key: Optional[str]):
         """
@@ -59,6 +60,43 @@ class BraintrustLogger(CustomLogger):
 
         if len(missing_keys) > 0:
             raise Exception("Missing keys={} in environment.".format(missing_keys))
+
+    def get_project_id_sync(self, project_name: str) -> str:
+        """
+        Get project ID from name, using cache if available.
+        If project doesn't exist, creates it.
+        """
+        if project_name in self._project_id_cache:
+            return self._project_id_cache[project_name]
+
+        try:
+            response = global_braintrust_sync_http_handler.post(
+                f"{self.api_base}/project", headers=self.headers, json={"name": project_name}
+            )
+            project_dict = response.json()
+            project_id = project_dict["id"]
+            self._project_id_cache[project_name] = project_id
+            return project_id
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"Failed to register project: {e.response.text}")
+
+    async def get_project_id_async(self, project_name: str) -> str:
+        """
+        Async version of get_project_id_sync
+        """
+        if project_name in self._project_id_cache:
+            return self._project_id_cache[project_name]
+
+        try:
+            response = await global_braintrust_http_handler.post(
+                f"{self.api_base}/project/register", headers=self.headers, json={"name": project_name}
+            )
+            project_dict = response.json()
+            project_id = project_dict["id"]
+            self._project_id_cache[project_name] = project_id
+            return project_id
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"Failed to register project: {e.response.text}")
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
@@ -150,7 +188,12 @@ class BraintrustLogger(CustomLogger):
                         new_metadata[key] = copy.deepcopy(value)
                 metadata = new_metadata
 
-            project_id = metadata.get("project_id", None)
+            # Get project_id from metadata or create default if needed
+            project_id = metadata.get("project_id")
+            if project_id is None:
+                project_name = metadata.get("project_name")
+                project_id = self.get_project_id_sync(project_name) if project_name else None
+
             if project_id is None:
                 if self.default_project_id is None:
                     self.create_sync_default_project_and_experiment()
@@ -266,12 +309,15 @@ class BraintrustLogger(CustomLogger):
                             value[k] = v.isoformat()
                     new_metadata[key] = value
 
-            metadata = new_metadata
+            # Get project_id from metadata or create default if needed
+            project_id = metadata.get("project_id")
+            if project_id is None:
+                project_name = metadata.get("project_name")
+                project_id = await self.get_project_id_async(project_name) if project_name else None
 
-            project_id = metadata.get("project_id", None)
             if project_id is None:
                 if self.default_project_id is None:
-                    self.create_sync_default_project_and_experiment()
+                    await self.create_default_project_and_experiment()
                 project_id = self.default_project_id
 
             tags = []
