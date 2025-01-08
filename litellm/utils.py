@@ -1257,7 +1257,7 @@ def _select_tokenizer(
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
         )
-        return {"type": "huggingface_tokenizer", "tokenizer": _tokenizer}
+        return _tokenizer
     return _select_tokenizer_helper(model=model)
 
 
