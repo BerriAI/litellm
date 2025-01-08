@@ -570,6 +570,7 @@ class SlackAlerting(CustomBatchLogger):
         self,
         type: Literal[
             "token_budget",
+            "soft_budget",
             "user_budget",
             "team_budget",
             "proxy_budget",
@@ -595,7 +596,12 @@ class SlackAlerting(CustomBatchLogger):
             user_info_str = "\n{}: {}\n".format(k, v)
 
         event: Optional[
-            Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]
+            Literal[
+                "budget_crossed",
+                "threshold_crossed",
+                "projected_limit_exceeded",
+                "soft_budget_crossed",
+            ]
         ] = None
         event_group: Optional[
             Literal["internal_user", "team", "key", "proxy", "customer"]
@@ -605,6 +611,9 @@ class SlackAlerting(CustomBatchLogger):
         if type == "proxy_budget":
             event_group = "proxy"
             event_message += "Proxy Budget: "
+        elif type == "soft_budget":
+            event_group = "proxy"
+            event_message += "Soft Budget: "
         elif type == "user_budget":
             event_group = "internal_user"
             event_message += "User Budget: "
@@ -624,26 +633,32 @@ class SlackAlerting(CustomBatchLogger):
             _id = user_info.token
 
         # percent of max_budget left to spend
-        if user_info.max_budget is None:
+        if user_info.max_budget is None and user_info.soft_budget is None:
             return
-
-        if user_info.max_budget > 0:
-            percent_left = (
-                user_info.max_budget - user_info.spend
-            ) / user_info.max_budget
-        else:
-            percent_left = 0
+        percent_left: float = 0
+        if user_info.max_budget is not None:
+            if user_info.max_budget > 0:
+                percent_left = (
+                    user_info.max_budget - user_info.spend
+                ) / user_info.max_budget
 
         # check if crossed budget
-        if user_info.spend >= user_info.max_budget:
-            event = "budget_crossed"
-            event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
-        elif percent_left <= 0.05:
-            event = "threshold_crossed"
-            event_message += "5% Threshold Crossed "
-        elif percent_left <= 0.15:
-            event = "threshold_crossed"
-            event_message += "15% Threshold Crossed"
+        if user_info.max_budget is not None:
+            if user_info.spend >= user_info.max_budget:
+                event = "budget_crossed"
+                event_message += (
+                    f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
+                )
+            elif percent_left <= 0.05:
+                event = "threshold_crossed"
+                event_message += "5% Threshold Crossed "
+            elif percent_left <= 0.15:
+                event = "threshold_crossed"
+                event_message += "15% Threshold Crossed"
+        elif user_info.soft_budget is not None:
+            if user_info.spend >= user_info.soft_budget:
+                event = "soft_budget_crossed"
+                event_message += f"Soft Budget Crossed\n Soft Budget:`{user_info.soft_budget}` \nSpend:`{user_info.spend}`"
 
         if event is not None and event_group is not None:
             _cache_key = "budget_alerts:{}:{}".format(event, _id)
