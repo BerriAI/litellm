@@ -40,6 +40,9 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
+# Ensure runtime stage runs as root
+USER root
+
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .
