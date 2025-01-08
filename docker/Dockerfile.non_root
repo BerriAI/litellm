@@ -58,9 +58,6 @@ USER root
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && \
     rm -f *.whl && rm -rf /wheels
 
-# **Switch Back to nonroot for Security**
-USER nonroot
-
 # Install semantic-cache without dependencies
 RUN pip install redisvl==0.0.7 --no-deps
 
@@ -72,18 +69,15 @@ RUN pip install PyJWT==2.9.0 --no-cache-dir
 ENV PRISMA_BINARY_CACHE_DIR=/app/prisma
 
 # Use Python to create and modify directories (avoiding shell commands)
-RUN python -c "import os; os.makedirs('/.cache', exist_ok=True)"
-RUN python -c "import os; os.chmod('/.cache', 0o777)"
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+RUN mkdir -p /.cache
+RUN chmod -R 777 /.cache
 
 # Install Node.js tools if needed
 RUN pip install nodejs-bin
 RUN pip install prisma
 RUN prisma generate
 
-# **Ensure Entrypoint Scripts Are Executable on Host or Switch to root Temporarily**
-# Assuming executable permissions are set on host, you can remove chmod here
-# Otherwise, run as root to chmod
-USER root
 RUN chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh
 USER nonroot
 
