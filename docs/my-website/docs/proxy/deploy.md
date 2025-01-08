@@ -32,9 +32,8 @@ source .env
 docker-compose up
 ```
 
-<Tabs>
 
-<TabItem value="basic" label="Basic (No DB)">
+### Docker Run 
 
 #### Step 1. CREATE config.yaml 
 
@@ -84,13 +83,7 @@ Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/l
   }'
   ```
 
-</TabItem>
-
-
-
-<TabItem value="cli" label="With CLI Args">
-
-#### Run with LiteLLM CLI args
+### Docker Run - CLI Args
 
 See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
 
@@ -104,15 +97,13 @@ Here's how you can run the docker image and start litellm on port 8002 with `num
 docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
 
-</TabItem>
-<TabItem value="terraform" label="Terraform">
+### Terraform
 
 s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
 
 👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
 
-</TabItem>
-<TabItem value="base-image" label="use litellm as a base image">
+### Use litellm as a base image
 
 ```shell
 # Use the provided base image
@@ -137,9 +128,7 @@ EXPOSE 4000/tcp
 CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 ```
 
-</TabItem>
-
-<TabItem value="kubernetes" label="Kubernetes">
+### Kubernetes
 
 Deploying a config file based litellm instance just requires a simple deployment that loads
 the config.yaml file via a config map. Also it would be a good practice to use the env var
@@ -204,11 +193,8 @@ spec:
 To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
 :::
 
-</TabItem>
 
-<TabItem value="helm-" label="Helm Chart">
-
-
+### Helm Chart
 
 :::info
 
@@ -247,10 +233,6 @@ kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
 Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
-
-</TabItem>
-
-</Tabs>
 
 **That's it ! That's the quick start to deploy litellm**
 
