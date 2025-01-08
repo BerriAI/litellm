@@ -440,9 +440,9 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
-        function_call=None,
-        tool_calls: Optional[list] = None,
+        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
+        function_call: Optional[FunctionCall] = None,
+        tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
