@@ -8,7 +8,7 @@ Has all /sso/* routes
 import asyncio
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -18,10 +18,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
 from litellm.proxy._types import (
     LitellmUserRoles,
+    Member,
     NewUserRequest,
+    NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
     SSOUserDefinedValues,
+    TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import _has_user_setup_sso
@@ -37,6 +40,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
     has_admin_ui_access,
 )
+from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.secret_managers.main import str_to_bool
 
@@ -345,6 +349,42 @@ async def get_generic_sso_response(
     return result
 
 
+async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[str]):
+    """
+    - Get missing teams (diff b/w user_info.team_ids and sso_teams)
+    - Add missing user to missing teams
+    """
+    if user_info.teams is None:
+        return
+    missing_teams = set(sso_teams) - set(user_info.teams)
+    missing_teams_list = list(missing_teams)
+    verbose_proxy_logger.debug(f"missing_teams: {missing_teams_list}")
+    tasks = []
+    for team_id in missing_teams_list:
+        member = Member(user_id=user_info.user_id, role="user")
+        team_member_add_request = TeamMemberAddRequest(
+            member=member,
+            team_id=team_id,
+        )
+        tasks.append(
+            team_member_add(
+                data=team_member_add_request,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+                http_request=Request(
+                    scope={"type": "http", "path": "/sso/callback"},
+                ),
+            )
+        )
+    try:
+        result = await asyncio.gather(*tasks)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"[Non-Blocking] Error trying to add sso user to db: {e}"
+        )
+
+
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
@@ -532,12 +572,21 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 )
             else:
                 # user not in DB, insert User into LiteLLM DB
-                user_role = await insert_sso_user(
+                user_info = await insert_sso_user(
                     result_openid=result,
                     user_defined_values=user_defined_values,
                 )
-    except Exception:
-        pass
+
+                user_role = (
+                    user_info.user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+                )
+            sso_teams = getattr(result, "team_ids", [])
+            await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"[Non-Blocking] Error trying to add sso user to db: {e}"
+        )
 
     if user_defined_values is None:
         raise Exception(
@@ -612,13 +661,16 @@ async def auth_callback(request: Request):  # noqa: PLR0915
 async def insert_sso_user(
     result_openid: Optional[OpenID],
     user_defined_values: Optional[SSOUserDefinedValues] = None,
-) -> str:
+) -> NewUserResponse:
     """
     Helper function to create a New User in LiteLLM DB after a successful SSO login
 
     Args:
         result_openid (OpenID): User information in OpenID format if the login was successful.
         user_defined_values (Optional[SSOUserDefinedValues], optional): LiteLLM SSOValues / fields that were read
+
+    Returns:
+        Tuple[str, str]: User ID and User Role
     """
     verbose_proxy_logger.debug(
         f"Inserting SSO user into DB. User values: {user_defined_values}"
@@ -653,9 +705,9 @@ async def insert_sso_user(
     if result_openid:
         new_user_request.metadata = {"auth_provider": result_openid.provider}
 
-    await new_user(data=new_user_request, user_api_key_dict=UserAPIKeyAuth())
+    response = await new_user(data=new_user_request, user_api_key_dict=UserAPIKeyAuth())
 
-    return user_defined_values["user_role"] or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    return response
 
 
 @router.get(
