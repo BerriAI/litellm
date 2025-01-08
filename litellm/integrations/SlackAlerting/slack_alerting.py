@@ -591,10 +591,7 @@ class SlackAlerting(CustomBatchLogger):
             return
         _id: Optional[str] = "default_id"  # used for caching
         user_info_json = user_info.model_dump(exclude_none=True)
-        user_info_str = ""
-        for k, v in user_info_json.items():
-            user_info_str = "\n{}: {}\n".format(k, v)
-
+        user_info_str = self._get_user_info_str(user_info)
         event: Optional[
             Literal[
                 "budget_crossed",
@@ -613,7 +610,7 @@ class SlackAlerting(CustomBatchLogger):
             event_message += "Proxy Budget: "
         elif type == "soft_budget":
             event_group = "proxy"
-            event_message += "Soft Budget: "
+            event_message += "Soft Budget Crossed: "
         elif type == "user_budget":
             event_group = "internal_user"
             event_message += "User Budget: "
@@ -658,8 +655,6 @@ class SlackAlerting(CustomBatchLogger):
         elif user_info.soft_budget is not None:
             if user_info.spend >= user_info.soft_budget:
                 event = "soft_budget_crossed"
-                event_message += f"Soft Budget Crossed\n Soft Budget:`{user_info.soft_budget}` \nSpend:`{user_info.spend}`"
-
         if event is not None and event_group is not None:
             _cache_key = "budget_alerts:{}:{}".format(event, _id)
             result = await _cache.async_get_cache(key=_cache_key)
@@ -685,6 +680,18 @@ class SlackAlerting(CustomBatchLogger):
 
             return
         return
+
+    def _get_user_info_str(self, user_info: CallInfo) -> str:
+        """
+        Create a standard message for a budget alert
+        """
+        _all_fields_as_dict = user_info.model_dump(exclude_none=True)
+        _all_fields_as_dict.pop("token")
+        msg = ""
+        for k, v in _all_fields_as_dict.items():
+            msg += f"*{k}:* `{v}`\n"
+
+        return msg
 
     async def customer_spend_alert(
         self,
