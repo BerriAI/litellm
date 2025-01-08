@@ -964,7 +964,7 @@ jobs:
       - run:
           name: Check for expected error
           command: |
-            if grep -q "Can't reach database server at" docker_output.log; then
+            if grep -q "prisma schema out of sync with db" docker_output.log; then
               echo "Expected error found. Test passed."
             else
               echo "Expected error not found. Test failed."
