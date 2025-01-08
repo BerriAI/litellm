@@ -8,7 +8,7 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 import json
 import os
-from typing import Optional, cast
+from typing import List, Optional, cast
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -58,6 +58,11 @@ class JWTHandler:
         if self.litellm_jwtauth.admin_jwt_scope in scopes:
             return True
         return False
+
+    def get_team_ids_from_jwt(self, token: dict) -> List[str]:
+        if self.litellm_jwtauth.team_ids_jwt_field is not None:
+            return token[self.litellm_jwtauth.team_ids_jwt_field]
+        return []
 
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
