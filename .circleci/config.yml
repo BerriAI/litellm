@@ -1411,6 +1411,7 @@ jobs:
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
           command: |
+            cd docker/build_from_pip
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
