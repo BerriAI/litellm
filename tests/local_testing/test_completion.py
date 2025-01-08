@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import os
@@ -2134,7 +2134,7 @@ def test_completion_openai_organization():
             )
             pytest.fail("Request should have failed - This organization does not exist")
         except Exception as e:
-            assert "No such organization: org-ikDc4ex8NB" in str(e)
+            assert "header should match organization for API key" in str(e)
 
     except Exception as e:
         print(e)
