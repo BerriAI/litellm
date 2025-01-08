@@ -1,0 +1,10 @@
+model_list:
+  - model_name: "fake-openai-endpoint"
+    litellm_params:
+      model: openai/gpt-4o
+
+general_settings:    
+    alerting: ["slack"]
+    alerting_args:
+       budget_alert_ttl: 10
+       log_to_console: true
