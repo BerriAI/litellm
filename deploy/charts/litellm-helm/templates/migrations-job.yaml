@@ -18,7 +18,7 @@
       spec:
         containers:
           - name: prisma-migrations
-            image: ghcr.io/berriai/litellm-database:main-latest
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
             command: ["python", "litellm/proxy/prisma_migration.py"]
             workingDir: "/app"
             env:
