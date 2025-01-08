@@ -8,7 +8,7 @@ class AthinaLogger:
             "athina-api-key": self.athina_api_key,
             "Content-Type": "application/json"
         }
-        self.athina_logging_url = "https://log.athina.ai/api/v1/log/inference"
+        self.athina_logging_url = os.getenv("ATHINA_LOGGING_URL", "https://log.athina.ai/api/v1/log/inference")
         self.additional_keys = ["environment", "prompt_slug", "customer_id", "customer_user_id", "session_id", "external_reference_id", "context", "expected_response", "user_query"]
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
