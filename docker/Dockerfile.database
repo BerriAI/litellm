@@ -43,6 +43,10 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
+# Install runtime dependencies
+RUN apk update && \
+    apk add --no-cache openssl
+
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .
