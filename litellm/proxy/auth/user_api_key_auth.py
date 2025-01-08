@@ -1028,6 +1028,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     soft_budget=valid_token.soft_budget,
                     user_id=valid_token.user_id,
                     team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
                     user_email=None,
                     key_alias=valid_token.key_alias,
                 )
