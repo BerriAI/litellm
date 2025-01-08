@@ -1014,6 +1014,29 @@ async def user_api_key_auth(  # noqa: PLR0915
                         current_cost=valid_token.spend,
                         max_budget=valid_token.max_budget,
                     )
+            if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+                verbose_proxy_logger.debug(
+                    "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+                    valid_token.token,
+                    valid_token.spend,
+                    valid_token.soft_budget,
+                )
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    soft_budget=valid_token.soft_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    user_email=None,
+                    key_alias=valid_token.key_alias,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="soft_budget",
+                        user_info=call_info,
+                    )
+                )
 
             # Check 5. Token Model Spend is under Model budget
             max_budget_per_model = valid_token.model_max_budget

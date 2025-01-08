@@ -1,13 +1,13 @@
 model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: aiohttp_openai/any
-      api_base: https://example-openai-endpoint.onrender.com/chat/completions
-      api_key: "ishaan"
+      model: openai/gpt-4o
 
-general_settings:
-  key_management_system: "hashicorp_vault" # 👈 KEY CHANGE
-  key_management_settings: 
-    store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
-    prefix_for_stored_virtual_keys: "litellm/" # OPTIONAL. If set, this prefix will be used for stored virtual keys in the secret manager
-    access_mode: "write_only" # Literal["read_only", "write_only", "read_and_write"]
+general_settings:    
+    alerting: ["slack"]
+    alert_to_webhook_url: {
+      "budget_alerts": ["https://hooks.slack.com/services/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"]
+    }
+    alerting_args:
+       budget_alert_ttl: 10
+       log_to_console: true
