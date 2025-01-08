@@ -1360,10 +1360,7 @@ def openai_token_counter(  # noqa: PLR0915
     """
     print_verbose(f"LiteLLM: Utils - Counting tokens for OpenAI model={model}")
     try:
-        if "gpt-4o" in model:
-            encoding = tiktoken.get_encoding("o200k_base")
-        else:
-            encoding = tiktoken.encoding_for_model(model)
+        encoding = tiktoken.encoding_for_model(model)
     except KeyError:
         print_verbose("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
