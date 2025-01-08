@@ -6,17 +6,13 @@ import TabItem from '@theme/TabItem';
 
 Get alerts for:
 
-- Hanging LLM api calls
-- Slow LLM api calls
-- Failed LLM api calls
-- Budget Tracking per key/user
-- Spend Reports - Weekly & Monthly spend per Team, Tag
-- Failed db read/writes
-- Model outage alerting
-- Daily Reports:
-    - **LLM** Top 5 slowest deployments
-    - **LLM** Top 5 deployments with most failed requests
-- **Spend** Weekly & Monthly spend per Team, Tag
+| Category | Alert Type |
+|----------|------------|
+| **LLM Performance** | Hanging API calls, Slow API calls, Failed API calls, Model outage alerting |
+| **Budget & Spend** | Budget tracking per key/user, Soft budget alerts, Weekly & Monthly spend reports per Team/Tag |
+| **System Health** | Failed database read/writes |
+| **Daily Reports** | Top 5 slowest LLM deployments, Top 5 LLM deployments with most failed requests, Weekly & Monthly spend per Team/Tag |
+
 
 
 Works across: 
