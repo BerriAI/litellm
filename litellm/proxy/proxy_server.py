@@ -3294,6 +3294,9 @@ simple_router = Router(
 async def lite_completion(
     request: Request,
 ):
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     # Get the raw request body
     data = await request.json()
