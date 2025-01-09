@@ -674,7 +674,7 @@ def run_server(  # noqa: PLR0915
                 app="litellm.proxy.proxy_server:app",  # Pass as import string instead of app object
                 **uvicorn_args,
                 loop="uvloop",
-                workers=1,
+                workers=2,
             )
         elif run_gunicorn is True:
             # Gunicorn Application Class
