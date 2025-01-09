@@ -747,6 +747,125 @@ def test_stream_chunk_builder_empty_initial_chunk():
     assert id == "1"
 
 
+def test_stream_chunk_builder_tool_calls_list():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        ChunkProcessor,
+    )
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Function,
+        ModelResponseStream,
+        Delta,
+        StreamingChoices,
+        ChatCompletionDeltaToolCall,
+    )
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-f323f7a5-2da0-4f86-8ed7-c653c5a359d9",
+            created=1736388417,
+            model="llama-3.3-70b-versatile",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_9y79",
+                                function=Function(
+                                    arguments='{"location": "San Francisco", "unit": "celsius"}',
+                                    name="get_current_weather",
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            stream_options=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-f323f7a5-2da0-4f86-8ed7-c653c5a359d9",
+            created=1736388417,
+            model="llama-3.3-70b-versatile",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_pfp7",
+                                function=Function(
+                                    arguments='{"location": "Tokyo", "unit": "celsius"}',
+                                    name="get_current_weather",
+                                ),
+                                type="function",
+                                index=1,
+                            )
+                        ],
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            stream_options=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-f323f7a5-2da0-4f86-8ed7-c653c5a359d9",
+            created=1736388417,
+            model="llama-3.3-70b-versatile",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_hyj5",
+                                function=Function(
+                                    arguments='{"location": "Paris", "unit": "celsius"}',
+                                    name="get_current_weather",
+                                ),
+                                type="function",
+                                index=2,
+                            )
+                        ],
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            stream_options=None,
+        ),
+    ]
+
+    processor = ChunkProcessor(chunks=chunks)
+
+    tool_calls = processor.get_combined_tool_content(tool_call_chunks=chunks)
+    print(f"tool_calls: {tool_calls}")
+    assert len(tool_calls) == 3
+
+
 import json
 
 
@@ -762,3 +881,55 @@ def get_current_weather(location, unit="fahrenheit"):
         return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
     else:
         return json.dumps({"location": location, "temperature": "unknown"})
+
+
+@pytest.fixture(scope="module", autouse=True)
+def load_env():
+    messages = [
+        {"role": "system", "content": "You are a helpful AI assistant"},
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris?",
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": litellm.utils.function_to_dict(get_current_weather),
+        }
+    ]
+    OPENAI_GPT4oMINI = {
+        "messages": messages,
+        "model": "gpt-4o-mini",
+        "temperature": 0.0,
+        "tools": tools,
+        "stream": True,
+    }
+    LLAMA3_3 = {
+        "messages": messages,
+        "model": "groq/llama-3.3-70b-versatile",
+        "api_base": "https://api.groq.com/openai/v1",
+        "temperature": 0.0,
+        "tools": tools,
+        "stream": True,
+    }
+    return OPENAI_GPT4oMINI, LLAMA3_3
+
+
+def execute_completion(opts: dict):
+    partial_streaming_chunks = []
+    response_gen = litellm.completion(**opts)
+    for i, part in enumerate(response_gen):
+        partial_streaming_chunks.append(part)
+    assembly = litellm.stream_chunk_builder(partial_streaming_chunks)
+    print(assembly.choices[0].message.tool_calls)
+    assert len(assembly.choices[0].message.tool_calls) == 3, (
+        assembly.choices[0].message.tool_calls[0].function.arguments[0]
+    )
+    print(assembly.choices[0].message.tool_calls)
+
+
+def test_grok_bug(load_env):
+    litellm.set_verbose = True
+    _, LLAMA3_3 = load_env
+    execute_completion(LLAMA3_3)
