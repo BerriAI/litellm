@@ -954,9 +954,9 @@ def client(original_function):  # noqa: PLR0915
                     model=model or "",
                     optional_params=getattr(logging_obj, "optional_params", {}),
                 )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
+                # result._hidden_params["response_cost"] = (
+                #     logging_obj._response_cost_calculator(result=result)
+                # )
 
                 result._hidden_params["additional_headers"] = process_response_headers(
                     result._hidden_params.get("additional_headers") or {}
@@ -1112,9 +1112,9 @@ def client(original_function):  # noqa: PLR0915
                     model=model or "",
                     optional_params=kwargs,
                 )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
+                # result._hidden_params["response_cost"] = (
+                #     logging_obj._response_cost_calculator(result=result)
+                # )
                 result._hidden_params["additional_headers"] = process_response_headers(
                     result._hidden_params.get("additional_headers") or {}
                 )  # GUARANTEE OPENAI HEADERS IN RESPONSE
