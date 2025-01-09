@@ -3158,9 +3158,9 @@ class Router:
         if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
             response = await response
         ## PROCESS RESPONSE HEADERS
-        response = await self.set_response_headers(
-            response=response, model_group=model_group
-        )
+        # response = await self.set_response_headers(
+        #     response=response, model_group=model_group
+        # )
 
         return response
 
