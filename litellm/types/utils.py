@@ -847,6 +847,13 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
+        if (
+            "usage" in kwargs
+            and kwargs["usage"] is not None
+            and isinstance(kwargs["usage"], dict)
+        ):
+            kwargs["usage"] = Usage(**kwargs["usage"])
+
         kwargs["id"] = id
         kwargs["created"] = created
         kwargs["object"] = "chat.completion.chunk"
