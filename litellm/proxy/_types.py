@@ -420,6 +420,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "info_routes",
     ]
     team_id_jwt_field: Optional[str] = None
+    team_ids_jwt_field: Optional[str] = None
+    upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
