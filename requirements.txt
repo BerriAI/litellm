@@ -7,33 +7,18 @@ backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
 gunicorn==22.0.0 # server dep
-boto3==1.34.34 # aws bedrock/sagemaker calls
-redis==5.0.0 # caching
-numpy==2.1.1 # semantic caching
 prisma==0.11.0 # for db
-mangum==0.17.0 # for aws lambda functions
+uvloop==0.21.0
 pynacl==1.5.0 # for encrypting keys
-google-cloud-aiplatform==1.47.0 # for vertex ai calls
-anthropic[vertex]==0.21.3
-google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.45.0 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
-ddtrace==2.19.0rc1       # for advanced DD tracing / profiling
 orjson==3.10.12 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
 fastapi-sso==0.16.0 # admin UI, SSO
 pyjwt[crypto]==2.9.0
 python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
-azure-ai-contentsafety==1.0.0 # for azure content safety
-azure-identity==1.16.1 # for azure content safety
-azure-storage-file-datalake==12.15.0 # for azure buck storage logging
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
-opentelemetry-exporter-otlp==1.25.0
-sentry_sdk==2.2.1 # for sentry error handling
-detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==43.0.1
 
 ### LITELLM PACKAGE DEPENDENCIES
