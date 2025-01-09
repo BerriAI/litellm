@@ -673,7 +673,6 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
             uvicorn.run(
                 **uvicorn_args,
-                loop="uvloop",
                 workers=2,
             )
         elif run_gunicorn is True:
