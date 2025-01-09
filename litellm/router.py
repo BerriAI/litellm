@@ -8,12 +8,14 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
 import copy
 import enum
 import hashlib
 import inspect
 import json
 import logging
+import os
 import threading
 import time
 import traceback
@@ -4046,46 +4048,64 @@ class Router:
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
-
-        for model in original_model_list:
-            _model_name = model.pop("model_name")
-            _litellm_params = model.pop("litellm_params")
-            ## check if litellm params in os.environ
-            if isinstance(_litellm_params, dict):
-                for k, v in _litellm_params.items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
-                        _litellm_params[k] = get_secret(v)
-
-            _model_info: dict = model.pop("model_info", {})
-
-            # check if model info has id
-            if "id" not in _model_info:
-                _id = self._generate_model_id(_model_name, _litellm_params)
-                _model_info["id"] = _id
-
-            if _litellm_params.get("organization", None) is not None and isinstance(
-                _litellm_params["organization"], list
-            ):  # Addresses https://github.com/BerriAI/litellm/issues/3949
-                for org in _litellm_params["organization"]:
-                    _litellm_params["organization"] = org
-                    self._create_deployment(
-                        deployment_info=model,
-                        _model_name=_model_name,
-                        _litellm_params=_litellm_params,
-                        _model_info=_model_info,
-                    )
-            else:
-                self._create_deployment(
-                    deployment_info=model,
-                    _model_name=_model_name,
-                    _litellm_params=_litellm_params,
-                    _model_info=_model_info,
-                )
+        if os.cpu_count() > 1: # type: ignore
+            with ProcessPoolExecutor() as executor:
+                results = executor.map(self._process_model, original_model_list)
+                # Collect the results in the main process
+                for deployment_list in results:
+                    if deployment_list:
+                        self.model_list.extend(deployment_list)
+        else:
+            for model in original_model_list:
+                self._process_model(model)
 
         verbose_router_logger.debug(
             f"\nInitialized Model List {self.get_model_names()}"
         )
         self.model_names = [m["model_name"] for m in model_list]
+
+    def _process_model(self, model: dict):
+        _model_name = model.pop("model_name")
+        _litellm_params = model.pop("litellm_params")
+        ## check if litellm params in os.environ
+        if isinstance(_litellm_params, dict):
+            for k, v in _litellm_params.items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    _litellm_params[k] = get_secret(v)
+
+        _model_info: dict = model.pop("model_info", {})
+
+        # check if model info has id
+        if "id" not in _model_info:
+            _id = self._generate_model_id(_model_name, _litellm_params)
+            _model_info["id"] = _id
+
+        deployments = []
+
+        if _litellm_params.get("organization", None) is not None and isinstance(
+            _litellm_params["organization"], list
+        ):  # Addresses https://github.com/BerriAI/litellm/issues/3949
+            for org in _litellm_params["organization"]:
+                _litellm_params["organization"] = org
+                deployment = self._create_deployment(
+                    deployment_info=model,
+                    _model_name=_model_name,
+                    _litellm_params=_litellm_params,
+                    _model_info=_model_info,
+                )
+                if deployment:
+                    deployments.append(deployment.to_json(exclude_none=True))
+        else:
+            deployment = self._create_deployment(
+                deployment_info=model,
+                _model_name=_model_name,
+                _litellm_params=_litellm_params,
+                _model_info=_model_info,
+            )
+            if deployment:
+                deployments.append(deployment.to_json(exclude_none=True))
+        
+        return deployments
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
