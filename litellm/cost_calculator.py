@@ -371,14 +371,14 @@ def _select_model_name_for_cost_calc(
     3. If completion response has model set return that
     4. Check if model is passed in return that
     """
+    if custom_pricing is True:
+        return model
+
     return_model: Optional[str] = None
     region_name: Optional[str] = None
     custom_llm_provider = _get_provider_for_cost_calc(
         model=model, custom_llm_provider=custom_llm_provider
     )
-
-    if custom_pricing is True:
-        return_model = model
 
     if base_model is not None:
         return_model = base_model

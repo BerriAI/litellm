@@ -73,6 +73,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
     def audio_transcriptions(
         self,
         model: str,
+        custom_llm_provider: str,
         audio_file: FileTypes,
         optional_params: dict,
         model_response: TranscriptionResponse,
@@ -97,6 +98,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             return self.async_audio_transcriptions(  # type: ignore
                 audio_file=audio_file,
                 data=data,
+                custom_llm_provider=custom_llm_provider,
                 model_response=model_response,
                 timeout=timeout,
                 api_key=api_key,
@@ -142,7 +144,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+        hidden_params = {"model": model, "custom_llm_provider": custom_llm_provider}
         final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
@@ -150,6 +152,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         self,
         audio_file: FileTypes,
         data: dict,
+        custom_llm_provider: str,
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
@@ -197,7 +200,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            hidden_params = {"model": "whisper-1", "custom_llm_provider": "openai"}
+            hidden_params = {"model": data.get("model"), "custom_llm_provider": custom_llm_provider}
             return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         except Exception as e:
             ## LOGGING
