@@ -250,12 +250,19 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
             <TabGroup>
               <TabList>
+                <Tab>Model Information</Tab>
                 <Tab>OpenAI Python SDK</Tab>
                 <Tab>Supported OpenAI Params</Tab>
                 <Tab>LlamaIndex</Tab>
                 <Tab>Langchain Py</Tab>
               </TabList>
               <TabPanels>
+                <TabPanel>
+                  <Text>
+                    <strong>Model Group:</strong> 
+                    <pre>{JSON.stringify(selectedModel, null, 2)}</pre>
+                  </Text>
+                </TabPanel>
                 <TabPanel>
                   <SyntaxHighlighter language="python">
                     {`
