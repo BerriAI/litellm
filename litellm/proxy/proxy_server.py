@@ -3308,6 +3308,42 @@ simple_router = Router(
 )
 
 
+@router.post("/lite_sdk/chat/completions")
+@router.post("/lite_sdk/v1/chat/completions")
+async def lite_sdk_completion(
+    request: Request,
+):
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    global general_settings, user_debug, proxy_logging_obj, llm_model_list
+    # Get the raw request body
+    data = await request.json()
+    data.pop("model", None)
+
+    # Get the authorization header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
+    # data = await add_litellm_data_to_request(
+    #     data=data,
+    #     request=request,
+    #     general_settings=general_settings,
+    #     user_api_key_dict=UserAPIKeyAuth(token="", api_key=""),
+    #     version=version,
+    #     proxy_config=proxy_config,
+    # )
+
+    response = await litellm.acompletion(
+        model="aiohttp_openai/any",
+        api_base="https://example-openai-endpoint.onrender.com/v1/chat/completions",
+        api_key="my-key",
+        **data,
+    )
+    return response
+
+
 @router.post("/lite/chat/completions")
 @router.post("/lite/v1/chat/completions")
 async def lite_completion(
