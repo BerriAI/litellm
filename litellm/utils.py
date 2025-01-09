@@ -954,9 +954,9 @@ def client(original_function):  # noqa: PLR0915
                     model=model or "",
                     optional_params=getattr(logging_obj, "optional_params", {}),
                 )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
+                # result._hidden_params["response_cost"] = (
+                #     logging_obj._response_cost_calculator(result=result)
+                # )
 
                 result._hidden_params["additional_headers"] = process_response_headers(
                     result._hidden_params.get("additional_headers") or {}
@@ -1112,9 +1112,9 @@ def client(original_function):  # noqa: PLR0915
                     model=model or "",
                     optional_params=kwargs,
                 )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
+                # result._hidden_params["response_cost"] = (
+                #     logging_obj._response_cost_calculator(result=result)
+                # )
                 result._hidden_params["additional_headers"] = process_response_headers(
                     result._hidden_params.get("additional_headers") or {}
                 )  # GUARANTEE OPENAI HEADERS IN RESPONSE
@@ -1143,15 +1143,15 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
+            # asyncio.create_task(
+            #     _client_async_logging_helper(
+            #         logging_obj=logging_obj,
+            #         result=result,
+            #         start_time=start_time,
+            #         end_time=end_time,
+            #         is_completion_with_fallbacks=is_completion_with_fallbacks,
+            #     )
+            # )
             # executor.submit(
             #     logging_obj.success_handler,
             #     result,
