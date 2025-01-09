@@ -397,6 +397,7 @@ const sidebars = {
         "observability/lago",
         "observability/helicone_integration",
         "observability/openmeter",
+        "observability/amberflo",
         "observability/promptlayer_integration",
         "observability/wandb_integration",
         "observability/slack_integration",

@@ -67,6 +67,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
+from ..integrations.amberflo.amberflo_metering import AmberfloLogger
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
 from ..integrations.athina import AthinaLogger
@@ -129,6 +130,7 @@ logfireLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+amberfloLogger = None
 openMeterLogger = None
 lagoLogger = None
 dataDogLogger = None
@@ -2342,7 +2344,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     """
     try:
         custom_logger_init_args = custom_logger_init_args or {}
-        if logging_integration == "lago":
+        if logging_integration == "amberflo":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AmberfloLogger):
+                    return callback  # type: ignore
+
+            amberflo_logger = AmberfloLogger()
+            _in_memory_loggers.append(amberflo_logger)
+            return amberflo_logger  # type: ignore
+        elif logging_integration == "lago":
             for callback in _in_memory_loggers:
                 if isinstance(callback, LagoLogger):
                     return callback  # type: ignore
@@ -2590,7 +2600,11 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
     try:
-        if logging_integration == "lago":
+        if logging_integration == "amberflo":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AmberfloLogger):
+                    return callback
+        elif logging_integration == "lago":
             for callback in _in_memory_loggers:
                 if isinstance(callback, LagoLogger):
                     return callback
