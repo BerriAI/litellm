@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
@@ -257,17 +258,13 @@ class AnthropicConfig(BaseConfig):
     ) -> Optional[List[str]]:
         new_stop: Optional[List[str]] = None
         if isinstance(stop, str):
-            if (
-                stop == "\n"
-            ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+            if re.match(r'^\s+$', stop) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
                 return new_stop
             new_stop = [stop]
         elif isinstance(stop, list):
             new_v = []
             for v in stop:
-                if (
-                    v == "\n"
-                ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                if re.match(r'^\s+$', v) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
                     continue
                 new_v.append(v)
             if len(new_v) > 0:

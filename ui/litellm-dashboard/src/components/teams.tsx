@@ -371,6 +371,13 @@ const Team: React.FC<TeamProps> = ({
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
+        let organizationId = formValues?.organization_id;
+        if (organizationId === "" || typeof organizationId !== 'string') {
+          formValues.organization_id = null;
+        } else {
+          formValues.organization_id = organizationId.trim();
+        }
+        
 
         if (existingTeamAliases.includes(newTeamAlias)) {
           throw new Error(
@@ -738,27 +745,23 @@ const Team: React.FC<TeamProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Accordion className="mt-20 mb-8">
-                  <AccordionHeader>
-                    <b>Optional Settings</b>
-                  </AccordionHeader>
-                  <AccordionBody>
-                    <Form.Item
-                      label="Team ID"
-                      name="team_id"
-                      className="mt-8"
-                      help={`ID of the team you want to create. If not provided, it will be generated automatically.`}
-                    >
-                      <TextInput />
-                    </Form.Item>
-                    <Form.Item
-                      label="Organization ID"
-                      name="organization_id"
-                      className="mt-8"
-                      help={`ID of the organization you want to assign the team to. Check the Organization tab for more information.`}
-                    >
-                      <TextInput />
-                    </Form.Item>
-                  </AccordionBody>
+                <AccordionHeader>
+                  <b>Additional Settings</b>
+                </AccordionHeader>
+                <AccordionBody>
+                <Form.Item
+                  label="Organization ID"
+                  name="organization_id"
+                  help="Assign team to an organization. Found in the 'Organization' tab."
+                >
+                  <TextInput 
+                    placeholder="" 
+                    onChange={(e) => {
+                      e.target.value = e.target.value.trim();
+                    }} 
+                  />
+                </Form.Item>
+                </AccordionBody>
                 </Accordion>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>
