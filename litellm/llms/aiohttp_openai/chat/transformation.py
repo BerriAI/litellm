@@ -13,7 +13,7 @@ from aiohttp import ClientResponse
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Choices, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -66,4 +66,12 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         _json_response = await raw_response.json()
-        return ModelResponse(**_json_response)
+        model_response.id = _json_response.get("id")
+        model_response.choices = [
+            Choices(**choice) for choice in _json_response.get("choices")
+        ]
+        model_response.created = _json_response.get("created")
+        model_response.model = _json_response.get("model")
+        model_response.object = _json_response.get("object")
+        model_response.system_fingerprint = _json_response.get("system_fingerprint")
+        return model_response

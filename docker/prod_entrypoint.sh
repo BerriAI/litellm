@@ -3,5 +3,5 @@
 if [ "$USE_DDTRACE" = "true" ]; then
     exec ddtrace-run litellm "$@"
 else
-    exec litellm "$@"
+    exec py-spy litellm "$@"
 fi

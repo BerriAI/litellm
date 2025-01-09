@@ -244,7 +244,7 @@ async def user_api_key_auth(  # noqa: PLR0915
     route: str = get_request_route(request=request)
     try:
         # get the request body
-        request_data = await _read_request_body(request=request)
+        request_data = {}
         await pre_db_read_auth_checks(
             request_data=request_data,
             request=request,
@@ -309,17 +309,17 @@ async def user_api_key_auth(  # noqa: PLR0915
         """
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
-        if (
-            route in LiteLLMRoutes.public_routes.value  # type: ignore
-            or route_in_additonal_public_routes(current_route=route)
-        ):
-            # check if public endpoint
-            return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
-        elif is_pass_through_provider_route(route=route):
-            if should_run_auth_on_pass_through_provider_route(route=route) is False:
-                return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-                )
+        # if (
+        #     route in LiteLLMRoutes.public_routes.value  # type: ignore
+        #     or route_in_additonal_public_routes(current_route=route)
+        # ):
+        #     # check if public endpoint
+        #     return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+        # elif is_pass_through_provider_route(route=route):
+        #     if should_run_auth_on_pass_through_provider_route(route=route) is False:
+        #         return UserAPIKeyAuth(
+        #             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        #         )
 
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
@@ -538,44 +538,44 @@ async def user_api_key_auth(  # noqa: PLR0915
                 )
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
-        is_mapped_pass_through_route: bool = False
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-            if route.startswith(mapped_route):
-                is_mapped_pass_through_route = True
-        if is_mapped_pass_through_route:
-            if request.headers.get("litellm_user_api_key") is not None:
-                api_key = request.headers.get("litellm_user_api_key") or ""
-        if pass_through_endpoints is not None:
-            for endpoint in pass_through_endpoints:
-                if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                    ## IF AUTH DISABLED
-                    if endpoint.get("auth") is not True:
-                        return UserAPIKeyAuth()
-                    ## IF AUTH ENABLED
-                    ### IF CUSTOM PARSER REQUIRED
-                    if (
-                        endpoint.get("custom_auth_parser") is not None
-                        and endpoint.get("custom_auth_parser") == "langfuse"
-                    ):
-                        """
-                        - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                        - check the langfuse public key if it contains the litellm api key
-                        """
-                        import base64
+        # is_mapped_pass_through_route: bool = False
+        # for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
+        #     if route.startswith(mapped_route):
+        #         is_mapped_pass_through_route = True
+        # if is_mapped_pass_through_route:
+        #     if request.headers.get("litellm_user_api_key") is not None:
+        #         api_key = request.headers.get("litellm_user_api_key") or ""
+        # if pass_through_endpoints is not None:
+        #     for endpoint in pass_through_endpoints:
+        #         if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
+        #             ## IF AUTH DISABLED
+        #             if endpoint.get("auth") is not True:
+        #                 return UserAPIKeyAuth()
+        #             ## IF AUTH ENABLED
+        #             ### IF CUSTOM PARSER REQUIRED
+        #             if (
+        #                 endpoint.get("custom_auth_parser") is not None
+        #                 and endpoint.get("custom_auth_parser") == "langfuse"
+        #             ):
+        #                 """
+        #                 - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
+        #                 - check the langfuse public key if it contains the litellm api key
+        #                 """
+        #                 import base64
 
-                        api_key = api_key.replace("Basic ", "").strip()
-                        decoded_bytes = base64.b64decode(api_key)
-                        decoded_str = decoded_bytes.decode("utf-8")
-                        api_key = decoded_str.split(":")[0]
-                    else:
-                        headers = endpoint.get("headers", None)
-                        if headers is not None:
-                            header_key = headers.get("litellm_user_api_key", "")
-                            if (
-                                isinstance(request.headers, dict)
-                                and request.headers.get(key=header_key) is not None  # type: ignore
-                            ):
-                                api_key = request.headers.get(key=header_key)  # type: ignore
+        #                 api_key = api_key.replace("Basic ", "").strip()
+        #                 decoded_bytes = base64.b64decode(api_key)
+        #                 decoded_str = decoded_bytes.decode("utf-8")
+        #                 api_key = decoded_str.split(":")[0]
+        #             else:
+        #                 headers = endpoint.get("headers", None)
+        #                 if headers is not None:
+        #                     header_key = headers.get("litellm_user_api_key", "")
+        #                     if (
+        #                         isinstance(request.headers, dict)
+        #                         and request.headers.get(key=header_key) is not None  # type: ignore
+        #                     ):
+        #                         api_key = request.headers.get(key=header_key)  # type: ignore
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -1274,7 +1274,6 @@ async def _return_user_api_key_auth_obj(
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
-
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
             service=ServiceTypes.AUTH,

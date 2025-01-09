@@ -442,6 +442,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
+        return
         litellm.error_logs["PRE_CALL"] = locals()
         try:
             self._pre_call(
@@ -726,6 +727,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
+        return
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(

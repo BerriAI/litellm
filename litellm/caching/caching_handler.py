@@ -670,6 +670,8 @@ class LLMCachingHandler:
         Raises:
             None
         """
+        if litellm.cache is None:
+            return
 
         new_kwargs = kwargs.copy()
         new_kwargs.update(
@@ -678,8 +680,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-        if litellm.cache is None:
-            return
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(
             original_function=original_function, kwargs=new_kwargs
