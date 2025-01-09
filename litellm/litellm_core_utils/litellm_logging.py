@@ -442,6 +442,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
+        return
         litellm.error_logs["PRE_CALL"] = locals()
         try:
             self._pre_call(

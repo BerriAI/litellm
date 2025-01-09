@@ -1130,9 +1130,9 @@ def client(original_function):  # noqa: PLR0915
                 )  # return response latency in ms like openai
 
             ### POST-CALL RULES ###
-            post_call_processing(
-                original_response=result, model=model, optional_params=kwargs
-            )
+            # post_call_processing(
+            #     original_response=result, model=model, optional_params=kwargs
+            # )
 
             ## Add response to cache
             await _llm_caching_handler.async_set_cache(
