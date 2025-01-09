@@ -19,6 +19,9 @@ spec:
       containers:
         - name: prisma-migrations
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           command: ["python", "litellm/proxy/prisma_migration.py"]
           workingDir: "/app"
           env:
