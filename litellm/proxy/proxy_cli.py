@@ -653,7 +653,6 @@ def run_server(  # noqa: PLR0915
         from litellm.proxy.proxy_server import app  # noqa
 
         uvicorn_args = {
-            "app": app,
             "host": host,
             "port": port,
         }
@@ -671,7 +670,12 @@ def run_server(  # noqa: PLR0915
                 )
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
-            uvicorn.run(**uvicorn_args)
+            uvicorn.run(
+                app="litellm.proxy.proxy_server:app",  # Pass as import string instead of app object
+                **uvicorn_args,
+                loop="uvloop",
+                workers=2,
+            )
         elif run_gunicorn is True:
             # Gunicorn Application Class
             class StandaloneApplication(gunicorn.app.base.BaseApplication):
