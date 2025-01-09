@@ -443,6 +443,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def pre_call(self, input, api_key, model=None, additional_args={}):  # noqa: PLR0915
         # Log the exact input to the LLM API
         litellm.error_logs["PRE_CALL"] = locals()
+        return
         try:
             self._pre_call(
                 input=input,
