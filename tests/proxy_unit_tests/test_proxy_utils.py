@@ -1327,3 +1327,35 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         # Verify the result structure
         assert isinstance(result, UserInfoResponse)
         assert len(result.keys) == 2
+
+
+def test_custom_openid_response():
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    from litellm.proxy.management_endpoints.ui_sso import JWTHandler
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.caching import DualCache
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client={},
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="department",
+        ),
+    )
+    response = {
+        "sub": "3f196e06-7484-451e-be5a-ea6c6bb86c5b",
+        "email_verified": True,
+        "name": "Krish Dholakia",
+        "preferred_username": "krrishd",
+        "given_name": "Krish",
+        "department": ["/test-group"],
+        "family_name": "Dholakia",
+        "email": "krrishdholakia@gmail.com",
+    }
+
+    resp = generic_response_convertor(
+        response=response,
+        jwt_handler=jwt_handler,
+    )
+    assert resp.team_ids == ["/test-group"]

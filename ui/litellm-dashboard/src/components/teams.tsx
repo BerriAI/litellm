@@ -20,6 +20,7 @@ import {
   Tooltip
 } from "antd";
 import { Select, SelectItem } from "@tremor/react";
+
 import {
   Table,
   TableBody,
@@ -68,6 +69,7 @@ import {
   modelAvailableCall,
   teamListCall
 } from "./networking";
+
 
 const Team: React.FC<TeamProps> = ({
   teams,
@@ -365,6 +367,7 @@ const Team: React.FC<TeamProps> = ({
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
+      console.log(`formValues: ${JSON.stringify(formValues)}`);
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
@@ -746,6 +749,17 @@ const Team: React.FC<TeamProps> = ({
                   <b>Additional Settings</b>
                 </AccordionHeader>
                 <AccordionBody>
+                <Form.Item
+                  label="Team ID"
+                  name="team_id"
+                  help="ID of the team you want to create. If not provided, it will be generated automatically."
+                >
+                  <TextInput 
+                    onChange={(e) => {
+                      e.target.value = e.target.value.trim();
+                    }} 
+                  />
+                </Form.Item>
                 <Form.Item
                   label="Organization ID"
                   name="organization_id"
