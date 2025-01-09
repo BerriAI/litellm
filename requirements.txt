@@ -21,6 +21,7 @@ python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
 cryptography==43.0.1
 py-spy
+fastapi-cprofile
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
