@@ -925,6 +925,7 @@ def test_initialize_assistants_endpoint(model_list):
     assert router.acreate_assistants is not None
     assert router.adelete_assistant is not None
     assert router.aget_assistants is not None
+    assert router.amodify_assistants is not None
     assert router.acreate_thread is not None
     assert router.aget_thread is not None
     assert router.arun_thread is not None

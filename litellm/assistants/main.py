@@ -568,6 +568,155 @@ def delete_assistant(
         )
     return response
 
+async def amodify_assistants(
+    custom_llm_provider: Literal["openai", "azure"],
+    assistant_id: str,
+    **kwargs,
+) -> Assistant:
+    loop = asyncio.get_event_loop()
+    kwargs["async_modify_assistants"] = True
+
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+    func = partial(modify_assistants, custom_llm_provider, assistant_id, **kwargs)
+
+    ctx = contextvars.copy_context()
+    func_with_context = partial(ctx.run, func)
+
+    _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
+        model=kwargs.get("model", ""), custom_llm_provider=custom_llm_provider
+    )  # type: ignore
+
+    try:
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response  # type: ignore
+    except Exception as e:
+        raise exception_type(
+            model=kwargs.get("model", ""),
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs={},
+            extra_kwargs=kwargs,
+        )
+
+
+def modify_assistants(
+    custom_llm_provider: Literal["openai", "azure"],
+    assistant_id: str,
+    model: Optional[str] = None,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    instructions: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_resources: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, str]] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    response_format: Optional[Union[str, Dict[str, str]]] = None,
+    client: Optional[Any] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    **kwargs,
+) -> Union[Assistant, Coroutine[Any, Any, Assistant]]:
+    async_modify_assistants: Optional[bool] = kwargs.pop("async_modify_assistants", None)
+    if async_modify_assistants is not None and not isinstance(async_modify_assistants, bool):
+        raise ValueError(
+            "Invalid value passed in for async_modify_assistants. Only bool or None allowed."
+        )
+
+    optional_params = GenericLiteLLMParams(
+        api_key=api_key, api_base=api_base, api_version=api_version, **kwargs
+    )
+
+    timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+
+    if (
+        timeout is not None
+        and isinstance(timeout, httpx.Timeout)
+        and supports_httpx_timeout(custom_llm_provider) is False
+    ):
+        read_timeout = timeout.read or 600
+        timeout = read_timeout
+    elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+        timeout = float(timeout)  # type: ignore
+    elif timeout is None:
+        timeout = 600.0
+
+    modify_assistant_data = {
+        "model": model,
+        "name": name,
+        "description": description,
+        "instructions": instructions,
+        "tools": tools,
+        "tool_resources": tool_resources,
+        "metadata": metadata,
+        "temperature": temperature,
+        "top_p": top_p,
+        "response_format": response_format,
+    }
+
+    modify_assistant_data = {k: v for k, v in modify_assistant_data.items() if v is not None}
+
+    response: Optional[Union[Coroutine[Any, Any, Assistant], Assistant]] = None
+
+    if custom_llm_provider == "openai":
+        api_base = (
+            optional_params.api_base
+            or litellm.api_base
+            or os.getenv("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )
+        organization = (
+            optional_params.organization
+            or litellm.organization
+            or os.getenv("OPENAI_ORGANIZATION", None)
+            or None
+        )
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or os.getenv("OPENAI_API_KEY")
+        )
+
+        response = openai_assistants_api.modify_assistants(
+            assistant_id=assistant_id,
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+            organization=organization,
+            modify_assistant_data=modify_assistant_data,
+            client=client,
+            async_modify_assistants=async_modify_assistants,  # type: ignore
+        )
+    else:
+        raise litellm.exceptions.BadRequestError(
+            message="LiteLLM doesn't support {} for 'modify_assistants'. Only 'openai' is supported.".format(
+                custom_llm_provider
+            ),
+            model="n/a",
+            llm_provider=custom_llm_provider,
+            response=httpx.Response(
+                status_code=400,
+                content="Unsupported provider",
+                request=httpx.Request(method="update_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+            ),
+        )
+
+    if response is None:
+        raise litellm.exceptions.InternalServerError(
+            message="No response returned from 'modify_assistants'",
+            model=model or "n/a",
+            llm_provider=custom_llm_provider,
+        )
+    return response
+
 
 ### THREADS ###
 
