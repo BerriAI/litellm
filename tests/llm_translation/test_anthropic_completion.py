@@ -1015,3 +1015,23 @@ def test_anthropic_json_mode_and_tool_call_response(
     assert (
         result is None if expect_null_response else result is not None
     ), f"Expected result to be {None if expect_null_response else 'not None'}, but got {result}"
+
+
+@pytest.mark.parametrize(
+    "stop_input,expected_output,drop_params",
+    [
+        ("stop", ["stop"], True),  # basic string
+        (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
+        ("   ", None, True),  # whitespace string should be dropped when drop_params is True
+        ("   ", ["   "], False),  # whitespace string should be kept when drop_params is False
+        (["stop1", "  ", "stop2"], ["stop1", "stop2"], True),  # list with whitespace that should be filtered
+        (["stop1", "  ", "stop2"], ["stop1", "  ", "stop2"], False),  # list with whitespace that should be kept
+        (None, None, True),  # None input
+    ],
+)
+def test_map_stop_sequences(stop_input, expected_output, drop_params):
+    """Test the _map_stop_sequences method of AnthropicConfig"""
+    litellm.drop_params = drop_params
+    config = AnthropicConfig()
+    result = config._map_stop_sequences(stop_input)
+    assert result == expected_output

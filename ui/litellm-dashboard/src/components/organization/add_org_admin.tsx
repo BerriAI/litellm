@@ -72,7 +72,7 @@ const AddOrgAdmin: FC<AddOrgAdminProps> = ({
             onCancel={handleMemberCancel}
         >
             <Text className='mb-2'>
-                User must exist in proxy. Get User ID from 'Users' tab.
+                User must exist in proxy. Get User ID from &apos;Users&apos; tab.
             </Text>
             <Form
                 form={form}

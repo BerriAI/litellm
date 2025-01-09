@@ -246,10 +246,11 @@ const Organizations: React.FC<TeamProps> = ({
         {premiumUser ? 
         <Col numColSpan={1}>  
         <Title level={4}>Organization Members</Title>
-          <Paragraph>
-            If you belong to multiple organizations, this setting controls which organizations'
+        <Paragraph>
+            If you belong to multiple organizations, this setting controls which organizations&apos;
             members you see.
-          </Paragraph>
+        </Paragraph>
+
           {organizations && organizations.length > 0 ? (
             <Select>
               {organizations.map((organization: any, index) => (
