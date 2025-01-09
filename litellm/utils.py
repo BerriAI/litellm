@@ -939,12 +939,12 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            # executor.submit(
+            #     logging_obj.success_handler,
+            #     result,
+            #     start_time,
+            #     end_time,
+            # )
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
@@ -1143,21 +1143,21 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            # asyncio.create_task(
+            #     _client_async_logging_helper(
+            #         logging_obj=logging_obj,
+            #         result=result,
+            #         start_time=start_time,
+            #         end_time=end_time,
+            #         is_completion_with_fallbacks=is_completion_with_fallbacks,
+            #     )
+            # )
+            # executor.submit(
+            #     logging_obj.success_handler,
+            #     result,
+            #     start_time,
+            #     end_time,
+            # )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
