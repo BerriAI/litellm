@@ -886,8 +886,10 @@ class Router:
 
             # debug how often this deployment picked
 
-            self._track_deployment_metrics(
-                deployment=deployment, parent_otel_span=parent_otel_span
+            asyncio.create_task(
+                self._track_deployment_metrics(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
@@ -959,10 +961,12 @@ class Router:
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
             )
             # debug how often this deployment picked
-            self._track_deployment_metrics(
-                deployment=deployment,
-                response=response,
-                parent_otel_span=parent_otel_span,
+            asyncio.create_task(
+                self._track_deployment_metrics(
+                    deployment=deployment,
+                    response=response,
+                    parent_otel_span=parent_otel_span,
+                )
             )
 
             return response
@@ -5734,7 +5738,7 @@ class Router:
             healthy_deployments.remove(deployment)
         return healthy_deployments
 
-    def _track_deployment_metrics(
+    async def _track_deployment_metrics(
         self, deployment, parent_otel_span: Optional[Span], response=None
     ):
         """
