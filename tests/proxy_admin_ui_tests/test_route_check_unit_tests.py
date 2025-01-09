@@ -63,6 +63,25 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
     assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
 
+    assert (
+        RouteChecks.is_llm_api_route(
+            "/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions"
+        )
+        is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route(
+            "/openai/deployments/gemini/gemini-1.5-flash/chat/completions"
+        )
+        is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route(
+            "/openai/deployments/anthropic/claude-3-5-sonnet-20240620/chat/completions"
+        )
+        is True
+    )
+
     # check non-matching routes
     assert RouteChecks.is_llm_api_route("/some/random/route") is False
     assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False
