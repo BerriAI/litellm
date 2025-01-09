@@ -457,7 +457,7 @@ async def update_team(
 
     if existing_team_row is None:
         raise HTTPException(
-            status_code=404,
+            status_code=400,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 

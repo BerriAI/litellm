@@ -59,7 +59,7 @@ def load_vertex_ai_credentials():
 
 async def create_async_vertex_embedding_task():
     load_vertex_ai_credentials()
-    base_url = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/embedding-gecko-001:predict"
+    base_url = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/embedding-gecko-001:predict"
     embedding_args = {
         "model": "vertex_ai/textembedding-gecko",
         "input": "This is a test sentence for embedding.",

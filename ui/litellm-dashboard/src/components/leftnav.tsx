@@ -33,6 +33,7 @@ const menuItems: MenuItem[] = [
   { key: "2", page: "models", label: "Models", roles: all_admin_roles },
   { key: "4", page: "usage", label: "Usage"}, // all roles
   { key: "6", page: "teams", label: "Teams" },
+  { key: "17", page: "organizations", label: "Organizations", roles: all_admin_roles },
   { key: "5", page: "users", label: "Internal Users", roles: all_admin_roles },
   { key: "8", page: "settings", label: "Logging & Alerts", roles: all_admin_roles },
   { key: "9", page: "caching", label: "Caching", roles: all_admin_roles },

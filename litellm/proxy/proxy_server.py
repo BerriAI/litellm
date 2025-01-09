@@ -535,7 +535,13 @@ async def proxy_startup_event(app: FastAPI):
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
+    ## [Optional] Initialize dd tracer
+    ProxyStartupEvent._init_dd_tracer()
+
+    # End of startup event
     yield
+
+    # Shutdown event
     await proxy_shutdown_event()
 
 
@@ -3218,6 +3224,19 @@ class ProxyStartupEvent:
             await prisma_client.health_check()
         return prisma_client
 
+    @classmethod
+    def _init_dd_tracer(cls):
+        """
+        Initialize dd tracer - if `USE_DDTRACE=true` in .env
+
+        DD tracer is used to trace Python applications.
+        Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
+        """
+        if get_secret_bool("USE_DDTRACE", False) is True:
+            import ddtrace
+
+            ddtrace.patch_all(logging=True)
+
 
 #### API ENDPOINTS ####
 @router.get(
@@ -5635,6 +5654,7 @@ async def token_counter(request: TokenCountRequest):
     _tokenizer_used = litellm.utils._select_tokenizer(
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
+
     tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,

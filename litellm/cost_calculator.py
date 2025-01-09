@@ -410,7 +410,9 @@ def _select_model_name_for_cost_calc(
     if (
         return_model is not None
         and custom_llm_provider is not None
-        and not return_model.startswith(custom_llm_provider)
+        and not any(
+            return_model.startswith(provider) for provider in litellm.provider_list
+        )
     ):  # add provider prefix if not already present, to match model_cost
         if region_name is not None:
             return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
@@ -538,13 +540,17 @@ def completion_cost(  # noqa: PLR0915
             custom_pricing=custom_pricing,
             base_model=base_model,
         )
+
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
-            usage_obj: Optional[Union[dict, Usage]] = completion_response.get(  # type: ignore
-                "usage", {}
-            )
+            if isinstance(completion_response, dict):
+                usage_obj: Optional[Union[dict, Usage]] = completion_response.get(
+                    "usage", {}
+                )
+            else:
+                usage_obj = getattr(completion_response, "usage", {})
             if isinstance(usage_obj, BaseModel) and not isinstance(
                 usage_obj, litellm.Usage
             ):

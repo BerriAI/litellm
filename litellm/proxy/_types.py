@@ -420,6 +420,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "info_routes",
     ]
     team_id_jwt_field: Optional[str] = None
+    team_ids_jwt_field: Optional[str] = None
+    upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
@@ -690,7 +692,17 @@ class RegenerateKeyRequest(GenerateKeyRequest):
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
-    keys: List[str]
+    keys: Optional[List[str]] = None
+    key_aliases: Optional[List[str]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_at_least_one(cls, values):
+        if not values.get("keys") and not values.get("key_aliases"):
+            raise ValueError(
+                "At least one of 'keys' or 'key_aliases' must be provided."
+            )
+        return values
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
@@ -1627,6 +1639,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
 
     spend: float
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     token: Optional[str] = Field(default=None, description="Hashed value of that key")
     customer_id: Optional[str] = None
     user_id: Optional[str] = None
@@ -1641,6 +1654,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
 class WebhookEvent(CallInfo):
     event: Literal[
         "budget_crossed",
+        "soft_budget_crossed",
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",

@@ -9,10 +9,7 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, ca
 from packaging.version import Version
 from typing_extensions import TypeAlias
 
-from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
@@ -144,67 +141,36 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         else:
             return model.replace("langfuse/", "")
 
-    async def async_pre_call_hook(
+    def _get_optional_params_from_langfuse(
+        self, langfuse_prompt_client: PROMPT_CLIENT
+    ) -> dict:
+        config = langfuse_prompt_client.config
+        optional_params = {}
+        for k, v in config.items():
+            if k != "model":
+                optional_params[k] = v
+        return optional_params
+
+    async def async_get_chat_completion_prompt(
         self,
-        user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
-        data: dict,
-        call_type: Union[
-            Literal["completion"],
-            Literal["text_completion"],
-            Literal["embeddings"],
-            Literal["image_generation"],
-            Literal["moderation"],
-            Literal["audio_transcription"],
-            Literal["pass_through_endpoint"],
-            Literal["rerank"],
-        ],
-    ) -> Union[Exception, str, dict, None]:
-
-        metadata = data.get("metadata") or {}
-
-        if isinstance(metadata, dict):
-            langfuse_prompt_id = cast(Optional[str], metadata.get("langfuse_prompt_id"))
-
-            langfuse_prompt_variables = cast(
-                Optional[dict], metadata.get("langfuse_prompt_variables") or {}
-            )
-        else:
-            return None
-
-        if langfuse_prompt_id is None:
-            return None
-
-        prompt_client = self._get_prompt_from_id(
-            langfuse_prompt_id=langfuse_prompt_id, langfuse_client=self.Langfuse
-        )
-        compiled_prompt: Optional[Union[str, list]] = None
-        if call_type == "completion" or call_type == "text_completion":
-            compiled_prompt = self._compile_prompt(
-                langfuse_prompt_client=prompt_client,
-                langfuse_prompt_variables=langfuse_prompt_variables,
-                call_type=call_type,
-            )
-        if compiled_prompt is None:
-            return await super().async_pre_call_hook(
-                user_api_key_dict, cache, data, call_type
-            )
-        if call_type == "completion":
-            if isinstance(compiled_prompt, list):
-                data["messages"] = compiled_prompt + data["messages"]
-            else:
-                data["messages"] = [
-                    {"role": "system", "content": compiled_prompt}
-                ] + data["messages"]
-        elif call_type == "text_completion" and isinstance(compiled_prompt, str):
-            data["prompt"] = compiled_prompt + "\n" + data["prompt"]
-
-        verbose_proxy_logger.debug(
-            f"LangfusePromptManagement.async_pre_call_hook compiled_prompt: {compiled_prompt}, type: {type(compiled_prompt)}"
-        )
-
-        return await super().async_pre_call_hook(
-            user_api_key_dict, cache, data, call_type
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> Tuple[
+        str,
+        List[AllMessageValues],
+        dict,
+    ]:
+        return self.get_chat_completion_prompt(
+            model,
+            messages,
+            non_default_params,
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
         )
 
     def get_chat_completion_prompt(
@@ -212,7 +178,6 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -255,7 +220,11 @@ class LangfusePromptManagement(LangFuseLogger, CustomLogger):
         ## SET MODEL
         model = self._get_model_from_prompt(langfuse_prompt_client, model)
 
-        return model, messages, non_default_params
+        optional_params = self._get_optional_params_from_langfuse(
+            langfuse_prompt_client
+        )
+
+        return model, messages, optional_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_callback_dynamic_params = kwargs.get(

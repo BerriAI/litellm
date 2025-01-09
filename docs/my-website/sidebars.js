@@ -287,12 +287,14 @@ const sidebars = {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
           items: [
+            "pass_through/intro",
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
             "pass_through/cohere",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
             "pass_through/langfuse",
+            "proxy/pass_through",
           ],
         },
         "rerank",
@@ -302,7 +304,6 @@ const sidebars = {
         "realtime",
         "fine_tuning",
         "moderation",
-        "proxy/pass_through",
       ],
     },
     {
@@ -361,7 +362,6 @@ const sidebars = {
       label: "Load Testing",
       items: [
         "benchmarks",
-        "load_test",
         "load_test_advanced",
         "load_test_sdk",
         "load_test_rpm",
