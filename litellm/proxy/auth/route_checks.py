@@ -177,6 +177,9 @@ class RouteChecks:
                 ):
                     return True
 
+        if RouteChecks._is_azure_openai_route(route=route):
+            return True
+
         # Pass through Bedrock, VertexAI, and Cohere Routes
         if "/bedrock/" in route:
             return True
@@ -193,6 +196,22 @@ class RouteChecks:
         if "/azure/" in route:
             return True
         if "/openai/" in route:
+            return True
+        return False
+
+    @staticmethod
+    def _is_azure_openai_route(route: str) -> bool:
+        """
+        Check if route is a route from AzureOpenAI SDK client
+
+        eg.
+        route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
+        """
+        # Add support for deployment and engine model paths
+        deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
+        engine_pattern = r"^/engines/[^/]+/chat/completions$"
+
+        if re.match(deployment_pattern, route) or re.match(engine_pattern, route):
             return True
         return False
 
