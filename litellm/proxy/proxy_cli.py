@@ -674,6 +674,7 @@ def run_server(  # noqa: PLR0915
             uvicorn.run(
                 **uvicorn_args,
                 workers=2,
+                loop="uvloop",
             )
         elif run_gunicorn is True:
             # Gunicorn Application Class
