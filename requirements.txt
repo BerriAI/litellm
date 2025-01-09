@@ -20,6 +20,7 @@ pyjwt[crypto]==2.9.0
 python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
 cryptography==43.0.1
+py-spy
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
