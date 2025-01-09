@@ -554,6 +554,15 @@ app = FastAPI(
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,
 )
+from fastapi_cprofile.profiler import CProfileMiddleware
+
+app.add_middleware(
+    CProfileMiddleware,
+    enable=True,
+    print_each_request=True,
+    strip_dirs=False,
+    sort_by="cumulative",
+)
 
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
