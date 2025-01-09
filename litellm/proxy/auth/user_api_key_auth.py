@@ -732,7 +732,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             )
 
         if is_master_key_valid:
-            _user_api_key_obj = _return_user_api_key_auth_obj(
+            _user_api_key_obj = await _return_user_api_key_auth_obj(
                 user_obj=None,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key=master_key,
@@ -1014,6 +1014,30 @@ async def user_api_key_auth(  # noqa: PLR0915
                         current_cost=valid_token.spend,
                         max_budget=valid_token.max_budget,
                     )
+            if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+                verbose_proxy_logger.debug(
+                    "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+                    valid_token.token,
+                    valid_token.spend,
+                    valid_token.soft_budget,
+                )
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    soft_budget=valid_token.soft_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    user_email=None,
+                    key_alias=valid_token.key_alias,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="soft_budget",
+                        user_info=call_info,
+                    )
+                )
 
             # Check 5. Token Model Spend is under Model budget
             max_budget_per_model = valid_token.model_max_budget
@@ -1177,7 +1201,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            return _return_user_api_key_auth_obj(
+            return await _return_user_api_key_auth_obj(
                 user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
@@ -1240,7 +1264,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         )
 
 
-def _return_user_api_key_auth_obj(
+async def _return_user_api_key_auth_obj(
     user_obj: Optional[LiteLLM_UserTable],
     api_key: str,
     parent_otel_span: Optional[Span],
@@ -1250,14 +1274,18 @@ def _return_user_api_key_auth_obj(
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
-    user_api_key_service_logger_obj.service_success_hook(
-        service=ServiceTypes.AUTH,
-        call_type=route,
-        start_time=start_time,
-        end_time=end_time,
-        duration=end_time.timestamp() - start_time.timestamp(),
-        parent_otel_span=parent_otel_span,
+
+    asyncio.create_task(
+        user_api_key_service_logger_obj.async_service_success_hook(
+            service=ServiceTypes.AUTH,
+            call_type=route,
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time.timestamp() - start_time.timestamp(),
+            parent_otel_span=parent_otel_span,
+        )
     )
+
     retrieved_user_role = (
         user_role or _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
     )

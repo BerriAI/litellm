@@ -600,6 +600,7 @@ class ProxyLogging:
         type: Literal[
             "token_budget",
             "user_budget",
+            "soft_budget",
             "team_budget",
             "proxy_budget",
             "projected_limit_exceeded",
@@ -1534,7 +1535,8 @@ class PrismaClient:
                             b.max_budget AS litellm_budget_table_max_budget,
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
-                            b.model_max_budget as litellm_budget_table_model_max_budget
+                            b.model_max_budget as litellm_budget_table_model_max_budget,
+                            b.soft_budget as litellm_budget_table_soft_budget
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id

@@ -361,7 +361,6 @@ const sidebars = {
       label: "Load Testing",
       items: [
         "benchmarks",
-        "load_test",
         "load_test_advanced",
         "load_test_sdk",
         "load_test_rpm",

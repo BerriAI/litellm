@@ -10,6 +10,11 @@ metadata:
     checksum/config: {{ toYaml .Values | sha256sum }}
 spec:
   template:
+    metadata:
+      annotations:
+        {{- with .Values.migrationJob.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       containers:
         - name: prisma-migrations

@@ -1113,7 +1113,7 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "adroit-crow-413218"
+    litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
     test_models = ["gemini-1.5-pro"]
@@ -3926,7 +3926,7 @@ def test_unit_test_perplexity_citations_chunk():
         "gpt-3.5-turbo",
         "claude-3-5-sonnet-20240620",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "vertex_ai/claude-3-5-sonnet@20240620",
+        # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)

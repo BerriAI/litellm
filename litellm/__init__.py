@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ###
+### INIT VARIABLES ####
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -425,6 +425,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-1-405b-instruct-v1:0",
     "meta.llama3-70b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
+    "mistral.mistral-large-2402-v1:0",
     "meta.llama3-2-1b-instruct-v1:0",
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
@@ -609,7 +610,7 @@ openai_compatible_endpoints: List = [
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
-    "inference.friendli.ai/v1",
+    "https://api.friendli.ai/serverless/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
     "api.galadriel.ai/v1",

@@ -150,7 +150,9 @@ class GroqChatConfig(OpenAIGPTConfig):
                 optional_params["tools"] = [_tool]
                 optional_params["tool_choice"] = _tool_choice
                 optional_params["json_mode"] = True
-            non_default_params.pop("response_format", None)
+                non_default_params.pop(
+                    "response_format", None
+                )  # only remove if it's a json_schema - handled via using groq's tool calling params.
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )
