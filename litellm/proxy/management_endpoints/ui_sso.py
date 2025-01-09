@@ -349,6 +349,25 @@ async def get_generic_sso_response(
     return result
 
 
+async def create_team_member_add_task(team_id, user_info):
+    """Create a task for adding a member to a team."""
+    try:
+        member = Member(user_id=user_info.user_id, role="user")
+        team_member_add_request = TeamMemberAddRequest(
+            member=member,
+            team_id=team_id,
+        )
+        return await team_member_add(
+            data=team_member_add_request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            http_request=Request(scope={"type": "http", "path": "/sso/callback"}),
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"[Non-Blocking] Error trying to add sso user to db: {e}"
+        )
+
+
 async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[str]):
     """
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
@@ -358,27 +377,14 @@ async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[st
         return
     missing_teams = set(sso_teams) - set(user_info.teams)
     missing_teams_list = list(missing_teams)
-    verbose_proxy_logger.debug(f"missing_teams: {missing_teams_list}")
     tasks = []
-    for team_id in missing_teams_list:
-        member = Member(user_id=user_info.user_id, role="user")
-        team_member_add_request = TeamMemberAddRequest(
-            member=member,
-            team_id=team_id,
-        )
-        tasks.append(
-            team_member_add(
-                data=team_member_add_request,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN
-                ),
-                http_request=Request(
-                    scope={"type": "http", "path": "/sso/callback"},
-                ),
-            )
-        )
+    tasks = [
+        create_team_member_add_task(team_id, user_info)
+        for team_id in missing_teams_list
+    ]
+
     try:
-        result = await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
     except Exception as e:
         verbose_proxy_logger.debug(
             f"[Non-Blocking] Error trying to add sso user to db: {e}"
