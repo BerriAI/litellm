@@ -511,10 +511,10 @@ class LangFuseLogger:
             )
 
             session_id = clean_metadata.pop("session_id", None)
-            trace_name = clean_metadata.pop("trace_name", None)
+            trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", litellm_call_id)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
-            update_trace_keys = clean_metadata.pop("update_trace_keys", [])
+            update_trace_keys = cast(list, clean_metadata.pop("update_trace_keys", []))
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
