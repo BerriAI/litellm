@@ -831,6 +831,22 @@ const Team: React.FC<TeamProps> = ({
                                 : null}
                           </TableCell>
                           <TableCell>{member["role"]}</TableCell>
+                          <TableCell>
+                          {userRole == "Admin" ? (
+                            <>
+                            <Icon
+                              icon={PencilAltIcon}
+                              size="sm"
+                              onClick={() => {}}
+                            />
+                            <Icon
+                              onClick={() => {}}
+                              icon={TrashIcon}
+                              size="sm"
+                            />
+                            </>
+                          ) : null}
+                        </TableCell>
                         </TableRow>
                       )
                     )
