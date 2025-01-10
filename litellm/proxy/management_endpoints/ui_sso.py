@@ -391,6 +391,17 @@ async def add_missing_team_member(user_info: NewUserResponse, sso_teams: List[st
         )
 
 
+def get_disabled_non_admin_personal_key_creation():
+    key_generation_settings = litellm.key_generation_settings
+    if key_generation_settings is None:
+        return False
+    personal_key_generation = (
+        key_generation_settings.get("personal_key_generation") or {}
+    )
+    allowed_user_roles = personal_key_generation.get("allowed_user_roles") or []
+    return bool("proxy_admin" in allowed_user_roles)
+
+
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
 async def auth_callback(request: Request):  # noqa: PLR0915
     """Verify login"""
@@ -640,6 +651,10 @@ async def auth_callback(request: Request):  # noqa: PLR0915
                 },
             )
 
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
+
     import jwt
 
     jwt_token = jwt.encode(  # type: ignore
@@ -653,6 +668,7 @@ async def auth_callback(request: Request):  # noqa: PLR0915
             "auth_header_name": general_settings.get(
                 "litellm_key_header_name", "Authorization"
             ),
+            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
         },
         master_key,
         algorithm="HS256",
