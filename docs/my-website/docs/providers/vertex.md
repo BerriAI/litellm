@@ -2480,7 +2480,7 @@ create_batch_response = oai_client.batches.create(
 
 ```json
 {
-    "id": "projects/633608382793/locations/us-central1/batchPredictionJobs/986266568679751680",
+    "id": "3814889423749775360",
     "completion_window": "24hrs",
     "created_at": 1733392026,
     "endpoint": "",
@@ -2502,6 +2502,43 @@ create_batch_response = oai_client.batches.create(
     "request_counts": null
 }
 ```
+
+#### 4. Retrieve a batch
+
+```python
+retrieved_batch = oai_client.batches.retrieve(
+    batch_id=create_batch_response.id,
+    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm to use `vertex_ai` for this batch request
+)
+```
+
+**Expected Response**
+
+```json
+{
+    "id": "3814889423749775360",
+    "completion_window": "24hrs",
+    "created_at": 1736500100,
+    "endpoint": "",
+    "input_file_id": "gs://example-bucket-1-litellm/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/7b2e47f5-3dd4-436d-920f-f9155bbdc952",
+    "object": "batch",
+    "status": "completed",
+    "cancelled_at": null,
+    "cancelling_at": null,
+    "completed_at": null,
+    "error_file_id": null,
+    "errors": null,
+    "expired_at": null,
+    "expires_at": null,
+    "failed_at": null,
+    "finalizing_at": null,
+    "in_progress_at": null,
+    "metadata": null,
+    "output_file_id": "gs://example-bucket-1-litellm/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001",
+    "request_counts": null
+}
+```
+
 
 ## **Fine Tuning APIs**
 
