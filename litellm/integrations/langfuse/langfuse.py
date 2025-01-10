@@ -179,6 +179,7 @@ class LangFuseLogger:
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
+
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
             if functions is not None:
@@ -462,15 +463,27 @@ class LangFuseLogger:
 
             if standard_logging_object is None:
                 end_user_id = None
+                prompt_management_metadata: Optional[dict] = None
             else:
                 end_user_id = standard_logging_object["metadata"].get(
                     "user_api_key_end_user_id", None
                 )
 
+                prompt_management_metadata = cast(
+                    Optional[dict],
+                    standard_logging_object["metadata"].get(
+                        "prompt_management_metadata", None
+                    ),
+                )
+
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
-            clean_metadata = {}
+            clean_metadata: Dict[str, Any] = {}
+            if prompt_management_metadata is not None:
+                clean_metadata["prompt_management_metadata"] = (
+                    prompt_management_metadata
+                )
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -498,10 +511,10 @@ class LangFuseLogger:
             )
 
             session_id = clean_metadata.pop("session_id", None)
-            trace_name = clean_metadata.pop("trace_name", None)
+            trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", litellm_call_id)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
-            update_trace_keys = clean_metadata.pop("update_trace_keys", [])
+            update_trace_keys = cast(list, clean_metadata.pop("update_trace_keys", []))
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
@@ -514,7 +527,7 @@ class LangFuseLogger:
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             if existing_trace_id is not None:
-                trace_params = {"id": existing_trace_id}
+                trace_params: Dict[str, Any] = {"id": existing_trace_id}
 
                 # Update the following keys for this trace
                 for metadata_param_key in update_trace_keys:
@@ -656,8 +669,12 @@ class LangFuseLogger:
                 # if `generation_name` is None, use sensible default values
                 # If using litellm proxy user `key_alias` if not None
                 # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
-                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                _user_api_key_alias = cast(
+                    Optional[str], clean_metadata.get("user_api_key_alias", None)
+                )
+                generation_name = (
+                    f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
+                )
                 if _user_api_key_alias is not None:
                     generation_name = f"litellm:{_user_api_key_alias}"
 
