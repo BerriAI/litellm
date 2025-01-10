@@ -2561,19 +2561,22 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
 
 
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
+    """
+    Check if the model uses custom pricing
+
+    Returns True if any of `SPECIAL_MODEL_INFO_PARAMS` are present in `litellm_params` or `model_info`
+    """
     if litellm_params is None:
         return False
-    for k, v in litellm_params.items():
-        if k in SPECIAL_MODEL_INFO_PARAMS and v is not None:
+
+    metadata: dict = litellm_params.get("metadata", {}) or {}
+    model_info: dict = metadata.get("model_info", {}) or {}
+
+    for _custom_cost_param in SPECIAL_MODEL_INFO_PARAMS:
+        if litellm_params.get(_custom_cost_param, None) is not None:
             return True
-    metadata: Optional[dict] = litellm_params.get("metadata", {})
-    if metadata is None:
-        return False
-    model_info: Optional[dict] = metadata.get("model_info", {})
-    if model_info is not None:
-        for k, v in model_info.items():
-            if k in SPECIAL_MODEL_INFO_PARAMS:
-                return True
+        elif model_info.get(_custom_cost_param, None) is not None:
+            return True
 
     return False
 
