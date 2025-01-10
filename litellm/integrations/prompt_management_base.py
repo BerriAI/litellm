@@ -8,15 +8,16 @@ from litellm.types.utils import StandardCallbackDynamicParams
 class PromptManagementClient(TypedDict):
     prompt_id: str
     prompt_template: List[AllMessageValues]
-    model: Optional[str]
-    optional_params: Optional[Dict[str, Any]]
+    prompt_template_model: Optional[str]
+    prompt_template_optional_params: Optional[Dict[str, Any]]
     completed_messages: Optional[List[AllMessageValues]]
 
 
 class PromptManagementBase(ABC):
+
     @property
     @abstractmethod
-    def integration_name(self):
+    def integration_name(self) -> str:
         pass
 
     @abstractmethod
@@ -29,22 +30,39 @@ class PromptManagementBase(ABC):
 
     @abstractmethod
     def _compile_prompt_helper(
-        self, prompt_id: str, prompt_variables: Optional[dict]
+        self,
+        prompt_id: str,
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> PromptManagementClient:
         pass
+
+    def merge_messages(
+        self,
+        prompt_template: List[AllMessageValues],
+        client_messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
+        return prompt_template + client_messages
 
     def compile_prompt(
         self,
         prompt_id: str,
         prompt_variables: Optional[dict],
         client_messages: List[AllMessageValues],
+        dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> PromptManagementClient:
         compiled_prompt_client = self._compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
         )
 
-        messages = compiled_prompt_client["prompt_template"] + client_messages
+        try:
+            messages = compiled_prompt_client["prompt_template"] + client_messages
+        except Exception as e:
+            raise ValueError(
+                f"Error compiling prompt: {e}. Prompt id={prompt_id}, prompt_variables={prompt_variables}, client_messages={client_messages}, dynamic_callback_params={dynamic_callback_params}"
+            )
 
         compiled_prompt_client["completed_messages"] = messages
         return compiled_prompt_client
@@ -52,8 +70,8 @@ class PromptManagementBase(ABC):
     def _get_model_from_prompt(
         self, prompt_management_client: PromptManagementClient, model: str
     ) -> str:
-        if prompt_management_client["model"] is not None:
-            return prompt_management_client["model"]
+        if prompt_management_client["prompt_template_model"] is not None:
+            return prompt_management_client["prompt_template_model"]
         else:
             return model.replace("{}/".format(self.integration_name), "")
 
@@ -79,11 +97,14 @@ class PromptManagementBase(ABC):
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             client_messages=messages,
+            dynamic_callback_params=dynamic_callback_params,
         )
 
         completed_messages = prompt_template["completed_messages"] or messages
 
-        prompt_template_optional_params = prompt_template["optional_params"] or {}
+        prompt_template_optional_params = (
+            prompt_template["prompt_template_optional_params"] or {}
+        )
 
         updated_non_default_params = {
             **non_default_params,
