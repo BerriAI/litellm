@@ -51,6 +51,7 @@ os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
 
 ```yaml
 general_settings:
+  master_key: os.environ/litellm_master_key 
   key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
   key_management_settings: 
     hosted_keys: ["litellm_master_key"] # 👈 Specify which env keys you stored on AWS 
@@ -76,6 +77,7 @@ general_settings:
 
 ```yaml
 general_settings:
+  master_key: os.environ/litellm_master_key 
   key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
   key_management_settings: 
     store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
