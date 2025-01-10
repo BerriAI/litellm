@@ -59,6 +59,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingPromptManagementMetadata,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
@@ -2630,7 +2631,7 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_standard_logging_metadata(
-        metadata: Optional[Dict[str, Any]]
+        metadata: Optional[Dict[str, Any]], litellm_params: Optional[dict] = None
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -2645,6 +2646,20 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+        prompt_management_metadata: Optional[
+            StandardLoggingPromptManagementMetadata
+        ] = None
+        if litellm_params is not None:
+            prompt_id = cast(Optional[str], litellm_params.get("prompt_id", None))
+            prompt_variables = cast(
+                Optional[dict], litellm_params.get("prompt_variables", None)
+            )
+
+            prompt_management_metadata = StandardLoggingPromptManagementMetadata(
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+            )
+
         # Initialize with default values
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
@@ -2657,6 +2672,7 @@ class StandardLoggingPayloadSetup:
             requester_ip_address=None,
             requester_metadata=None,
             user_api_key_end_user_id=None,
+            prompt_management_metadata=prompt_management_metadata,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -2951,7 +2967,7 @@ def get_standard_logging_object_payload(
         )
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
-            metadata=metadata
+            metadata=metadata, litellm_params=litellm_params
         )
 
         saved_cache_cost: float = 0.0
@@ -3075,6 +3091,7 @@ def get_standard_logging_metadata(
         requester_ip_address=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
+        prompt_management_metadata=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

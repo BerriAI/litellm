@@ -463,15 +463,27 @@ class LangFuseLogger:
 
             if standard_logging_object is None:
                 end_user_id = None
+                prompt_management_metadata: Optional[dict] = None
             else:
                 end_user_id = standard_logging_object["metadata"].get(
                     "user_api_key_end_user_id", None
+                )
+
+                prompt_management_metadata = cast(
+                    Optional[dict],
+                    standard_logging_object["metadata"].get(
+                        "prompt_management_metadata", None
+                    ),
                 )
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
             clean_metadata = {}
+            if prompt_management_metadata is not None:
+                clean_metadata["prompt_management_metadata"] = (
+                    prompt_management_metadata
+                )
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
