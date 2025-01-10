@@ -479,7 +479,7 @@ class LangFuseLogger:
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
-            clean_metadata = {}
+            clean_metadata: Dict[str, Any] = {}
             if prompt_management_metadata is not None:
                 clean_metadata["prompt_management_metadata"] = (
                     prompt_management_metadata
@@ -669,8 +669,12 @@ class LangFuseLogger:
                 # if `generation_name` is None, use sensible default values
                 # If using litellm proxy user `key_alias` if not None
                 # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
-                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                _user_api_key_alias = cast(
+                    Optional[str], clean_metadata.get("user_api_key_alias", None)
+                )
+                generation_name = (
+                    f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
+                )
                 if _user_api_key_alias is not None:
                     generation_name = f"litellm:{_user_api_key_alias}"
 
