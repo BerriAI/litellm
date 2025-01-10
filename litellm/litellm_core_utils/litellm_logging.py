@@ -4,6 +4,7 @@
 import copy
 import datetime
 import json
+import logging
 import os
 import re
 import subprocess
@@ -455,55 +456,11 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             # User Logging -> if you pass in a custom logging function
-            headers = additional_args.get("headers", {})
-            if headers is None:
-                headers = {}
-            data = additional_args.get("complete_input_dict", {})
-            api_base = str(additional_args.get("api_base", ""))
-            query_params = additional_args.get("query_params", {})
-            if "key=" in api_base:
-                # Find the position of "key=" in the string
-                key_index = api_base.find("key=") + 4
-                # Mask the last 5 characters after "key="
-                masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-            else:
-                masked_api_base = api_base
-            self.model_call_details["litellm_params"]["api_base"] = masked_api_base
-            masked_headers = {
-                k: (
-                    (v[:-44] + "*" * 44)
-                    if (isinstance(v, str) and len(v) > 44)
-                    else "*****"
-                )
-                for k, v in headers.items()
-            }
-            formatted_headers = " ".join(
-                [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+            self._print_llm_call_debugging_log(
+                api_base=additional_args.get("api_base", ""),
+                headers=additional_args.get("headers", {}),
+                additional_args=additional_args,
             )
-
-            verbose_logger.debug(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
-
-            curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
-            curl_command += "curl -X POST \\\n"
-            curl_command += f"{api_base} \\\n"
-            curl_command += (
-                f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
-            )
-            curl_command += f"-d '{str(data)}'\n"
-            if additional_args.get("request_str", None) is not None:
-                # print the sagemaker / bedrock client request
-                curl_command = "\nRequest Sent from LiteLLM:\n"
-                curl_command += additional_args.get("request_str", None)
-            elif api_base == "":
-                curl_command = self.model_call_details
-
-            if json_logs:
-                verbose_logger.debug(
-                    "POST Request Sent from LiteLLM",
-                    extra={"api_base": {api_base}, **masked_headers},
-                )
-            else:
-                print_verbose(f"\033[92m{curl_command}\033[0m\n", log_level="DEBUG")
             # log raw request to provider (like LangFuse) -- if opted in.
             if log_raw_request_response is True:
                 _litellm_params = self.model_call_details.get("litellm_params", {})
@@ -519,6 +476,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             'litellm.turn_off_message_logging=True'"
                         )
                     else:
+                        curl_command = self._get_request_curl_command(
+                            api_base=additional_args.get("api_base", ""),
+                            headers=additional_args.get("headers", {}),
+                            additional_args=additional_args,
+                            data=additional_args.get("complete_input_dict", {}),
+                        )
                         _metadata["raw_request"] = str(curl_command)
                 except Exception as e:
                     _metadata["raw_request"] = (
@@ -611,6 +574,90 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
+
+    def _print_llm_call_debugging_log(
+        self,
+        api_base: str,
+        headers: dict,
+        additional_args: dict,
+    ):
+        """
+        Internal debugging helper function
+
+        Prints the RAW curl command sent from LiteLLM
+        """
+        if verbose_logger.isEnabledFor(logging.DEBUG) or litellm.set_verbose is True:
+            if json_logs:
+                masked_headers = self._get_masked_headers(headers)
+                verbose_logger.debug(
+                    "POST Request Sent from LiteLLM",
+                    extra={"api_base": {api_base}, **masked_headers},
+                )
+            else:
+                headers = additional_args.get("headers", {})
+                if headers is None:
+                    headers = {}
+                data = additional_args.get("complete_input_dict", {})
+                api_base = str(additional_args.get("api_base", ""))
+                query_params = additional_args.get("query_params", {})
+                if "key=" in api_base:
+                    # Find the position of "key=" in the string
+                    key_index = api_base.find("key=") + 4
+                    # Mask the last 5 characters after "key="
+                    masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
+                else:
+                    masked_api_base = api_base
+                self.model_call_details["litellm_params"]["api_base"] = masked_api_base
+
+                verbose_logger.debug(
+                    "PRE-API-CALL ADDITIONAL ARGS: %s", additional_args
+                )
+
+                curl_command = self._get_request_curl_command(
+                    api_base=api_base,
+                    headers=headers,
+                    additional_args=additional_args,
+                    data=data,
+                )
+                verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
+
+    def _get_request_curl_command(
+        self, api_base: str, headers: dict, additional_args: dict, data: dict
+    ):
+        curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
+        curl_command += "curl -X POST \\\n"
+        curl_command += f"{api_base} \\\n"
+        masked_headers = self._get_masked_headers(headers)
+        formatted_headers = " ".join(
+            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+        )
+
+        curl_command += (
+            f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
+        )
+        curl_command += f"-d '{str(data)}'\n"
+        if additional_args.get("request_str", None) is not None:
+            # print the sagemaker / bedrock client request
+            curl_command = "\nRequest Sent from LiteLLM:\n"
+            curl_command += additional_args.get("request_str", None)
+        elif api_base == "":
+            curl_command = self.model_call_details
+        return curl_command
+
+    def _get_masked_headers(self, headers: dict):
+        """
+        Internal debugging helper function
+
+        Masks the headers of the request sent from LiteLLM
+        """
+        return {
+            k: (
+                (v[:-44] + "*" * 44)
+                if (isinstance(v, str) and len(v) > 44)
+                else "*****"
+            )
+            for k, v in headers.items()
+        }
 
     def post_call(
         self, original_response, input=None, api_key=None, additional_args={}
