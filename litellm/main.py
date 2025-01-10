@@ -2670,6 +2670,29 @@ def completion(  # type: ignore # noqa: PLR0915
 
             ## RESPONSE OBJECT
             response = model_response
+        elif custom_llm_provider == "heroku":
+            api_base = (
+                litellm.api_base
+                or api_base
+                or get_secret("HEROKU_API_BASE")
+            )
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="heroku",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
+            )
         elif custom_llm_provider == "ollama":
             api_base = (
                 litellm.api_base

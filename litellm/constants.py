@@ -65,6 +65,7 @@ LITELLM_CHAT_PROVIDERS = [
     "custom",
     "litellm_proxy",
     "hosted_vllm",
+    "heroku"
     "lm_studio",
     "galadriel",
 ]
