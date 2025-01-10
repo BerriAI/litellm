@@ -1817,6 +1817,10 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
 
 
+# Create a set of all provider values for quick lookup
+LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+
 class LiteLLMLoggingBaseClass:
     """
     Base class for logging pre and post call
