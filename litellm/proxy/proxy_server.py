@@ -3357,7 +3357,9 @@ async def chat_completion(  # noqa: PLR0915
 
     data = {}
     try:
-        data = await _read_request_body(request=request)
+        data = user_api_key_dict.request_body or await _read_request_body(
+            request=request
+        )
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
