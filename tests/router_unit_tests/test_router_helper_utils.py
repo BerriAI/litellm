@@ -810,12 +810,13 @@ def test_filter_cooldown_deployments(model_list):
     )
 
 
-def test_track_deployment_metrics(model_list):
+@pytest.mark.asyncio
+async def test_track_deployment_metrics(model_list):
     """Test if the 'track_deployment_metrics' function is working correctly"""
     from litellm.types.utils import ModelResponse
 
     router = Router(model_list=model_list)
-    router._track_deployment_metrics(
+    await router._track_deployment_metrics(
         deployment=router.get_deployment_by_model_group_name(
             model_group_name="gpt-3.5-turbo"
         ),
