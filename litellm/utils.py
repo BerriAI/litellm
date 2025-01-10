@@ -2034,6 +2034,8 @@ def get_litellm_params(
     litellm_metadata: Optional[dict] = None,
     disable_add_transform_inline_image_block: Optional[bool] = None,
     drop_params: Optional[bool] = None,
+    prompt_id: Optional[str] = None,
+    prompt_variables: Optional[dict] = None,
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2068,6 +2070,8 @@ def get_litellm_params(
         "litellm_metadata": litellm_metadata,
         "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
         "drop_params": drop_params,
+        "prompt_id": prompt_id,
+        "prompt_variables": prompt_variables,
     }
     return litellm_params
 
