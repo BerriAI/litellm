@@ -141,7 +141,7 @@ def get_llm_provider(  # noqa: PLR0915
         # check if llm provider part of model name
         if (
             model.split("/", 1)[0] in litellm.provider_list
-            and model.split("/", 1)[0] not in litellm.model_list
+            and model.split("/", 1)[0] not in litellm.model_list_set
             and len(model.split("/"))
             > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
         ):
@@ -210,7 +210,9 @@ def get_llm_provider(  # noqa: PLR0915
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
                     elif endpoint == "https://api.friendli.ai/serverless/v1":
                         custom_llm_provider = "friendliai"
-                        dynamic_api_key = get_secret_str("FRIENDLIAI_API_KEY") or get_secret("FRIENDLI_TOKEN")
+                        dynamic_api_key = get_secret_str(
+                            "FRIENDLIAI_API_KEY"
+                        ) or get_secret("FRIENDLI_TOKEN")
                     elif endpoint == "api.galadriel.com/v1":
                         custom_llm_provider = "galadriel"
                         dynamic_api_key = get_secret_str("GALADRIEL_API_KEY")
