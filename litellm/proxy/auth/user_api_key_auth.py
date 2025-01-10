@@ -744,11 +744,13 @@ async def user_api_key_auth(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-            await _cache_key_object(
-                hashed_token=hash_token(master_key),
-                user_api_key_obj=_user_api_key_obj,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
+            asyncio.create_task(
+                _cache_key_object(
+                    hashed_token=hash_token(master_key),
+                    user_api_key_obj=_user_api_key_obj,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
             return _user_api_key_obj
