@@ -424,7 +424,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         dynamic_callback_params=self.standard_callback_dynamic_params,
                     )
                 )
-        self.model_call_details["messages"] = messages
+        self.messages = messages
 
         return model, messages, non_default_params
 
