@@ -623,7 +623,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _get_request_curl_command(
         self, api_base: str, headers: dict, additional_args: dict, data: dict
-    ):
+    ) -> str:
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
         curl_command += f"{api_base} \\\n"
@@ -641,7 +641,7 @@ class Logging(LiteLLMLoggingBaseClass):
             curl_command = "\nRequest Sent from LiteLLM:\n"
             curl_command += additional_args.get("request_str", None)
         elif api_base == "":
-            curl_command = self.model_call_details
+            curl_command = str(self.model_call_details)
         return curl_command
 
     def _get_masked_headers(self, headers: dict):
