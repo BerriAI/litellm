@@ -2562,7 +2562,6 @@ class ProxyConfig:
         for response in responses:
             if response is not None:
                 param_name = getattr(response, "param_name", None)
-                verbose_proxy_logger.info(f"loading {param_name} settings from db")
                 if param_name == "litellm_settings":
                     verbose_proxy_logger.info(
                         f"litellm_settings: {response.param_value}"

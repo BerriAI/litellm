@@ -120,6 +120,8 @@ from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
+    Rules,
+    function_setup,
     get_llm_provider,
     get_non_default_completion_params,
     get_secret,
@@ -1457,6 +1459,17 @@ class Router:
         messages: List[AllMessageValues],
         kwargs: Dict[str, Any],
     ):
+        litellm_logging_object = kwargs.get("litellm_logging_obj", None)
+        if litellm_logging_object is None:
+            litellm_logging_object, kwargs = function_setup(
+                **{
+                    "original_function": "acompletion",
+                    "rules_obj": Rules(),
+                    "start_time": get_utc_datetime(),
+                    **kwargs,
+                }
+            )
+        litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
         prompt_management_deployment = self.get_available_deployment(
             model=model,
             messages=[{"role": "user", "content": "prompt"}],
@@ -1475,38 +1488,29 @@ class Router:
             "prompt_variables", None
         )
 
-        if litellm_model is None or "/" not in litellm_model:
+        if prompt_id is None or not isinstance(prompt_id, str):
             raise ValueError(
-                f"Model is not a custom logger compatible callback. Got={litellm_model}"
+                f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
+            )
+        if prompt_variables is not None and not isinstance(prompt_variables, dict):
+            raise ValueError(
+                f"Prompt variables is set but not a dictionary. Got={prompt_variables}, type={type(prompt_variables)}"
             )
 
-        custom_logger_compatible_callback = litellm_model.split("/", 1)[0]
-        split_litellm_model = litellm_model.split("/", 1)[1]
-
-        custom_logger = _init_custom_logger_compatible_class(
-            logging_integration=custom_logger_compatible_callback,
-            internal_usage_cache=None,
-            llm_router=None,
-        )
-
-        if custom_logger is None:
-            raise ValueError(
-                f"Custom logger is not initialized. Got={custom_logger_compatible_callback}"
-            )
         model, messages, optional_params = (
-            await custom_logger.async_get_chat_completion_prompt(
-                model=split_litellm_model,
+            litellm_logging_object.get_chat_completion_prompt(
+                model=litellm_model,
                 messages=messages,
                 non_default_params=get_non_default_completion_params(kwargs=kwargs),
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
-                dynamic_callback_params={},
             )
         )
 
         kwargs = {**kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
+        kwargs["litellm_logging_obj"] = litellm_logging_object
 
         _model_list = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model

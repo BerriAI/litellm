@@ -424,6 +424,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         dynamic_callback_params=self.standard_callback_dynamic_params,
                     )
                 )
+        self.model_call_details["messages"] = messages
 
         return model, messages, non_default_params
 
@@ -431,6 +432,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Common helper function across the sync + async pre-call function
         """
+
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = additional_args

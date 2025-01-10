@@ -179,6 +179,7 @@ class LangFuseLogger:
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
+
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
             if functions is not None:
