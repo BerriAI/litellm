@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
+import TeamMemberModal from "@/components/team/edit_membership";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -112,6 +113,7 @@ const Team: React.FC<TeamProps> = ({
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
+  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
@@ -257,16 +259,19 @@ const Team: React.FC<TeamProps> = ({
 
   const handleMemberOk = () => {
     setIsAddMemberModalVisible(false);
+    setIsEditMemberModalVisible(false);
     memberForm.resetFields();
   };
 
   const handleCancel = () => {
     setIsTeamModalVisible(false);
+
     form.resetFields();
   };
 
   const handleMemberCancel = () => {
     setIsAddMemberModalVisible(false);
+    setIsEditMemberModalVisible(false);
     memberForm.resetFields();
   };
 
@@ -837,7 +842,9 @@ const Team: React.FC<TeamProps> = ({
                             <Icon
                               icon={PencilAltIcon}
                               size="sm"
-                              onClick={() => {}}
+                              onClick={() => {
+                                setIsEditMemberModalVisible(true);
+                              }}
                             />
                             <Icon
                               onClick={() => {}}
@@ -854,6 +861,12 @@ const Team: React.FC<TeamProps> = ({
               </TableBody>
             </Table>
           </Card>
+          <TeamMemberModal
+            visible={isEditMemberModalVisible}
+            onCancel={handleMemberCancel}
+            onSubmit={handleMemberCreate}
+            mode="edit"
+          />
           {selectedTeam && (
             <EditTeamModal
               visible={editModalVisible}
