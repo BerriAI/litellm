@@ -244,7 +244,7 @@ async def user_api_key_auth(  # noqa: PLR0915
     route: str = get_request_route(request=request)
     try:
         # get the request body
-        request_data = {}
+        request_data = await _read_request_body(request=request)
         await pre_db_read_auth_checks(
             request_data=request_data,
             request=request,
