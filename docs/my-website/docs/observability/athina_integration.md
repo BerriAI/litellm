@@ -82,11 +82,11 @@ Following are the allowed fields in metadata, their types, and their description
 
 ## Using a self hosted deployment of Athina
 
-If you are using a self hosted deployment of Athina, you will need to set the `ATHINA_LOGGING_URL` environment variable to point to your self hosted deployment.
+If you are using a self hosted deployment of Athina, you will need to set the `ATHINA_BASE_URL` environment variable to point to your self hosted deployment.
 
 ```python
 ...
-os.environ["ATHINA_LOGGING_URL"]= "http://localhost:9000/api/v1/log/inference"
+os.environ["ATHINA_BASE_URL"]= "http://localhost:9000"
 ...
 ```
 
