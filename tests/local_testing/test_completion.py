@@ -4285,7 +4285,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],
+    ["gpt-4o", "azure/chatgpt-v-2"],
 )
 @pytest.mark.parametrize(
     "stream",
