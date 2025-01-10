@@ -867,6 +867,7 @@ jobs:
             pip install "boto3==1.34.34"
             pip install jinja2
             pip install tokenizers=="0.20.0"
+            pip install uvloop==0.21.0
             pip install jsonschema
       - run:
           name: Run tests
