@@ -599,7 +599,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     headers = {}
                 data = additional_args.get("complete_input_dict", {})
                 api_base = str(additional_args.get("api_base", ""))
-                query_params = additional_args.get("query_params", {})
                 if "key=" in api_base:
                     # Find the position of "key=" in the string
                     key_index = api_base.find("key=") + 4
