@@ -981,3 +981,43 @@ async def test_spend_report_cache(report_type):
             else:
                 await slack_alerting.send_monthly_spend_report()
             mock_send_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_soft_budget_alerts():
+    """
+    Test if soft budget alerts (warnings when approaching budget limit) work correctly
+    - Test alert is sent when spend reaches 80% of budget
+    """
+    slack_alerting = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        # Test 80% threshold
+        user_info = CallInfo(
+            token="test_token",
+            spend=80,  # $80 spent
+            soft_budget=80,
+            user_id="test@test.com",
+            user_email="test@test.com",
+            key_alias="test-key",
+        )
+
+        await slack_alerting.budget_alerts(
+            type="soft_budget",
+            user_info=user_info,
+        )
+        mock_send_alert.assert_called_once()
+
+        # Verify alert message contains correct percentage
+        alert_message = mock_send_alert.call_args[1]["message"]
+        print(alert_message)
+
+        expected_message = (
+            "Soft Budget Crossed: \n\n"
+            "*spend:* `80.0`\n"
+            "*soft_budget:* `80.0`\n"
+            "*user_id:* `test@test.com`\n"
+            "*user_email:* `test@test.com`\n"
+            "*key_alias:* `test-key`\n"
+        )
+        assert alert_message == expected_message

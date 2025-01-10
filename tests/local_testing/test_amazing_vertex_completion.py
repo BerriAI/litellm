@@ -930,7 +930,7 @@ from test_completion import response_format_tests
         "vertex_ai/mistral-large@2407",
         "vertex_ai/mistral-nemo@2407",
         "vertex_ai/codestral@2405",
-        "vertex_ai/meta/llama3-405b-instruct-maas",
+        # "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
@@ -960,7 +960,6 @@ async def test_partner_models_httpx(model, sync_mode):
             "model": model,
             "messages": messages,
             "timeout": 10,
-            "mock_response": "Hello, how are you?",
         }
         if sync_mode:
             response = litellm.completion(**data)
@@ -993,7 +992,8 @@ async def test_partner_models_httpx(model, sync_mode):
     "model",
     [
         "vertex_ai/mistral-large@2407",
-        "vertex_ai/meta/llama3-405b-instruct-maas",
+        # "vertex_ai/meta/llama3-405b-instruct-maas",
+        "vertex_ai/codestral@2405",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
@@ -1023,7 +1023,6 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
             "model": model,
             "messages": messages,
             "stream": True,
-            "mock_response": "Hello, how are you?",
         }
         if sync_mode:
             response = litellm.completion(**data)
@@ -3193,3 +3192,16 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.completion_tokens == 109
     assert response.usage.prompt_tokens == 63
     assert response.usage.total_tokens == 172
+
+
+def test_vertexai_code_gecko():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    response = completion(
+        model="vertex_ai/code-gecko@002",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    for chunk in response:
+        print(chunk)

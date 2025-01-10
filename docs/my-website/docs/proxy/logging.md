@@ -1070,6 +1070,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+- `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
 <Tabs>
 <TabItem value="datadog" label="Datadog Logs">
@@ -1141,6 +1142,21 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
+
+#### Datadog Tracing
+
+Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
+
+Pass `USE_DDTRACE=true` to the docker run command. When `USE_DDTRACE=true`, the proxy will run `ddtrace-run litellm` as the `ENTRYPOINT` instead of just `litellm`
+
+```bash
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e USE_DDTRACE=true \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+```
 
 ### Set DD variables (`DD_SERVICE` etc)
 

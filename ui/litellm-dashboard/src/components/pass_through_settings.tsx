@@ -61,7 +61,6 @@ import {
   XCircleIcon,
   QuestionMarkCircleIcon,
 } from "@heroicons/react/outline";
-import StaticGenerationSearchParamsBailoutProvider from "next/dist/client/components/static-generation-searchparams-bailout-provider";
 import AddFallbacks from "./add_fallbacks";
 import AddPassThroughEndpoint from "./add_pass_through";
 import openai from "openai";

@@ -472,8 +472,8 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
-        print_verbose("Inside Proxy Logging Pre-call hook!")
-        ### ALERTING ###
+        verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
+        ## ALERTING ###
         asyncio.create_task(
             self.slack_alerting_instance.response_taking_too_long(request_data=data)
         )
@@ -517,6 +517,8 @@ class ProxyLogging:
                     _callback is not None
                     and isinstance(_callback, CustomLogger)
                     and "async_pre_call_hook" in vars(_callback.__class__)
+                    and _callback.__class__.async_pre_call_hook
+                    != CustomLogger.async_pre_call_hook
                 ):
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
@@ -600,6 +602,7 @@ class ProxyLogging:
         type: Literal[
             "token_budget",
             "user_budget",
+            "soft_budget",
             "team_budget",
             "proxy_budget",
             "projected_limit_exceeded",
@@ -1534,7 +1537,8 @@ class PrismaClient:
                             b.max_budget AS litellm_budget_table_max_budget,
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
-                            b.model_max_budget as litellm_budget_table_model_max_budget
+                            b.model_max_budget as litellm_budget_table_model_max_budget,
+                            b.soft_budget as litellm_budget_table_soft_budget
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id

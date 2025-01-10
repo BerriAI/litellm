@@ -1,8 +1,9 @@
 import json
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
 
-import aiohttp  # Add this import
+import aiohttp
 import httpx  # type: ignore
+from aiohttp import ClientSession
 
 import litellm
 import litellm.litellm_core_utils
@@ -13,7 +14,6 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
-    get_async_httpx_client,
 )
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -32,9 +32,21 @@ class BaseLLMAIOHTTPHandler:
     def __init__(self):
         self.client_session: Optional[aiohttp.ClientSession] = None
 
+    def _get_async_client_session(
+        self, dynamic_client_session: Optional[ClientSession] = None
+    ) -> ClientSession:
+        if dynamic_client_session:
+            return dynamic_client_session
+        elif self.client_session:
+            return self.client_session
+        else:
+            # init client session, and then return new session
+            self.client_session = aiohttp.ClientSession()
+            return self.client_session
+
     async def _make_common_async_call(
         self,
-        async_httpx_client: AsyncHTTPHandler,
+        async_client_session: Optional[ClientSession],
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
@@ -49,12 +61,13 @@ class BaseLLMAIOHTTPHandler:
         )
 
         response: Optional[aiohttp.ClientResponse] = None
-        if self.client_session is None:
-            self.client_session = aiohttp.ClientSession()
+        async_client_session = self._get_async_client_session(
+            dynamic_client_session=async_client_session
+        )
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
-                response = await self.client_session.post(
+                response = await async_client_session.post(
                     url=api_base,
                     headers=headers,
                     json=data,
@@ -146,17 +159,11 @@ class BaseLLMAIOHTTPHandler:
         litellm_params: dict,
         encoding: Any,
         api_key: Optional[str] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        client: Optional[ClientSession] = None,
     ):
-        if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
-            )
-        else:
-            async_httpx_client = client
 
         _response = await self._make_common_async_call(
-            async_httpx_client=async_httpx_client,
+            async_client_session=client,
             provider_config=provider_config,
             api_base=api_base,
             headers=headers,
@@ -165,9 +172,19 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
-        _json_response = await _response.json()
-
-        return _json_response
+        _transformed_response = await provider_config.transform_response(  # type: ignore
+            model=model,
+            raw_response=_response,  # type: ignore
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+        )
+        return _transformed_response
 
     def completion(
         self,
@@ -186,7 +203,7 @@ class BaseLLMAIOHTTPHandler:
         fake_stream: bool = False,
         api_key: Optional[str] = None,
         headers: Optional[dict] = {},
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, ClientSession]] = None,
     ):
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -245,7 +262,7 @@ class BaseLLMAIOHTTPHandler:
                 encoding=encoding,
                 client=(
                     client
-                    if client is not None and isinstance(client, AsyncHTTPHandler)
+                    if client is not None and isinstance(client, ClientSession)
                     else None
                 ),
             )

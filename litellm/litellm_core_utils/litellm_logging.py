@@ -398,7 +398,6 @@ class Logging(LiteLLMLoggingBaseClass):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
@@ -420,7 +419,6 @@ class Logging(LiteLLMLoggingBaseClass):
                         model=model,
                         messages=messages,
                         non_default_params=non_default_params,
-                        headers=headers,
                         prompt_id=prompt_id,
                         prompt_variables=prompt_variables,
                         dynamic_callback_params=self.standard_callback_dynamic_params,

@@ -130,9 +130,11 @@ const DataTable: React.FC<DataTableProps> = ({
                 {actions && actions.length > 0 && (
                   <TableCell>
                     {actions.map((action, actionIndex) => (
+                      // @ts-ignore
                       action.condition?.(row) !== false && (
                         <Tooltip key={actionIndex} title={action.tooltip}>
-                          <Icon
+                          <Icon 
+                            // @ts-ignore
                             icon={action.icon}
                             size="sm"
                             onClick={() => action.onClick(row)}

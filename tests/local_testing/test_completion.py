@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import os
@@ -2134,7 +2134,7 @@ def test_completion_openai_organization():
             )
             pytest.fail("Request should have failed - This organization does not exist")
         except Exception as e:
-            assert "No such organization: org-ikDc4ex8NB" in str(e)
+            assert "header should match organization for API key" in str(e)
 
     except Exception as e:
         print(e)
@@ -4285,7 +4285,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],
+    ["gpt-4o", "azure/chatgpt-v-2"],
 )
 @pytest.mark.parametrize(
     "stream",

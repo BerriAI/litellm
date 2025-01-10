@@ -393,4 +393,10 @@ async def test_avertex_batch_prediction():
         metadata={"key1": "value1", "key2": "value2"},
     )
     print("create_batch_response=", create_batch_response)
+
+    retrieved_batch = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider="vertex_ai",
+    )
+    print("retrieved_batch=", retrieved_batch)
     pass
