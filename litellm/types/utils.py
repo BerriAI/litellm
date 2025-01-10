@@ -1807,6 +1807,7 @@ class LlmProviders(str, Enum):
     GITHUB = "github"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
+    HEROKU = "heroku"
     HOSTED_VLLM = "hosted_vllm"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"

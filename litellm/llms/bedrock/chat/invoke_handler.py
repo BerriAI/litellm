@@ -1,5 +1,5 @@
 """
-Manages calling Bedrock's `/converse` API + `/invoke` API 
+Manages calling Bedrock's `/converse` API + `/invoke` API
 """
 
 import copy
