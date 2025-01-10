@@ -204,6 +204,9 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import update_team
+from litellm.proxy.management_endpoints.ui_sso import (
+    get_disabled_non_admin_personal_key_creation,
+)
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -7294,6 +7297,9 @@ async def login(request: Request):  # noqa: PLR0915
         _user_row = await prisma_client.db.litellm_usertable.find_first(
             where={"user_email": {"equals": username}}
         )
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
     """
     To login to Admin UI, we support the following 
     - Login with UI_USERNAME and UI_PASSWORD
@@ -7365,6 +7371,7 @@ async def login(request: Request):  # noqa: PLR0915
                 "auth_header_name": general_settings.get(
                     "litellm_key_header_name", "Authorization"
                 ),
+                "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
             },
             master_key,
             algorithm="HS256",
@@ -7432,6 +7439,7 @@ async def login(request: Request):  # noqa: PLR0915
                     "auth_header_name": general_settings.get(
                         "litellm_key_header_name", "Authorization"
                     ),
+                    "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
                 },
                 master_key,
                 algorithm="HS256",
@@ -7546,6 +7554,10 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
+
     jwt_token = jwt.encode(  # type: ignore
         {
             "user_id": user_obj.user_id,
@@ -7557,6 +7569,7 @@ async def onboarding(invite_link: str):
             "auth_header_name": general_settings.get(
                 "litellm_key_header_name", "Authorization"
             ),
+            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
         },
         master_key,
         algorithm="HS256",

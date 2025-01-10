@@ -671,7 +671,10 @@ def run_server(  # noqa: PLR0915
                 )
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
-            uvicorn.run(**uvicorn_args)
+            uvicorn.run(
+                **uvicorn_args,
+                loop="uvloop",
+            )
         elif run_gunicorn is True:
             # Gunicorn Application Class
             class StandaloneApplication(gunicorn.app.base.BaseApplication):
