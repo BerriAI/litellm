@@ -1945,16 +1945,15 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     for key, value in loaded_model_cost.items():
         ## get model info ##
         try:
-            existing_model: Union[ModelInfo, dict] = get_model_info(model=key)
+            existing_model: dict = cast(dict, get_model_info(model=key))
             model_cost_key = existing_model["key"]
         except Exception:
             existing_model = {}
             model_cost_key = key
         ## override / add new keys to the existing model cost dictionary
-        litellm.model_cost.setdefault(model_cost_key, {}).update(
-            _update_dictionary(existing_model, value)  # type: ignore
-        )
-        verbose_logger.debug(f"{key} added to model cost map")
+        updated_dictionary = _update_dictionary(existing_model, value)
+        litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        verbose_logger.debug(f"{model_cost_key} added to model cost map")
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
