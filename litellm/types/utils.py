@@ -1457,9 +1457,14 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
 
 
+class StandardLoggingPromptManagementMetadata(TypedDict):
+    prompt_id: Optional[str]
+    prompt_variables: Optional[dict]
+
+
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
-    Specific metadata k,v pairs logged to integration for easier cost tracking
+    Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
     """
 
     spend_logs_metadata: Optional[
@@ -1467,6 +1472,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
+    prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):

@@ -500,6 +500,37 @@ def test_get_supported_openai_params() -> None:
     assert get_supported_openai_params("nonexistent") is None
 
 
+def test_get_chat_completion_prompt():
+    """
+    Unit test to ensure get_chat_completion_prompt updates messages in logging object.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    updated_message = "hello world"
+
+    litellm_logging_obj.get_chat_completion_prompt(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": updated_message}],
+        non_default_params={},
+        prompt_id="1234",
+        prompt_variables=None,
+    )
+
+    assert litellm_logging_obj.messages == [
+        {"role": "user", "content": updated_message}
+    ]
+
+
 def test_redact_msgs_from_logs():
     """
     Tests that turn_off_message_logging does not modify the response_obj
