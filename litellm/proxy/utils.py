@@ -472,8 +472,8 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
-        print_verbose("Inside Proxy Logging Pre-call hook!")
-        ### ALERTING ###
+        verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
+        ## ALERTING ###
         asyncio.create_task(
             self.slack_alerting_instance.response_taking_too_long(request_data=data)
         )
@@ -517,6 +517,8 @@ class ProxyLogging:
                     _callback is not None
                     and isinstance(_callback, CustomLogger)
                     and "async_pre_call_hook" in vars(_callback.__class__)
+                    and _callback.__class__.async_pre_call_hook
+                    != CustomLogger.async_pre_call_hook
                 ):
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
