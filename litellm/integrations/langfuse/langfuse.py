@@ -4,7 +4,7 @@ import copy
 import os
 import traceback
 from collections.abc import MutableMapping, MutableSequence, MutableSet
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -527,7 +527,7 @@ class LangFuseLogger:
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             if existing_trace_id is not None:
-                trace_params = {"id": existing_trace_id}
+                trace_params: Dict[str, Any] = {"id": existing_trace_id}
 
                 # Update the following keys for this trace
                 for metadata_param_key in update_trace_keys:
