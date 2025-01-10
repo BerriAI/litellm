@@ -4,7 +4,7 @@ import copy
 import os
 import traceback
 from collections.abc import MutableMapping, MutableSequence, MutableSet
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from packaging.version import Version
 from pydantic import BaseModel
