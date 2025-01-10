@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import json
 import threading
 import time
@@ -32,6 +33,19 @@ MAX_THREADS = 100
 
 # Create a ThreadPoolExecutor
 executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
+
+
+def is_async_iterable(obj: Any) -> bool:
+    """
+    Check if an object is an async iterable (can be used with 'async for').
+
+    Args:
+        obj: Any Python object to check
+
+    Returns:
+        bool: True if the object is async iterable, False otherwise
+    """
+    return isinstance(obj, collections.abc.AsyncIterable)
 
 
 def print_verbose(print_statement):
@@ -1530,36 +1544,7 @@ class CustomStreamWrapper:
             if self.completion_stream is None:
                 await self.fetch_stream()
 
-            if (
-                self.custom_llm_provider == "openai"
-                or self.custom_llm_provider == "azure"
-                or self.custom_llm_provider == "custom_openai"
-                or self.custom_llm_provider == "text-completion-openai"
-                or self.custom_llm_provider == "text-completion-codestral"
-                or self.custom_llm_provider == "azure_text"
-                or self.custom_llm_provider == "cohere_chat"
-                or self.custom_llm_provider == "cohere"
-                or self.custom_llm_provider == "anthropic"
-                or self.custom_llm_provider == "anthropic_text"
-                or self.custom_llm_provider == "huggingface"
-                or self.custom_llm_provider == "ollama"
-                or self.custom_llm_provider == "ollama_chat"
-                or self.custom_llm_provider == "vertex_ai"
-                or self.custom_llm_provider == "vertex_ai_beta"
-                or self.custom_llm_provider == "sagemaker"
-                or self.custom_llm_provider == "sagemaker_chat"
-                or self.custom_llm_provider == "gemini"
-                or self.custom_llm_provider == "replicate"
-                or self.custom_llm_provider == "cached_response"
-                or self.custom_llm_provider == "predibase"
-                or self.custom_llm_provider == "databricks"
-                or self.custom_llm_provider == "bedrock"
-                or self.custom_llm_provider == "triton"
-                or self.custom_llm_provider == "watsonx"
-                or self.custom_llm_provider == "cloudflare"
-                or self.custom_llm_provider in litellm.openai_compatible_providers
-                or self.custom_llm_provider in litellm._custom_providers
-            ):
+            if is_async_iterable(self.completion_stream):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
                         raise Exception
