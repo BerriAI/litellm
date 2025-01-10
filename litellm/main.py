@@ -3218,6 +3218,7 @@ def embedding(  # noqa: PLR0915
         api_base=api_base,
         api_key=api_key,
     )
+
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
@@ -3395,18 +3396,19 @@ def embedding(  # noqa: PLR0915
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "jina_ai"
             or custom_llm_provider == "hosted_vllm"
+            or custom_llm_provider == "lm_studio"
         ):
             api_base = (
                 api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
             )
 
             # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.openai_like_key
-                or get_secret_str("OPENAI_LIKE_API_KEY")
-            )
+            if api_key is None:
+                api_key = (
+                    litellm.api_key
+                    or litellm.openai_like_key
+                    or get_secret_str("OPENAI_LIKE_API_KEY")
+                )
 
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
