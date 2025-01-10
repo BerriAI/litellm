@@ -3,17 +3,18 @@ import { Modal, Form, Input, Select as AntSelect, Button as AntButton, message }
 import { Select, SelectItem } from "@tremor/react";
 import { Card, Text } from "@tremor/react";
 
-interface TeamMember {
+export interface TeamMember {
   id?: string;
   email?: string;
   role: 'admin' | 'user';
+  team_id: string;
 }
 
 interface TeamMemberModalProps {
   visible: boolean;
   onCancel: () => void;
   onSubmit: (data: TeamMember) => void;
-  initialData?: TeamMember;
+  initialData?: TeamMember | null;
   mode: 'add' | 'edit';
 }
 

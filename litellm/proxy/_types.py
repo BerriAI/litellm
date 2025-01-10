@@ -2073,12 +2073,13 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 
 
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
-    max_budget_in_team: float
+    max_budget_in_team: Optional[float] = None
+    role: Optional[Literal["admin", "user"]] = None
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
-    max_budget_in_team: float
+    max_budget_in_team: Optional[float] = None
 
 
 # Organization Member Requests
