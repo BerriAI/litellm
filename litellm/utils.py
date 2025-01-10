@@ -133,6 +133,7 @@ from litellm.types.utils import (
     Function,
     ImageResponse,
     LlmProviders,
+    LlmProvidersSet,
     Message,
     ModelInfo,
     ModelInfoBase,
@@ -4108,9 +4109,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
 
-            if custom_llm_provider and custom_llm_provider in [
-                provider.value for provider in LlmProviders
-            ]:
+            if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
                 # Check if the provider string exists in LlmProviders enum
                 provider_config = ProviderConfigManager.get_provider_model_info(
                     model=model, provider=LlmProviders(custom_llm_provider)

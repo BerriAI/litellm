@@ -861,6 +861,7 @@ model_list = (
     + azure_text_models
 )
 
+model_list_set = set(model_list)
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 
