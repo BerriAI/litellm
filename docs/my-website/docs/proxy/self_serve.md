@@ -231,6 +231,14 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 
 Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
 
+### Restrict Users from creating personal keys 
+
+This is useful if you only want users to create keys under a specific team. 
+
+This will also prevent users from using their session tokens on the test keys chat pane. 
+
+👉 [**See this**](./virtual_keys.md#restricting-key-generation)
+
 ## **All Settings for Self Serve / SSO Flow**
 
 ```yaml
