@@ -1153,11 +1153,10 @@ def client(original_function):  # noqa: PLR0915
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                 )
             )
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
             )
             # REBUILD EMBEDDING CACHING
             if (
