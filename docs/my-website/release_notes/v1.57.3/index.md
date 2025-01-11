@@ -1,6 +1,7 @@
 ---
 title: v1.57.3 - New Base Docker Image
 slug: v1.57.3
+date: 2025-01-08T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM

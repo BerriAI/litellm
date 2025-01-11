@@ -1,6 +1,7 @@
 ---
 title: v1.57.8-stable
 slug: v1.57.8-stable
+date: 2025-01-11T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM

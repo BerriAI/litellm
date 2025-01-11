@@ -1,6 +1,7 @@
 ---
 title: v1.56.3
 slug: v1.56.3
+date: 2024-12-28T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
