@@ -61,7 +61,7 @@ class OpenAIImageVariationsHandler:
         client=None,
         organization: Optional[str] = None,
         headers: Optional[dict] = None,
-    ):
+    ) -> ImageResponse:
         try:
             provider_config = ProviderConfigManager.get_provider_image_variation_config(
                 model=model or "",  # openai defaults to dall-e-2
@@ -126,9 +126,10 @@ class OpenAIImageVariationsHandler:
                 model=model,
                 model_response=ImageResponse(**response_json),
                 raw_response=httpx.Response(
-                    status_code=raw_response.status_code,
-                    headers=raw_response.headers,
-                    text="dummy_text",
+                    status_code=200,
+                    request=httpx.Request(
+                        method="GET", url="https://litellm.ai"
+                    ),  # mock request object
                 ),
                 logging_obj=logging_obj,
                 request_data=data,

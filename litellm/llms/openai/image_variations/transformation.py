@@ -29,12 +29,15 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
 
     def transform_request_image_variation(
         self,
-        model: str,
+        model: Optional[str],
         image: FileTypes,
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        return {}
+        return {
+            "image": image,
+            **optional_params,
+        }
 
     def transform_response_image_variation(
         self,

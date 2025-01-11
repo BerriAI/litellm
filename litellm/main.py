@@ -4632,6 +4632,8 @@ def image_variation(
         )
     model_response = ImageResponse()
 
+    response: Optional[ImageResponse] = None
+
     provider_config = ProviderConfigManager.get_provider_model_info(
         model=model or "",  # openai defaults to dall-e-2
         provider=llm_provider,
@@ -4648,7 +4650,7 @@ def image_variation(
         if api_key is None:
             raise ValueError("API key is required for OpenAI image variations")
 
-        openai_image_variations.image_variations(
+        response = openai_image_variations.image_variations(
             model_response=model_response,
             api_key=api_key,
             model=model,
@@ -4663,9 +4665,11 @@ def image_variation(
         raise NotImplementedError("Topaz image variation is not implemented")
 
     # return the response
-    raise ValueError(
-        f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
-    )
+    if response is None:
+        raise ValueError(
+            f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
+        )
+    return response
 
 
 ##### Transcription #######################

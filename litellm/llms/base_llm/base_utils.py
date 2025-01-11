@@ -17,7 +17,7 @@ class BaseLLMModelInfo(ABC):
     def get_models(self) -> List[str]:
         pass
 
-    @abstractmethod
     @staticmethod
+    @abstractmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         pass
