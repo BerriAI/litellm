@@ -3055,52 +3055,17 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             model=model, api_base=kwargs.get("api_base", None)
         )
 
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+
         response: Optional[EmbeddingResponse] = None
-        if (
-            custom_llm_provider == "openai"
-            or custom_llm_provider == "azure"
-            or custom_llm_provider == "xinference"
-            or custom_llm_provider == "voyage"
-            or custom_llm_provider == "mistral"
-            or custom_llm_provider == "custom_openai"
-            or custom_llm_provider == "triton"
-            or custom_llm_provider == "anyscale"
-            or custom_llm_provider == "openrouter"
-            or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "groq"
-            or custom_llm_provider == "nvidia_nim"
-            or custom_llm_provider == "cerebras"
-            or custom_llm_provider == "sambanova"
-            or custom_llm_provider == "ai21_chat"
-            or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "deepseek"
-            or custom_llm_provider == "fireworks_ai"
-            or custom_llm_provider == "ollama"
-            or custom_llm_provider == "vertex_ai"
-            or custom_llm_provider == "gemini"
-            or custom_llm_provider == "databricks"
-            or custom_llm_provider == "watsonx"
-            or custom_llm_provider == "cohere"
-            or custom_llm_provider == "huggingface"
-            or custom_llm_provider == "bedrock"
-            or custom_llm_provider == "azure_ai"
-            or custom_llm_provider == "together_ai"
-            or custom_llm_provider == "openai_like"
-            or custom_llm_provider == "jina_ai"
-            or custom_llm_provider == "voyage"
-        ):  # currently implemented aiohttp calls for just azure and openai, soon all.
-            # Await normally
-            init_response = await loop.run_in_executor(None, func_with_context)
-            if isinstance(init_response, dict):
-                response = EmbeddingResponse(**init_response)
-            elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
-                response = init_response
-            elif asyncio.iscoroutine(init_response):
-                response = await init_response  # type: ignore
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(init_response, dict):
+            response = EmbeddingResponse(**init_response)
+        elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
+            response = init_response
+        elif asyncio.iscoroutine(init_response):
+            response = await init_response  # type: ignore
+
         if (
             response is not None
             and isinstance(response, EmbeddingResponse)
