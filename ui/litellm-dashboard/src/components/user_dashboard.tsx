@@ -5,6 +5,7 @@ import {
   modelAvailableCall,
   getTotalSpendCall,
   getProxyUISettings,
+  teamListCall,
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -172,6 +173,18 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       if (cachedUserModels) {
         setUserModels(JSON.parse(cachedUserModels));
       } else {
+        const fetchTeams = async () => {
+          let givenTeams;
+          if (userRole != "Admin" && userRole != "Admin Viewer") {
+            givenTeams = await teamListCall(accessToken, userID)
+          } else {
+            givenTeams = await teamListCall(accessToken)
+          }
+          
+          console.log(`givenTeams: ${givenTeams}`)
+
+          setTeams(givenTeams)
+        }
         const fetchData = async () => {
           try {
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
@@ -194,7 +207,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
             setKeys(response["keys"]); // Assuming this is the correct path to your data
-            setTeams(response["teams"]);
             const teamsArray = [...response["teams"]];
             if (teamsArray.length > 0) {
               console.log(`response['teams']: ${teamsArray}`);
@@ -235,6 +247,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           }
         };
         fetchData();
+        fetchTeams();
       }
     }
   }, [userID, token, accessToken, keys, userRole]);

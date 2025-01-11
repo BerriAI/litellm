@@ -44,6 +44,8 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
     }
   };
 
+
+
   return (
     <Modal
       title={mode === 'add' ? "Add Team Member" : "Edit Team Member"}
@@ -59,8 +61,8 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
         wrapperCol={{ span: 16 }}
         labelAlign="left"
         initialValues={{
-          user_email: initialData?.email || '',
-          user_id: initialData?.id || '',
+          user_email: initialData?.email?.trim() || '',
+          user_id: initialData?.id?.trim() || '',
           role: initialData?.role || 'user',
         }}
       >
@@ -76,6 +78,9 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
             name="user_email"
             className="px-3 py-2 border rounded-md w-full"
             placeholder="user@example.com"
+            onChange={(e) => {
+                e.target.value = e.target.value.trim();
+              }} 
           />
         </Form.Item>
 
@@ -92,6 +97,9 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
             name="user_id"
             className="px-3 py-2 border rounded-md w-full"
             placeholder="user_123"
+            onChange={(e) => {
+                e.target.value = e.target.value.trim();
+              }} 
           />
         </Form.Item>
 
