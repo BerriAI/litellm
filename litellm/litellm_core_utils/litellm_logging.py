@@ -65,7 +65,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import _get_base_model_from_metadata, print_verbose
+from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
@@ -1019,7 +1019,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         status="success",
                     )
                 )
-            callbacks = get_combined_callback_list(
+            callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
             )
@@ -1555,7 +1555,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     status="success",
                 )
             )
-        callbacks = get_combined_callback_list(
+        callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
         )
@@ -1825,7 +1825,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
             )
-            callbacks = get_combined_callback_list(
+            callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
                 global_callbacks=litellm.failure_callback,
             )
@@ -2011,7 +2011,7 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time=end_time,
         )
 
-        callbacks = get_combined_callback_list(
+        callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
             global_callbacks=litellm._async_failure_callback,
         )
@@ -2107,6 +2107,95 @@ class Logging(LiteLLMLoggingBaseClass):
             return langFuseLogger
 
         return None
+
+    def handle_sync_success_callbacks_for_async_calls(
+        self,
+        result: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        """
+        Handles calling success callbacks for Async calls.
+
+        Why: Some callbacks - `langfuse`, `s3` are sync callbacks. We need to call them in the executor.
+        """
+        if self._should_run_sync_callbacks_for_async_calls() is False:
+            return
+
+        executor.submit(
+            self.success_handler,
+            result,
+            start_time,
+            end_time,
+        )
+
+    def _should_run_sync_callbacks_for_async_calls(self) -> bool:
+        """
+        Returns:
+            - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`
+        """
+        _combined_sync_callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_success_callbacks,
+            global_callbacks=litellm.success_callback,
+        )
+        _filtered_success_callbacks = self._remove_internal_custom_logger_callbacks(
+            _combined_sync_callbacks
+        )
+        _filtered_success_callbacks = self._remove_internal_litellm_callbacks(
+            _filtered_success_callbacks
+        )
+        return len(_filtered_success_callbacks) > 0
+
+    def get_combined_callback_list(
+        self, dynamic_success_callbacks: Optional[List], global_callbacks: List
+    ) -> List:
+        if dynamic_success_callbacks is None:
+            return global_callbacks
+        return list(set(dynamic_success_callbacks + global_callbacks))
+
+    def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
+        """Creates a filtered list of callbacks, excluding internal LiteLLM callbacks."""
+        INTERNAL_PREFIXES = [
+            "_PROXY",
+            "_service_logger.ServiceLogging",
+            "sync_deployment_callback_on_success",
+        ]
+
+        filtered = [
+            cb
+            for cb in callbacks
+            if isinstance(cb, str)
+            or (
+                callable(cb)
+                and not any(
+                    prefix
+                    in (
+                        getattr(cb, "__name__", None)
+                        or getattr(getattr(cb, "__func__", None), "__name__", str(cb))
+                    )
+                    for prefix in INTERNAL_PREFIXES
+                )
+            )
+        ]
+
+        verbose_logger.debug(f"Filtered callbacks: {filtered}")
+        return filtered
+
+    def _remove_internal_custom_logger_callbacks(self, callbacks: List) -> List:
+        """
+        Removes internal custom logger callbacks from the list.
+        """
+        _new_callbacks = []
+        for _c in callbacks:
+            if isinstance(_c, CustomLogger):
+                continue
+            elif (
+                isinstance(_c, str)
+                and _c in litellm._known_custom_logger_compatible_callbacks
+            ):
+                continue
+            _new_callbacks.append(_c)
+        return _new_callbacks
 
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
@@ -3191,11 +3280,3 @@ def modify_integration(integration_name, integration_params):
     if integration_name == "supabase":
         if "table_name" in integration_params:
             Supabase.supabase_table_name = integration_params["table_name"]
-
-
-def get_combined_callback_list(
-    dynamic_success_callbacks: Optional[List], global_callbacks: List
-) -> List:
-    if dynamic_success_callbacks is None:
-        return global_callbacks
-    return list(set(dynamic_success_callbacks + global_callbacks))
