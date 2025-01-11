@@ -372,7 +372,7 @@ class AnthropicConfig(BaseConfig):
             _input_schema["additionalProperties"] = True
             _input_schema["properties"] = {}
         else:
-            _input_schema["properties"] = {"values": json_schema}
+            _input_schema["properties"] = json_schema
 
         _tool = AnthropicMessagesTool(
             name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
