@@ -829,11 +829,20 @@ def _add_prompt_to_generation_params(
             verbose_logger.error(
                 "[Non-blocking] Langfuse Logger: Invalid prompt format. No prompt logged to Langfuse"
             )
-    elif prompt_management_metadata is not None:
+    elif (
+        prompt_management_metadata is not None
+        and prompt_management_metadata["prompt_integration"] == "langfuse"
+    ):
+        try:
+            generation_params["prompt"] = langfuse_client.get_prompt(
+                prompt_management_metadata["prompt_id"]
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"[Non-blocking] Langfuse Logger: Error getting prompt client for logging: {e}"
+            )
+            pass
 
-        generation_params["prompt"] = langfuse_client.get_prompt(
-            prompt_management_metadata["prompt_id"]
-        )
     else:
         generation_params["prompt"] = user_prompt
 

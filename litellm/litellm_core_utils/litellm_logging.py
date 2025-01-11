@@ -416,6 +416,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 if custom_logger is None:
                     continue
+                old_name = model
+
                 model, messages, non_default_params = (
                     custom_logger.get_chat_completion_prompt(
                         model=model,
@@ -426,6 +428,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         dynamic_callback_params=self.standard_callback_dynamic_params,
                     )
                 )
+                self.model_call_details["prompt_integration"] = old_name.split("/")[0]
         self.messages = messages
 
         return model, messages, non_default_params
@@ -2680,7 +2683,9 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_standard_logging_metadata(
-        metadata: Optional[Dict[str, Any]], litellm_params: Optional[dict] = None
+        metadata: Optional[Dict[str, Any]],
+        litellm_params: Optional[dict] = None,
+        prompt_integration: Optional[str] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -2704,10 +2709,12 @@ class StandardLoggingPayloadSetup:
                 Optional[dict], litellm_params.get("prompt_variables", None)
             )
 
-            prompt_management_metadata = StandardLoggingPromptManagementMetadata(
-                prompt_id=prompt_id,
-                prompt_variables=prompt_variables,
-            )
+            if prompt_id is not None and prompt_integration is not None:
+                prompt_management_metadata = StandardLoggingPromptManagementMetadata(
+                    prompt_id=prompt_id,
+                    prompt_variables=prompt_variables,
+                    prompt_integration=prompt_integration,
+                )
 
         # Initialize with default values
         clean_metadata = StandardLoggingMetadata(
@@ -3016,7 +3023,9 @@ def get_standard_logging_object_payload(
         )
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
-            metadata=metadata, litellm_params=litellm_params
+            metadata=metadata,
+            litellm_params=litellm_params,
+            prompt_integration=kwargs.get("prompt_integration", None),
         )
 
         saved_cache_cost: float = 0.0

@@ -1460,6 +1460,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
 class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
     prompt_variables: Optional[dict]
+    prompt_integration: str
 
 
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
