@@ -62,7 +62,13 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/anthropic/messages") is True
     assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
     assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
-
+    assert (
+        RouteChecks.is_llm_api_route("/v1/realtime?model=gpt-4o-realtime-preview")
+        is True
+    )
+    assert (
+        RouteChecks.is_llm_api_route("/realtime?model=gpt-4o-realtime-preview") is True
+    )
     assert (
         RouteChecks.is_llm_api_route(
             "/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions"
