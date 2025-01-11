@@ -1,6 +1,7 @@
 from typing import Literal, Optional
 
 import litellm
+from litellm import LlmProviders
 from litellm.exceptions import BadRequestError
 
 
@@ -199,5 +200,15 @@ def get_supported_openai_params(  # noqa: PLR0915
                     model=model
                 )
             )
+    elif custom_llm_provider in litellm._custom_providers:
+        if request_type == "chat_completion":
+            provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders.CUSTOM
+            )
+            return provider_config.get_supported_openai_params(model=model)
+        elif request_type == "embeddings":
+            return None
+        elif request_type == "transcription":
+            return None
 
     return None
