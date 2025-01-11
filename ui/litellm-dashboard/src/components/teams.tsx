@@ -869,7 +869,6 @@ const Team: React.FC<TeamProps> = ({
                                 setSelectedEditMember({
                                   "id": member["user_id"],
                                   "email": member["user_email"],
-                                  "team_id": selectedTeam["team_id"],
                                   "role": member["role"]
                                 })
                               }}
