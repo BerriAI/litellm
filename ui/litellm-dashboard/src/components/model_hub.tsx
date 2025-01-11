@@ -176,13 +176,13 @@ const ModelHub: React.FC<ModelHubProps> = ({
                         : "Unknown"}
                     </Text>
                     <Text>
-                      Input Cost Per Token:{" "}
+                      Input Cost Per 1M Tokens (USD):{" "}
                       {model?.input_cost_per_token
                         ? `$${(model.input_cost_per_token * 1_000_000).toFixed(2)}`
                         : "Unknown"}
                     </Text>
                     <Text>
-                      Output Cost Per Token:{" "}
+                      Output Cost Per 1M Tokens (USD):{" "}
                       {model?.output_cost_per_token
                         ? `$${(model.output_cost_per_token * 1_000_000).toFixed(2)}`
                         : "Unknown"}
