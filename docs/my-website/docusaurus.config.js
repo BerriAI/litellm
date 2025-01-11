@@ -71,6 +71,13 @@ const config = {
           trackingID: 'G-K7K215ZVNC',
           anonymizeIP: true,
         },
+        blog: {
+          // Blog specific options
+          showReadingTime: true,
+          // To enable sidebar for blog:
+          blogSidebarTitle: 'All posts',
+          blogSidebarCount: 'ALL',
+        },
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
         },
