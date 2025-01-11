@@ -285,3 +285,28 @@ def test_get_model_info_custom_provider():
     get_model_info(
         model="my-custom-llm/my-fake-model"
     )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+
+
+def test_get_model_info_custom_model_router():
+    from litellm import Router
+    from litellm import get_model_info
+
+    litellm._turn_on_debug()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ma-summary",
+                "litellm_params": {
+                    "api_base": "http://ma-mix-llm-serving.cicero.svc.cluster.local/v1",
+                    "input_cost_per_token": 1,
+                    "output_cost_per_token": 1,
+                    "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                },
+            }
+        ]
+    )
+    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    print("info", info)
+    assert info is not None
