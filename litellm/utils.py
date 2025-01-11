@@ -2036,7 +2036,8 @@ def get_litellm_params(
     drop_params: Optional[bool] = None,
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
-):
+    **kwargs,
+) -> dict:
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
