@@ -1,11 +1,7 @@
 from functools import lru_cache
 from typing import Any, Callable, TypeVar, cast
 
-try:
-    from typing import ParamSpec  # Try to import from typing first
-except ImportError:
-    from typing_extensions import ParamSpec  # Fall back to typing_extensions
-
+from typing_extensions import ParamSpec
 
 P = ParamSpec("P")
 T = TypeVar("T", bound=Callable[..., Any])
