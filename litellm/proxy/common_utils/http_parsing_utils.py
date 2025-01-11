@@ -1,6 +1,7 @@
 import json
 from typing import Dict, List, Optional
 
+import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
@@ -29,14 +30,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             body = await request.body()
 
             # Return empty dict if body is empty or None
-            if not body:
-                return {}
-
-            # Decode the body to a string
-            body_str = body.decode()
-
-            # Attempt JSON parsing (safe for untrusted input)
-            return json.loads(body_str)
+            return orjson.loads(body)
 
     except json.JSONDecodeError:
         # Log detailed information for debugging
