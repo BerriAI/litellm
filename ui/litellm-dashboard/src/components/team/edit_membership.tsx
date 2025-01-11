@@ -7,7 +7,6 @@ export interface TeamMember {
   id?: string;
   email?: string;
   role: 'admin' | 'user';
-  team_id: string;
 }
 
 interface TeamMemberModalProps {
@@ -32,7 +31,7 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
       const formData: TeamMember = {
         email: values.user_email,
         id: values.user_id,
-        role: values.role
+        role: values.role,
       };
       
       onSubmit(formData);

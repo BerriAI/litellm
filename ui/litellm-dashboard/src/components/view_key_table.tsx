@@ -151,7 +151,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     teams.forEach(team => {
       // For default team or when user is not admin, use personal keys (data)
       if (team.team_id === "default-team" || !isUserTeamAdmin(team)) {
-        if (selectedTeam && selectedTeam.team_id === team.team_id) {
+        if (selectedTeam && selectedTeam.team_id === team.team_id && data) {
           allKeys = [...allKeys, ...data.filter(key => key.team_id === team.team_id)];
         }
       }
@@ -164,7 +164,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     });
 
     // If no team is selected, show all accessible keys
-    if (!selectedTeam) {
+    if (!selectedTeam && data) {
       const personalKeys = data.filter(key => !key.team_id || key.team_id === "default-team");
       const adminTeamKeys = teams
         .filter(team => isUserTeamAdmin(team))
@@ -909,7 +909,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           </TableRow>
         </TableHead>
         <TableBody>
-          {all_keys_to_display.map((item) => {
+          {all_keys_to_display && all_keys_to_display.map((item) => {
             console.log(item);
             // skip item if item.team_id == "litellm-dashboard"
             if (item.team_id === "litellm-dashboard") {
