@@ -4163,31 +4163,6 @@ class Router:
             litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         )
 
-        # set region (if azure model) ## PREVIEW FEATURE ##
-        if litellm.enable_preview_features is True:
-            print("Auto inferring region")  # noqa
-            """
-            Hiding behind a feature flag
-            When there is a large amount of LLM deployments this makes startup times blow up
-            """
-            try:
-                if (
-                    "azure" in deployment.litellm_params.model
-                    and deployment.litellm_params.region_name is None
-                ):
-                    region = litellm.utils.get_model_region(
-                        litellm_params=deployment.litellm_params, mode=None
-                    )
-
-                    deployment.litellm_params.region_name = region
-            except Exception as e:
-                verbose_router_logger.debug(
-                    "Unable to get the region for azure model - {}, {}".format(
-                        deployment.litellm_params.model, str(e)
-                    )
-                )
-                pass  # [NON-BLOCKING]
-
         return deployment
 
     def add_deployment(self, deployment: Deployment) -> Optional[Deployment]:

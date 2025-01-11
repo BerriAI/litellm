@@ -15,7 +15,10 @@ from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingPromptManagementMetadata,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
@@ -463,14 +466,16 @@ class LangFuseLogger:
 
             if standard_logging_object is None:
                 end_user_id = None
-                prompt_management_metadata: Optional[dict] = None
+                prompt_management_metadata: Optional[
+                    StandardLoggingPromptManagementMetadata
+                ] = None
             else:
                 end_user_id = standard_logging_object["metadata"].get(
                     "user_api_key_end_user_id", None
                 )
 
                 prompt_management_metadata = cast(
-                    Optional[dict],
+                    Optional[StandardLoggingPromptManagementMetadata],
                     standard_logging_object["metadata"].get(
                         "prompt_management_metadata", None
                     ),
@@ -707,7 +712,10 @@ class LangFuseLogger:
 
             if supports_prompt:
                 generation_params = _add_prompt_to_generation_params(
-                    generation_params=generation_params, clean_metadata=clean_metadata
+                    generation_params=generation_params,
+                    clean_metadata=clean_metadata,
+                    prompt_management_metadata=prompt_management_metadata,
+                    langfuse_client=self.Langfuse,
                 )
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
@@ -753,8 +761,12 @@ class LangFuseLogger:
 
 
 def _add_prompt_to_generation_params(
-    generation_params: dict, clean_metadata: dict
+    generation_params: dict,
+    clean_metadata: dict,
+    prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata],
+    langfuse_client: Any,
 ) -> dict:
+    from langfuse import Langfuse
     from langfuse.model import (
         ChatPromptClient,
         Prompt_Chat,
@@ -762,8 +774,10 @@ def _add_prompt_to_generation_params(
         TextPromptClient,
     )
 
+    langfuse_client = cast(Langfuse, langfuse_client)
+
     user_prompt = clean_metadata.pop("prompt", None)
-    if user_prompt is None:
+    if user_prompt is None and prompt_management_metadata is None:
         pass
     elif isinstance(user_prompt, dict):
         if user_prompt.get("type", "") == "chat":
@@ -815,6 +829,20 @@ def _add_prompt_to_generation_params(
             verbose_logger.error(
                 "[Non-blocking] Langfuse Logger: Invalid prompt format. No prompt logged to Langfuse"
             )
+    elif (
+        prompt_management_metadata is not None
+        and prompt_management_metadata["prompt_integration"] == "langfuse"
+    ):
+        try:
+            generation_params["prompt"] = langfuse_client.get_prompt(
+                prompt_management_metadata["prompt_id"]
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"[Non-blocking] Langfuse Logger: Error getting prompt client for logging: {e}"
+            )
+            pass
+
     else:
         generation_params["prompt"] = user_prompt
 
