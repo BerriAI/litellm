@@ -4174,6 +4174,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         )
 
 
+@lru_cache(maxsize=64)
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.

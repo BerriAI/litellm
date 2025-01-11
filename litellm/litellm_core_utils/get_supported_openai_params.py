@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Literal, Optional
 
 import litellm
@@ -5,6 +6,7 @@ from litellm import LlmProviders
 from litellm.exceptions import BadRequestError
 
 
+@lru_cache(maxsize=20)
 def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
