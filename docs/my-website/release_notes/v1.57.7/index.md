@@ -1,3 +1,22 @@
+---
+title: v1.57.7
+slug: v1.57.7
+date: 2025-01-10T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: CEO, LiteLLM
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://media.licdn.com/dms/image/v2/C5103AQHYMXJfHTf4Ng/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1517455593871?e=1741824000&v=beta&t=udmat6jS-s3EQZp1DTykf7NZmf-3sefD_I9B1aMjE5Y
+  - name: Ishaan Jaffer
+    title: CTO, LiteLLM
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGiM7ZrUwqu_Q/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1675971026692?e=1741824000&v=beta&t=eQnRdXPJo4eiINWTZARoYTfqh064pgZ-E21pQTSy8jc
+tags: [langfuse, management endpoints, ui, prometheus, secret management]
+hide_table_of_contents: false
+---
+
+`langfuse`, `management endpoints`, `ui`, `prometheus`, `secret management`
+
 ## Langfuse Prompt Management 
 
 Langfuse Prompt Management is being labelled as BETA. This allows us to iterate quickly on the feedback we're receiving, and making the status clearer to users. We expect to make this feature to be stable by next month (February 2025).
