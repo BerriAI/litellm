@@ -2154,32 +2154,53 @@ class Logging(LiteLLMLoggingBaseClass):
         return list(set(dynamic_success_callbacks + global_callbacks))
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
-        """Creates a filtered list of callbacks, excluding internal LiteLLM callbacks."""
+        """
+        Creates a filtered list of callbacks, excluding internal LiteLLM callbacks.
+
+        Args:
+            callbacks: List of callback functions/strings to filter
+
+        Returns:
+            List of filtered callbacks with internal ones removed
+        """
+        filtered = [
+            cb for cb in callbacks if not self._is_internal_litellm_proxy_callback(cb)
+        ]
+
+        verbose_logger.debug(f"Filtered callbacks: {filtered}")
+        return filtered
+
+    def _get_callback_name(self, cb) -> str:
+        """
+        Helper to get the name of a callback function
+
+        Args:
+            cb: The callback function/string to get the name of
+
+        Returns:
+            The name of the callback
+        """
+        if hasattr(cb, "__name__"):
+            return cb.__name__
+        if hasattr(cb, "__func__"):
+            return cb.__func__.__name__
+        return str(cb)
+
+    def _is_internal_litellm_proxy_callback(self, cb) -> bool:
+        """Helper to check if a callback is internal"""
         INTERNAL_PREFIXES = [
             "_PROXY",
             "_service_logger.ServiceLogging",
             "sync_deployment_callback_on_success",
         ]
+        if isinstance(cb, str):
+            return False
 
-        filtered = [
-            cb
-            for cb in callbacks
-            if isinstance(cb, str)
-            or (
-                callable(cb)
-                and not any(
-                    prefix
-                    in (
-                        getattr(cb, "__name__", None)
-                        or getattr(getattr(cb, "__func__", None), "__name__", str(cb))
-                    )
-                    for prefix in INTERNAL_PREFIXES
-                )
-            )
-        ]
+        if not callable(cb):
+            return True
 
-        verbose_logger.debug(f"Filtered callbacks: {filtered}")
-        return filtered
+        cb_name = self._get_callback_name(cb)
+        return any(prefix in cb_name for prefix in INTERNAL_PREFIXES)
 
     def _remove_internal_custom_logger_callbacks(self, callbacks: List) -> List:
         """
