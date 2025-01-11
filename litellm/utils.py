@@ -57,6 +57,7 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
+from litellm.caching._internal_lru_cache import typed_lru_cache
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.integrations.custom_logger import CustomLogger
@@ -4004,6 +4005,7 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
+@typed_lru_cache(maxsize=16)
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
