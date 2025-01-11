@@ -70,6 +70,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     CustomStreamWrapper,
+    ProviderConfigManager,
     Usage,
     async_completion_with_fallbacks,
     async_mock_completion_streaming_obj,
@@ -128,6 +129,7 @@ from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
+from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
@@ -170,6 +172,7 @@ from .types.utils import (
     CompletionTokensDetails,
     FileTypes,
     HiddenParams,
+    LlmProviders,
     PromptTokensDetails,
     all_litellm_params,
 )
@@ -191,6 +194,7 @@ from litellm.utils import (
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
+openai_image_variations = OpenAIImageVariationsHandler()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
 azure_ai_embedding = AzureAIEmbedding()
@@ -4605,6 +4609,9 @@ def image_variation(
 ) -> ImageResponse:
     # get non-default params
 
+    # get logging object
+    litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+
     # get the litellm params
     litellm_params = get_litellm_params(**kwargs)
     # get the custom llm provider
@@ -4617,16 +4624,41 @@ def image_variation(
 
     # route to the correct provider w/ the params
     try:
-        image_variation_provider = LITELLM_IMAGE_VARIATION_PROVIDERS(
-            custom_llm_provider
-        )
+        llm_provider = LlmProviders(custom_llm_provider)
+        image_variation_provider = LITELLM_IMAGE_VARIATION_PROVIDERS(llm_provider)
     except ValueError:
         raise ValueError(
             f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
         )
+    model_response = ImageResponse()
+
+    provider_config = ProviderConfigManager.get_provider_model_info(
+        model=model or "",  # openai defaults to dall-e-2
+        provider=llm_provider,
+    )
+
+    if provider_config is None:
+        raise ValueError(
+            f"image variation provider has no known model info config - required for getting api keys, etc.: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
+        )
 
     if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
-        raise NotImplementedError("OpenAI image variation is not implemented")
+        api_key = provider_config.get_api_key(litellm_params.get("api_key", None))
+
+        if api_key is None:
+            raise ValueError("API key is required for OpenAI image variations")
+
+        openai_image_variations.image_variations(
+            model_response=model_response,
+            api_key=api_key,
+            model=model,
+            image=image,
+            timeout=litellm_params.get("timeout", None),
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=litellm_logging_obj,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
     elif image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.TOPAZ:
         raise NotImplementedError("Topaz image variation is not implemented")
 

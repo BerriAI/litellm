@@ -49,7 +49,7 @@ def image_url():
     return image_file
 
 
-def test_openai_image_edit_openai_sdk(image_url):
+def test_openai_image_variation_openai_sdk(image_url):
     from openai import OpenAI
 
     client = OpenAI()
@@ -57,11 +57,11 @@ def test_openai_image_edit_openai_sdk(image_url):
     print(response)
 
 
-def test_openai_image_edit_litellm_sdk(image_url):
+def test_openai_image_variation_litellm_sdk(image_url):
     from litellm import image_variation
 
     image_variation(image=image_url, n=2, size="1024x1024")
 
 
-def test_topaz_image_edit():
+def test_topaz_image_variation():
     pass

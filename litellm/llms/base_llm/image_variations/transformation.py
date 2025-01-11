@@ -8,7 +8,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageVariationOptionalParams,
 )
-from litellm.types.utils import ImageResponse, ModelResponse
+from litellm.types.utils import FileTypes, ImageResponse, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -49,11 +49,30 @@ class BaseImageVariationConfig(BaseConfig, ABC):
     ) -> dict:
         pass
 
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        return {}
+
     @abstractmethod
     def transform_response_image_variation(
         self,
-        *args,
-        **kwargs,
+        model: Optional[str],
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        image: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
     ) -> ImageResponse:
         pass
 
