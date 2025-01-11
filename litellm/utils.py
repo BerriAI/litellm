@@ -253,55 +253,6 @@ additional_details: Optional[Dict[str, str]] = {}
 local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
-
-import queue
-from threading import Thread
-from typing import Optional
-
-# With other global variables
-_logging_queue: Optional[queue.Queue] = None
-_logging_workers: List[Thread] = []
-MAX_QUEUE_SIZE = 1000  # Adjust based on your needs
-NUM_WORKERS = 2  # Keep this small - just 1-2 workers for logging
-
-
-def _init_logging_queue():
-    """Initialize the logging queue and worker threads if not already done"""
-    global _logging_queue, _logging_workers
-    if _logging_queue is None:
-        _logging_queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
-
-        def _logging_worker():
-            # Create event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            while True:
-                try:
-                    # Get logging task from queue
-                    log_fn, args = _logging_queue.get()  # type: ignore
-                    try:
-                        if asyncio.iscoroutinefunction(log_fn):
-                            # Handle async function
-                            loop.run_until_complete(log_fn(*args))
-                        else:
-                            # Handle regular function
-                            log_fn(*args)
-                    except Exception as e:
-                        verbose_logger.error(f"Logging error: {str(e)}")
-                    finally:
-                        _logging_queue.task_done()  # type: ignore
-                        time.sleep(0.1)
-                except Exception as e:
-                    verbose_logger.error(f"Worker error: {str(e)}")
-
-        # Start worker threads
-        for _ in range(NUM_WORKERS):
-            worker = Thread(target=_logging_worker, daemon=True)
-            worker.start()
-            _logging_workers.append(worker)
-
-
 ######## Model Response #########################
 
 # All liteLLM Model responses will be in this format, Follows the OpenAI Format
@@ -647,22 +598,16 @@ async def _client_async_logging_helper(
     end_time,
     is_completion_with_fallbacks: bool,
 ):
-    if is_completion_with_fallbacks is False:
-        print_verbose(f"Async Wrapper: Completed Call, calling async_success_handler")
-
-        # Initialize queue if needed
-        _init_logging_queue()
-
-        # Add logging task to queue instead of creating new async task
-        if _logging_queue is not None:
-            try:
-                _logging_queue.put_nowait(
-                    (logging_obj.async_success_handler, (result, start_time, end_time))
-                )
-            except queue.Full:
-                verbose_logger.warning("Logging queue full - skipping log")
-
-        # Handle sync callbacks
+    if (
+        is_completion_with_fallbacks is False
+    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
+        print_verbose(
+            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
+        )
+        # check if user does not want this to be logged
+        asyncio.create_task(
+            logging_obj.async_success_handler(result, start_time, end_time)
+        )
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
@@ -1200,13 +1145,14 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-
-            await _client_async_logging_helper(
-                logging_obj=logging_obj,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_completion_with_fallbacks=is_completion_with_fallbacks,
+            asyncio.create_task(
+                _client_async_logging_helper(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                )
             )
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
