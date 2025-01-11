@@ -4389,6 +4389,7 @@ from litellm import _arealtime
 
 
 @app.websocket("/v1/realtime")
+@app.websocket("/realtime")
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str,
