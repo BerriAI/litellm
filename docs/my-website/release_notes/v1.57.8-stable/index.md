@@ -18,6 +18,12 @@ hide_table_of_contents: false
 `alerting`, `prometheus`, `secret management`, `management endpoints`, `ui`, `prompt management`, `finetuning`, `batch`
 
 
+:::note
+
+v1.57.8-stable, is currently being tested. It will be released on 2025-01-12. 
+
+:::
+
 
 ## New / Updated Models
 
@@ -98,3 +104,11 @@ Support for reading credentials + writing LLM API keys. [Start Here](https://doc
 3. Lunary - Allow passing custom parent run id to LLM Calls 
 
 
+
+## Git Diff 
+
+This is the diff between v1.56.3-stable and v1.57.8-stable. 
+
+Use this to see the changes in the codebase. 
+
+[Git Diff](https://github.com/BerriAI/litellm/compare/v1.56.3-stable...189b67760011ea313ca58b1f8bd43aa74fbd7f55)
