@@ -4109,7 +4109,6 @@ class Router:
         return deployments
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
-        import os
 
         #### DEPLOYMENT NAMES INIT ########
         self.deployment_names.append(deployment.litellm_params.model)
