@@ -1230,3 +1230,6 @@ custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
     []
 )  # internal helper util, used to track names of custom providers
+
+open_ai_chat_completion_models = set(open_ai_chat_completion_models)  # type: ignore
+open_ai_text_completion_models = set(open_ai_text_completion_models)  # type: ignore

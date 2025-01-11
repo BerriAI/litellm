@@ -19,6 +19,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -4635,10 +4636,7 @@ class Router:
         Returns:
         - usage: Tuple[tpm, rpm]
         """
-        dt = get_utc_datetime()
-        current_minute = dt.strftime(
-            "%H-%M"
-        )  # use the same timezone regardless of system clock
+        current_minute = datetime.now().strftime("%M")
         tpm_keys: List[str] = []
         rpm_keys: List[str] = []
 
@@ -4696,21 +4694,49 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
+    def get_rpm_tpm_for_model_group(
+        self, model_group: str
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Get RPM and TPM limits for a model group.
+
+        Returns:
+        Tuple[Optional[int], Optional[int]]: (tpm_limit, rpm_limit)
+        """
+        total_tpm = None
+        total_rpm = None
+
+        model_list = self.get_model_list(model_name=model_group)
+        if model_list:
+            for model in model_list:
+                # Get model TPM
+                _deployment_tpm = (
+                    model.get("tpm")
+                    or model.get("litellm_params", {}).get("tpm")
+                    or model.get("model_info", {}).get("tpm")
+                )
+
+                # Get model RPM
+                _deployment_rpm = (
+                    model.get("rpm")
+                    or model.get("litellm_params", {}).get("rpm")
+                    or model.get("model_info", {}).get("rpm")
+                )
+
+                # Sum up TPM/RPM across all deployments
+                if _deployment_tpm is not None:
+                    total_tpm = (total_tpm or 0) + _deployment_tpm
+                if _deployment_rpm is not None:
+                    total_rpm = (total_rpm or 0) + _deployment_rpm
+
+        return total_tpm, total_rpm
+
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
 
         current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
-        model_group_info = self.get_model_group_info(model_group)
-
-        if model_group_info is not None and model_group_info.tpm is not None:
-            tpm_limit = model_group_info.tpm
-        else:
-            tpm_limit = None
-
-        if model_group_info is not None and model_group_info.rpm is not None:
-            rpm_limit = model_group_info.rpm
-        else:
-            rpm_limit = None
+        # Get just the RPM/TPM limits instead of full model info
+        tpm_limit, rpm_limit = self.get_rpm_tpm_for_model_group(model_group)
 
         returned_dict = {}
         if tpm_limit is not None:
