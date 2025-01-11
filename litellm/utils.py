@@ -4158,76 +4158,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 )
                 _output_cost_per_token = 0
 
+            # Create ModelInfoBase object by unpacking the dictionary
             return ModelInfoBase(
                 key=key,
-                max_tokens=_model_info.get("max_tokens", None),
-                max_input_tokens=_model_info.get("max_input_tokens", None),
-                max_output_tokens=_model_info.get("max_output_tokens", None),
-                input_cost_per_token=_input_cost_per_token,
-                cache_creation_input_token_cost=_model_info.get(
-                    "cache_creation_input_token_cost", None
-                ),
-                cache_read_input_token_cost=_model_info.get(
-                    "cache_read_input_token_cost", None
-                ),
-                input_cost_per_character=_model_info.get(
-                    "input_cost_per_character", None
-                ),
-                input_cost_per_token_above_128k_tokens=_model_info.get(
-                    "input_cost_per_token_above_128k_tokens", None
-                ),
-                input_cost_per_query=_model_info.get("input_cost_per_query", None),
-                input_cost_per_second=_model_info.get("input_cost_per_second", None),
-                input_cost_per_audio_token=_model_info.get(
-                    "input_cost_per_audio_token", None
-                ),
-                output_cost_per_token=_output_cost_per_token,
-                output_cost_per_audio_token=_model_info.get(
-                    "output_cost_per_audio_token", None
-                ),
-                output_cost_per_character=_model_info.get(
-                    "output_cost_per_character", None
-                ),
-                output_cost_per_token_above_128k_tokens=_model_info.get(
-                    "output_cost_per_token_above_128k_tokens", None
-                ),
-                output_cost_per_character_above_128k_tokens=_model_info.get(
-                    "output_cost_per_character_above_128k_tokens", None
-                ),
-                output_cost_per_second=_model_info.get("output_cost_per_second", None),
-                output_cost_per_image=_model_info.get("output_cost_per_image", None),
-                output_vector_size=_model_info.get("output_vector_size", None),
-                litellm_provider=_model_info.get(
-                    "litellm_provider", custom_llm_provider
-                ),
-                mode=_model_info.get("mode"),  # type: ignore
-                supports_system_messages=_model_info.get(
-                    "supports_system_messages", None
-                ),
-                supports_response_schema=_model_info.get(
-                    "supports_response_schema", None
-                ),
-                supports_vision=_model_info.get("supports_vision", False),
-                supports_function_calling=_model_info.get(
-                    "supports_function_calling", False
-                ),
-                supports_assistant_prefill=_model_info.get(
-                    "supports_assistant_prefill", False
-                ),
-                supports_prompt_caching=_model_info.get(
-                    "supports_prompt_caching", False
-                ),
-                supports_audio_input=_model_info.get("supports_audio_input", False),
-                supports_audio_output=_model_info.get("supports_audio_output", False),
-                supports_pdf_input=_model_info.get("supports_pdf_input", False),
-                supports_embedding_image_input=_model_info.get(
-                    "supports_embedding_image_input", False
-                ),
-                supports_native_streaming=_model_info.get(
-                    "supports_native_streaming", None
-                ),
-                tpm=_model_info.get("tpm", None),
-                rpm=_model_info.get("rpm", None),
+                **_model_info,
             )
     except Exception as e:
         if "OllamaError" in str(e):
