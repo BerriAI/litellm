@@ -608,10 +608,11 @@ async def _client_async_logging_helper(
         asyncio.create_task(
             logging_obj.async_success_handler(result, start_time, end_time)
         )
-        threading.Thread(
-            target=logging_obj.success_handler,
-            args=(result, start_time, end_time),
-        ).start()
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
 def client(original_function):  # noqa: PLR0915
