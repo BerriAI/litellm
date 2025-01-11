@@ -5,8 +5,6 @@ For companies that need SSO, user management and professional support for LiteLL
 Get free 7-day trial key [here](https://www.litellm.ai/#trial)
 :::
 
-Deploy managed LiteLLM Proxy within your VPC.
-
 Includes all enterprise features.
 
 [**Procurement available via AWS / Azure Marketplace**](./data_security.md#legalcompliance-faqs)
@@ -17,6 +15,18 @@ This covers:
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
 - ✅ **Professional Support - Dedicated discord + slack**
+
+
+Deployment Options:
+
+**Self-Hosted**
+1. Manage Yourself - you can deploy our Docker Image or build a custom image from our pip package, and manage your own infrastructure. In this case, we would give you a license key + provide support via a dedicated support channel. 
+
+2. We Manage - you give us subscription access on your AWS/Azure/GCP account, and we manage the deployment.
+
+**Managed**
+
+You can use our cloud product where we setup a dedicated instance for you. 
 
 ## Frequently Asked Questions
 
@@ -45,3 +55,7 @@ LITELLM_LICENSE="eyJ..."
 ```
 
 No data leaves your environment. 
+
+## Data Security / Legal / Compliance FAQs
+
+[Data Security / Legal / Compliance FAQs](./data_security.md)
