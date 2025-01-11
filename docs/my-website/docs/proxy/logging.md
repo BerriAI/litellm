@@ -981,6 +981,28 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Your logs should be available on the specified s3 Bucket
 
+### Team Alias Prefix in Object Key
+
+**This is a preview feature**
+
+You can add the team alias to the object key by setting the `team_alias` in the `config.yaml` file. This will prefix the object key with the team alias.
+
+```yaml
+litellm_settings:
+  callbacks: ["s3"]
+  enable_preview_features: true
+  s3_callback_params:
+    s3_bucket_name: logs-bucket-litellm
+    s3_region_name: us-west-2
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    s3_path: my-test-path
+    s3_endpoint_url: https://s3.amazonaws.com
+    s3_use_team_prefix: true
+```
+
+On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
+
 ## Azure Blob Storage
 
 Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction)
