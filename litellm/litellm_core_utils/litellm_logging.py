@@ -778,7 +778,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
-        return
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
@@ -813,7 +812,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str="",
             )
             verbose_logger.debug(
                 f"response_cost_failure_debug_information: {debug_info}"
@@ -831,7 +830,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str="",
                 model=response_cost_calculator_kwargs["model"],
                 cache_hit=response_cost_calculator_kwargs["cache_hit"],
                 custom_llm_provider=response_cost_calculator_kwargs[
