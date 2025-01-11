@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import litellm
 import litellm._logging
 from litellm import verbose_logger
+from litellm.caching._internal_lru_cache import typed_lru_cache
 from litellm.litellm_core_utils.llm_cost_calc.utils import _generic_cost_per_character
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
@@ -339,6 +340,7 @@ def has_hidden_params(obj: Any) -> bool:
     return hasattr(obj, "_hidden_params")
 
 
+@typed_lru_cache(maxsize=16)
 def _get_provider_for_cost_calc(
     model: Optional[str],
     custom_llm_provider: Optional[str] = None,
@@ -384,22 +386,7 @@ def _select_model_name_for_cost_calc(
         return_model = base_model
 
     completion_response_model: Optional[str] = None
-    if completion_response is not None and isinstance(completion_response, BaseModel):
-        completion_response_model = getattr(completion_response, "model", None)
-        hidden_params = getattr(completion_response, "_hidden_params", None)
-        if completion_response_model is None and hidden_params is not None:
-            if (
-                hidden_params.get("model", None) is not None
-                and len(hidden_params["model"]) > 0
-            ):
-                return_model = hidden_params.get("model", model)
-        if (
-            hidden_params is not None
-            and hidden_params.get("region_name", None) is not None
-        ):
-            region_name = hidden_params.get("region_name", None)
-    elif completion_response is not None and isinstance(completion_response, dict):
-        completion_response_model = completion_response.get("model", None)
+    completion_response_model = getattr(completion_response, "model", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model
@@ -407,17 +394,17 @@ def _select_model_name_for_cost_calc(
     if return_model is None and model is not None:
         return_model = model
 
-    if (
-        return_model is not None
-        and custom_llm_provider is not None
-        and not any(
-            return_model.startswith(provider) for provider in litellm.provider_list
-        )
-    ):  # add provider prefix if not already present, to match model_cost
-        if region_name is not None:
-            return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
-        else:
-            return_model = f"{custom_llm_provider}/{return_model}"
+    # if (
+    #     return_model is not None
+    #     and custom_llm_provider is not None
+    #     and not any(
+    #         return_model.startswith(provider) for provider in litellm.provider_list
+    #     )
+    # ):  # add provider prefix if not already present, to match model_cost
+    #     if region_name is not None:
+    #         return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
+    #     else:
+    #         return_model = f"{custom_llm_provider}/{return_model}"
 
     return return_model
 

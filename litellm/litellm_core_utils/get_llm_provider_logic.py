@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
+from litellm.caching._internal_lru_cache import typed_lru_cache
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -84,6 +85,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+@typed_lru_cache(maxsize=16)
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
