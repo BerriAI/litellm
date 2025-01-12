@@ -204,7 +204,18 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
 
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    
+    connection_kwargs = {}
+    args = _get_redis_cluster_kwargs()
+    for arg in redis_kwargs:
+        if arg in args:
+            connection_kwargs[arg] = redis_kwargs[arg]
+            
+    # Use connection_kwargs and override special kwargs for sentinel
+    sentinel_kwargs = dict(connection_kwargs)
+    sentinel_kwargs["password"] = sentinel_password   
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -214,7 +225,12 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
-    sentinel = redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+    sentinel = redis.Sentinel(
+        sentinel_nodes,
+        socket_timeout=0.1,
+        sentinel_kwargs=sentinel_kwargs,
+        **connection_kwargs
+    )
 
     # Return the master instance for the given service
 
