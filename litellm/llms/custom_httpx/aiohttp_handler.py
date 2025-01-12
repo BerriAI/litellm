@@ -479,8 +479,6 @@ class BaseLLMAIOHTTPHandler:
                 f"image variation provider not found: {custom_llm_provider}."
             )
 
-        max_retries = optional_params.pop("max_retries", 2)
-
         api_base = provider_config.get_complete_url(
             api_base=api_base,
             model=model,
