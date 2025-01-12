@@ -5,7 +5,7 @@ from httpx import Headers, Response
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_variations.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import OpenAIImageVariationOptionalParams
-from litellm.types.utils import FileTypes, ImageResponse
+from litellm.types.utils import FileTypes, HttpHandlerRequestFields, ImageResponse
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import OpenAIError
@@ -33,10 +33,12 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> HttpHandlerRequestFields:
         return {
-            "image": image,
-            **optional_params,
+            "data": {
+                "image": image,
+                **optional_params,
+            }
         }
 
     def transform_response_image_variation(

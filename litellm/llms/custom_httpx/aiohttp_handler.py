@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
 
 import aiohttp
 import httpx  # type: ignore
@@ -15,6 +15,8 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
 )
+from litellm.types.llms.openai import FileTypes
+from litellm.types.utils import ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -99,6 +101,9 @@ class BaseLLMAIOHTTPHandler:
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
         stream: bool = False,
+        files: Optional[dict] = None,
+        content: Any = None,
+        params: Optional[dict] = None,
     ) -> httpx.Response:
 
         max_retry_on_unprocessable_entity_error = (
@@ -112,9 +117,12 @@ class BaseLLMAIOHTTPHandler:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    data=data,  # do not json dump the data here. let the individual endpoint handle this.
                     timeout=timeout,
                     stream=stream,
+                    files=files,
+                    content=content,
+                    params=params,
                 )
             except httpx.HTTPStatusError as e:
                 hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
@@ -304,9 +312,9 @@ class BaseLLMAIOHTTPHandler:
             provider_config=provider_config,
             api_base=api_base,
             headers=headers,
-            data=data,
             timeout=timeout,
             litellm_params=litellm_params,
+            data=data,
         )
         return provider_config.transform_response(
             model=model,
@@ -372,6 +380,123 @@ class BaseLLMAIOHTTPHandler:
         )
 
         return completion_stream, dict(response.headers)
+
+    async def async_image_variations(self, *args, **kwargs):
+        pass
+
+    def image_variations(
+        self,
+        model_response: ImageResponse,
+        api_key: str,
+        model: Optional[str],
+        image: FileTypes,
+        timeout: float,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
+        litellm_params: dict,
+        print_verbose: Optional[Callable] = None,
+        api_base: Optional[str] = None,
+        aimage_variation: bool = False,
+        logger_fn=None,
+        client=None,
+        organization: Optional[str] = None,
+        headers: Optional[dict] = None,
+    ) -> ImageResponse:
+        if model is None:
+            raise ValueError("model is required for non-openai image variations")
+
+        provider_config = ProviderConfigManager.get_provider_image_variation_config(
+            model=model,  # openai defaults to dall-e-2
+            provider=LlmProviders(custom_llm_provider),
+        )
+
+        if provider_config is None:
+            raise ValueError(
+                f"image variation provider not found: {custom_llm_provider}."
+            )
+
+        max_retries = optional_params.pop("max_retries", 2)
+
+        api_base = provider_config.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+            stream=False,
+        )
+
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers or {},
+            model=model,
+            messages=[{"role": "user", "content": "test"}],
+            optional_params=optional_params,
+            api_base=api_base,
+        )
+
+        data = provider_config.transform_request_image_variation(
+            model=model,
+            image=image,
+            optional_params=optional_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input="",
+            api_key=api_key,
+            additional_args={
+                "headers": headers,
+                "api_base": api_base,
+                "complete_input_dict": data.copy(),
+            },
+        )
+
+        if aimage_variation is True:
+            return self.async_image_variations(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        response = self._make_common_sync_call(
+            sync_httpx_client=sync_httpx_client,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            stream=False,
+            data=data.get("data") or {},
+            files=data.get("files"),
+            content=data.get("content"),
+            params=data.get("params"),
+        )
+
+        ## LOGGING
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={
+                "headers": headers,
+                "api_base": api_base,
+            },
+        )
+
+        ## RESPONSE OBJECT
+        return provider_config.transform_response_image_variation(
+            model=model,
+            model_response=model_response,
+            raw_response=response,
+            logging_obj=logging_obj,
+            request_data=cast(dict, data),
+            image=image,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=None,
+            api_key=api_key,
+        )
 
     def _handle_error(self, e: Exception, provider_config: BaseConfig):
         status_code = getattr(e, "status_code", 500)

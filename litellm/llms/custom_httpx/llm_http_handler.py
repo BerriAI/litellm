@@ -757,12 +757,6 @@ class BaseLLMHTTPHandler:
             request_data=request_data,
         )
 
-    async def async_image_variations(self, *args, **kwargs):
-        pass
-
-    def image_variations(self, *args, **kwargs):
-        pass
-
     def handle_audio_file(self, audio_file: FileTypes) -> bytes:
         """
         Processes the audio file input based on its type and returns the binary data.

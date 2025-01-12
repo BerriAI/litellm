@@ -4644,9 +4644,10 @@ def image_variation(
             f"image variation provider has no known model info config - required for getting api keys, etc.: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
         )
 
-    if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
-        api_key = provider_config.get_api_key(litellm_params.get("api_key", None))
+    api_key = provider_config.get_api_key(litellm_params.get("api_key", None))
+    api_base = provider_config.get_api_base(litellm_params.get("api_base", None))
 
+    if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
         if api_key is None:
             raise ValueError("API key is required for OpenAI image variations")
 
@@ -4662,7 +4663,23 @@ def image_variation(
             litellm_params=litellm_params,
         )
     elif image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.TOPAZ:
-        raise NotImplementedError("Topaz image variation is not implemented")
+        if api_key is None:
+            raise ValueError("API key is required for Topaz image variations")
+        if api_base is None:
+            raise ValueError("API base is required for Topaz image variations")
+
+        response = base_llm_aiohttp_handler.image_variations(
+            model_response=model_response,
+            api_key=api_key,
+            api_base=api_base,
+            model=model,
+            image=image,
+            timeout=litellm_params.get("timeout", None),
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=litellm_logging_obj,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
 
     # return the response
     if response is None:

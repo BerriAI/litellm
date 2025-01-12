@@ -6169,6 +6169,8 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
+        elif LlmProviders.TOPAZ == provider:
+            return litellm.TopazModelInfo()
 
         return None
 
@@ -6179,6 +6181,8 @@ class ProviderConfigManager:
     ) -> Optional[BaseImageVariationConfig]:
         if LlmProviders.OPENAI == provider:
             return litellm.OpenAIImageVariationConfig()
+        elif LlmProviders.TOPAZ == provider:
+            return litellm.TopazImageVariationConfig()
         return None
 
 

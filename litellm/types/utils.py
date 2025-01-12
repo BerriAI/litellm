@@ -1852,3 +1852,10 @@ class LITELLM_IMAGE_VARIATION_PROVIDERS(Enum):
 
     OPENAI = LlmProviders.OPENAI.value
     TOPAZ = LlmProviders.TOPAZ.value
+
+
+class HttpHandlerRequestFields(TypedDict, total=False):
+    data: Optional[dict]  # request body
+    params: Optional[dict]  # query params
+    files: Optional[dict]  # file uploads
+    content: Any  # raw content

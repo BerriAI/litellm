@@ -2,7 +2,7 @@
 OpenAI Image Variations Handler
 """
 
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -79,8 +79,13 @@ class OpenAIImageVariationsHandler:
                 model=model,
                 image=image,
                 optional_params=optional_params,
-                headers=headers,
+                headers=headers or {},
             )
+            json_data = data.get("data")
+            if not json_data:
+                raise ValueError(
+                    f"data field is required, for openai image variations. Got={data}"
+                )
             ## LOGGING
             logging_obj.pre_call(
                 input="",
@@ -132,7 +137,7 @@ class OpenAIImageVariationsHandler:
                     ),  # mock request object
                 ),
                 logging_obj=logging_obj,
-                request_data=data,
+                request_data=cast(dict, data),
                 image=image,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
