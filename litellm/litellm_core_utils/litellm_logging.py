@@ -778,6 +778,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
+        return None
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
@@ -889,10 +891,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, Batch)
                     or isinstance(result, FineTuningJob)
                 ):
-                    ## RESPONSE COST ##
-                    self.model_call_details["response_cost"] = (
-                        self._response_cost_calculator(result=result)
-                    )
+
+                    _hidden_params: dict = getattr(result, "_hidden_params", {}) or {}
+                    if "response_cost" not in _hidden_params:
+                        ## RESPONSE COST ##
+                        self.model_call_details["response_cost"] = (
+                            self._response_cost_calculator(result=result)
+                        )
 
                     ## HIDDEN PARAMS ##
                     if hasattr(result, "_hidden_params"):
@@ -914,7 +919,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             ] = getattr(
                                 result, "_hidden_params", {}
                             )
-                    ## STANDARDIZED LOGGING PAYLOAD
+                        ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details["standard_logging_object"] = (
                         get_standard_logging_object_payload(

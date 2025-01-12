@@ -723,7 +723,6 @@ async def get_team_object(
         )
 
 
-@log_db_metrics
 async def get_key_object(
     hashed_token: str,
     prisma_client: Optional[PrismaClient],

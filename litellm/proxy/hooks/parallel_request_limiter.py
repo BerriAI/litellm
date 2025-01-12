@@ -172,6 +172,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         data: dict,
         call_type: str,
     ):
+        return
         self.print_verbose("Inside Max Parallel Request Pre-Call Hook")
         api_key = user_api_key_dict.api_key
         max_parallel_requests = user_api_key_dict.max_parallel_requests
