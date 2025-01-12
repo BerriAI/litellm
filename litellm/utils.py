@@ -4156,10 +4156,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                     )
                 )
                 _output_cost_per_token = 0
-
+            _model_info.pop("key", None)
             return ModelInfoBase(
-                key=key,
                 **_model_info,
+                key=key,
             )
     except Exception as e:
         if "OllamaError" in str(e):
