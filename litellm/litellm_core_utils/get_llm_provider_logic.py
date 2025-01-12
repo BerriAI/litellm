@@ -1,4 +1,5 @@
-from typing import Optional, Tuple
+from functools import lru_cache
+from typing import Optional, Tuple, overload
 
 import httpx
 
@@ -85,7 +86,29 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-@typed_lru_cache(maxsize=16)
+@overload
+def get_llm_provider(
+    model: str,
+    custom_llm_provider: str,
+    api_base: str,
+    api_key: str,
+    litellm_params: LiteLLM_Params,
+) -> Tuple[str, str, str, str]:
+    pass
+
+
+@overload
+def get_llm_provider(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+    litellm_params: Optional[LiteLLM_Params] = None,
+) -> Tuple[str, str, Optional[str], Optional[str]]:
+    pass
+
+
+@lru_cache(maxsize=16)
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,

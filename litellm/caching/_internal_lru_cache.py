@@ -1,30 +1,12 @@
-from functools import lru_cache
-from typing import Any, Callable, TypeVar, cast
+from functools import lru_cache, wraps
+from typing import Callable, TypeVar, cast
 
-from typing_extensions import ParamSpec
-
-P = ParamSpec("P")
-T = TypeVar("T", bound=Callable[..., Any])
+RT = TypeVar("RT")  # Return type
 
 
-def typed_lru_cache(maxsize: int) -> Callable[[T], T]:
-    """
-    Decorator to cache the result of a function with a configurable maximum size.
-    Skips caching if any arguments are not hashable.
-
-    Args:
-        maxsize (int): Maximum size of the cache. Defaults to 128.
-    """
-
-    def decorator(f: T) -> T:
-        cached_f = lru_cache(maxsize=maxsize, typed=True)(f)
-
-        def wrapper(*args, **kwargs):
-            try:
-                return cached_f(*args, **kwargs)
-            except TypeError:
-                return f(*args, **kwargs)
-
-        return cast(T, wrapper)
+def typed_lru_cache(maxsize: int = 128) -> Callable:
+    def decorator(func: Callable[..., RT]) -> Callable[..., RT]:
+        wrapped = lru_cache(maxsize=maxsize)(func)
+        return cast(Callable[..., RT], wraps(func)(wrapped))
 
     return decorator
