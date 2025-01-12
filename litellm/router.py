@@ -19,6 +19,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -4592,6 +4593,7 @@ class Router:
 
         return model_group_info
 
+    @lru_cache(maxsize=128)
     def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
         """
         For a given model group name, return the combined model info
