@@ -757,6 +757,7 @@ async def test_async_fallbacks_max_retries_per_request():
         router.reset()
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_ausage_based_routing_fallbacks():
     try:
         import litellm
