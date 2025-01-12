@@ -1357,6 +1357,7 @@ def test_router_fallbacks_with_custom_model_costs():
 
     Goal: make sure custom model doesn't override default model costs.
     """
+
     model_list = [
         {
             "model_name": "claude-3-5-sonnet-20240620",

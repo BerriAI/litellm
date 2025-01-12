@@ -1959,7 +1959,6 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
-        verbose_logger.debug(f"{model_cost_key} added to model cost map")
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -4129,8 +4128,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                         model=model, existing_model_info=_model_info
                     ),
                 )
-                if key is None:
-                    key = "provider_specific_model_info"
+                key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -4236,6 +4234,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 rpm=_model_info.get("rpm", None),
             )
     except Exception as e:
+        verbose_logger.debug(f"Error getting model info: {e}")
         if "OllamaError" in str(e):
             raise e
         raise Exception(
