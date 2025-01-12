@@ -394,6 +394,8 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "aiohttp_openai":
+        return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
         # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret_str("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
