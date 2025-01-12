@@ -11,6 +11,7 @@ from litellm.llms.base_llm.chat.transformation import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    FileContent,
     OpenAIImageVariationOptionalParams,
 )
 from litellm.types.utils import (
@@ -86,7 +87,7 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
         """
         # Default values
         filename = "image.png"
-        content = None
+        content: Optional[FileTypes] = None
         content_type = "image/png"
         headers: Mapping[str, str] = {}
 
