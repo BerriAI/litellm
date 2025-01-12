@@ -4,7 +4,6 @@
 import copy
 import datetime
 import json
-import logging
 import os
 import re
 import subprocess
@@ -23,8 +22,8 @@ from litellm import (
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
-    verbose_logger,
 )
+from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
@@ -589,7 +588,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         Prints the RAW curl command sent from LiteLLM
         """
-        if verbose_logger.isEnabledFor(logging.DEBUG) or litellm.set_verbose is True:
+        if _is_debugging_on():
             if json_logs:
                 masked_headers = self._get_masked_headers(headers)
                 verbose_logger.debug(
