@@ -60,8 +60,7 @@ from litellm.utils import (
     ModelResponse,
     TextCompletionResponse,
     TranscriptionResponse,
-    _get_model_info_helper,
-    print_verbose,
+    _cached_get_model_info_helper,
     token_counter,
 )
 
@@ -279,7 +278,7 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
     else:
-        model_info = _get_model_info_helper(
+        model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
@@ -292,8 +291,11 @@ def cost_per_token(  # noqa: PLR0915
             model_info.get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
-            print_verbose(
-                f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; response time: {response_time_ms}"
+            verbose_logger.debug(
+                "For model=%s - input_cost_per_second: %s; response time: %s",
+                model,
+                model_info.get("input_cost_per_second", None),
+                response_time_ms,
             )
             ## COST PER SECOND ##
             prompt_tokens_cost_usd_dollar = (
@@ -308,16 +310,22 @@ def cost_per_token(  # noqa: PLR0915
             model_info.get("output_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
-            print_verbose(
-                f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; response time: {response_time_ms}"
+            verbose_logger.debug(
+                "For model=%s - output_cost_per_second: %s; response time: %s",
+                model,
+                model_info.get("output_cost_per_second", None),
+                response_time_ms,
             )
             ## COST PER SECOND ##
             completion_tokens_cost_usd_dollar = (
                 model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
             )
 
-        print_verbose(
-            f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
+        verbose_logger.debug(
+            "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
+            model,
+            prompt_tokens_cost_usd_dollar,
+            completion_tokens_cost_usd_dollar,
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 

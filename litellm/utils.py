@@ -4013,6 +4013,18 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
+@lru_cache(maxsize=16)
+def _cached_get_model_info_helper(
+    model: str, custom_llm_provider: Optional[str]
+) -> ModelInfoBase:
+    """
+    _get_model_info_helper wrapped with lru_cache
+
+    Speed Optimization to hit high RPS
+    """
+    return _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+
+
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
