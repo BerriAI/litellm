@@ -1481,6 +1481,10 @@ class UserAPIKeyAuth(
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
 
+    # store the request body if read in auth layer so we don't re-use it
+    # This is for a perf / latency optimization
+    request_body: Optional[Dict] = None
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @model_validator(mode="before")
