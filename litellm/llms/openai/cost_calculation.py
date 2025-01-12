@@ -7,7 +7,7 @@ from typing import Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import CallTypes, Usage
-from litellm.utils import get_model_info_for_cost_tracking
+from litellm.utils import _get_model_info_helper
 
 
 def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_second"]:
@@ -29,9 +29,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     ## GET MODEL INFO
-    model_info = get_model_info_for_cost_tracking(
-        model=model, custom_llm_provider="openai"
-    )
+    model_info = _get_model_info_helper(model=model, custom_llm_provider="openai")
     ## CALCULATE INPUT COST
     ### Non-cached text tokens
     non_cached_text_tokens = usage.prompt_tokens
@@ -93,7 +91,7 @@ def cost_per_second(
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     ## GET MODEL INFO
-    model_info = get_model_info_for_cost_tracking(
+    model_info = _get_model_info_helper(
         model=model, custom_llm_provider=custom_llm_provider or "openai"
     )
     prompt_cost = 0.0
