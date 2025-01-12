@@ -927,6 +927,8 @@ def client(original_function):  # noqa: PLR0915
                 return result
             elif "aspeech" in kwargs and kwargs["aspeech"] is True:
                 return result
+            elif asyncio.iscoroutine(result):  # bubble up to relevant async function
+                return result
 
             ### POST-CALL RULES ###
             post_call_processing(
@@ -2039,6 +2041,7 @@ def get_litellm_params(
     drop_params: Optional[bool] = None,
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
+    async_call: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -2076,6 +2079,7 @@ def get_litellm_params(
         "drop_params": drop_params,
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
+        "async_call": async_call,
     }
     return litellm_params
 

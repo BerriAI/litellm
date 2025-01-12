@@ -4613,7 +4613,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
     model = kwargs.get("model", None)
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     ### PASS ARGS TO Image Generation ###
-    kwargs["aimg_variation"] = True
+    kwargs["async_call"] = True
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(image_variation, *args, **kwargs)
@@ -4705,10 +4705,13 @@ def image_variation(
     if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
         if api_key is None:
             raise ValueError("API key is required for OpenAI image variations")
+        if api_base is None:
+            raise ValueError("API base is required for OpenAI image variations")
 
         response = openai_image_variations.image_variations(
             model_response=model_response,
             api_key=api_key,
+            api_base=api_base,
             model=model,
             image=image,
             timeout=litellm_params.get("timeout", None),
