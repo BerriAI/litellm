@@ -538,7 +538,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 )
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
-        if request.headers.get("litellm_user_api_key") is not None:
+        if (
+            getattr(request, "headers", None) is not None
+            and request.headers.get("litellm_user_api_key") is not None
+        ):
             api_key = request.headers.get("litellm_user_api_key") or ""
         if pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
