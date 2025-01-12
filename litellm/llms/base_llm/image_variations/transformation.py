@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
+from aiohttp import ClientResponse
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import (
@@ -66,6 +67,22 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         api_base: Optional[str] = None,
     ) -> dict:
         return {}
+
+    @abstractmethod
+    async def async_transform_response_image_variation(
+        self,
+        model: Optional[str],
+        raw_response: ClientResponse,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        image: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+    ) -> ImageResponse:
+        pass
 
     @abstractmethod
     def transform_response_image_variation(

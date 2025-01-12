@@ -2,20 +2,23 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
 
 import aiohttp
 import httpx  # type: ignore
-from aiohttp import ClientSession
+from aiohttp import ClientSession, FormData
 
 import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.image_variations.transformation import (
+    BaseImageVariationConfig,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
 )
 from litellm.types.llms.openai import FileTypes
-from litellm.types.utils import ImageResponse, LlmProviders
+from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
 if TYPE_CHECKING:
@@ -51,9 +54,10 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: dict,
+        data: Optional[dict],
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
+        form_data: Optional[FormData] = None,
         stream: bool = False,
     ) -> aiohttp.ClientResponse:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
@@ -72,10 +76,12 @@ class BaseLLMAIOHTTPHandler:
                     url=api_base,
                     headers=headers,
                     json=data,
+                    data=form_data,
                 )
                 if not response.ok:
                     response.raise_for_status()
             except aiohttp.ClientResponseError as e:
+                setattr(e, "text", e.message)
                 raise self._handle_error(e=e, provider_config=provider_config)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
@@ -168,7 +174,6 @@ class BaseLLMAIOHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[ClientSession] = None,
     ):
-
         _response = await self._make_common_async_call(
             async_client_session=client,
             provider_config=provider_config,
@@ -380,8 +385,67 @@ class BaseLLMAIOHTTPHandler:
 
         return completion_stream, dict(response.headers)
 
-    async def async_image_variations(self, *args, **kwargs):
-        pass
+    async def async_image_variations(
+        self,
+        client: Optional[ClientSession],
+        provider_config: BaseImageVariationConfig,
+        api_base: str,
+        headers: dict,
+        data: HttpHandlerRequestFields,
+        timeout: float,
+        litellm_params: dict,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: str,
+        model: Optional[str],
+        image: FileTypes,
+        optional_params: dict,
+    ) -> ImageResponse:
+        # create aiohttp form data if files in data
+        form_data: Optional[FormData] = None
+        if "files" in data and "data" in data:
+            form_data = FormData()
+            for k, v in data["files"].items():
+                form_data.add_field(k, v[1], filename=v[0], content_type=v[2])
+
+            for key, value in data["data"].items():
+                form_data.add_field(key, value)
+
+        _response = await self._make_common_async_call(
+            async_client_session=client,
+            provider_config=provider_config,
+            api_base=api_base,
+            headers=headers,
+            data=None if form_data is not None else cast(dict, data),
+            form_data=form_data,
+            timeout=timeout,
+            litellm_params=litellm_params,
+            stream=False,
+        )
+
+        ## LOGGING
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=_response.text,
+            additional_args={
+                "headers": headers,
+                "api_base": api_base,
+            },
+        )
+
+        ## RESPONSE OBJECT
+        return await provider_config.async_transform_response_image_variation(
+            model=model,
+            model_response=model_response,
+            raw_response=_response,
+            logging_obj=logging_obj,
+            request_data=cast(dict, data),
+            image=image,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=None,
+            api_key=api_key,
+        )
 
     def image_variations(
         self,
@@ -451,8 +515,22 @@ class BaseLLMAIOHTTPHandler:
             },
         )
 
-        if aimage_variation is True:
-            return self.async_image_variations(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
+        if litellm_params.get("async_call", False):
+            return self.async_image_variations(
+                api_base=api_base,
+                data=data,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                logging_obj=logging_obj,
+                model=model,
+                timeout=timeout,
+                client=client,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                image=image,
+                provider_config=provider_config,
+            )  # type: ignore
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()

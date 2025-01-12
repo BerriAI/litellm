@@ -3,6 +3,7 @@ import time
 from io import BytesIO
 from typing import Any, List, Mapping, Optional, Tuple, Union
 
+from aiohttp import ClientResponse
 from httpx import Headers, Response
 
 from litellm.llms.base_llm.chat.transformation import (
@@ -127,6 +128,48 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
 
         return request_params
 
+    def _common_transform_response_image_variation(
+        self,
+        image_content: bytes,
+        response_ms: float,
+    ) -> ImageResponse:
+
+        # Convert to base64
+        base64_image = base64.b64encode(image_content).decode("utf-8")
+
+        return ImageResponse(
+            created=int(time.time()),
+            data=[
+                ImageObject(
+                    b64_json=base64_image,
+                    url=None,
+                    revised_prompt=None,
+                )
+            ],
+            response_ms=response_ms,
+        )
+
+    async def async_transform_response_image_variation(
+        self,
+        model: Optional[str],
+        raw_response: ClientResponse,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        image: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+    ) -> ImageResponse:
+        image_content = await raw_response.read()
+
+        response_ms = logging_obj.get_response_ms()
+
+        return self._common_transform_response_image_variation(
+            image_content, response_ms
+        )
+
     def transform_response_image_variation(
         self,
         model: Optional[str],
@@ -142,23 +185,12 @@ class TopazImageVariationConfig(BaseImageVariationConfig):
     ) -> ImageResponse:
         image_content = raw_response.content
 
-        # Convert to base64
-        base64_image = base64.b64encode(image_content).decode("utf-8")
-
         response_ms = (
             raw_response.elapsed.total_seconds() * 1000
         )  # Convert to milliseconds
 
-        return ImageResponse(
-            created=int(time.time()),
-            data=[
-                ImageObject(
-                    b64_json=base64_image,
-                    url=None,
-                    revised_prompt=None,
-                )
-            ],
-            response_ms=response_ms,
+        return self._common_transform_response_image_variation(
+            image_content, response_ms
         )
 
     def get_error_class(
