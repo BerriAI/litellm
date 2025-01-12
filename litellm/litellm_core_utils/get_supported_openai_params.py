@@ -2,6 +2,7 @@ from typing import Literal, Optional
 
 import litellm
 from litellm import LlmProviders
+from litellm.caching._internal_lru_cache import typed_lru_cache
 from litellm.exceptions import BadRequestError
 
 
