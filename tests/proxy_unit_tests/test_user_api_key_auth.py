@@ -148,6 +148,7 @@ async def test_returned_user_api_key_auth(user_role, expected_role):
     from datetime import datetime
 
     new_obj = await _return_user_api_key_auth_obj(
+        request_data={},
         user_obj=LiteLLM_UserTable(
             user_role=user_role, user_id="", max_budget=None, user_email=""
         ),
