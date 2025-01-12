@@ -112,7 +112,7 @@ class OpenAIImageVariationsHandler:
                 client=client, init_client_params=init_client_params
             )
 
-            raw_response = client.images.with_raw_response.create_variation(**data)  # type: ignore
+            raw_response = client.images.with_raw_response.create_variation(**json_data)  # type: ignore
             response = raw_response.parse()
             response_json = response.model_dump()
 
@@ -137,7 +137,7 @@ class OpenAIImageVariationsHandler:
                     ),  # mock request object
                 ),
                 logging_obj=logging_obj,
-                request_data=cast(dict, data),
+                request_data=json_data,
                 image=image,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
