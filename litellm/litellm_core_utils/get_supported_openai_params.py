@@ -6,7 +6,6 @@ from litellm.caching._internal_lru_cache import typed_lru_cache
 from litellm.exceptions import BadRequestError
 
 
-@typed_lru_cache(maxsize=16)
 def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
