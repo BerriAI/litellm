@@ -183,7 +183,7 @@ from litellm.llms.base_llm.completion.transformation import BaseTextCompletionCo
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
-from ._logging import verbose_logger
+from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
     Cache,
     QdrantSemanticCache,
@@ -5612,6 +5612,8 @@ def get_valid_models(check_provider_endpoint: bool = False) -> List[str]:
 
 
 def print_args_passed_to_litellm(original_function, args, kwargs):
+    if not _is_debugging_on():
+        return
     try:
         # we've already printed this for acompletion, don't print for completion
         if (
