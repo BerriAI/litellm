@@ -1,6 +1,7 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
+from functools import lru_cache
 from typing import Any, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
@@ -51,7 +52,12 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypesLiteral, PassthroughCallTypes, Usage
+from litellm.types.utils import (
+    CallTypesLiteral,
+    LlmProvidersSet,
+    PassthroughCallTypes,
+    Usage,
+)
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -392,23 +398,18 @@ def _select_model_name_for_cost_calc(
     if base_model is not None:
         return_model = base_model
 
-    completion_response_model: Optional[str] = None
-    if completion_response is not None and isinstance(completion_response, BaseModel):
-        completion_response_model = getattr(completion_response, "model", None)
-        hidden_params = getattr(completion_response, "_hidden_params", None)
-        if completion_response_model is None and hidden_params is not None:
-            if (
-                hidden_params.get("model", None) is not None
-                and len(hidden_params["model"]) > 0
-            ):
-                return_model = hidden_params.get("model", model)
+    completion_response_model: Optional[str] = getattr(
+        completion_response, "model", None
+    )
+    hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
+    if completion_response_model is None and hidden_params is not None:
         if (
-            hidden_params is not None
-            and hidden_params.get("region_name", None) is not None
+            hidden_params.get("model", None) is not None
+            and len(hidden_params["model"]) > 0
         ):
-            region_name = hidden_params.get("region_name", None)
-    elif completion_response is not None and isinstance(completion_response, dict):
-        completion_response_model = completion_response.get("model", None)
+            return_model = hidden_params.get("model", model)
+    if hidden_params is not None and hidden_params.get("region_name", None) is not None:
+        region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model
@@ -419,9 +420,7 @@ def _select_model_name_for_cost_calc(
     if (
         return_model is not None
         and custom_llm_provider is not None
-        and not any(
-            return_model.startswith(provider) for provider in litellm.provider_list
-        )
+        and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
         if region_name is not None:
             return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
@@ -429,6 +428,15 @@ def _select_model_name_for_cost_calc(
             return_model = f"{custom_llm_provider}/{return_model}"
 
     return return_model
+
+
+@lru_cache(maxsize=16)
+def _model_contains_known_llm_provider(model: str) -> bool:
+    """
+    Check if the model contains a known llm provider
+    """
+    _provider_prefix = model.split("/")[0]
+    return _provider_prefix in LlmProvidersSet
 
 
 def _get_usage_object(
