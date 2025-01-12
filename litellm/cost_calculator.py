@@ -487,7 +487,7 @@ def completion_cost(  # noqa: PLR0915
     total_time: Optional[float] = 0.0,  # used for replicate, sagemaker
     call_type: Optional[CallTypesLiteral] = None,
     ### REGION ###
-    custom_llm_provider=None,
+    custom_llm_provider: Optional[str] = None,
     region_name=None,  # used for bedrock pricing
     ### IMAGE GEN ###
     size: Optional[str] = None,
@@ -630,16 +630,17 @@ def completion_cost(  # noqa: PLR0915
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
-        try:
-            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model
-            )  # strip the llm provider from the model name -> for image gen cost calculation
-        except Exception as e:
-            verbose_logger.debug(
-                "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
-                    str(e)
+        if custom_llm_provider is None:
+            try:
+                model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=model
+                )  # strip the llm provider from the model name -> for image gen cost calculation
+            except Exception as e:
+                verbose_logger.debug(
+                    "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
+                        str(e)
+                    )
                 )
-            )
         if (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
