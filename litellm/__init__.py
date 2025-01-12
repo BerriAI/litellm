@@ -18,6 +18,7 @@ from litellm._logging import (
     _turn_on_json,
     log_level,
 )
+import re
 from litellm.constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
@@ -484,9 +485,44 @@ galadriel_models: List = []
 sambanova_models: List = []
 
 
+def is_bedrock_pricing_only_model(key: str) -> bool:
+    """
+    Excludes keys with the pattern 'bedrock/<region>/<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
+
+    Args:
+        key (str): A key to filter.
+
+    Returns:
+        bool: True if the key matches the Bedrock pattern, False otherwise.
+    """
+    # Regex to match 'bedrock/<region>/<model>'
+    bedrock_pattern = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
+
+    if "month-commitment" in key:
+        return True
+
+    is_match = bedrock_pattern.match(key)
+    return is_match is not None
+
+
+def is_openai_finetune_model(key: str) -> bool:
+    """
+    Excludes model cost keys with the pattern 'ft:<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
+
+    Args:
+        key (str): A key to filter.
+
+    Returns:
+        bool: True if the key matches the OpenAI finetune pattern, False otherwise.
+    """
+    return key.startswith("ft:") and not key.count(":") > 1
+
+
 def add_known_models():
     for key, value in model_cost.items():
-        if value.get("litellm_provider") == "openai":
+        if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
+            key
+        ):
             open_ai_chat_completion_models.append(key)
         elif value.get("litellm_provider") == "text-completion-openai":
             open_ai_text_completion_models.append(key)
@@ -542,7 +578,9 @@ def add_known_models():
             nlp_cloud_models.append(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.append(key)
-        elif value.get("litellm_provider") == "bedrock":
+        elif value.get(
+            "litellm_provider"
+        ) == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.append(key)
         elif value.get("litellm_provider") == "bedrock_converse":
             bedrock_converse_models.append(key)
