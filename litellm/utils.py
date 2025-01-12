@@ -181,6 +181,9 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.image_variations.transformation import (
+    BaseImageVariationConfig,
+)
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
 from ._logging import _is_debugging_on, verbose_logger
@@ -923,6 +926,8 @@ def client(original_function):  # noqa: PLR0915
             elif "atranscription" in kwargs and kwargs["atranscription"] is True:
                 return result
             elif "aspeech" in kwargs and kwargs["aspeech"] is True:
+                return result
+            elif asyncio.iscoroutine(result):  # bubble up to relevant async function
                 return result
 
             ### POST-CALL RULES ###
@@ -1954,7 +1959,6 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
-        verbose_logger.debug(f"{model_cost_key} added to model cost map")
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -2036,7 +2040,9 @@ def get_litellm_params(
     drop_params: Optional[bool] = None,
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
-):
+    async_call: Optional[bool] = None,
+    **kwargs,
+) -> dict:
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
@@ -2072,6 +2078,7 @@ def get_litellm_params(
         "drop_params": drop_params,
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
+        "async_call": async_call,
     }
     return litellm_params
 
@@ -4123,8 +4130,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                         model=model, existing_model_info=_model_info
                     ),
                 )
-                if key is None:
-                    key = "provider_specific_model_info"
+                key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -4230,6 +4236,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 rpm=_model_info.get("rpm", None),
             )
     except Exception as e:
+        verbose_logger.debug(f"Error getting model info: {e}")
         if "OllamaError" in str(e):
             raise e
         raise Exception(
@@ -6165,9 +6172,24 @@ class ProviderConfigManager:
     ) -> Optional[BaseLLMModelInfo]:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.OPENAI == provider:
+            return litellm.OpenAIGPTConfig()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
+        elif LlmProviders.TOPAZ == provider:
+            return litellm.TopazModelInfo()
 
+        return None
+
+    @staticmethod
+    def get_provider_image_variation_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageVariationConfig]:
+        if LlmProviders.OPENAI == provider:
+            return litellm.OpenAIImageVariationConfig()
+        elif LlmProviders.TOPAZ == provider:
+            return litellm.TopazImageVariationConfig()
         return None
 
 
