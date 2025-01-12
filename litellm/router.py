@@ -4709,9 +4709,6 @@ class Router:
         return self.get_model_group_info(model_group)
 
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
-
-        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
-
         model_group_info = self._cached_get_model_group_info(model_group)
 
         if model_group_info is not None and model_group_info.tpm is not None:
@@ -4723,6 +4720,11 @@ class Router:
             rpm_limit = model_group_info.rpm
         else:
             rpm_limit = None
+
+        if tpm_limit is None and rpm_limit is None:
+            return {}
+
+        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
         returned_dict = {}
         if tpm_limit is not None:
