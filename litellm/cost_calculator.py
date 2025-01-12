@@ -51,7 +51,12 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypesLiteral, PassthroughCallTypes, Usage
+from litellm.types.utils import (
+    CallTypesLiteral,
+    LlmProvidersSet,
+    PassthroughCallTypes,
+    Usage,
+)
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -411,9 +416,7 @@ def _select_model_name_for_cost_calc(
     if (
         return_model is not None
         and custom_llm_provider is not None
-        and not any(
-            return_model.startswith(provider) for provider in litellm.provider_list
-        )
+        and not _provider_name_in_model(return_model)
     ):  # add provider prefix if not already present, to match model_cost
         if region_name is not None:
             return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
@@ -421,6 +424,15 @@ def _select_model_name_for_cost_calc(
             return_model = f"{custom_llm_provider}/{return_model}"
 
     return return_model
+
+
+def _provider_name_in_model(model: str) -> bool:
+    if not model or "/" not in model:
+        return False
+
+    _potential_provider = model.split("/", 1)[0]
+
+    return _potential_provider in LlmProvidersSet
 
 
 def _get_usage_object(
