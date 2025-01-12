@@ -1,5 +1,6 @@
 from typing import Any, List, Optional, Union
 
+from aiohttp import ClientResponse
 from httpx import Headers, Response
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -40,6 +41,21 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
                 **optional_params,
             }
         }
+
+    async def async_transform_response_image_variation(
+        self,
+        model: Optional[str],
+        raw_response: ClientResponse,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        image: FileTypes,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+    ) -> ImageResponse:
+        return model_response
 
     def transform_response_image_variation(
         self,

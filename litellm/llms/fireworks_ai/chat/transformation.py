@@ -224,6 +224,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+
         api_base, api_key = self._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
         )
@@ -249,6 +250,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             )
 
         models = response.json()["models"]
+
         return ["fireworks_ai/" + model["name"] for model in models]
 
     @staticmethod

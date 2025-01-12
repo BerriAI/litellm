@@ -1362,8 +1362,11 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
+    litellm._turn_on_debug()
+
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
+    monkeypatch.setattr(litellm, "provider_list", ["fireworks_ai"])
 
     mock_response_data = {
         "models": [
@@ -1431,6 +1434,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
+        mock_post.assert_called_once()
         assert (
             "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
             in valid_models
