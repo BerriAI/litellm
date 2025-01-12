@@ -4592,9 +4592,7 @@ class Router:
 
         return model_group_info
 
-    def get_model_group_info(
-        self, model_group: str, use_cache: bool = True
-    ) -> Optional[ModelGroupInfo]:
+    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
         """
         For a given model group name, return the combined model info
 
@@ -4606,10 +4604,6 @@ class Router:
         - ModelGroupInfo if able to construct a model group
         - None if error constructing model group info or hidden model group
         """
-        if use_cache:
-            cached_info = self._get_cached_model_group_info(model_group)
-            if cached_info is not None:
-                return cached_info
 
         ## Check if model group alias
         if model_group in self.model_group_alias:
@@ -4624,34 +4618,54 @@ class Router:
             else:
                 return None
 
-            _router_model_group = self._set_model_group_info(
+            return self._set_model_group_info(
                 model_group=_router_model_group,
                 user_facing_model_group_name=model_group,
             )
-            if use_cache and _router_model_group is not None:
-                self._cache_model_group_info(model_group, _router_model_group)
-            return _router_model_group
 
         ## Check if actual model
-        _router_model_group = self._set_model_group_info(
+        return self._set_model_group_info(
             model_group=model_group, user_facing_model_group_name=model_group
         )
 
-        if use_cache and _router_model_group is not None:
-            self._cache_model_group_info(model_group, _router_model_group)
         return _router_model_group
 
-    def _get_cached_model_group_info(
+    def get_rpm_tpm_for_model_group(
         self, model_group: str
-    ) -> Optional[ModelGroupInfo]:
-        """Helper to get cached model group info"""
-        key = f"model_group_info_{model_group}"
-        return self.cache.get_cache(key=key, local_only=True)
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Get RPM and TPM limits for a model group.
 
-    def _cache_model_group_info(self, model_group: str, info: ModelGroupInfo) -> None:
-        """Helper to cache model group info"""
-        key = f"model_group_info_{model_group}"
-        self.cache.set_cache(key=key, value=info, local_only=True)
+        Returns:
+        Tuple[Optional[int], Optional[int]]: (tpm_limit, rpm_limit)
+        """
+        total_tpm = None
+        total_rpm = None
+
+        model_list = self.get_model_list(model_name=model_group)
+        if model_list:
+            for model in model_list:
+                # Get model TPM
+                _deployment_tpm = (
+                    model.get("tpm")
+                    or model.get("litellm_params", {}).get("tpm")
+                    or model.get("model_info", {}).get("tpm")
+                )
+
+                # Get model RPM
+                _deployment_rpm = (
+                    model.get("rpm")
+                    or model.get("litellm_params", {}).get("rpm")
+                    or model.get("model_info", {}).get("rpm")
+                )
+
+                # Sum up TPM/RPM across all deployments
+                if _deployment_tpm is not None:
+                    total_tpm = (total_tpm or 0) + _deployment_tpm
+                if _deployment_rpm is not None:
+                    total_rpm = (total_rpm or 0) + _deployment_rpm
+
+        return total_tpm, total_rpm
 
     async def get_model_group_usage(
         self, model_group: str
@@ -4728,19 +4742,10 @@ class Router:
 
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
 
+        tpm_limit, rpm_limit = self.get_rpm_tpm_for_model_group(model_group)
+        if tpm_limit is None and rpm_limit is None:
+            return {}
         current_tpm, current_rpm = await self.get_model_group_usage(model_group)
-
-        model_group_info = self.get_model_group_info(model_group)
-
-        if model_group_info is not None and model_group_info.tpm is not None:
-            tpm_limit = model_group_info.tpm
-        else:
-            tpm_limit = None
-
-        if model_group_info is not None and model_group_info.rpm is not None:
-            rpm_limit = model_group_info.rpm
-        else:
-            rpm_limit = None
 
         returned_dict = {}
         if tpm_limit is not None:
