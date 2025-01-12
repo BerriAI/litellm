@@ -4,6 +4,7 @@ import uuid
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.completion_usage import (
@@ -21,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
+from .guardrails import GuardrailEventHooks
 from .llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
@@ -31,6 +33,28 @@ from .rerank import RerankResponse
 
 def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
+
+
+class LiteLLMPydanticObjectBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):  # type: ignore
+        try:
+            return self.model_dump(**kwargs)  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.dict(**kwargs)
+
+    def fields_set(self):
+        try:
+            return self.model_fields_set  # noqa
+        except Exception:
+            # if using pydantic v1
+            return self.__fields_set__
+
+    model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLMCommonStrings(Enum):
@@ -52,11 +76,21 @@ class ProviderField(TypedDict):
     field_value: str
 
 
-class ModelInfo(TypedDict, total=False):
-    """
-    Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
-    """
+class ProviderSpecificModelInfo(TypedDict, total=False):
+    supports_system_messages: Optional[bool]
+    supports_response_schema: Optional[bool]
+    supports_vision: Optional[bool]
+    supports_function_calling: Optional[bool]
+    supports_assistant_prefill: Optional[bool]
+    supports_prompt_caching: Optional[bool]
+    supports_audio_input: Optional[bool]
+    supports_embedding_image_input: Optional[bool]
+    supports_audio_output: Optional[bool]
+    supports_pdf_input: Optional[bool]
+    supports_native_streaming: Optional[bool]
 
+
+class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
@@ -97,18 +131,16 @@ class ModelInfo(TypedDict, total=False):
             "completion", "embedding", "image_generation", "chat", "audio_transcription"
         ]
     ]
-    supported_openai_params: Required[Optional[List[str]]]
-    supports_system_messages: Optional[bool]
-    supports_response_schema: Optional[bool]
-    supports_vision: Optional[bool]
-    supports_function_calling: Optional[bool]
-    supports_assistant_prefill: Optional[bool]
-    supports_prompt_caching: Optional[bool]
-    supports_audio_input: Optional[bool]
-    supports_audio_output: Optional[bool]
-    supports_pdf_input: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
+
+
+class ModelInfo(ModelInfoBase, total=False):
+    """
+    Model info for a given model, this is information found in litellm.model_prices_and_context_window.json
+    """
+
+    supported_openai_params: Required[Optional[List[str]]]
 
 
 class GenericStreamingChunk(TypedDict, total=False):
@@ -144,6 +176,8 @@ class CallTypes(Enum):
     rerank = "rerank"
     arerank = "arerank"
     arealtime = "_arealtime"
+    create_batch = "create_batch"
+    acreate_batch = "acreate_batch"
     pass_through = "pass_through_endpoint"
 
 
@@ -165,6 +199,9 @@ CallTypesLiteral = Literal[
     "rerank",
     "arerank",
     "_arealtime",
+    "create_batch",
+    "acreate_batch",
+    "pass_through_endpoint",
 ]
 
 
@@ -783,6 +820,8 @@ class ModelResponseStream(ModelResponseBase):
     def __init__(
         self,
         choices: Optional[List[Union[StreamingChoices, dict, BaseModel]]] = None,
+        id: Optional[str] = None,
+        created: Optional[int] = None,
         **kwargs,
     ):
         if choices is not None and isinstance(choices, list):
@@ -799,6 +838,27 @@ class ModelResponseStream(ModelResponseBase):
             kwargs["choices"] = new_choices
         else:
             kwargs["choices"] = [StreamingChoices()]
+
+        if id is None:
+            id = _generate_id()
+        else:
+            id = id
+        if created is None:
+            created = int(time.time())
+        else:
+            created = created
+
+        if (
+            "usage" in kwargs
+            and kwargs["usage"] is not None
+            and isinstance(kwargs["usage"], dict)
+        ):
+            kwargs["usage"] = Usage(**kwargs["usage"])
+
+        kwargs["id"] = id
+        kwargs["created"] = created
+        kwargs["object"] = "chat.completion.chunk"
+
         super().__init__(**kwargs)
 
     def __contains__(self, key):
@@ -1022,10 +1082,10 @@ class EmbeddingResponse(OpenAIObject):
 
 
 class Logprobs(OpenAIObject):
-    text_offset: List[int]
-    token_logprobs: List[Union[float, None]]
-    tokens: List[str]
-    top_logprobs: List[Union[Dict[str, float], None]]
+    text_offset: Optional[List[int]]
+    token_logprobs: Optional[List[Union[float, None]]]
+    tokens: Optional[List[str]]
+    top_logprobs: Optional[List[Union[Dict[str, float], None]]]
 
 
 class TextChoices(OpenAIObject):
@@ -1336,83 +1396,6 @@ class ResponseFormatChunk(TypedDict, total=False):
     response_schema: dict
 
 
-all_litellm_params = [
-    "metadata",
-    "litellm_trace_id",
-    "tags",
-    "acompletion",
-    "aimg_generation",
-    "atext_completion",
-    "text_completion",
-    "caching",
-    "mock_response",
-    "api_key",
-    "api_version",
-    "api_base",
-    "force_timeout",
-    "logger_fn",
-    "verbose",
-    "custom_llm_provider",
-    "litellm_logging_obj",
-    "litellm_call_id",
-    "use_client",
-    "id",
-    "fallbacks",
-    "azure",
-    "headers",
-    "model_list",
-    "num_retries",
-    "context_window_fallback_dict",
-    "retry_policy",
-    "retry_strategy",
-    "roles",
-    "final_prompt_value",
-    "bos_token",
-    "eos_token",
-    "request_timeout",
-    "complete_response",
-    "self",
-    "client",
-    "rpm",
-    "tpm",
-    "max_parallel_requests",
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_second",
-    "output_cost_per_second",
-    "hf_model_name",
-    "model_info",
-    "proxy_server_request",
-    "preset_cache_key",
-    "caching_groups",
-    "ttl",
-    "cache",
-    "no-log",
-    "base_model",
-    "stream_timeout",
-    "supports_system_message",
-    "region_name",
-    "allowed_model_region",
-    "model_config",
-    "fastest_response",
-    "cooldown_time",
-    "cache_key",
-    "max_retries",
-    "azure_ad_token_provider",
-    "tenant_id",
-    "client_id",
-    "client_secret",
-    "user_continue_message",
-    "configurable_clientside_auth_params",
-    "weight",
-    "ensure_alternating_roles",
-    "assistant_continue_message",
-    "user_continue_message",
-    "fallback_depth",
-    "max_fallbacks",
-]
-
-
 class LoggedLiteLLMParams(TypedDict, total=False):
     force_timeout: Optional[float]
     custom_llm_provider: Optional[str]
@@ -1472,11 +1455,18 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]
+    user_api_key_end_user_id: Optional[str]
+
+
+class StandardLoggingPromptManagementMetadata(TypedDict):
+    prompt_id: str
+    prompt_variables: Optional[dict]
+    prompt_integration: str
 
 
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
-    Specific metadata k,v pairs logged to integration for easier cost tracking
+    Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
     """
 
     spend_logs_metadata: Optional[
@@ -1484,6 +1474,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
+    prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1523,6 +1514,19 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: Optional[bool]
 
 
+class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
+    error_code: Optional[str]
+    error_class: Optional[str]
+    llm_provider: Optional[str]
+
+
+class StandardLoggingGuardrailInformation(TypedDict, total=False):
+    guardrail_name: Optional[str]
+    guardrail_mode: Optional[GuardrailEventHooks]
+    guardrail_response: Optional[Union[dict, str]]
+    guardrail_status: Literal["success", "failure"]
+
+
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
@@ -1530,17 +1534,20 @@ class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
+    stream: Optional[bool]
     response_cost: float
     response_cost_failure_debug_info: Optional[
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    startTime: float
+    startTime: float  # Note: making this camelCase was a mistake, everything should be snake case
     endTime: float
     completionStartTime: float
+    response_time: float
     model_map_information: StandardLoggingModelInformation
     model: str
     model_id: Optional[str]
@@ -1556,8 +1563,10 @@ class StandardLoggingPayload(TypedDict):
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]
+    error_information: Optional[StandardLoggingPayloadErrorInformation]
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
+    guardrail_information: Optional[StandardLoggingGuardrailInformation]
 
 
 from typing import AsyncIterator, Iterator
@@ -1607,8 +1616,97 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
 
+    # Humanloop dynamic params
+    humanloop_api_key: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
+
+
+all_litellm_params = [
+    "metadata",
+    "litellm_metadata",
+    "litellm_trace_id",
+    "tags",
+    "acompletion",
+    "aimg_generation",
+    "atext_completion",
+    "text_completion",
+    "caching",
+    "mock_response",
+    "mock_timeout",
+    "disable_add_transform_inline_image_block",
+    "api_key",
+    "api_version",
+    "prompt_id",
+    "prompt_variables",
+    "api_base",
+    "force_timeout",
+    "logger_fn",
+    "verbose",
+    "custom_llm_provider",
+    "litellm_logging_obj",
+    "litellm_call_id",
+    "use_client",
+    "id",
+    "fallbacks",
+    "azure",
+    "headers",
+    "model_list",
+    "num_retries",
+    "context_window_fallback_dict",
+    "retry_policy",
+    "retry_strategy",
+    "roles",
+    "final_prompt_value",
+    "bos_token",
+    "eos_token",
+    "request_timeout",
+    "complete_response",
+    "self",
+    "client",
+    "rpm",
+    "tpm",
+    "max_parallel_requests",
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "hf_model_name",
+    "model_info",
+    "proxy_server_request",
+    "preset_cache_key",
+    "caching_groups",
+    "ttl",
+    "cache",
+    "no-log",
+    "base_model",
+    "stream_timeout",
+    "supports_system_message",
+    "region_name",
+    "allowed_model_region",
+    "model_config",
+    "fastest_response",
+    "cooldown_time",
+    "cache_key",
+    "max_retries",
+    "azure_ad_token_provider",
+    "tenant_id",
+    "client_id",
+    "azure_username",
+    "azure_password",
+    "client_secret",
+    "user_continue_message",
+    "configurable_clientside_auth_params",
+    "weight",
+    "ensure_alternating_roles",
+    "assistant_continue_message",
+    "user_continue_message",
+    "fallback_depth",
+    "max_fallbacks",
+    "max_budget",
+    "budget_duration",
+] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -1628,3 +1726,137 @@ class PersonalUIKeyGenerationConfig(KeyGenerationConfig):
 class StandardKeyGenerationConfig(TypedDict, total=False):
     team_key_generation: TeamUIKeyGenerationConfig
     personal_key_generation: PersonalUIKeyGenerationConfig
+
+
+class BudgetConfig(BaseModel):
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+    def __init__(self, **data: Any) -> None:
+        # Map time_period to budget_duration if present
+        if "time_period" in data:
+            data["budget_duration"] = data.pop("time_period")
+
+        # Map budget_limit to max_budget if present
+        if "budget_limit" in data:
+            data["max_budget"] = data.pop("budget_limit")
+
+        super().__init__(**data)
+
+
+GenericBudgetConfigType = Dict[str, BudgetConfig]
+
+
+class LlmProviders(str, Enum):
+    OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"  # embedding only
+    JINA_AI = "jina_ai"
+    XAI = "xai"
+    CUSTOM_OPENAI = "custom_openai"
+    TEXT_COMPLETION_OPENAI = "text-completion-openai"
+    COHERE = "cohere"
+    COHERE_CHAT = "cohere_chat"
+    CLARIFAI = "clarifai"
+    ANTHROPIC = "anthropic"
+    ANTHROPIC_TEXT = "anthropic_text"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
+    TOGETHER_AI = "together_ai"
+    OPENROUTER = "openrouter"
+    VERTEX_AI = "vertex_ai"
+    VERTEX_AI_BETA = "vertex_ai_beta"
+    GEMINI = "gemini"
+    AI21 = "ai21"
+    BASETEN = "baseten"
+    AZURE = "azure"
+    AZURE_TEXT = "azure_text"
+    AZURE_AI = "azure_ai"
+    SAGEMAKER = "sagemaker"
+    SAGEMAKER_CHAT = "sagemaker_chat"
+    BEDROCK = "bedrock"
+    VLLM = "vllm"
+    NLP_CLOUD = "nlp_cloud"
+    PETALS = "petals"
+    OOBABOOGA = "oobabooga"
+    OLLAMA = "ollama"
+    OLLAMA_CHAT = "ollama_chat"
+    DEEPINFRA = "deepinfra"
+    PERPLEXITY = "perplexity"
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    NVIDIA_NIM = "nvidia_nim"
+    CEREBRAS = "cerebras"
+    AI21_CHAT = "ai21_chat"
+    VOLCENGINE = "volcengine"
+    CODESTRAL = "codestral"
+    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DEEPSEEK = "deepseek"
+    SAMBANOVA = "sambanova"
+    MARITALK = "maritalk"
+    VOYAGE = "voyage"
+    CLOUDFLARE = "cloudflare"
+    XINFERENCE = "xinference"
+    FIREWORKS_AI = "fireworks_ai"
+    FRIENDLIAI = "friendliai"
+    WATSONX = "watsonx"
+    WATSONX_TEXT = "watsonx_text"
+    TRITON = "triton"
+    PREDIBASE = "predibase"
+    DATABRICKS = "databricks"
+    EMPOWER = "empower"
+    GITHUB = "github"
+    CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
+    HOSTED_VLLM = "hosted_vllm"
+    LM_STUDIO = "lm_studio"
+    GALADRIEL = "galadriel"
+    INFINITY = "infinity"
+    DEEPGRAM = "deepgram"
+    AIOHTTP_OPENAI = "aiohttp_openai"
+    LANGFUSE = "langfuse"
+    HUMANLOOP = "humanloop"
+    TOPAZ = "topaz"
+
+
+# Create a set of all provider values for quick lookup
+LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+
+class LiteLLMLoggingBaseClass:
+    """
+    Base class for logging pre and post call
+
+    Meant to simplify type checking for logging obj.
+    """
+
+    def pre_call(self, input, api_key, model=None, additional_args={}):
+        pass
+
+    def post_call(
+        self, original_response, input=None, api_key=None, additional_args={}
+    ):
+        pass
+
+
+class CustomHuggingfaceTokenizer(TypedDict):
+    identifier: str
+    revision: str  # usually 'main'
+    auth_token: Optional[str]
+
+
+class LITELLM_IMAGE_VARIATION_PROVIDERS(Enum):
+    """
+    Try using an enum for endpoints. This should make it easier to track what provider is supported for what endpoint.
+    """
+
+    OPENAI = LlmProviders.OPENAI.value
+    TOPAZ = LlmProviders.TOPAZ.value
+
+
+class HttpHandlerRequestFields(TypedDict, total=False):
+    data: dict  # request body
+    params: dict  # query params
+    files: dict  # file uploads
+    content: Any  # raw content

@@ -199,3 +199,28 @@ async def test_can_team_call_model(model, expect_to_work):
         assert model_in_access_group(**args)
     else:
         assert not model_in_access_group(**args)
+
+
+def test_common_checks_import():
+    """
+    Enforce that common_checks can only be imported by the 'user_api_key_auth()' function.
+    """
+    try:
+        from litellm.proxy.auth.user_api_key_auth import common_checks
+        from litellm.proxy._types import CommonProxyErrors
+
+        common_checks(
+            request_body={},
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="",
+            llm_router=None,
+        )
+        pytest.fail(
+            "common_checks can only be imported by the 'user_api_key_auth()' function."
+        )
+    except Exception as e:
+        assert CommonProxyErrors.not_premium_user.value in str(e)

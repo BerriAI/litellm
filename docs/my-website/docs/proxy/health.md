@@ -121,6 +121,20 @@ model_list:
       mode: audio_speech
 ```
 
+### Rerank Models 
+
+To run rerank health checks, specify the mode as "rerank" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: rerank-english-v3.0
+    litellm_params:
+      model: cohere/rerank-english-v3.0
+      api_key: os.environ/COHERE_API_KEY
+    model_info:
+      mode: rerank
+```
+
 ### Batch Models (Azure Only)
 
 For Azure models deployed as 'batch' models, set `mode: batch`. 
@@ -152,6 +166,20 @@ Expected Response
     "healthy_count": 1,
     "unhealthy_count": 0
 }
+```
+
+### Realtime Models 
+
+To run realtime health checks, specify the mode as "realtime" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o-realtime-audio
+    litellm_params:
+      model: openai/gpt-4o-realtime-audio
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
 ```
 
 ## Background Health Checks 

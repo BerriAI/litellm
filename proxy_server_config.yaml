@@ -127,8 +127,8 @@ litellm_settings:
 # For /fine_tuning/jobs endpoints
 finetune_settings:
   - custom_llm_provider: azure
-    api_base: https://exampleopenaiendpoint-production.up.railway.app
-    api_key: fake-key
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
     api_version: "2023-03-15-preview"
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY
@@ -136,8 +136,8 @@ finetune_settings:
 # for /files endpoints
 files_settings:
   - custom_llm_provider: azure
-    api_base: https://exampleopenaiendpoint-production.up.railway.app
-    api_key: fake-key
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
     api_version: "2023-03-15-preview"
   - custom_llm_provider: openai
     api_key: os.environ/OPENAI_API_KEY

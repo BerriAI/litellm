@@ -18,17 +18,17 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.fine_tuning_apis.azure import AzureOpenAIFineTuningAPI
-from litellm.llms.fine_tuning_apis.openai import (
+from litellm.llms.azure.fine_tuning.handler import AzureOpenAIFineTuningAPI
+from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
+from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
     FineTuningJob,
     FineTuningJobCreate,
-    OpenAIFineTuningAPI,
+    Hyperparameters,
 )
-from litellm.llms.fine_tuning_apis.vertex_ai import VertexFineTuningAPI
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import Hyperparameters
 from litellm.types.router import *
-from litellm.utils import supports_httpx_timeout
+from litellm.utils import client, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_fine_tuning_apis_instance = OpenAIFineTuningAPI()
@@ -37,10 +37,11 @@ vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
 #################################################
 
 
+@client
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[Hyperparameters] = {},  # type: ignore
+    hyperparameters: Optional[dict] = {},
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -90,10 +91,11 @@ async def acreate_fine_tuning_job(
         raise e
 
 
+@client
 def create_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: Optional[Hyperparameters] = {},  # type: ignore
+    hyperparameters: Optional[dict] = {},
     suffix: Optional[str] = None,
     validation_file: Optional[str] = None,
     integrations: Optional[List[str]] = None,
@@ -112,6 +114,12 @@ def create_fine_tuning_job(
     try:
         _is_async = kwargs.pop("acreate_fine_tuning_job", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
+
+        # handle hyperparameters
+        hyperparameters = hyperparameters or {}  # original hyperparameters
+        _oai_hyperparameters: Hyperparameters = Hyperparameters(
+            **hyperparameters
+        )  # Typed Hyperparameters for OpenAI Spec
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -155,7 +163,7 @@ def create_fine_tuning_job(
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=hyperparameters,
+                hyperparameters=_oai_hyperparameters,
                 suffix=suffix,
                 validation_file=validation_file,
                 integrations=integrations,
@@ -169,6 +177,7 @@ def create_fine_tuning_job(
             response = openai_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
+                api_version=optional_params.api_version,
                 organization=organization,
                 create_fine_tuning_job_data=create_fine_tuning_job_data_dict,
                 timeout=timeout,
@@ -198,11 +207,10 @@ def create_fine_tuning_job(
                 extra_body.pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")  # type: ignore
-
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=hyperparameters,
+                hyperparameters=_oai_hyperparameters,
                 suffix=suffix,
                 validation_file=validation_file,
                 integrations=integrations,
@@ -221,6 +229,7 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                organization=optional_params.organization,
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
@@ -240,7 +249,7 @@ def create_fine_tuning_job(
             create_fine_tuning_job_data = FineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=hyperparameters,
+                hyperparameters=_oai_hyperparameters,
                 suffix=suffix,
                 validation_file=validation_file,
                 integrations=integrations,
@@ -255,6 +264,7 @@ def create_fine_tuning_job(
                 timeout=timeout,
                 api_base=api_base,
                 kwargs=kwargs,
+                original_hyperparameters=hyperparameters,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -277,7 +287,7 @@ def create_fine_tuning_job(
 
 async def acancel_fine_tuning_job(
     fine_tuning_job_id: str,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -372,6 +382,7 @@ def cancel_fine_tuning_job(
             response = openai_fine_tuning_apis_instance.cancel_fine_tuning_job(
                 api_base=api_base,
                 api_key=api_key,
+                api_version=optional_params.api_version,
                 organization=organization,
                 fine_tuning_job_id=fine_tuning_job_id,
                 timeout=timeout,
@@ -410,6 +421,7 @@ def cancel_fine_tuning_job(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                organization=optional_params.organization,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -432,7 +444,7 @@ def cancel_fine_tuning_job(
 async def alist_fine_tuning_jobs(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -531,6 +543,7 @@ def list_fine_tuning_jobs(
             response = openai_fine_tuning_apis_instance.list_fine_tuning_jobs(
                 api_base=api_base,
                 api_key=api_key,
+                api_version=optional_params.api_version,
                 organization=organization,
                 after=after,
                 limit=limit,
@@ -571,6 +584,7 @@ def list_fine_tuning_jobs(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                organization=optional_params.organization,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -583,6 +597,156 @@ def list_fine_tuning_jobs(
                     status_code=400,
                     content="Unsupported provider",
                     request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
+            )
+        return response
+    except Exception as e:
+        raise e
+
+
+async def aretrieve_fine_tuning_job(
+    fine_tuning_job_id: str,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> FineTuningJob:
+    """
+    Async: Get info about a fine-tuning job.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aretrieve_fine_tuning_job"] = True
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            retrieve_fine_tuning_job,
+            fine_tuning_job_id,
+            custom_llm_provider,
+            extra_headers,
+            extra_body,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+        return response
+    except Exception as e:
+        raise e
+
+
+def retrieve_fine_tuning_job(
+    fine_tuning_job_id: str,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> Union[FineTuningJob, Coroutine[Any, Any, FineTuningJob]]:
+    """
+    Get info about a fine-tuning job.
+    """
+    try:
+        optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("aretrieve_fine_tuning_job", False) is True
+
+        # OpenAI
+        if custom_llm_provider == "openai":
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or os.getenv("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            organization = (
+                optional_params.organization
+                or litellm.organization
+                or os.getenv("OPENAI_ORGANIZATION", None)
+                or None
+            )
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.openai_key
+                or os.getenv("OPENAI_API_KEY")
+            )
+
+            response = openai_fine_tuning_apis_instance.retrieve_fine_tuning_job(
+                api_base=api_base,
+                api_key=api_key,
+                api_version=optional_params.api_version,
+                organization=organization,
+                fine_tuning_job_id=fine_tuning_job_id,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                _is_async=_is_async,
+            )
+        # Azure OpenAI
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            if extra_body is not None:
+                extra_body.pop("azure_ad_token", None)
+            else:
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_fine_tuning_apis_instance.retrieve_fine_tuning_job(
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                fine_tuning_job_id=fine_tuning_job_id,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                _is_async=_is_async,
+                organization=optional_params.organization,
+            )
+        else:
+            raise litellm.exceptions.BadRequestError(
+                message="LiteLLM doesn't support {} for 'retrieve_fine_tuning_job'. Only 'openai' and 'azure' are supported.".format(
+                    custom_llm_provider
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider,
+                response=httpx.Response(
+                    status_code=400,
+                    content="Unsupported provider",
+                    request=httpx.Request(method="retrieve_fine_tuning_job", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return response

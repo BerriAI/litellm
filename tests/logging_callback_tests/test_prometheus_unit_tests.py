@@ -14,7 +14,11 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus import (
+    PrometheusLogger,
+    UserAPIKeyLabelValues,
+    get_custom_labels_from_metadata,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -46,6 +50,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
     return StandardLoggingPayload(
         id="test_id",
         call_type="completion",
+        stream=False,
         response_cost=0.1,
         response_cost_failure_debug_info=None,
         status="success",
@@ -61,6 +66,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         model="gpt-3.5-turbo",
         model_id="model-123",
         model_group="openai-gpt",
+        custom_llm_provider="openai",
         api_base="https://api.openai.com",
         metadata=StandardLoggingMetadata(
             user_api_key_hash="test_hash",
@@ -72,6 +78,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             spend_logs_metadata=None,
             requester_ip_address="127.0.0.1",
             requester_metadata=None,
+            user_api_key_end_user_id="test_end_user",
         ),
         cache_hit=False,
         cache_key=None,
@@ -110,6 +117,7 @@ async def test_async_log_success_event(prometheus_logger):
                 "user_api_key": "test_key",
                 "user_api_key_user_id": "test_user",
                 "user_api_key_team_id": "test_team",
+                "user_api_key_end_user_id": "test_end_user",
             }
         },
         "start_time": datetime.now(),
@@ -186,6 +194,16 @@ def test_increment_token_metrics(prometheus_logger):
     standard_logging_payload["prompt_tokens"] = 50
     standard_logging_payload["completion_tokens"] = 50
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
+
     prometheus_logger._increment_token_metrics(
         standard_logging_payload,
         end_user_id="user1",
@@ -195,6 +213,7 @@ def test_increment_token_metrics(prometheus_logger):
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         user_id="user1",
+        enum_values=enum_values,
     )
 
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
@@ -203,14 +222,28 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
     prometheus_logger.litellm_input_tokens_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model=None,
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
         50
     )
 
     prometheus_logger.litellm_output_tokens_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model=None,
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -270,6 +303,18 @@ def test_set_latency_metrics(prometheus_logger):
     prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
     prometheus_logger.litellm_request_total_latency_metric = MagicMock()
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        requested_model=standard_logging_payload["model_group"],
+        user=standard_logging_payload["metadata"]["user_api_key_user_id"],
+        **standard_logging_payload,
+    )
+
     now = datetime.now()
     kwargs = {
         "end_time": now,  # when the request ends
@@ -287,6 +332,7 @@ def test_set_latency_metrics(prometheus_logger):
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         standard_logging_payload=standard_logging_payload,
+        enum_values=enum_values,
     )
 
     # completion_start_time - api_call_start_time
@@ -299,7 +345,14 @@ def test_set_latency_metrics(prometheus_logger):
 
     # end_time - api_call_start_time
     prometheus_logger.litellm_llm_api_latency_metric.labels.assert_called_once_with(
-        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+        end_user=None,
+        user="test_user",
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model="openai-gpt",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -307,7 +360,14 @@ def test_set_latency_metrics(prometheus_logger):
 
     # total latency for the request
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once_with(
-        "gpt-3.5-turbo", "key1", "alias1", "team1", "team_alias1"
+        end_user=None,
+        user="test_user",
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        requested_model="openai-gpt",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
@@ -321,6 +381,16 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     - litellm_requests_metric is incremented by 1
     - litellm_spend_metric is incremented by the response cost in the standard logging payload
     """
+    standard_logging_payload = create_standard_logging_payload()
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
     prometheus_logger.litellm_requests_metric = MagicMock()
     prometheus_logger.litellm_spend_metric = MagicMock()
 
@@ -333,10 +403,17 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         user_api_team_alias="team_alias1",
         user_id="user1",
         response_cost=0.1,
+        enum_values=enum_values,
     )
 
     prometheus_logger.litellm_requests_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
@@ -478,20 +555,21 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         team="test_team",
         team_alias="test_team_alias",
         user="test_user",
-        exception_status=429,
+        exception_status="429",
         exception_class="RateLimitError",
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
     # Assert total requests metric was incremented with correct labels
     prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
-        "test_end_user",
-        "test_key",
-        "test_alias",
-        "gpt-3.5-turbo",
-        "test_team",
-        "test_team_alias",
-        "test_user",
+        end_user="test_end_user",
+        hashed_api_key="test_key",
+        api_key_alias="test_alias",
+        requested_model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        status_code="429",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -527,13 +605,14 @@ async def test_async_post_call_success_hook(prometheus_logger):
 
     # Assert total requests metric was incremented with correct labels
     prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
-        "test_end_user",
-        "test_key",
-        "test_alias",
-        "gpt-3.5-turbo",
-        "test_team",
-        "test_team_alias",
-        "test_user",
+        end_user="test_end_user",
+        hashed_api_key="test_key",
+        api_key_alias="test_alias",
+        requested_model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        status_code="200",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -564,6 +643,16 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         "standard_logging_object": standard_logging_payload,
     }
 
+    enum_values = UserAPIKeyLabelValues(
+        litellm_model_name=standard_logging_payload["model"],
+        api_provider=standard_logging_payload["custom_llm_provider"],
+        hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
+        api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        team=standard_logging_payload["metadata"]["user_api_key_team_id"],
+        team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        **standard_logging_payload,
+    )
+
     start_time = datetime.now()
     end_time = start_time + timedelta(seconds=1)
     output_tokens = 10
@@ -574,6 +663,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         start_time=start_time,
         end_time=end_time,
         output_tokens=output_tokens,
+        enum_values=enum_values,
     )
 
     # Verify remaining requests metric
@@ -760,6 +850,7 @@ def test_deployment_state_management(prometheus_logger):
 
 
 def test_increment_deployment_cooled_down(prometheus_logger):
+
     prometheus_logger.litellm_deployment_cooled_down = MagicMock()
 
     prometheus_logger.increment_deployment_cooled_down(
@@ -774,3 +865,40 @@ def test_increment_deployment_cooled_down(prometheus_logger):
         "gpt-3.5-turbo", "model-123", "https://api.openai.com", "openai", "429"
     )
     prometheus_logger.litellm_deployment_cooled_down.labels().inc.assert_called_once()
+
+
+@pytest.mark.parametrize("disable_end_user_tracking", [True, False])
+def test_prometheus_factory(monkeypatch, disable_end_user_tracking):
+    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    monkeypatch.setattr(
+        "litellm.disable_end_user_cost_tracking_prometheus_only",
+        disable_end_user_tracking,
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        end_user="test_end_user",
+        api_key_hash="test_hash",
+        api_key_alias="test_alias",
+    )
+    supported_labels = ["end_user", "api_key_hash", "api_key_alias"]
+    returned_dict = prometheus_label_factory(
+        supported_enum_labels=supported_labels, enum_values=enum_values
+    )
+
+    if disable_end_user_tracking:
+        assert returned_dict["end_user"] == None
+    else:
+        assert returned_dict["end_user"] == "test_end_user"
+
+
+def test_get_custom_labels_from_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels", ["metadata.foo", "metadata.bar"]
+    )
+    metadata = {"foo": "bar", "bar": "baz", "taz": "qux"}
+    assert get_custom_labels_from_metadata(metadata) == {
+        "metadata_foo": "bar",
+        "metadata_bar": "baz",
+    }

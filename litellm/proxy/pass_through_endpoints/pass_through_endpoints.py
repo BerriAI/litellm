@@ -1,31 +1,18 @@
 import ast
 import asyncio
 import json
-import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import AsyncIterable, List, Optional, Union
+from typing import List, Optional
 
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Request,
-    Response,
-    status,
-)
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
-    ModelResponseIterator,
-)
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -35,6 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -326,7 +314,6 @@ async def pass_through_request(  # noqa: PLR0915
     stream: Optional[bool] = None,
 ):
     try:
-        import time
         import uuid
 
         from litellm.litellm_core_utils.litellm_logging import Logging
@@ -344,15 +331,7 @@ async def pass_through_request(  # noqa: PLR0915
         if custom_body:
             _parsed_body = custom_body
         else:
-            request_body = await request.body()
-            if request_body == b"" or request_body is None:
-                _parsed_body = None
-            else:
-                body_str = request_body.decode()
-                try:
-                    _parsed_body = ast.literal_eval(body_str)
-                except Exception:
-                    _parsed_body = json.loads(body_str)
+            _parsed_body = await _read_request_body(request)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
                 url, headers, _parsed_body

@@ -226,6 +226,7 @@ async def test_datadog_logging_http_request():
 
         # Parse the 'message' field as JSON and check its structure
         message = json.loads(body[0]["message"])
+        print("logged message", json.dumps(message, indent=4))
 
         expected_message_fields = StandardLoggingPayload.__annotations__.keys()
 
@@ -381,9 +382,10 @@ async def test_datadog_payload_environment_variables():
             assert (
                 dd_payload["service"] == "test-service"
             ), "Incorrect service in payload"
+
             assert (
-                dd_payload["ddtags"]
-                == "env:test-env,service:test-service,version:1.0.0"
+                "env:test-env,service:test-service,version:1.0.0,HOSTNAME:"
+                in dd_payload["ddtags"]
             ), "Incorrect tags in payload"
 
     except Exception as e:
@@ -442,3 +444,91 @@ async def test_datadog_payload_content_truncation():
     assert (
         len(str(message_dict["response"])) < 10_100
     ), "response not truncated correctly"
+
+
+def test_datadog_static_methods():
+    """Test the static helper methods in DataDogLogger class"""
+
+    # Test with default environment variables
+    assert DataDogLogger._get_datadog_source() == "litellm"
+    assert DataDogLogger._get_datadog_service() == "litellm-server"
+    assert DataDogLogger._get_datadog_hostname() is not None
+    assert DataDogLogger._get_datadog_env() == "unknown"
+    assert DataDogLogger._get_datadog_pod_name() == "unknown"
+
+    # Test tags format with default values
+    assert (
+        "env:unknown,service:litellm,version:unknown,HOSTNAME:"
+        in DataDogLogger._get_datadog_tags()
+    )
+
+    # Test with custom environment variables
+    test_env = {
+        "DD_SOURCE": "custom-source",
+        "DD_SERVICE": "custom-service",
+        "HOSTNAME": "test-host",
+        "DD_ENV": "production",
+        "DD_VERSION": "1.0.0",
+        "POD_NAME": "pod-123",
+    }
+
+    with patch.dict(os.environ, test_env):
+        assert DataDogLogger._get_datadog_source() == "custom-source"
+        print(
+            "DataDogLogger._get_datadog_source()", DataDogLogger._get_datadog_source()
+        )
+        assert DataDogLogger._get_datadog_service() == "custom-service"
+        print(
+            "DataDogLogger._get_datadog_service()", DataDogLogger._get_datadog_service()
+        )
+        assert DataDogLogger._get_datadog_hostname() == "test-host"
+        print(
+            "DataDogLogger._get_datadog_hostname()",
+            DataDogLogger._get_datadog_hostname(),
+        )
+        assert DataDogLogger._get_datadog_env() == "production"
+        print("DataDogLogger._get_datadog_env()", DataDogLogger._get_datadog_env())
+        assert DataDogLogger._get_datadog_pod_name() == "pod-123"
+        print(
+            "DataDogLogger._get_datadog_pod_name()",
+            DataDogLogger._get_datadog_pod_name(),
+        )
+
+        # Test tags format with custom values
+        expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
+        print("DataDogLogger._get_datadog_tags()", DataDogLogger._get_datadog_tags())
+        assert DataDogLogger._get_datadog_tags() == expected_custom_tags
+
+
+@pytest.mark.asyncio
+async def test_datadog_non_serializable_messages():
+    """Test logging events with non-JSON-serializable messages"""
+    dd_logger = DataDogLogger()
+
+    # Create payload with non-serializable content
+    standard_payload = create_standard_logging_payload()
+    non_serializable_obj = datetime.now()  # datetime objects aren't JSON serializable
+    standard_payload["messages"] = [{"role": "user", "content": non_serializable_obj}]
+    standard_payload["response"] = {
+        "choices": [{"message": {"content": non_serializable_obj}}]
+    }
+
+    kwargs = {"standard_logging_object": standard_payload}
+
+    # Test payload creation
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    # Verify payload can be serialized
+    assert dd_payload["status"] == DataDogStatus.INFO
+
+    # Verify the message can be parsed back to dict
+    dict_payload = json.loads(dd_payload["message"])
+
+    # Check that the non-serializable objects were converted to strings
+    assert isinstance(dict_payload["messages"][0]["content"], str)
+    assert isinstance(dict_payload["response"]["choices"][0]["message"]["content"], str)

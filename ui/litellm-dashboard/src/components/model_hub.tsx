@@ -34,6 +34,8 @@ interface ModelInfo {
   supports_vision: boolean;
   max_input_tokens?: number;
   max_output_tokens?: number;
+  input_cost_per_token?: number;
+  output_cost_per_token?: number;
   supported_openai_params?: string[];
 }
 
@@ -161,26 +163,29 @@ const ModelHub: React.FC<ModelHubProps> = ({
                     </Tooltip>
                   </pre>
                   <div className="my-5">
-                    <Text>Mode: {model.mode}</Text>
-                    <Text>
-                      Supports Function Calling:{" "}
-                      {model?.supports_function_calling == true ? "Yes" : "No"}
-                    </Text>
-                    <Text>
-                      Supports Vision:{" "}
-                      {model?.supports_vision == true ? "Yes" : "No"}
-                    </Text>
                     <Text>
                       Max Input Tokens:{" "}
                       {model?.max_input_tokens
                         ? model?.max_input_tokens
-                        : "N/A"}
+                        : "Unknown"}
                     </Text>
                     <Text>
                       Max Output Tokens:{" "}
                       {model?.max_output_tokens
                         ? model?.max_output_tokens
-                        : "N/A"}
+                        : "Unknown"}
+                    </Text>
+                    <Text>
+                      Input Cost Per 1M Tokens (USD):{" "}
+                      {model?.input_cost_per_token
+                        ? `$${(model.input_cost_per_token * 1_000_000).toFixed(2)}`
+                        : "Unknown"}
+                    </Text>
+                    <Text>
+                      Output Cost Per 1M Tokens (USD):{" "}
+                      {model?.output_cost_per_token
+                        ? `$${(model.output_cost_per_token * 1_000_000).toFixed(2)}`
+                        : "Unknown"}
                     </Text>
                   </div>
                   <div style={{ marginTop: "auto", textAlign: "right" }}>
@@ -245,12 +250,19 @@ const ModelHub: React.FC<ModelHubProps> = ({
 
             <TabGroup>
               <TabList>
+                <Tab>Model Information</Tab>
                 <Tab>OpenAI Python SDK</Tab>
                 <Tab>Supported OpenAI Params</Tab>
                 <Tab>LlamaIndex</Tab>
                 <Tab>Langchain Py</Tab>
               </TabList>
               <TabPanels>
+                <TabPanel>
+                  <Text>
+                    <strong>Model Group:</strong> 
+                    <pre>{JSON.stringify(selectedModel, null, 2)}</pre>
+                  </Text>
+                </TabPanel>
                 <TabPanel>
                   <SyntaxHighlighter language="python">
                     {`

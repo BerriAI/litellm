@@ -1,6 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,20 +33,44 @@ def get_provider_models(provider: str) -> Optional[List[str]]:
         return get_valid_models()
 
     if provider in litellm.models_by_provider:
-        return litellm.models_by_provider[provider]
-
+        provider_models = litellm.models_by_provider[provider]
+        for idx, _model in enumerate(provider_models):
+            if provider not in _model:
+                provider_models[idx] = f"{provider}/{_model}"
+        return provider_models
     return None
 
 
+def _get_models_from_access_groups(
+    model_access_groups: Dict[str, List[str]],
+    all_models: List[str],
+) -> List[str]:
+    idx_to_remove = []
+    new_models = []
+    for idx, model in enumerate(all_models):
+        if model in model_access_groups:
+            idx_to_remove.append(idx)
+            new_models.extend(model_access_groups[model])
+
+    for idx in sorted(idx_to_remove, reverse=True):
+        all_models.pop(idx)
+
+    all_models.extend(new_models)
+    return all_models
+
+
 def get_key_models(
-    user_api_key_dict: UserAPIKeyAuth, proxy_model_list: List[str]
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
 ) -> List[str]:
     """
     Returns:
     - List of model name strings
     - Empty list if no models set
+    - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models = []
+    all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
         all_models = user_api_key_dict.models
         if SpecialModelNames.all_team_models.value in all_models:
@@ -54,17 +78,24 @@ def get_key_models(
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = proxy_model_list
 
+    all_models = _get_models_from_access_groups(
+        model_access_groups=model_access_groups, all_models=all_models
+    )
+
     verbose_proxy_logger.debug("ALL KEY MODELS - {}".format(len(all_models)))
     return all_models
 
 
 def get_team_models(
-    user_api_key_dict: UserAPIKeyAuth, proxy_model_list: List[str]
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
 ) -> List[str]:
     """
     Returns:
     - List of model name strings
     - Empty list if no models set
+    - If model_access_groups is provided, only return models that are in the access groups
     """
     all_models = []
     if len(user_api_key_dict.team_models) > 0:
@@ -73,6 +104,10 @@ def get_team_models(
             all_models = user_api_key_dict.team_models
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = proxy_model_list
+
+    all_models = _get_models_from_access_groups(
+        model_access_groups=model_access_groups, all_models=all_models
+    )
 
     verbose_proxy_logger.debug("ALL TEAM MODELS - {}".format(len(all_models)))
     return all_models
@@ -93,9 +128,7 @@ def get_complete_model_list(
 
     If list contains wildcard -> return known provider models
     """
-
     unique_models = set()
-
     if key_models:
         unique_models.update(key_models)
     elif team_models:

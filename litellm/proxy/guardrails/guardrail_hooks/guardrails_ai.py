@@ -6,25 +6,24 @@
 #  Thank you for using Litellm! - Krrish & Ishaan
 
 import json
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Optional, TypedDict
 
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.prompt_templates.common_utils import (
-    convert_openai_message_to_only_content_messages,
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
 
 
 class GuardrailsAIResponse(TypedDict):
@@ -52,10 +51,13 @@ class GuardrailsAI(CustomGuardrail):
         supported_event_hooks = [GuardrailEventHooks.post_call]
         super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
-    async def make_guardrails_ai_api_request(self, llm_output: str):
+    async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict):
         from httpx import URL
 
-        data = {"llmOutput": llm_output}
+        data = {
+            "llmOutput": llm_output,
+            **self.get_guardrail_dynamic_request_body_params(request_data=request_data),
+        }
         _json_data = json.dumps(data)
         response = await litellm.module_level_aclient.post(
             url=str(
@@ -80,6 +82,7 @@ class GuardrailsAI(CustomGuardrail):
             )
         return _json_response
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
@@ -100,7 +103,9 @@ class GuardrailsAI(CustomGuardrail):
 
         response_str: str = get_content_from_model_response(response)
         if response_str is not None and len(response_str) > 0:
-            await self.make_guardrails_ai_api_request(llm_output=response_str)
+            await self.make_guardrails_ai_api_request(
+                llm_output=response_str, request_data=data
+            )
 
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=self.guardrail_name

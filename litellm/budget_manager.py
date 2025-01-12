@@ -11,9 +11,7 @@ import json
 import os
 import threading
 import time
-from typing import Literal, Optional, Union
-
-import requests  # type: ignore
+from typing import Literal, Optional
 
 import litellm
 from litellm.utils import ModelResponse
@@ -58,7 +56,9 @@ class BudgetManager:
             # Load the user_dict from hosted db
             url = self.api_base + "/get_budget"
             data = {"project_name": self.project_name}
-            response = requests.post(url, headers=self.headers, json=data)
+            response = litellm.module_level_client.post(
+                url, headers=self.headers, json=data
+            )
             response = response.json()
             if response["status"] == "error":
                 self.user_dict = (
@@ -215,6 +215,8 @@ class BudgetManager:
         elif self.client_type == "hosted":
             url = self.api_base + "/set_budget"
             data = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = requests.post(url, headers=self.headers, json=data)
+            response = litellm.module_level_client.post(
+                url, headers=self.headers, json=data
+            )
             response = response.json()
             return response

@@ -8,14 +8,15 @@ Docs: https://docs.together.ai/reference/completions-1
 
 from typing import List, Union, cast
 
-from litellm.llms.OpenAI.completion.utils import is_tokens_or_list_of_tokens
+from litellm.llms.openai.completion.utils import is_tokens_or_list_of_tokens
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
     OpenAITextCompletionUserMessage,
 )
 
-from ...OpenAI.openai import OpenAITextCompletionConfig
+from ...openai.completion.transformation import OpenAITextCompletionConfig
+from ...openai.completion.utils import _transform_prompt
 
 
 class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
@@ -26,7 +27,7 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         """
         TogetherAI expects a string prompt.
         """
-        initial_prompt: AllPromptValues = super()._transform_prompt(messages)
+        initial_prompt: AllPromptValues = _transform_prompt(messages)
         ## TOGETHER AI SPECIFIC VALIDATION ##
         if isinstance(initial_prompt, list) and is_tokens_or_list_of_tokens(
             value=initial_prompt
@@ -44,3 +45,17 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
             together_prompt = cast(str, initial_prompt)
 
         return together_prompt
+
+    def transform_text_completion_request(
+        self,
+        model: str,
+        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        optional_params: dict,
+        headers: dict,
+    ) -> dict:
+        prompt = self._transform_prompt(messages)
+        return {
+            "model": model,
+            "prompt": prompt,
+            **optional_params,
+        }

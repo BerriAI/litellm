@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.llms.prompt_templates.factory import map_system_message_pt
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
@@ -122,6 +122,26 @@ def test_bedrock_optional_params_completions(model):
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/amazon.titan-large",
+        "bedrock/meta.llama3-2-11b-instruct-v1:0",
+        "bedrock/ai21.j2-ultra-v1",
+        "bedrock/cohere.command-nightly",
+        "bedrock/mistral.mistral-7b",
+    ],
+)
+def test_bedrock_optional_params_simple(model):
+    litellm.drop_params = True
+    get_optional_params(
+        model=model,
+        max_tokens=10,
+        temperature=0.1,
+        custom_llm_provider="bedrock",
+    )
+
+
+@pytest.mark.parametrize(
     "model, expected_dimensions, dimensions_kwarg",
     [
         ("bedrock/amazon.titan-embed-text-v1", False, None),
@@ -190,9 +210,10 @@ def test_databricks_optional_params():
         custom_llm_provider="databricks",
         max_tokens=10,
         temperature=0.2,
+        stream=True,
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 2
+    assert len(optional_params) == 3
     assert "user" not in optional_params
 
 
@@ -411,7 +432,9 @@ def test_dynamic_drop_params(drop_params):
 
 
 def test_dynamic_drop_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -457,7 +480,9 @@ def test_dynamic_drop_params_parallel_tool_calls():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -497,8 +522,24 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
+def test_dynamic_drop_additional_params_stream_options():
+    """
+    Make a call to vertex ai, dropping 'stream_options' specifically
+    """
+    optional_params = litellm.utils.get_optional_params(
+        model="mistral-large-2411@001",
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+        additional_drop_params=["stream_options"],
+    )
+
+    assert "stream_options" not in optional_params
+
+
 def test_dynamic_drop_additional_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -966,3 +1007,68 @@ def test_ollama_pydantic_obj():
         custom_llm_provider="ollama",
         response_format=ResponseFormat,
     )
+
+
+def test_gemini_frequency_penalty():
+    from litellm.utils import get_supported_openai_params
+
+    optional_params = get_supported_openai_params(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        request_type="chat_completion",
+    )
+    assert optional_params is not None
+    assert "frequency_penalty" in optional_params
+
+
+def test_litellm_proxy_claude_3_5_sonnet():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    tool_choice = "auto"
+
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet",
+        custom_llm_provider="litellm_proxy",
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    assert optional_params["tools"] == tools
+    assert optional_params["tool_choice"] == tool_choice
+
+
+def test_is_vertex_anthropic_model():
+    assert (
+        litellm.VertexAIAnthropicConfig().is_supported_model(
+            model="claude-3-5-sonnet", custom_llm_provider="litellm_proxy"
+        )
+        is False
+    )
+
+def test_groq_response_format_json_schema():
+    optional_params = get_optional_params(
+        model="llama-3.1-70b-versatile",
+        custom_llm_provider="groq",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params is not None
+    assert "response_format" in optional_params
+    assert optional_params["response_format"]["type"] == "json_object"

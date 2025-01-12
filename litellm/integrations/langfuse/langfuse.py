@@ -3,7 +3,6 @@
 import copy
 import os
 import traceback
-import types
 from collections.abc import MutableMapping, MutableSequence, MutableSet
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
@@ -13,9 +12,13 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingPayload,
+    StandardLoggingPromptManagementMetadata,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
@@ -56,6 +59,8 @@ class LangFuseLogger:
         self.langfuse_flush_interval = (
             os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
         )
+        http_client = _get_httpx_client()
+        self.langfuse_client = http_client.client
 
         parameters = {
             "public_key": self.public_key,
@@ -64,6 +69,7 @@ class LangFuseLogger:
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
+            "httpx_client": self.langfuse_client,
         }
 
         if Version(langfuse.version.__version__) >= Version("2.6.0"):
@@ -145,12 +151,7 @@ class LangFuseLogger:
 
         return metadata
 
-    # def log_error(kwargs, response_obj, start_time, end_time):
-    #     generation = trace.generation(
-    #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
-    #         status_message='error' # can be any string (e.g. stringified stack trace or error body)
-    #     )
-    def log_event(  # noqa: PLR0915
+    def _old_log_event(  # noqa: PLR0915
         self,
         kwargs,
         response_obj,
@@ -164,7 +165,7 @@ class LangFuseLogger:
         # Method definition
 
         try:
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
@@ -181,6 +182,7 @@ class LangFuseLogger:
             optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
+
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
             if functions is not None:
@@ -257,7 +259,9 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj.get("response", "")
-            print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            verbose_logger.debug(
+                f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}"
+            )
             trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
@@ -288,7 +292,7 @@ class LangFuseLogger:
                     input,
                     response_obj,
                 )
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
             verbose_logger.info("Langfuse Layer Logging - logging success")
@@ -441,7 +445,7 @@ class LangFuseLogger:
     ) -> tuple:
         import langfuse
 
-        print_verbose("Langfuse Layer Logging - logging to langfuse v2")
+        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
             metadata = self._prepare_metadata(metadata)
@@ -455,10 +459,36 @@ class LangFuseLogger:
 
             tags = metadata.pop("tags", []) if supports_tags else []
 
+            standard_logging_object: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
+
+            if standard_logging_object is None:
+                end_user_id = None
+                prompt_management_metadata: Optional[
+                    StandardLoggingPromptManagementMetadata
+                ] = None
+            else:
+                end_user_id = standard_logging_object["metadata"].get(
+                    "user_api_key_end_user_id", None
+                )
+
+                prompt_management_metadata = cast(
+                    Optional[StandardLoggingPromptManagementMetadata],
+                    standard_logging_object["metadata"].get(
+                        "prompt_management_metadata", None
+                    ),
+                )
+
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
             # we clean out all extra litellm metadata params before logging
-            clean_metadata = {}
+            clean_metadata: Dict[str, Any] = {}
+            if prompt_management_metadata is not None:
+                clean_metadata["prompt_management_metadata"] = (
+                    prompt_management_metadata
+                )
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -486,10 +516,10 @@ class LangFuseLogger:
             )
 
             session_id = clean_metadata.pop("session_id", None)
-            trace_name = clean_metadata.pop("trace_name", None)
+            trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", litellm_call_id)
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
-            update_trace_keys = clean_metadata.pop("update_trace_keys", [])
+            update_trace_keys = cast(list, clean_metadata.pop("update_trace_keys", []))
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
@@ -502,7 +532,7 @@ class LangFuseLogger:
                 trace_name = f"litellm-{kwargs.get('call_type', 'completion')}"
 
             if existing_trace_id is not None:
-                trace_params = {"id": existing_trace_id}
+                trace_params: Dict[str, Any] = {"id": existing_trace_id}
 
                 # Update the following keys for this trace
                 for metadata_param_key in update_trace_keys:
@@ -538,7 +568,7 @@ class LangFuseLogger:
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
-                    "user_id": user_id,
+                    "user_id": end_user_id,
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
@@ -562,11 +592,7 @@ class LangFuseLogger:
                     trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
 
             cost = kwargs.get("response_cost", None)
-            print_verbose(f"trace: {cost}")
-
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            verbose_logger.debug(f"trace: {cost}")
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
@@ -648,8 +674,12 @@ class LangFuseLogger:
                 # if `generation_name` is None, use sensible default values
                 # If using litellm proxy user `key_alias` if not None
                 # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
-                _user_api_key_alias = clean_metadata.get("user_api_key_alias", None)
-                generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
+                _user_api_key_alias = cast(
+                    Optional[str], clean_metadata.get("user_api_key_alias", None)
+                )
+                generation_name = (
+                    f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
+                )
                 if _user_api_key_alias is not None:
                     generation_name = f"litellm:{_user_api_key_alias}"
 
@@ -682,7 +712,10 @@ class LangFuseLogger:
 
             if supports_prompt:
                 generation_params = _add_prompt_to_generation_params(
-                    generation_params=generation_params, clean_metadata=clean_metadata
+                    generation_params=generation_params,
+                    clean_metadata=clean_metadata,
+                    prompt_management_metadata=prompt_management_metadata,
+                    langfuse_client=self.Langfuse,
                 )
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
@@ -728,8 +761,12 @@ class LangFuseLogger:
 
 
 def _add_prompt_to_generation_params(
-    generation_params: dict, clean_metadata: dict
+    generation_params: dict,
+    clean_metadata: dict,
+    prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata],
+    langfuse_client: Any,
 ) -> dict:
+    from langfuse import Langfuse
     from langfuse.model import (
         ChatPromptClient,
         Prompt_Chat,
@@ -737,8 +774,10 @@ def _add_prompt_to_generation_params(
         TextPromptClient,
     )
 
+    langfuse_client = cast(Langfuse, langfuse_client)
+
     user_prompt = clean_metadata.pop("prompt", None)
-    if user_prompt is None:
+    if user_prompt is None and prompt_management_metadata is None:
         pass
     elif isinstance(user_prompt, dict):
         if user_prompt.get("type", "") == "chat":
@@ -790,6 +829,20 @@ def _add_prompt_to_generation_params(
             verbose_logger.error(
                 "[Non-blocking] Langfuse Logger: Invalid prompt format. No prompt logged to Langfuse"
             )
+    elif (
+        prompt_management_metadata is not None
+        and prompt_management_metadata["prompt_integration"] == "langfuse"
+    ):
+        try:
+            generation_params["prompt"] = langfuse_client.get_prompt(
+                prompt_management_metadata["prompt_id"]
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"[Non-blocking] Langfuse Logger: Error getting prompt client for logging: {e}"
+            )
+            pass
+
     else:
         generation_params["prompt"] = user_prompt
 

@@ -10,19 +10,20 @@
 
 import asyncio
 import json
-import traceback
 import uuid
 from typing import Any, List, Optional, Tuple, Union
 
 import aiohttp
-from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.utils import (
@@ -30,7 +31,6 @@ from litellm.utils import (
     ImageResponse,
     ModelResponse,
     StreamingChoices,
-    get_formatted_prompt,
 )
 
 
@@ -135,6 +135,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         output_parse_pii: bool,
         presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
     ) -> str:
         """
         [TODO] make this more performant for high-throughput scenario
@@ -153,7 +154,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if self.ad_hoc_recognizers is not None:
                         analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
                     # End of constructing Request 1
-
+                    analyze_payload.update(
+                        self.get_guardrail_dynamic_request_body_params(
+                            request_data=request_data
+                        )
+                    )
                     redacted_text = None
                     verbose_proxy_logger.debug(
                         "Making request to: %s with payload: %s",
@@ -203,6 +208,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             raise e
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -238,6 +244,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 text=m["content"],
                                 output_parse_pii=self.output_parse_pii,
                                 presidio_config=presidio_config,
+                                request_data=data,
                             )
                         )
                 responses = await asyncio.gather(*tasks)
@@ -254,10 +261,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             raise e
 
+    @log_guardrail_information
     def logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
-        import threading
         from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop():
@@ -287,6 +294,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # No running event loop, we can safely run in this thread
             return run_in_new_loop()
 
+    @log_guardrail_information
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
@@ -315,6 +323,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             text=text_str,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
+                            request_data=kwargs,
                         )
                     )  # need to pass separately b/c presidio has context window limits
             responses = await asyncio.gather(*tasks)
@@ -330,6 +339,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return kwargs, result
 
+    @log_guardrail_information
     async def async_post_call_success_hook(  # type: ignore
         self,
         data: dict,

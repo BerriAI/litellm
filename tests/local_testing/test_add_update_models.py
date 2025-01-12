@@ -22,11 +22,9 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from litellm.caching.caching import DualCache
 from litellm.router import (
     Deployment,
-    updateDeployment,
     LiteLLM_Params,
-    ModelInfo,
-    updateLiteLLMParams,
 )
+from litellm.types.router import ModelInfo, updateDeployment, updateLiteLLMParams
 
 from litellm.proxy._types import (
     UserAPIKeyAuth,
@@ -105,6 +103,49 @@ async def test_add_new_model(prisma_client):
             _new_model_in_db = model
 
     assert _new_model_in_db is not None
+
+
+@pytest.mark.parametrize(
+    "team_id, key_team_id, user_role, expected_result",
+    [
+        ("1234", "1234", LitellmUserRoles.PROXY_ADMIN.value, True),
+        (
+            "1234",
+            "1235",
+            LitellmUserRoles.PROXY_ADMIN.value,
+            True,
+        ),  # proxy admin can add models for any team
+        (None, "1234", LitellmUserRoles.PROXY_ADMIN.value, True),
+        (None, None, LitellmUserRoles.PROXY_ADMIN.value, True),
+        (
+            "1234",
+            "1234",
+            LitellmUserRoles.INTERNAL_USER.value,
+            True,
+        ),  # internal users can add models for their team
+        ("1234", "1235", LitellmUserRoles.INTERNAL_USER.value, False),
+        (None, "1234", LitellmUserRoles.INTERNAL_USER.value, False),
+        (
+            None,
+            None,
+            LitellmUserRoles.INTERNAL_USER.value,
+            False,
+        ),  # internal users cannot add models by default
+    ],
+)
+def test_can_add_model(team_id, key_team_id, user_role, expected_result):
+    from litellm.proxy.proxy_server import check_if_team_id_matches_key
+
+    args = {
+        "team_id": team_id,
+        "user_api_key_dict": UserAPIKeyAuth(
+            user_role=user_role,
+            api_key="sk-1234",
+            team_id=key_team_id,
+        ),
+    }
+
+    assert check_if_team_id_matches_key(**args) is expected_result
 
 
 @pytest.mark.asyncio

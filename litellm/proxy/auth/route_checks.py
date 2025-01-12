@@ -11,10 +11,8 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import hash_token
 
 from .auth_checks_organization import _user_is_org_admin
-from .auth_utils import _has_user_setup_sso
 
 
 class RouteChecks:
@@ -65,8 +63,6 @@ class RouteChecks:
                 pass
             elif route == "/team/info":
                 pass  # handled by function itself
-        elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-            pass
         elif (
             route in LiteLLMRoutes.global_spend_tracking_routes.value
             and getattr(valid_token, "permissions", None) is not None
@@ -181,6 +177,9 @@ class RouteChecks:
                 ):
                     return True
 
+        if RouteChecks._is_azure_openai_route(route=route):
+            return True
+
         # Pass through Bedrock, VertexAI, and Cohere Routes
         if "/bedrock/" in route:
             return True
@@ -195,6 +194,24 @@ class RouteChecks:
         if "/anthropic/" in route:
             return True
         if "/azure/" in route:
+            return True
+        if "/openai/" in route:
+            return True
+        return False
+
+    @staticmethod
+    def _is_azure_openai_route(route: str) -> bool:
+        """
+        Check if route is a route from AzureOpenAI SDK client
+
+        eg.
+        route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
+        """
+        # Add support for deployment and engine model paths
+        deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
+        engine_pattern = r"^/engines/[^/]+/chat/completions$"
+
+        if re.match(deployment_pattern, route) or re.match(engine_pattern, route):
             return True
         return False
 

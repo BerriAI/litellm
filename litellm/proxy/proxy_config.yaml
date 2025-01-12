@@ -1,41 +1,15 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: "gpt-4"
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/fake
+      api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: anthropic/*
-    litellm_params:
-      model: anthropic/fake
-      api_base: https://exampleanthropicendpoint-production.up.railway.app/
 
-
-
-litellm_settings:
-  callbacks: ["datadog"] 
-
-  turn_off_message_logging: True
-
-
-router_settings:
-  provider_budget_config: 
-    openai: 
-      budget_limit: 0.000000000001 # float of $ value budget for time period
-      time_period: 1d # can be 1d, 2d, 30d, 1mo, 2mo
-    azure:
-      budget_limit: 100
-      time_period: 1d
-    anthropic:
-      budget_limit: 100
-      time_period: 10d
-    vertex_ai:
-      budget_limit: 100
-      time_period: 12d
-    gemini:
-      budget_limit: 100
-      time_period: 12d
-  
-  # OPTIONAL: Set Redis Host, Port, and Password if using multiple instance of LiteLLM
-  redis_host: os.environ/REDIS_HOST
-  redis_port: os.environ/REDIS_PORT
-  redis_password: os.environ/REDIS_PASSWORD
-
+general_settings:    
+    alerting: ["slack"]
+    alert_to_webhook_url: {
+      "budget_alerts": ["https://hooks.slack.com/services/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"]
+    }
+    alerting_args:
+       budget_alert_ttl: 10
+       log_to_console: true

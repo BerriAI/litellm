@@ -136,6 +136,7 @@ class InferenceConfig(TypedDict, total=False):
     stopSequences: List[str]
     temperature: float
     topP: float
+    topK: int
 
 
 class ToolBlockDeltaEvent(TypedDict):

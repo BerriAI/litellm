@@ -3,21 +3,13 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
-import datetime
-import os
-import subprocess
-import sys
-import traceback
-import uuid
 from typing import List, Optional, Union
 
-import dotenv
-import requests  # type: ignore
-
-import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+
+FAILED_REQUESTS_LABELS = ["error_class", "function_name"]
 
 
 class PrometheusServicesLogger:
@@ -54,7 +46,7 @@ class PrometheusServicesLogger:
                 counter_failed_request = self.create_counter(
                     service,
                     type_of_request="failed_requests",
-                    additional_labels=["error_class", "function_name"],
+                    additional_labels=FAILED_REQUESTS_LABELS,
                 )
                 counter_total_requests = self.create_counter(
                     service, type_of_request="total_requests"
@@ -214,10 +206,17 @@ class PrometheusServicesLogger:
             for obj in prom_objects:
                 # increment both failed and total requests
                 if isinstance(obj, self.Counter):
-                    self.increment_counter(
-                        counter=obj,
-                        labels=payload.service.value,
-                        # log additional_labels=["error_class", "function_name"], used for debugging what's going wrong with the DB
-                        additional_labels=[error_class, function_name],
-                        amount=1,  # LOG ERROR COUNT TO PROMETHEUS
-                    )
+                    if "failed_requests" in obj._name:
+                        self.increment_counter(
+                            counter=obj,
+                            labels=payload.service.value,
+                            # log additional_labels=["error_class", "function_name"], used for debugging what's going wrong with the DB
+                            additional_labels=[error_class, function_name],
+                            amount=1,  # LOG ERROR COUNT TO PROMETHEUS
+                        )
+                    else:
+                        self.increment_counter(
+                            counter=obj,
+                            labels=payload.service.value,
+                            amount=1,  # LOG TOTAL REQUESTS TO PROMETHEUS
+                        )

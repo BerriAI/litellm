@@ -8,42 +8,13 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
-import json
 import secrets
-import time
-import traceback
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
-from uuid import uuid4
+from datetime import datetime, timezone
+from typing import Optional
 
 import fastapi
-from fastapi import (
-    Depends,
-    FastAPI,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Path,
-    Request,
-    Response,
-    UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
-from fastapi.responses import (
-    FileResponse,
-    JSONResponse,
-    ORJSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
+from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -61,11 +32,9 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_team_object,
     get_user_object,
-    log_db_metrics,
 )
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,
@@ -262,6 +231,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         llm_model_list,
         llm_router,
         master_key,
+        model_max_budget_limiter,
         open_telemetry_logger,
         prisma_client,
         proxy_logging_obj,
@@ -311,12 +281,14 @@ async def user_api_key_auth(  # noqa: PLR0915
             )
 
         if open_telemetry_logger is not None:
+
             parent_otel_span = open_telemetry_logger.tracer.start_span(
                 name="Received Proxy Server Request",
                 start_time=_to_ns(start_time),
                 context=open_telemetry_logger.get_traceparent_from_header(
                     headers=request.headers
                 ),
+                kind=open_telemetry_logger.span_kind.SERVER,
             )
 
         ### USER-DEFINED AUTH FUNCTION ###
@@ -638,8 +610,12 @@ async def user_api_key_auth(  # noqa: PLR0915
         end_user_params = {}
         if "user" in request_data:
             try:
+                end_user_id = request_data["user"]
+                end_user_params["end_user_id"] = end_user_id
+
+                # get end-user object
                 _end_user_object = await get_end_user_object(
-                    end_user_id=request_data["user"],
+                    end_user_id=end_user_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
@@ -651,7 +627,6 @@ async def user_api_key_auth(  # noqa: PLR0915
                     )
                     if _end_user_object.litellm_budget_table is not None:
                         budget_info = _end_user_object.litellm_budget_table
-                        end_user_params["end_user_id"] = _end_user_object.user_id
                         if budget_info.tpm_limit is not None:
                             end_user_params["end_user_tpm_limit"] = (
                                 budget_info.tpm_limit
@@ -757,7 +732,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             )
 
         if is_master_key_valid:
-            _user_api_key_obj = _return_user_api_key_auth_obj(
+            _user_api_key_obj = await _return_user_api_key_auth_obj(
                 user_obj=None,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key=master_key,
@@ -769,11 +744,13 @@ async def user_api_key_auth(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-            await _cache_key_object(
-                hashed_token=hash_token(master_key),
-                user_api_key_obj=_user_api_key_obj,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
+            asyncio.create_task(
+                _cache_key_object(
+                    hashed_token=hash_token(master_key),
+                    user_api_key_obj=_user_api_key_obj,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
 
             return _user_api_key_obj
@@ -899,12 +876,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 # the validation will occur when checking the team has access to this model
                 pass
             else:
-                try:
-                    data = await request.json()
-                except json.JSONDecodeError:
-                    data = {}  # Provide a default value, such as an empty dictionary
-                model = data.get("model", None)
-                fallback_models: Optional[List[str]] = data.get("fallbacks", None)
+                model = request_data.get("model", None)
+                fallback_models: Optional[List[str]] = request_data.get(
+                    "fallbacks", None
+                )
 
                 if model is not None:
                     await can_key_call_model(
@@ -1041,6 +1016,30 @@ async def user_api_key_auth(  # noqa: PLR0915
                         current_cost=valid_token.spend,
                         max_budget=valid_token.max_budget,
                     )
+            if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+                verbose_proxy_logger.debug(
+                    "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+                    valid_token.token,
+                    valid_token.spend,
+                    valid_token.soft_budget,
+                )
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    soft_budget=valid_token.soft_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    user_email=None,
+                    key_alias=valid_token.key_alias,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="soft_budget",
+                        user_info=call_info,
+                    )
+                )
 
             # Check 5. Token Model Spend is under Model budget
             max_budget_per_model = valid_token.model_max_budget
@@ -1055,37 +1054,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 and valid_token.token is not None
             ):
                 ## GET THE SPEND FOR THIS MODEL
-                twenty_eight_days_ago = datetime.now() - timedelta(days=28)
-                model_spend = await prisma_client.db.litellm_spendlogs.group_by(
-                    by=["model"],
-                    sum={"spend": True},
-                    where={
-                        "AND": [
-                            {"api_key": valid_token.token},
-                            {"startTime": {"gt": twenty_eight_days_ago}},
-                            {"model": current_model},
-                        ]
-                    },  # type: ignore
+                await model_max_budget_limiter.is_key_within_model_budget(
+                    user_api_key_dict=valid_token,
+                    model=current_model,
                 )
-                if (
-                    len(model_spend) > 0
-                    and max_budget_per_model.get(current_model, None) is not None
-                ):
-                    if (
-                        "model" in model_spend[0]
-                        and model_spend[0].get("model") == current_model
-                        and "_sum" in model_spend[0]
-                        and "spend" in model_spend[0]["_sum"]
-                        and model_spend[0]["_sum"]["spend"]
-                        >= max_budget_per_model[current_model]
-                    ):
-                        current_model_spend = model_spend[0]["_sum"]["spend"]
-                        current_model_budget = max_budget_per_model[current_model]
-                        raise litellm.BudgetExceededError(
-                            current_cost=current_model_spend,
-                            max_budget=current_model_budget,
-                        )
-
             # Check 6. Team spend is under Team budget
             if (
                 hasattr(valid_token, "team_spend")
@@ -1231,7 +1203,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            return _return_user_api_key_auth_obj(
+            return await _return_user_api_key_auth_obj(
                 user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
@@ -1294,7 +1266,7 @@ async def user_api_key_auth(  # noqa: PLR0915
         )
 
 
-def _return_user_api_key_auth_obj(
+async def _return_user_api_key_auth_obj(
     user_obj: Optional[LiteLLM_UserTable],
     api_key: str,
     parent_otel_span: Optional[Span],
@@ -1304,14 +1276,18 @@ def _return_user_api_key_auth_obj(
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
-    user_api_key_service_logger_obj.service_success_hook(
-        service=ServiceTypes.AUTH,
-        call_type=route,
-        start_time=start_time,
-        end_time=end_time,
-        duration=end_time.timestamp() - start_time.timestamp(),
-        parent_otel_span=parent_otel_span,
+
+    asyncio.create_task(
+        user_api_key_service_logger_obj.async_service_success_hook(
+            service=ServiceTypes.AUTH,
+            call_type=route,
+            start_time=start_time,
+            end_time=end_time,
+            duration=end_time.timestamp() - start_time.timestamp(),
+            parent_otel_span=parent_otel_span,
+        )
     )
+
     retrieved_user_role = (
         user_role or _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
     )

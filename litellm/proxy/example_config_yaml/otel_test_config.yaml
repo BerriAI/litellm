@@ -37,6 +37,7 @@ model_list:
 litellm_settings:
   cache: true
   callbacks: ["otel", "prometheus"]
+  disable_end_user_cost_tracking_prometheus_only: True
 
 guardrails:
   - guardrail_name: "aporia-pre-guard"

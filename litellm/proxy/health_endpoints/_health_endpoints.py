@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional, Union
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -473,7 +473,7 @@ async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, version
+    from litellm.proxy.proxy_server import prisma_client, version
 
     try:
         # get success callback

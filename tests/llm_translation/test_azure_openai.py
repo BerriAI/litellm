@@ -6,8 +6,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import pytest
-from litellm.llms.AzureOpenAI.common_utils import process_azure_headers
+from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 
 def test_process_azure_headers_empty():
@@ -112,7 +113,14 @@ import os
         ({"prompt": "Hello world"}, "image_generation"),
     ],
 )
-def test_azure_extra_headers(input, call_type):
+@pytest.mark.parametrize(
+    "header_value",
+    [
+        "headers",
+        "extra_headers",
+    ],
+)
+def test_azure_extra_headers(input, call_type, header_value):
     from litellm import embedding, image_generation
 
     http_client = Client()
@@ -127,18 +135,21 @@ def test_azure_extra_headers(input, call_type):
                 func = embedding
             elif call_type == "image_generation":
                 func = image_generation
-            response = func(
-                model="azure/chatgpt-v-2",
-                api_base="https://openai-gpt-4-test-v-1.openai.azure.com",
-                api_version="2023-07-01-preview",
-                api_key="my-azure-api-key",
-                extra_headers={
+
+            data = {
+                "model": "azure/chatgpt-v-2",
+                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+                "api_version": "2023-07-01-preview",
+                "api_key": "my-azure-api-key",
+                header_value: {
                     "Authorization": "my-bad-key",
                     "Ocp-Apim-Subscription-Key": "hello-world-testing",
                 },
                 **input,
-            )
+            }
+            response = func(**data)
             print(response)
+
         except Exception as e:
             print(e)
 
@@ -172,7 +183,7 @@ def test_azure_extra_headers(input, call_type):
     ],
 )
 def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
-    from litellm.llms.AzureOpenAI.azure import AzureChatCompletion
+    from litellm.llms.azure.azure import AzureChatCompletion
 
     azure_chat_completion = AzureChatCompletion()
     input_args = {
@@ -188,3 +199,52 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
     }
     result = azure_chat_completion.create_azure_base_url(**input_args)
     assert result == expected_endpoint, "Unexpected endpoint"
+
+
+class TestAzureEmbedding(BaseLLMEmbeddingTest):
+    def get_base_embedding_call_args(self) -> dict:
+        return {
+            "model": "azure/azure-embedding-model",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.AZURE
+
+
+@patch("azure.identity.UsernamePasswordCredential")
+@patch("azure.identity.get_bearer_token_provider")
+def test_get_azure_ad_token_from_username_password(
+    mock_get_bearer_token_provider, mock_credential
+):
+    from litellm.llms.azure.common_utils import (
+        get_azure_ad_token_from_username_password,
+    )
+
+    # Test inputs
+    client_id = "test-client-id"
+    username = "test-username"
+    password = "test-password"
+
+    # Mock the token provider function
+    mock_token_provider = lambda: "mock-token"
+    mock_get_bearer_token_provider.return_value = mock_token_provider
+
+    # Call the function
+    result = get_azure_ad_token_from_username_password(
+        client_id=client_id, azure_username=username, azure_password=password
+    )
+
+    # Verify UsernamePasswordCredential was called with correct arguments
+    mock_credential.assert_called_once_with(
+        client_id=client_id, username=username, password=password
+    )
+
+    # Verify get_bearer_token_provider was called
+    mock_get_bearer_token_provider.assert_called_once_with(
+        mock_credential.return_value, "https://cognitiveservices.azure.com/.default"
+    )
+
+    # Verify the result is the mock token provider
+    assert result == mock_token_provider
