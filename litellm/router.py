@@ -4600,6 +4600,11 @@ class Router:
         - ModelGroupInfo if able to construct a model group
         - None if error constructing model group info or hidden model group
         """
+        key = f"model_group_info_{model_group}"
+        _router_model_group = self.cache.get_cache(key=key, local_only=True)
+        if _router_model_group is not None:
+            return _router_model_group
+
         ## Check if model group alias
         if model_group in self.model_group_alias:
             item = self.model_group_alias[model_group]
@@ -4613,15 +4618,21 @@ class Router:
             else:
                 return None
 
-            return self._set_model_group_info(
+            _router_model_group = self._set_model_group_info(
                 model_group=_router_model_group,
                 user_facing_model_group_name=model_group,
             )
+            self.cache.set_cache(key=key, value=_router_model_group, local_only=True)
+            return _router_model_group
 
         ## Check if actual model
-        return self._set_model_group_info(
+        _router_model_group = self._set_model_group_info(
             model_group=model_group, user_facing_model_group_name=model_group
         )
+        if _router_model_group is not None:
+            self.cache.set_cache(key=key, value=_router_model_group, local_only=True)
+            return _router_model_group
+        return None
 
     async def get_model_group_usage(
         self, model_group: str
