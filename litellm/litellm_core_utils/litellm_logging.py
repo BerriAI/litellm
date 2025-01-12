@@ -889,13 +889,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, Batch)
                     or isinstance(result, FineTuningJob)
                 ):
-                    ## RESPONSE COST ##
-                    self.model_call_details["response_cost"] = (
-                        self._response_cost_calculator(result=result)
-                    )
-
                     ## HIDDEN PARAMS ##
-                    if hasattr(result, "_hidden_params"):
+                    hidden_params = getattr(result, "_hidden_params", {})
+                    if hidden_params:
                         # add to metadata for logging
                         if self.model_call_details.get("litellm_params") is not None:
                             self.model_call_details["litellm_params"].setdefault(
@@ -914,6 +910,15 @@ class Logging(LiteLLMLoggingBaseClass):
                             ] = getattr(
                                 result, "_hidden_params", {}
                             )
+                    ## RESPONSE COST - Only calculate if not in hidden_params ##
+                    if "response_cost" in hidden_params:
+                        self.model_call_details["response_cost"] = hidden_params[
+                            "response_cost"
+                        ]
+                    else:
+                        self.model_call_details["response_cost"] = (
+                            self._response_cost_calculator(result=result)
+                        )
                     ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details["standard_logging_object"] = (
