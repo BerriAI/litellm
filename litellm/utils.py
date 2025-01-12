@@ -3890,9 +3890,11 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
     elif custom_llm_provider and (custom_llm_provider == "databricks"):
         strip_version = _strip_stable_vertex_version(model_name=model)
         return strip_version
-    else:
+    elif "ft:" in model:
         strip_finetune = _strip_openai_finetune_model_name(model_name=model)
         return strip_finetune
+    else:
+        return model
 
 
 def _get_model_info_from_model_cost(key: str) -> dict:
@@ -3969,7 +3971,7 @@ def _get_potential_model_names(
         )
         combined_stripped_model_name = "{}/{}".format(
             custom_llm_provider,
-            _strip_model_name(model=model, custom_llm_provider=custom_llm_provider),
+            stripped_model_name,
         )
 
     return PotentialModelNamesAndCustomLLMProvider(
