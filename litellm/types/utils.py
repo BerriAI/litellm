@@ -4,6 +4,7 @@ import uuid
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.completion_usage import (
@@ -1816,6 +1817,7 @@ class LlmProviders(str, Enum):
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
+    TOPAZ = "topaz"
 
 
 # Create a set of all provider values for quick lookup
@@ -1842,3 +1844,19 @@ class CustomHuggingfaceTokenizer(TypedDict):
     identifier: str
     revision: str  # usually 'main'
     auth_token: Optional[str]
+
+
+class LITELLM_IMAGE_VARIATION_PROVIDERS(Enum):
+    """
+    Try using an enum for endpoints. This should make it easier to track what provider is supported for what endpoint.
+    """
+
+    OPENAI = LlmProviders.OPENAI.value
+    TOPAZ = LlmProviders.TOPAZ.value
+
+
+class HttpHandlerRequestFields(TypedDict, total=False):
+    data: dict  # request body
+    params: dict  # query params
+    files: dict  # file uploads
+    content: Any  # raw content
