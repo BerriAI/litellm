@@ -3890,9 +3890,11 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
     elif custom_llm_provider and (custom_llm_provider == "databricks"):
         strip_version = _strip_stable_vertex_version(model_name=model)
         return strip_version
-    else:
+    elif "ft:" in model:
         strip_finetune = _strip_openai_finetune_model_name(model_name=model)
         return strip_finetune
+    else:
+        return model
 
 
 def _get_model_info_from_model_cost(key: str) -> dict:
@@ -3968,8 +3970,7 @@ def _get_potential_model_names(
             model=model, custom_llm_provider=custom_llm_provider
         )
         combined_stripped_model_name = "{}/{}".format(
-            custom_llm_provider,
-            _strip_model_name(model=model, custom_llm_provider=custom_llm_provider),
+            custom_llm_provider, stripped_model_name
         )
 
     return PotentialModelNamesAndCustomLLMProvider(
@@ -4158,74 +4159,7 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             return ModelInfoBase(
                 key=key,
-                max_tokens=_model_info.get("max_tokens", None),
-                max_input_tokens=_model_info.get("max_input_tokens", None),
-                max_output_tokens=_model_info.get("max_output_tokens", None),
-                input_cost_per_token=_input_cost_per_token,
-                cache_creation_input_token_cost=_model_info.get(
-                    "cache_creation_input_token_cost", None
-                ),
-                cache_read_input_token_cost=_model_info.get(
-                    "cache_read_input_token_cost", None
-                ),
-                input_cost_per_character=_model_info.get(
-                    "input_cost_per_character", None
-                ),
-                input_cost_per_token_above_128k_tokens=_model_info.get(
-                    "input_cost_per_token_above_128k_tokens", None
-                ),
-                input_cost_per_query=_model_info.get("input_cost_per_query", None),
-                input_cost_per_second=_model_info.get("input_cost_per_second", None),
-                input_cost_per_audio_token=_model_info.get(
-                    "input_cost_per_audio_token", None
-                ),
-                output_cost_per_token=_output_cost_per_token,
-                output_cost_per_audio_token=_model_info.get(
-                    "output_cost_per_audio_token", None
-                ),
-                output_cost_per_character=_model_info.get(
-                    "output_cost_per_character", None
-                ),
-                output_cost_per_token_above_128k_tokens=_model_info.get(
-                    "output_cost_per_token_above_128k_tokens", None
-                ),
-                output_cost_per_character_above_128k_tokens=_model_info.get(
-                    "output_cost_per_character_above_128k_tokens", None
-                ),
-                output_cost_per_second=_model_info.get("output_cost_per_second", None),
-                output_cost_per_image=_model_info.get("output_cost_per_image", None),
-                output_vector_size=_model_info.get("output_vector_size", None),
-                litellm_provider=_model_info.get(
-                    "litellm_provider", custom_llm_provider
-                ),
-                mode=_model_info.get("mode"),  # type: ignore
-                supports_system_messages=_model_info.get(
-                    "supports_system_messages", None
-                ),
-                supports_response_schema=_model_info.get(
-                    "supports_response_schema", None
-                ),
-                supports_vision=_model_info.get("supports_vision", False),
-                supports_function_calling=_model_info.get(
-                    "supports_function_calling", False
-                ),
-                supports_assistant_prefill=_model_info.get(
-                    "supports_assistant_prefill", False
-                ),
-                supports_prompt_caching=_model_info.get(
-                    "supports_prompt_caching", False
-                ),
-                supports_audio_input=_model_info.get("supports_audio_input", False),
-                supports_audio_output=_model_info.get("supports_audio_output", False),
-                supports_pdf_input=_model_info.get("supports_pdf_input", False),
-                supports_embedding_image_input=_model_info.get(
-                    "supports_embedding_image_input", False
-                ),
-                supports_native_streaming=_model_info.get(
-                    "supports_native_streaming", None
-                ),
-                tpm=_model_info.get("tpm", None),
-                rpm=_model_info.get("rpm", None),
+                **_model_info,
             )
     except Exception as e:
         if "OllamaError" in str(e):
@@ -4318,6 +4252,20 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
     )
 
     return returned_model_info
+
+
+def get_model_info_for_cost_tracking(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> ModelInfo:
+    """
+    Fast version of get_model_info that doesn't return supported_openai_params
+
+    (Speed optimization for cost tracking)
+    """
+    _model_info = _get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    return ModelInfo(**_model_info, supported_openai_params=None)
 
 
 def json_schema_type(python_type_name: str):
