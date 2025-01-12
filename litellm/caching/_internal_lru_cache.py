@@ -17,7 +17,7 @@ def typed_lru_cache(maxsize: int) -> Callable[[T], T]:
     """
 
     def decorator(f: T) -> T:
-        cached_f = lru_cache(maxsize=maxsize)(f)
+        cached_f = lru_cache(maxsize=maxsize, typed=True)(f)
 
         def wrapper(*args, **kwargs):
             try:
