@@ -622,3 +622,6 @@ AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
 OpenAIAudioTranscriptionOptionalParams = Literal[
     "language", "prompt", "temperature", "response_format", "timestamp_granularities"
 ]
+
+
+OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]
