@@ -538,13 +538,8 @@ async def user_api_key_auth(  # noqa: PLR0915
                 )
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
-        is_mapped_pass_through_route: bool = False
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-            if route.startswith(mapped_route):
-                is_mapped_pass_through_route = True
-        if is_mapped_pass_through_route:
-            if request.headers.get("litellm_user_api_key") is not None:
-                api_key = request.headers.get("litellm_user_api_key") or ""
+        if request.headers.get("litellm_user_api_key") is not None:
+            api_key = request.headers.get("litellm_user_api_key") or ""
         if pass_through_endpoints is not None:
             for endpoint in pass_through_endpoints:
                 if isinstance(endpoint, dict) and endpoint.get("path", "") == route:

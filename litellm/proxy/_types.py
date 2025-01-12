@@ -236,13 +236,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/realtime?{model}",
     ]
 
-    mapped_pass_through_routes = [
-        "/bedrock",
-        "/vertex-ai",
-        "/gemini",
-        "/langfuse",
-    ]
-
     anthropic_routes = [
         "/v1/messages",
     ]
@@ -312,16 +305,18 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
     ]
 
-    public_routes = [
-        "/routes",
-        "/",
-        "/health/liveliness",
-        "/health/liveness",
-        "/health/readiness",
-        "/test",
-        "/config/yaml",
-        "/metrics",
-    ]
+    public_routes = set(
+        [
+            "/routes",
+            "/",
+            "/health/liveliness",
+            "/health/liveness",
+            "/health/readiness",
+            "/test",
+            "/config/yaml",
+            "/metrics",
+        ]
+    )
 
     ui_routes = [
         "/sso",
