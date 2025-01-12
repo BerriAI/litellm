@@ -1657,8 +1657,8 @@ class ProxyConfig:
             return copy.deepcopy(self.config)
         except Exception as e:
             verbose_proxy_logger.debug(
-                "ProxyConfig:get_config_state(): Error returning copy of config state. self.config={}".format(
-                    self.config
+                "ProxyConfig:get_config_state(): Error returning copy of config state. self.config={}\nError: {}".format(
+                    self.config, e
                 )
             )
             return {}
