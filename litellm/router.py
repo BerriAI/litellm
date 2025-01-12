@@ -4592,18 +4592,24 @@ class Router:
 
         return model_group_info
 
-    def get_model_group_info(self, model_group: str) -> Optional[ModelGroupInfo]:
+    def get_model_group_info(
+        self, model_group: str, use_cache: bool = True
+    ) -> Optional[ModelGroupInfo]:
         """
         For a given model group name, return the combined model info
+
+        Args:
+        - model_group: str - the model group name
+        - use_cache: bool - whether to use cache or not. (this is an very expensive CPU operation, if this flag is true return the cached model info)
 
         Returns:
         - ModelGroupInfo if able to construct a model group
         - None if error constructing model group info or hidden model group
         """
-        key = f"model_group_info_{model_group}"
-        _router_model_group = self.cache.get_cache(key=key, local_only=True)
-        if _router_model_group is not None:
-            return _router_model_group
+        if use_cache:
+            cached_info = self._get_cached_model_group_info(model_group)
+            if cached_info is not None:
+                return cached_info
 
         ## Check if model group alias
         if model_group in self.model_group_alias:
@@ -4622,17 +4628,30 @@ class Router:
                 model_group=_router_model_group,
                 user_facing_model_group_name=model_group,
             )
-            self.cache.set_cache(key=key, value=_router_model_group, local_only=True)
+            if use_cache and _router_model_group is not None:
+                self._cache_model_group_info(model_group, _router_model_group)
             return _router_model_group
 
         ## Check if actual model
         _router_model_group = self._set_model_group_info(
             model_group=model_group, user_facing_model_group_name=model_group
         )
-        if _router_model_group is not None:
-            self.cache.set_cache(key=key, value=_router_model_group, local_only=True)
-            return _router_model_group
-        return None
+
+        if use_cache and _router_model_group is not None:
+            self._cache_model_group_info(model_group, _router_model_group)
+        return _router_model_group
+
+    def _get_cached_model_group_info(
+        self, model_group: str
+    ) -> Optional[ModelGroupInfo]:
+        """Helper to get cached model group info"""
+        key = f"model_group_info_{model_group}"
+        return self.cache.get_cache(key=key, local_only=True)
+
+    def _cache_model_group_info(self, model_group: str, info: ModelGroupInfo) -> None:
+        """Helper to cache model group info"""
+        key = f"model_group_info_{model_group}"
+        self.cache.set_cache(key=key, value=info, local_only=True)
 
     async def get_model_group_usage(
         self, model_group: str
