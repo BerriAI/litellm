@@ -57,10 +57,15 @@ def test_openai_image_variation_openai_sdk(image_url):
     print(response)
 
 
-def test_openai_image_variation_litellm_sdk(image_url):
-    from litellm import image_variation
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_image_variation_litellm_sdk(image_url, sync_mode):
+    from litellm import image_variation, aimage_variation
 
-    image_variation(image=image_url, n=2, size="1024x1024")
+    if sync_mode:
+        image_variation(image=image_url, n=2, size="1024x1024")
+    else:
+        await aimage_variation(image=image_url, n=2, size="1024x1024")
 
 
 def test_topaz_image_variation(image_url):
