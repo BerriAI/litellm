@@ -1457,3 +1457,13 @@ def test_supports_vision_gemini():
     from litellm.utils import supports_vision
 
     assert supports_vision("gemini-1.5-pro") is True
+
+
+def test_pick_cheapest_chat_model_from_llm_provider():
+    from litellm.litellm_core_utils.llm_request_utils import (
+        pick_cheapest_chat_models_from_llm_provider,
+    )
+
+    assert len(pick_cheapest_chat_models_from_llm_provider("openai", n=3)) == 3
+
+    assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
