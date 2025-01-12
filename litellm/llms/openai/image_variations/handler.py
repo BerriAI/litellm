@@ -2,7 +2,7 @@
 OpenAI Image Variations Handler
 """
 
-from typing import Callable, Optional, cast
+from typing import Callable, Optional
 
 import httpx
 from openai import AsyncOpenAI, OpenAI

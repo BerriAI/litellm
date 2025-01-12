@@ -1,4 +1,3 @@
-import json
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
 
 import aiohttp

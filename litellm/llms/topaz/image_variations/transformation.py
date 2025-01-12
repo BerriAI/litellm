@@ -11,7 +11,6 @@ from litellm.llms.base_llm.chat.transformation import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
-    FileContent,
     OpenAIImageVariationOptionalParams,
 )
 from litellm.types.utils import (
