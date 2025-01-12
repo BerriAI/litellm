@@ -60,6 +60,7 @@ from litellm.utils import (
     ModelResponse,
     TextCompletionResponse,
     TranscriptionResponse,
+    _get_model_info_helper,
     print_verbose,
     token_counter,
 )
@@ -278,7 +279,7 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
     else:
-        model_info = litellm.get_model_info(
+        model_info = _get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
