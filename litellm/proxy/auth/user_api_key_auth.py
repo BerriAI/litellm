@@ -314,11 +314,15 @@ async def user_api_key_auth(  # noqa: PLR0915
             or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
-            return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+            return UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+                request_body=request_data,
+            )
         elif is_pass_through_provider_route(route=route):
             if should_run_auth_on_pass_through_provider_route(route=route) is False:
                 return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+                    user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+                    request_body=request_data,
                 )
 
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
@@ -368,6 +372,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                         return UserAPIKeyAuth(
                             user_role=LitellmUserRoles.PROXY_ADMIN,
                             parent_otel_span=parent_otel_span,
+                            request_body=request_data,
                         )
                     else:
                         allowed_routes: List[Any] = (
@@ -535,6 +540,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
                     end_user_id=end_user_id,
+                    request_body=request_data,
                 )
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
@@ -550,7 +556,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
                     ## IF AUTH DISABLED
                     if endpoint.get("auth") is not True:
-                        return UserAPIKeyAuth()
+                        return UserAPIKeyAuth(request_body=request_data)
                     ## IF AUTH ENABLED
                     ### IF CUSTOM PARSER REQUIRED
                     if (
@@ -582,11 +588,13 @@ async def user_api_key_auth(  # noqa: PLR0915
                     api_key=api_key,
                     user_role=LitellmUserRoles.PROXY_ADMIN,
                     parent_otel_span=parent_otel_span,
+                    request_body=request_data,
                 )
             else:
                 return UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
                     parent_otel_span=parent_otel_span,
+                    request_body=request_data,
                 )
         elif api_key is None:  # only require api key if master key is set
             raise Exception("No api key passed in.")
@@ -598,7 +606,7 @@ async def user_api_key_auth(  # noqa: PLR0915
 
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) is True:
-                return UserAPIKeyAuth()
+                return UserAPIKeyAuth(request_body=request_data)
             else:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -733,6 +741,7 @@ async def user_api_key_auth(  # noqa: PLR0915
 
         if is_master_key_valid:
             _user_api_key_obj = await _return_user_api_key_auth_obj(
+                request_data=request_data,
                 user_obj=None,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key=master_key,
@@ -1210,6 +1219,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 valid_token_dict=valid_token_dict,
                 route=route,
                 start_time=start_time,
+                request_data=request_data,
             )
         else:
             raise Exception()
@@ -1273,6 +1283,7 @@ async def _return_user_api_key_auth_obj(
     valid_token_dict: dict,
     route: str,
     start_time: datetime,
+    request_data: dict,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
@@ -1296,6 +1307,7 @@ async def _return_user_api_key_auth_obj(
         "api_key": api_key,
         "parent_otel_span": parent_otel_span,
         "user_role": retrieved_user_role,
+        "request_body": request_data,
         **valid_token_dict,
     }
     if user_obj is not None:
