@@ -4004,6 +4004,7 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
+@lru_cache(maxsize=16)
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
