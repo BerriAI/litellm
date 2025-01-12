@@ -38,12 +38,9 @@ def test_get_model_info_custom_llm_with_same_name_vllm():
     """
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
-    try:
-        model_info = litellm.get_model_info(model, custom_llm_provider=provider)
-        print("model_info", model_info)
-        pytest.fail("Expected get model info to fail for an unmapped model/provider")
-    except Exception:
-        pass
+    model_info = litellm.get_model_info(model, custom_llm_provider=provider)
+    print("model_info", model_info)
+    assert model_info["input_cost_per_token"] == 0.0
 
 
 def test_get_model_info_shows_correct_supports_vision():

@@ -271,3 +271,21 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             max_input_tokens=None,
             max_output_tokens=None,
         )
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        return (
+            api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+
+    @staticmethod
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        return (
+            api_base
+            or litellm.api_base
+            or get_secret_str("OPENAI_API_BASE")
+            or "https://api.openai.com/v1"
+        )

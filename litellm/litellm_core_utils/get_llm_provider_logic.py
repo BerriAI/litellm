@@ -100,6 +100,7 @@ def get_llm_provider(  # noqa: PLR0915
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
+
     try:
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params is not None:

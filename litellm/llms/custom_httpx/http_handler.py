@@ -496,7 +496,6 @@ class HTTPHandler:
         content: Any = None,
     ):
         try:
-
             if timeout is not None:
                 req = self.client.build_request(
                     "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout, files=files, content=content  # type: ignore

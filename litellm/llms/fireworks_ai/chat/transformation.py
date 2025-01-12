@@ -250,3 +250,12 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         models = response.json()["models"]
         return ["fireworks_ai/" + model["name"] for model in models]
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        return api_key or (
+            get_secret_str("FIREWORKS_API_KEY")
+            or get_secret_str("FIREWORKS_AI_API_KEY")
+            or get_secret_str("FIREWORKSAI_API_KEY")
+            or get_secret_str("FIREWORKS_AI_TOKEN")
+        )

@@ -27,3 +27,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
             )
         models = super().get_models(api_key=api_key, api_base=api_base)
         return [f"litellm_proxy/{model}" for model in models]
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        return api_key or get_secret_str("LITELLM_PROXY_API_KEY")

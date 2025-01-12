@@ -181,6 +181,9 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.image_variations.transformation import (
+    BaseImageVariationConfig,
+)
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
 from ._logging import verbose_logger
@@ -2036,7 +2039,8 @@ def get_litellm_params(
     drop_params: Optional[bool] = None,
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
-):
+    **kwargs,
+) -> dict:
     litellm_params = {
         "acompletion": acompletion,
         "api_key": api_key,
@@ -6161,9 +6165,24 @@ class ProviderConfigManager:
     ) -> Optional[BaseLLMModelInfo]:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
+        elif LlmProviders.OPENAI == provider:
+            return litellm.OpenAIGPTConfig()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
+        elif LlmProviders.TOPAZ == provider:
+            return litellm.TopazModelInfo()
 
+        return None
+
+    @staticmethod
+    def get_provider_image_variation_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseImageVariationConfig]:
+        if LlmProviders.OPENAI == provider:
+            return litellm.OpenAIImageVariationConfig()
+        elif LlmProviders.TOPAZ == provider:
+            return litellm.TopazImageVariationConfig()
         return None
 
 
