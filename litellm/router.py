@@ -19,6 +19,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -4696,11 +4697,22 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
+    @lru_cache(maxsize=64)
+    def _cached_get_model_group_info(
+        self, model_group: str
+    ) -> Optional[ModelGroupInfo]:
+        """
+        Cached version of get_model_group_info, uses @lru_cache wrapper
+
+        This is a speed optimization, since set_response_headers makes a call to get_model_group_info on every request
+        """
+        return self.get_model_group_info(model_group)
+
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
 
         current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
-        model_group_info = self.get_model_group_info(model_group)
+        model_group_info = self._cached_get_model_group_info(model_group)
 
         if model_group_info is not None and model_group_info.tpm is not None:
             tpm_limit = model_group_info.tpm
