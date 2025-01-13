@@ -4044,11 +4044,14 @@ class Router:
             return True
         return False
 
+    def get_cpu_count(self):
+        return os.cpu_count() or 1  # in case cpu_count return None, assumed to be 1
+
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
-        cpu_count = os.cpu_count() or 1 # in case cpu_count return None, assumed to be 1
+        cpu_count = self.get_cpu_count()
         if cpu_count > 1:
             with ProcessPoolExecutor() as executor:
                 results = executor.map(self._process_model, original_model_list)
