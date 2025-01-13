@@ -177,7 +177,7 @@ class GenericLiteLLMParams(BaseModel):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
 
-    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True, frozen=True)
 
     def __init__(
         self,
@@ -249,7 +249,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
     """
 
     model: str
-    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True, frozen=True)
 
     def __init__(
         self,
