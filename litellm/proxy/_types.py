@@ -2,6 +2,7 @@ import enum
 import json
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
@@ -123,6 +124,7 @@ class LitellmTableNames(str, enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
 
 
+@lru_cache(maxsize=16)
 def hash_token(token: str):
     import hashlib
 
