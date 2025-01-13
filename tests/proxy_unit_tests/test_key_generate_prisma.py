@@ -3099,7 +3099,6 @@ async def test_team_access_groups(prisma_client):
     generated_key = key.key
     bearer_token = "Bearer " + generated_key
 
-    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
     for model in ["gpt-4o", "gemini-pro-vision"]:
@@ -3109,6 +3108,8 @@ async def test_team_access_groups(prisma_client):
             # return string as bytes
             return return_string.encode()
 
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
         request.body = return_body
 
         # use generated key to auth in
@@ -3124,6 +3125,8 @@ async def test_team_access_groups(prisma_client):
             # return string as bytes
             return return_string.encode()
 
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
         request.body = return_body_2
 
         # use generated key to auth in
