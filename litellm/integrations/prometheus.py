@@ -449,7 +449,6 @@ class PrometheusLogger(CustomLogger):
             # why type ignore below?
             # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
-            standard_logging_payload=standard_logging_payload,  # type: ignore
             enum_values=enum_values,
         )
 

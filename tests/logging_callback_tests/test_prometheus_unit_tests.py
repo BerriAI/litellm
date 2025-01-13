@@ -331,7 +331,6 @@ def test_set_latency_metrics(prometheus_logger):
         user_api_key_alias="alias1",
         user_api_team="team1",
         user_api_team_alias="team_alias1",
-        standard_logging_payload=standard_logging_payload,
         enum_values=enum_values,
     )
 
