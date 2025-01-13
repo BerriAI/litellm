@@ -543,7 +543,8 @@ class Delta(OpenAIObject):
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
-        return getattr(self, key, default)
+        value = getattr(self, key, default)
+        return default if value is None else value
 
     def __getitem__(self, key):
         # Allow dictionary-style access to attributes
