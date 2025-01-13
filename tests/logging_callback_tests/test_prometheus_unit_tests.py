@@ -112,6 +112,7 @@ async def test_async_log_success_event(prometheus_logger):
     standard_logging_object = create_standard_logging_payload()
     kwargs = {
         "model": "gpt-3.5-turbo",
+        "stream": True,
         "litellm_params": {
             "metadata": {
                 "user_api_key": "test_key",
