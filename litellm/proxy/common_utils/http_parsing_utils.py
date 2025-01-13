@@ -23,9 +23,11 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             return {}
 
         # Check if we already read and parsed the body
-        parsed_body = _safe_get_request_parsed_body(request=request)
-        if parsed_body is not None:
-            return parsed_body
+        _cached_request_body: Optional[dict] = _safe_get_request_parsed_body(
+            request=request
+        )
+        if _cached_request_body is not None:
+            return _cached_request_body
 
         _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
@@ -65,7 +67,8 @@ def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
 
 
 def _safe_set_request_parsed_body(
-    request: Optional[Request], parsed_body: dict
+    request: Optional[Request],
+    parsed_body: dict,
 ) -> None:
     try:
         if request is None:
