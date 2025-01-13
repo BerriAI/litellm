@@ -640,8 +640,7 @@ class PrometheusLogger(CustomLogger):
         if (
             completion_start_time is not None
             and isinstance(completion_start_time, datetime)
-            and model_parameters.get("stream")
-            is True  # only emit for streaming requests
+            and kwargs.get("stream") is True is True  # only emit for streaming requests
         ):
             time_to_first_token_seconds = (
                 completion_start_time - api_call_start_time
