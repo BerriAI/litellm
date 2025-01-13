@@ -99,6 +99,7 @@ class HuggingfaceChatConfig(BaseConfig):
             "stop",
             "n",
             "echo",
+            "response_format",
         ]
 
     def map_openai_params(
