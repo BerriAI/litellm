@@ -956,7 +956,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_prompt_caching": true
     },
     "azure/o1-preview": {
