@@ -1,15 +1,19 @@
 model_list:
-  - model_name: "gpt-4"
+  - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: openai/fake
+      model: aiohttp_openai/fake
       api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      api_base: https://exampleopenaiendpoint-production.up.railway.app
+      input_cost_per_token: "0.0001"
+      output_cost_per_token: "0.0001"
+  - model_name: "fake-openai-endpoint-2"
+    litellm_params:
+      model: aiohttp_openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app
+      input_cost_per_token: "0.0001"
+      output_cost_per_token: "0.0001"
 
-general_settings:    
-    alerting: ["slack"]
-    alert_to_webhook_url: {
-      "budget_alerts": ["https://hooks.slack.com/services/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"]
-    }
-    alerting_args:
-       budget_alert_ttl: 10
-       log_to_console: true
+
+
+
