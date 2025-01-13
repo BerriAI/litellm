@@ -4434,6 +4434,8 @@ def image_generation(  # noqa: PLR0915
             },
             custom_llm_provider=custom_llm_provider,
         )
+        if "custom_llm_provider" not in logging.model_call_details:
+            logging.model_call_details["custom_llm_provider"] = custom_llm_provider
         if mock_response is not None:
             return mock_image_generation(model=model, mock_response=mock_response)
 
