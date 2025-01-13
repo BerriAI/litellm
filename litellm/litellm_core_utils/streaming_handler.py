@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -1576,14 +1577,14 @@ class CustomStreamWrapper:
                         cache_hit=cache_hit,
                     )
 
-                    asyncio.create_task(
+                    create_background_task(
                         self.logging_obj.async_success_handler(
                             processed_chunk, cache_hit=cache_hit
                         )
                     )
 
                     if self.logging_obj._llm_caching_handler is not None:
-                        asyncio.create_task(
+                        create_background_task(
                             self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
                                 processed_chunk=cast(ModelResponse, processed_chunk),
                             )
@@ -1637,7 +1638,7 @@ class CustomStreamWrapper:
                             target=self.logging_obj.success_handler,
                             args=(processed_chunk, None, None, cache_hit),
                         ).start()  # log processed_chunk
-                        asyncio.create_task(
+                        create_background_task(
                             self.logging_obj.async_success_handler(
                                 processed_chunk, cache_hit=cache_hit
                             )
@@ -1674,7 +1675,7 @@ class CustomStreamWrapper:
                     target=self.logging_obj.success_handler,
                     args=(response, None, None, cache_hit),
                 ).start()  # log response
-                asyncio.create_task(
+                create_background_task(
                     self.logging_obj.async_success_handler(
                         response, cache_hit=cache_hit
                     )
@@ -1691,7 +1692,7 @@ class CustomStreamWrapper:
                     target=self.logging_obj.success_handler,
                     args=(processed_chunk, None, None, cache_hit),
                 ).start()  # log response
-                asyncio.create_task(
+                create_background_task(
                     self.logging_obj.async_success_handler(
                         processed_chunk, cache_hit=cache_hit
                     )
@@ -1710,7 +1711,7 @@ class CustomStreamWrapper:
                     args=(e, traceback_exception),
                 ).start()  # log response
                 # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
+                create_background_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)
                 )
             raise e
@@ -1723,7 +1724,7 @@ class CustomStreamWrapper:
                     args=(e, traceback_exception),
                 ).start()  # log response
                 # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
+                create_background_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
             ## Map to OpenAI Exception

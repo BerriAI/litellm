@@ -27,6 +27,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
@@ -52,7 +53,7 @@ class RouterBudgetLimiting(CustomLogger):
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
-        asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
+        create_background_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: Optional[GenericBudgetConfigType] = (
             provider_budget_config
         )
@@ -492,7 +493,7 @@ class RouterBudgetLimiting(CustomLogger):
                 self.redis_increment_operation_queue,
             )
             if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
+                create_background_task(
                     self.dual_cache.redis_cache.async_increment_pipeline(
                         increment_list=self.redis_increment_operation_queue,
                     )
@@ -745,7 +746,7 @@ class RouterBudgetLimiting(CustomLogger):
                         budget_limit=config.get("budget_limit"),
                         time_period=config.get("time_period"),
                     )
-                asyncio.create_task(
+                create_background_task(
                     self._init_provider_budget_in_cache(
                         provider=provider,
                         budget_config=self.provider_budget_config[provider],

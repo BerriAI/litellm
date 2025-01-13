@@ -9,6 +9,7 @@ from typing import Dict, List
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -65,7 +66,7 @@ class OpikLogger(CustomBatchLogger):
         self.opik_workspace = opik_workspace
         self.opik_api_key = opik_api_key
         try:
-            asyncio.create_task(self.periodic_flush())
+            create_background_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
         except Exception as e:
             verbose_logger.exception(

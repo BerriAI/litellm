@@ -19,6 +19,7 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -501,7 +502,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                             spend=global_proxy_spend,
                             token=jwt_valid_token["token"],
                         )
-                        asyncio.create_task(
+                        create_background_task(
                             proxy_logging_obj.budget_alerts(
                                 type="proxy_budget",
                                 user_info=user_info,
@@ -744,7 +745,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-            asyncio.create_task(
+            create_background_task(
                 _cache_key_object(
                     hashed_token=hash_token(master_key),
                     user_api_key_obj=_user_api_key_obj,
@@ -1000,7 +1001,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     user_email=user_email,
                     key_alias=valid_token.key_alias,
                 )
-                asyncio.create_task(
+                create_background_task(
                     proxy_logging_obj.budget_alerts(
                         type="token_budget",
                         user_info=call_info,
@@ -1034,7 +1035,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     user_email=None,
                     key_alias=valid_token.key_alias,
                 )
-                asyncio.create_task(
+                create_background_task(
                     proxy_logging_obj.budget_alerts(
                         type="soft_budget",
                         user_info=call_info,
@@ -1073,7 +1074,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                     team_id=valid_token.team_id,
                     team_alias=valid_token.team_alias,
                 )
-                asyncio.create_task(
+                create_background_task(
                     proxy_logging_obj.budget_alerts(
                         type="team_budget",
                         user_info=call_info,
@@ -1139,7 +1140,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                         user_id=litellm_proxy_admin_name,
                         team_id=valid_token.team_id,
                     )
-                    asyncio.create_task(
+                    create_background_task(
                         proxy_logging_obj.budget_alerts(
                             type="proxy_budget",
                             user_info=call_info,
@@ -1163,7 +1164,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             api_key = valid_token.token
 
             # Add hashed token to cache
-            asyncio.create_task(
+            create_background_task(
                 _cache_key_object(
                     hashed_token=api_key,
                     user_api_key_obj=valid_token,
@@ -1232,7 +1233,7 @@ async def user_api_key_auth(  # noqa: PLR0915
             api_key=api_key,
         )
         request_data = await _read_request_body(request=request)
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=e,
@@ -1277,7 +1278,7 @@ async def _return_user_api_key_auth_obj(
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
 
-    asyncio.create_task(
+    create_background_task(
         user_api_key_service_logger_obj.async_service_success_hook(
             service=ServiceTypes.AUTH,
             call_type=route,

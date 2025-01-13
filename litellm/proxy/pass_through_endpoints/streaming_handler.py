@@ -6,6 +6,7 @@ from typing import List, Optional
 import httpx
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.utils import StandardPassThroughResponseObject
@@ -45,7 +46,7 @@ class PassThroughStreamingHandler:
             # After all chunks are processed, handle post-processing
             end_time = datetime.now()
 
-            asyncio.create_task(
+            create_background_task(
                 PassThroughStreamingHandler._route_streaming_logging_to_handler(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,

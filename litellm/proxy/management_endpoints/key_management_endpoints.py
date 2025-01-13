@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -523,7 +524,7 @@ async def generate_key_fn(  # noqa: PLR0915
             data.soft_budget
         )  # include the user-input soft budget in the response
 
-        asyncio.create_task(
+        create_background_task(
             KeyManagementEventHooks.async_key_generated_hook(
                 data=data,
                 response=response,
@@ -719,7 +720,7 @@ async def update_key_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        asyncio.create_task(
+        create_background_task(
             KeyManagementEventHooks.async_key_updated_hook(
                 data=data,
                 existing_key_row=existing_key_row,
@@ -856,7 +857,7 @@ async def delete_key_fn(
             f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
         )
 
-        asyncio.create_task(
+        create_background_task(
             KeyManagementEventHooks.async_key_deleted_hook(
                 data=data,
                 keys_being_deleted=_keys_being_deleted,
@@ -1706,7 +1707,7 @@ async def block_key(
                 param="key",
                 code=status.HTTP_404_NOT_FOUND,
             )
-        asyncio.create_task(
+        create_background_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
@@ -1813,7 +1814,7 @@ async def unblock_key(
                 param="key",
                 code=status.HTTP_404_NOT_FOUND,
             )
-        asyncio.create_task(
+        create_background_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),

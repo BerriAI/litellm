@@ -19,6 +19,7 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.openai.openai import OpenAIBatchesAPI
@@ -87,7 +88,7 @@ async def acreate_batch(
 
         # Start async logging job
         if response is not None:
-            asyncio.create_task(
+            create_background_task(
                 batches_async_logging(
                     logging_obj=kwargs.get("litellm_logging_obj", None),
                     batch_id=response.id,
