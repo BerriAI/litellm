@@ -626,17 +626,13 @@ class PrometheusLogger(CustomLogger):
         user_api_key_alias: Optional[str],
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
-        standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
     ):
         # latency metrics
-        model_parameters: dict = standard_logging_payload["model_parameters"]
         end_time: datetime = kwargs.get("end_time") or datetime.now()
         start_time: Optional[datetime] = kwargs.get("start_time")
         api_call_start_time = kwargs.get("api_call_start_time", None)
-
         completion_start_time = kwargs.get("completion_start_time", None)
-
         if (
             completion_start_time is not None
             and isinstance(completion_start_time, datetime)
