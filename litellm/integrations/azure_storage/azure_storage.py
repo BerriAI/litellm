@@ -8,6 +8,7 @@ from typing import List, Optional
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.llms.azure.common_utils import get_azure_ad_token_from_entrata_id
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -57,7 +58,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 None  # the expiry time of the currentAzure AD token
             )
 
-            asyncio.create_task(self.periodic_flush())
+            create_background_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[StandardLoggingPayload] = []
             super().__init__(**kwargs, flush_lock=self.flush_lock)

@@ -4,6 +4,7 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import Request
+from litellm.litellm_core_utils.async_utils import create_background_task
 from starlette.datastructures import Headers
 
 import litellm
@@ -616,7 +617,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     end_time = time.time()
-    asyncio.create_task(
+    create_background_task(
         service_logger_obj.async_service_success_hook(
             service=ServiceTypes.PROXY_PRE_CALL,
             duration=end_time - start_time,

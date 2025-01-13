@@ -55,6 +55,7 @@ from tokenizers import Tokenizer
 import litellm
 import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
+from litellm.litellm_core_utils.async_utils import create_background_task
 import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching.caching import DualCache
@@ -275,7 +276,6 @@ last_fetched_at_keys = None
 #  'model': 'claude-instant-1',
 #  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
 # }
-
 
 ############################################################
 def print_verbose(
@@ -608,9 +608,10 @@ async def _client_async_logging_helper(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
         # check if user does not want this to be logged
-        asyncio.create_task(
+        create_background_task(
             logging_obj.async_success_handler(result, start_time, end_time)
         )
+
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
@@ -1150,7 +1151,7 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
+            create_background_task(
                 _client_async_logging_helper(
                     logging_obj=logging_obj,
                     result=result,
@@ -1159,6 +1160,7 @@ def client(original_function):  # noqa: PLR0915
                     is_completion_with_fallbacks=is_completion_with_fallbacks,
                 )
             )
+
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,

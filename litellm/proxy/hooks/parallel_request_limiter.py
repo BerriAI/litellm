@@ -11,6 +11,7 @@ from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -463,7 +464,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 values_to_update_in_cache=values_to_update_in_cache,
             )
 
-        asyncio.create_task(
+        create_background_task(
             self.internal_usage_cache.async_batch_set_cache(
                 cache_list=values_to_update_in_cache,
                 ttl=60,

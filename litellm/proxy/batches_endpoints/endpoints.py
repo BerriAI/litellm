@@ -16,6 +16,7 @@ from litellm.batches.main import (
     CreateBatchRequest,
     RetrieveBatchRequest,
 )
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
@@ -124,7 +125,7 @@ async def create_batch(
             )
 
         ### ALERTING ###
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -233,7 +234,7 @@ async def retrieve_batch(
             )
 
         ### ALERTING ###
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -430,7 +431,7 @@ async def cancel_batch(
         )
 
         ### ALERTING ###
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 
 from .router_callbacks.track_deployment_metrics import (
@@ -195,7 +196,7 @@ def _set_cooldown_deployments(
         )
 
         # Trigger cooldown callback handler
-        asyncio.create_task(
+        create_background_task(
             router_cooldown_event_callback(
                 litellm_router_instance=litellm_router_instance,
                 deployment_id=deployment,

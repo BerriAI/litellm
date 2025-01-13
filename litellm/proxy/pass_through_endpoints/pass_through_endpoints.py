@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     ConfigFieldInfo,
@@ -172,35 +173,35 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         router_model_names = llm_router.model_names if llm_router is not None else []
         # skip router if user passed their key
         if "api_key" in data:
-            llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
+            llm_response = create_background_task(litellm.aadapter_completion(**data))
         elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            llm_response = create_background_task(llm_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            llm_response = create_background_task(llm_router.aadapter_completion(**data))
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(
+            llm_response = create_background_task(
                 llm_router.aadapter_completion(**data, specific_deployment=True)
             )
         elif (
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            llm_response = create_background_task(llm_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
             and llm_router.default_deployment is not None
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+            llm_response = create_background_task(llm_router.aadapter_completion(**data))
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
+            llm_response = create_background_task(litellm.aadapter_completion(**data))
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -220,7 +221,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         response_cost = hidden_params.get("response_cost", None) or ""
 
         ### ALERTING ###
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.update_request_status(
                 litellm_call_id=data.get("litellm_call_id", ""), status="success"
             )
@@ -508,7 +509,7 @@ async def pass_through_request(  # noqa: PLR0915
         response_body: Optional[dict] = get_response_body(response)
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
-        asyncio.create_task(
+        create_background_task(
             pass_through_endpoint_logging.pass_through_async_success_handler(
                 httpx_response=response,
                 response_body=response_body,

@@ -4,6 +4,7 @@ from typing import Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -82,7 +83,7 @@ async def _PROXY_track_cost_callback(
                 )
 
                 # update cache
-                asyncio.create_task(
+                create_background_task(
                     update_cache(
                         token=user_api_key,
                         user_id=user_id,
@@ -126,7 +127,7 @@ async def _PROXY_track_cost_callback(
         model = kwargs.get("model", "")
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
         error_msg += f"\n Args to _PROXY_track_cost_callback\n model: {model}\n metadata: {metadata}\n"
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.failed_tracking_alert(
                 error_message=error_msg,
                 failing_model=model,

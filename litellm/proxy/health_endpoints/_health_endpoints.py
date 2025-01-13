@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -198,10 +199,10 @@ async def health_services_endpoint(  # noqa: PLR0915
                     )
 
                 if prisma_client is not None:
-                    asyncio.create_task(
+                    create_background_task(
                         proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
                     )
-                    asyncio.create_task(
+                    create_background_task(
                         proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report()
                     )
 

@@ -41,6 +41,7 @@ from typing_extensions import overload
 
 import litellm
 import litellm.litellm_core_utils
+from litellm.litellm_core_utils.async_utils import create_background_task
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
@@ -826,7 +827,7 @@ class Router:
                 response = await self.async_function_with_fallbacks(**kwargs)
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
@@ -839,7 +840,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -873,7 +874,7 @@ class Router:
             )
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
@@ -1301,7 +1302,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -1589,7 +1590,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -1702,7 +1703,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -1856,7 +1857,7 @@ class Router:
             )
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -1877,7 +1878,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -2025,7 +2026,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -2123,7 +2124,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -2291,7 +2292,7 @@ class Router:
             response = await self.async_function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -2385,7 +2386,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -2490,7 +2491,7 @@ class Router:
 
             return response
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -2642,7 +2643,7 @@ class Router:
                 )
             )
         except Exception as e:
-            asyncio.create_task(
+            create_background_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
                     request_kwargs=kwargs,
@@ -3840,7 +3841,7 @@ class Router:
                 except litellm.RateLimitError as e:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
-                        asyncio.create_task(
+                        create_background_task(
                             logging_obj.async_failure_handler(
                                 exception=e,
                                 traceback_exception=traceback.format_exc(),
@@ -3863,7 +3864,7 @@ class Router:
                 except Exception as e:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
-                        asyncio.create_task(
+                        create_background_task(
                             logging_obj.async_failure_handler(
                                 exception=e,
                                 traceback_exception=traceback.format_exc(),
@@ -3913,7 +3914,7 @@ class Router:
                 except Exception as e:
                     ## LOG FAILURE EVENT
                     if logging_obj is not None:
-                        asyncio.create_task(
+                        create_background_task(
                             logging_obj.async_failure_handler(
                                 exception=e,
                                 traceback_exception=traceback.format_exc(),
@@ -5544,7 +5545,7 @@ class Router:
 
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
@@ -5569,7 +5570,7 @@ class Router:
                         args=(e, traceback_exception),
                     ).start()  # log response
                     # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(
+                    create_background_task(
                         logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                     )
             raise e

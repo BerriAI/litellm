@@ -13,6 +13,7 @@ from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.router import ModelGroupInfo
 from litellm.utils import get_utc_datetime
@@ -243,7 +244,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
             elif available_rpm is not None or available_tpm is not None:
                 ## UPDATE CACHE WITH ACTIVE PROJECT
-                asyncio.create_task(
+                create_background_task(
                     self.internal_usage_cache.async_set_cache_sadd(  # this is a set
                         model=data["model"],  # type: ignore
                         value=[user_api_key_dict.token or "default_key"],

@@ -10,6 +10,7 @@ from functools import wraps
 from typing import Callable, Dict, Tuple
 
 from litellm._service_logger import ServiceTypes
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -45,7 +46,7 @@ def log_db_metrics(func):
             from litellm.proxy.proxy_server import proxy_logging_obj
 
             if "PROXY" not in func.__name__:
-                asyncio.create_task(
+                create_background_task(
                     proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.DB,
                         call_type=func.__name__,
@@ -74,7 +75,7 @@ def log_db_metrics(func):
                 if parent_otel_span is not None:
                     metadata = get_litellm_metadata_from_kwargs(kwargs=passed_kwargs)
 
-                    asyncio.create_task(
+                    create_background_task(
                         proxy_logging_obj.service_logging_obj.async_service_success_hook(
                             service=ServiceTypes.BATCH_WRITE_TO_DB,
                             call_type=func.__name__,
