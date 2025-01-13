@@ -12,6 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from dotenv import load_dotenv
 
@@ -117,6 +118,38 @@ def test_init_clients_basic():
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
 
+@patch("os.cpu_count")
+def test_init_clients_basic_with_mocked_cpu(mocked_cpu_count):
+    litellm.set_verbose = True
+    try:
+        print("Test basic client init")
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+        ]
+        for cpu_count, expected_cpu_count in [(None, 1), (1, 1),(4, 4)]:
+            mocked_cpu_count.return_value = cpu_count
+            router = Router(model_list=model_list)
+            assert router.get_cpu_count() == expected_cpu_count
+            for elem in router.model_list:
+                model_id = elem["model_info"]["id"]
+                assert router.cache.get_cache(f"{model_id}_client") is not None
+                assert router.cache.get_cache(f"{model_id}_async_client") is not None
+                assert router.cache.get_cache(f"{model_id}_stream_client") is not None
+                assert router.cache.get_cache(f"{model_id}_stream_async_client") is not None
+            print("PASSED !")
+
+        # see if we can init clients without timeout or max retries set
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
 
 # test_init_clients_basic()
 
