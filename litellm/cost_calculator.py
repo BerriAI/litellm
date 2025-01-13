@@ -922,8 +922,19 @@ def default_image_cost_calculator(
     elif base_model_name in litellm.model_cost:
         cost_info = litellm.model_cost[base_model_name]
     else:
-        raise Exception(
-            f"Model not found in cost map. Tried {model_name_with_quality} and {base_model_name}"
+        # Try without provider prefix
+        model_without_provider = f"{size_str}/{model.split('/')[-1]}"
+        model_with_quality_without_provider = (
+            f"{quality}/{model_without_provider}" if quality else model_without_provider
         )
+
+        if model_with_quality_without_provider in litellm.model_cost:
+            cost_info = litellm.model_cost[model_with_quality_without_provider]
+        elif model_without_provider in litellm.model_cost:
+            cost_info = litellm.model_cost[model_without_provider]
+        else:
+            raise Exception(
+                f"Model not found in cost map. Tried {model_name_with_quality}, {base_model_name}, {model_with_quality_without_provider}, and {model_without_provider}"
+            )
 
     return cost_info["input_cost_per_pixel"] * height * width * n
