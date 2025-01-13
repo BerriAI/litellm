@@ -161,6 +161,18 @@ def init_guardrails_v2(  # noqa: PLR0915
                 category_thresholds=litellm_params.get("category_thresholds"),
             )
             litellm.callbacks.append(_lakera_callback)  # type: ignore
+        elif litellm_params["guardrail"] == SupportedGuardrailIntegrations.AIM.value:
+            from litellm.proxy.guardrails.guardrail_hooks.aim import (
+                AimGuardrail,
+            )
+
+            _aim_callback = AimGuardrail(
+                api_base=litellm_params["api_base"],
+                api_key=litellm_params["api_key"],
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params["mode"],
+            )
+            litellm.callbacks.append(_aim_callback)  # type: ignore
         elif (
             litellm_params["guardrail"] == SupportedGuardrailIntegrations.PRESIDIO.value
         ):
