@@ -5,14 +5,17 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 """
 
 import asyncio
+import nest_asyncio
+
 from typing import Any, Dict, List
 
 import litellm
 from litellm.types.utils import EmbeddingResponse
 
+nest_asyncio.apply()
+
 # ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
 # and convert to jpeg if necessary.
-
 
 async def ollama_aembeddings(
     api_base: str,
