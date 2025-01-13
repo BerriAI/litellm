@@ -219,23 +219,3 @@ class UserAPIKeyLabelValues(BaseModel):
     exception_class: Optional[str] = None
     status_code: Optional[str] = None
     fallback_model: Optional[str] = None
-
-    class Config:
-        fields = {
-            "end_user": {"alias": UserAPIKeyLabelNames.END_USER},
-            "user": {"alias": UserAPIKeyLabelNames.USER},
-            "hashed_api_key": {"alias": UserAPIKeyLabelNames.API_KEY_HASH},
-            "api_key_alias": {"alias": UserAPIKeyLabelNames.API_KEY_ALIAS},
-            "team": {"alias": UserAPIKeyLabelNames.TEAM},
-            "team_alias": {"alias": UserAPIKeyLabelNames.TEAM_ALIAS},
-            "requested_model": {"alias": UserAPIKeyLabelNames.REQUESTED_MODEL},
-            "model": {"alias": UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME},
-            "litellm_model_name": {"alias": UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME},
-            "model_id": {"alias": UserAPIKeyLabelNames.MODEL_ID},
-            "api_base": {"alias": UserAPIKeyLabelNames.API_BASE},
-            "api_provider": {"alias": UserAPIKeyLabelNames.API_PROVIDER},
-            "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
-            "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
-            "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
-            "fallback_model": {"alias": UserAPIKeyLabelNames.FALLBACK_MODEL},
-        }
