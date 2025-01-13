@@ -298,7 +298,6 @@ def test_set_latency_metrics(prometheus_logger):
     time to first token, llm api latency, and request total latency metrics are set to the values in the standard logging payload
     """
     standard_logging_payload = create_standard_logging_payload()
-    standard_logging_payload["model_parameters"] = {"stream": True}
     prometheus_logger.litellm_llm_api_time_to_first_token_metric = MagicMock()
     prometheus_logger.litellm_llm_api_latency_metric = MagicMock()
     prometheus_logger.litellm_request_total_latency_metric = MagicMock()
@@ -322,6 +321,7 @@ def test_set_latency_metrics(prometheus_logger):
         "api_call_start_time": now - timedelta(seconds=1.5),  # when the api call starts
         "completion_start_time": now
         - timedelta(seconds=1),  # when the completion starts
+        "stream": True,
     }
 
     prometheus_logger._set_latency_metrics(
