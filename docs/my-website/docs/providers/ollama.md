@@ -147,6 +147,7 @@ model_list:
   - model_name: "llama3.1"             
     litellm_params:
       model: "ollama_chat/llama3.1"
+      keep_alive: "8m" # Optional: Overrides default keep_alive, use -1 for Forever
     model_info:
       supports_function_calling: true
 ```

@@ -1653,7 +1653,15 @@ class ProxyConfig:
 
         Do this, to avoid mutating the config state outside of allowed methods
         """
-        return copy.deepcopy(self.config)
+        try:
+            return copy.deepcopy(self.config)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "ProxyConfig:get_config_state(): Error returning copy of config state. self.config={}\nError: {}".format(
+                    self.config, e
+                )
+            )
+            return {}
 
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str

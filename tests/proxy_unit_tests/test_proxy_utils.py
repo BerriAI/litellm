@@ -1107,6 +1107,29 @@ def test_proxy_config_state_post_init_callback_call():
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
 
 
+def test_proxy_config_state_get_config_state_error():
+    """
+    Ensures that get_config_state does not raise an error when the config is not a valid dictionary
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    import threading
+
+    test_config = {
+        "callback_list": [
+            {
+                "lock": threading.RLock(),  # This will cause the deep copy to fail
+                "name": "test_callback",
+            }
+        ],
+        "model_list": ["gpt-4", "claude-3"],
+    }
+
+    pc = ProxyConfig()
+    pc.config = test_config
+    config = pc.get_config_state()
+    assert config == {}
+
+
 @pytest.mark.parametrize(
     "associated_budget_table, expected_user_api_key_auth_key, expected_user_api_key_auth_value",
     [
