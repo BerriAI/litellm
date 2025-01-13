@@ -21,32 +21,26 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     try:
         if request is None:
             return {}
-
-        # Check if we already read and parsed the body
-        if hasattr(request.state, "parsed_body"):
-            return request.state.parsed_body
-
         _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
-
         if "form" in content_type:
-            parsed_body = dict(await request.form())
+            return dict(await request.form())
         else:
             # Read the request body
             body = await request.body()
 
             # Return empty dict if body is empty or None
             if not body:
-                parsed_body = {}
-            parsed_body = orjson.loads(body)
+                return {}
 
-        # Cache the parsed result
-        request.state.parsed_body = parsed_body
-        return parsed_body
+            # Attempt JSON parsing (safe for untrusted input)
+            return orjson.loads(body)
 
     except (json.JSONDecodeError, orjson.JSONDecodeError):
+        # Log detailed information for debugging
         verbose_proxy_logger.exception("Invalid JSON payload received.")
         return {}
+
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
