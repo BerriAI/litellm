@@ -2,68 +2,17 @@
 Translate from OpenAI's `/v1/audio/transcriptions` to Groq's `/v1/audio/transcriptions`
 """
 
-import types
-from typing import List, Optional, Union
-
+from typing import List
+from ...base_llm.audio_transcription.transformation import (
+    BaseAudioTranscriptionConfig,
+)
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
 import litellm
 
 
-class GroqSTTConfig:
-
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
-
-    def __init__(
-        self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params_stt(self):
+class GroqSTTConfig(OpenAIGPTConfig, BaseAudioTranscriptionConfig):
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return [
             "prompt",
             "response_format",
@@ -74,7 +23,7 @@ class GroqSTTConfig:
     def get_supported_openai_response_formats_stt(self) -> List[str]:
         return ["json", "verbose_json", "text"]
 
-    def map_openai_params_stt(
+    def map_openai_params(
         self,
         non_default_params: dict,
         optional_params: dict,
