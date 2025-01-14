@@ -494,7 +494,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 className="mt-8"
                 label="RPM Limit (requests per minute)" 
                 name="rpm_limit" 
-                help={`rpm_limit cannot exceed team max tpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
+                help={`rpm_limit cannot exceed team max rpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
                 rules={[
                   {
                       validator: async (_, value) => {
