@@ -616,6 +616,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     models: Optional[list] = []
     spend: Optional[float] = 0
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
@@ -646,7 +647,6 @@ class KeyRequestBase(GenerateRequestBase):
 
 
 class GenerateKeyRequest(KeyRequestBase):
-    soft_budget: Optional[float] = None
     send_invite_email: Optional[bool] = None
 
 
