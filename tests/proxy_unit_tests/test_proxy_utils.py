@@ -1407,3 +1407,43 @@ def test_update_key_request_validation():
         temp_budget_increase=100,
         temp_budget_expiry="2024-01-20T00:00:00Z",
     )
+
+
+def test_get_temp_budget_increase():
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+    from litellm.proxy._types import UserAPIKeyAuth
+    from datetime import datetime, timedelta
+
+    expiry = datetime.now() + timedelta(days=1)
+    expiry_in_isoformat = expiry.isoformat()
+
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": expiry_in_isoformat,
+        },
+    )
+    assert _get_temp_budget_increase(valid_token) == 100
+
+
+def test_update_key_budget_with_temp_budget_increase():
+    from litellm.proxy.auth.user_api_key_auth import (
+        _update_key_budget_with_temp_budget_increase,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from datetime import datetime, timedelta
+
+    expiry = datetime.now() + timedelta(days=1)
+    expiry_in_isoformat = expiry.isoformat()
+
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": expiry_in_isoformat,
+        },
+    )
+    assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
