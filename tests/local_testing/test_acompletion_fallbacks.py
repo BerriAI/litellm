@@ -91,3 +91,13 @@ async def test_acompletion_fallbacks_none_response():
         fallbacks=["gpt-3.5-turbo"],  # replace with a model you know works
     )
     assert response is not None
+
+
+async def test_completion_fallbacks_sync():
+    response = litellm.completion(
+        model="openai/unknown-model",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        fallbacks=["openai/gpt-4o-mini"],
+    )
+    print(response)
+    assert response is not None
