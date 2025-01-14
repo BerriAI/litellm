@@ -571,8 +571,10 @@ def prepare_metadata_fields(
     return non_default_values
 
 
-def prepare_key_update_data(
-    data: Union[UpdateKeyRequest, RegenerateKeyRequest], existing_key_row
+async def prepare_key_update_data(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: Union[UpdateKeyRequest, RegenerateKeyRequest],
+    existing_key_row,
 ):
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
@@ -600,6 +602,20 @@ def prepare_key_update_data(
             key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+
+    # Handle soft budget updates
+    if "soft_budget" in non_default_values:
+        if user_api_key_dict is None:
+            raise Exception("user_api_key_dict is required for budget updates")
+
+        budget_id = await handle_soft_budget_update(
+            soft_budget=non_default_values.pop("soft_budget"),
+            existing_budget_id=existing_key_row.budget_id,
+            user_id=user_api_key_dict.user_id,
+        )
+
+        if budget_id is not None:
+            non_default_values["budget_id"] = budget_id
 
     _metadata = existing_key_row.metadata or {}
 
@@ -643,7 +659,7 @@ async def update_key_fn(
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-    - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -697,8 +713,10 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
-        non_default_values = prepare_key_update_data(
-            data=data, existing_key_row=existing_key_row
+        non_default_values = await prepare_key_update_data(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=user_api_key_dict,
         )
 
         await _enforce_unique_key_alias(
@@ -1495,8 +1513,10 @@ async def regenerate_key_fn(
         non_default_values = {}
         if data is not None:
             # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = prepare_key_update_data(
-                data=data, existing_key_row=_key_in_db
+            non_default_values = await prepare_key_update_data(
+                data=data,
+                existing_key_row=_key_in_db,
+                user_api_key_dict=user_api_key_dict,
             )
             verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
 
@@ -2116,3 +2136,53 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )
+
+
+async def handle_soft_budget_update(
+    soft_budget: Optional[float],
+    existing_budget_id: Optional[str],
+    user_id: Optional[str],
+) -> Optional[str]:
+    """
+    Helper to handle soft budget updates for a key.
+    Creates or updates a budget record in the LiteLLM_BudgetTable.
+
+    Args:
+        soft_budget (Optional[float]): The soft budget value to set
+        existing_budget_id (Optional[str]): Existing budget_id if any
+        user_id (Optional[str]): User ID making the update
+
+    Returns:
+        Optional[str]: Returns budget_id if a new budget was created, None if updating existing
+    """
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+
+    if prisma_client is None:
+        raise Exception("Database not connected")
+
+    if soft_budget is None:
+        return None
+
+    # Create budget row
+    budget_row = LiteLLM_BudgetTable(
+        soft_budget=soft_budget,
+    )
+    new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
+
+    if existing_budget_id:
+        # Update existing budget
+        await prisma_client.db.litellm_budgettable.update(
+            where={"budget_id": existing_budget_id},
+            data=new_budget,  # type: ignore
+        )
+        return None
+    else:
+        # Create new budget
+        _budget = await prisma_client.db.litellm_budgettable.create(
+            data={
+                **new_budget,  # type: ignore
+                "created_by": user_id or litellm_proxy_admin_name,
+                "updated_by": user_id or litellm_proxy_admin_name,
+            }
+        )
+        return getattr(_budget, "budget_id", None)
