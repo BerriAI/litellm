@@ -444,7 +444,7 @@ class OpenTelemetry(CustomLogger):
     ):
         try:
             if self.callback_name == "arize":
-                from litellm.integrations.arize.arize_ai import ArizeLogger
+                from litellm.integrations.arize.arize import ArizeLogger
                 ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
                 return
             elif self.callback_name == "arize_phoenix":
