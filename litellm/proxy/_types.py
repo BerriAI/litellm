@@ -646,8 +646,8 @@ class KeyRequestBase(GenerateRequestBase):
 
 
 class GenerateKeyRequest(KeyRequestBase):
-    send_invite_email: Optional[bool] = None
     soft_budget: Optional[float] = None
+    send_invite_email: Optional[bool] = None
 
 
 class GenerateKeyResponse(KeyRequestBase):
