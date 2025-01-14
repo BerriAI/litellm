@@ -3940,7 +3940,7 @@ def test_completion_hf_prompt_array():
         litellm.set_verbose = True
         print("\n testing hf mistral\n")
         response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1",
+            model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
             prompt=token_prompt,  # token prompt is a 2d list,
             max_tokens=0,
             temperature=0.0,
@@ -3971,7 +3971,7 @@ def test_text_completion_stream():
     try:
         for _ in range(2):  # check if closed client used
             response = text_completion(
-                model="huggingface/mistralai/Mistral-7B-v0.1",
+                model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
                 prompt="good morning",
                 stream=True,
                 max_tokens=10,
