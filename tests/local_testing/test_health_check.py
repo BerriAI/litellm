@@ -222,3 +222,38 @@ async def test_async_realtime_health_check(model, mocker):
     )
     print(response)
     assert response == {}
+
+
+def test_update_litellm_params_for_health_check():
+    """
+    Test if _update_litellm_params_for_health_check correctly:
+    1. Updates messages with a random message
+    2. Updates model name when health_check_model is provided
+    """
+    from litellm.proxy.health_check import _update_litellm_params_for_health_check
+
+    # Test with health_check_model
+    model_info = {"health_check_model": "gpt-3.5-turbo"}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "messages" in updated_params
+    assert isinstance(updated_params["messages"], list)
+    assert updated_params["model"] == "gpt-3.5-turbo"
+
+    # Test without health_check_model
+    model_info = {}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "messages" in updated_params
+    assert isinstance(updated_params["messages"], list)
+    assert updated_params["model"] == "gpt-4"
