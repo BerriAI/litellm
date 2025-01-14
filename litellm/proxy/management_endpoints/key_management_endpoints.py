@@ -604,14 +604,14 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = budget_duration
 
     # Handle soft budget updates
-    if "soft_budget" in non_default_values:
+    if non_default_values.get("soft_budget") is not None:
         if user_api_key_dict is None:
             raise Exception("user_api_key_dict is required for budget updates")
 
         budget_id = await handle_soft_budget_update(
             soft_budget=non_default_values.pop("soft_budget"),
             existing_budget_id=existing_key_row.budget_id,
-            user_id=user_api_key_dict.user_id,
+            user_api_key_dict=user_api_key_dict,
         )
 
         if budget_id is not None:
@@ -2141,7 +2141,7 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
 async def handle_soft_budget_update(
     soft_budget: Optional[float],
     existing_budget_id: Optional[str],
-    user_id: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[str]:
     """
     Helper to handle soft budget updates for a key.
@@ -2181,8 +2181,8 @@ async def handle_soft_budget_update(
         _budget = await prisma_client.db.litellm_budgettable.create(
             data={
                 **new_budget,  # type: ignore
-                "created_by": user_id or litellm_proxy_admin_name,
-                "updated_by": user_id or litellm_proxy_admin_name,
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }
         )
         return getattr(_budget, "budget_id", None)
