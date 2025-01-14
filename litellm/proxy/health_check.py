@@ -112,9 +112,7 @@ def _update_litellm_params_for_health_check(
     Update the litellm params for health check.
 
     - gets a short `messages` param for health check
-    - updates the `model` param with the `health_check_model` if it exists
-
-    Doc: https://docs.litellm.ai/docs/proxy/health#health_check_model
+    - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     """
     litellm_params["messages"] = _get_random_llm_message()
     _health_check_model = model_info.get("health_check_model", None)
