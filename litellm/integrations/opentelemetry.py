@@ -70,7 +70,7 @@ class OpenTelemetryConfig:
             endpoint=os.getenv("OTEL_ENDPOINT"),
             headers=os.getenv(
                 "OTEL_HEADERS"
-            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96VGdFisfJVme1H"
+            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         )
 
 
@@ -84,6 +84,7 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.trace import SpanKind
 
         if config is None:
             config = OpenTelemetryConfig.from_env()
@@ -98,6 +99,8 @@ class OpenTelemetry(CustomLogger):
 
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
+
+        self.span_kind = SpanKind
 
         _debug_otel = str(os.getenv("DEBUG_OTEL", "False")).lower()
 

@@ -32,11 +32,10 @@ source .env
 docker-compose up
 ```
 
-<Tabs>
 
-<TabItem value="basic" label="Basic (No DB)">
+### Docker Run 
 
-### Step 1. CREATE config.yaml 
+#### Step 1. CREATE config.yaml 
 
 Example `litellm_config.yaml` 
 
@@ -52,7 +51,7 @@ model_list:
 
 
 
-### Step 2. RUN Docker Image
+#### Step 2. RUN Docker Image
 
 ```shell
 docker run \
@@ -66,7 +65,7 @@ docker run \
 
 Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/litellm)
 
-### Step 3. TEST Request
+#### Step 3. TEST Request
 
   Pass `model=azure-gpt-3.5` this was set on step 1
 
@@ -84,13 +83,7 @@ Get Latest Image 👉 [here](https://github.com/berriai/litellm/pkgs/container/l
   }'
   ```
 
-</TabItem>
-
-
-
-<TabItem value="cli" label="With CLI Args">
-
-#### Run with LiteLLM CLI args
+### Docker Run - CLI Args
 
 See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
 
@@ -104,15 +97,8 @@ Here's how you can run the docker image and start litellm on port 8002 with `num
 docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
 
-</TabItem>
-<TabItem value="terraform" label="Terraform">
 
-s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
-
-👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
-
-</TabItem>
-<TabItem value="base-image" label="use litellm as a base image">
+### Use litellm as a base image
 
 ```shell
 # Use the provided base image
@@ -137,9 +123,75 @@ EXPOSE 4000/tcp
 CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 ```
 
-</TabItem>
+### Build from litellm `pip` package
 
-<TabItem value="kubernetes" label="Kubernetes">
+Follow these instructons to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
+
+Dockerfile 
+
+```shell
+FROM cgr.dev/chainguard/python:latest-dev
+
+USER root
+WORKDIR /app
+
+ENV HOME=/home/litellm
+ENV PATH="${HOME}/venv/bin:$PATH"
+
+# Install runtime dependencies
+RUN apk update && \
+    apk add --no-cache gcc python3-dev openssl openssl-dev
+
+RUN python -m venv ${HOME}/venv
+RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
+
+COPY requirements.txt .
+RUN --mount=type=cache,target=${HOME}/.cache/pip \
+    ${HOME}/venv/bin/pip install -r requirements.txt
+
+EXPOSE 4000/tcp
+
+ENTRYPOINT ["litellm"]
+CMD ["--port", "4000"]
+```
+
+
+Example `requirements.txt`
+
+```shell
+litellm[proxy]==1.57.3 # Specify the litellm version you want to use
+prometheus_client
+langfuse
+prisma
+```
+
+Build the docker image
+
+```shell
+docker build \
+  -f Dockerfile.build_from_pip \
+  -t litellm-proxy-with-pip-5 .
+```
+
+Run the docker image
+
+```shell
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e OPENAI_API_KEY="sk-1222" \
+    -e DATABASE_URL="postgresql://xxxxxxxxx \
+    -p 4000:4000 \
+    litellm-proxy-with-pip-5 \
+    --config /app/config.yaml --detailed_debug
+```
+
+### Terraform
+
+s/o [Nicholas Cecere](https://www.linkedin.com/in/nicholas-cecere-24243549/) for his LiteLLM User Management Terraform
+
+👉 [Go here for Terraform](https://github.com/ncecere/terraform-litellm-user-mgmt)
+
+### Kubernetes
 
 Deploying a config file based litellm instance just requires a simple deployment that loads
 the config.yaml file via a config map. Also it would be a good practice to use the env var
@@ -204,11 +256,8 @@ spec:
 To avoid issues with predictability, difficulties in rollback, and inconsistent environments, use versioning or SHA digests (for example, `litellm:main-v1.30.3` or `litellm@sha256:12345abcdef...`) instead of `litellm:main-latest`.
 :::
 
-</TabItem>
 
-<TabItem value="helm-" label="Helm Chart">
-
-
+### Helm Chart
 
 :::info
 
@@ -248,13 +297,9 @@ kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 
 Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 
-</TabItem>
-
-</Tabs>
-
 **That's it ! That's the quick start to deploy litellm**
 
-## Use with Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl
+#### Make LLM API Requests
 
 :::info
 💡 Go here 👉 [to make your first LLM API Request](user_keys)
@@ -263,7 +308,7 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 
 :::
 
-## Options to deploy LiteLLM 
+## Deployment Options
 
 | Docs                                                                                              | When to Use                                                                                                                                           |
 | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -272,8 +317,8 @@ LiteLLM is compatible with several SDKs - including OpenAI SDK, Anthropic SDK, M
 | [LiteLLM container + Redis](#litellm-container--redis)                                            | + load balance across multiple litellm containers                                                                                                     |
 | [LiteLLM Database container + PostgresDB + Redis](#litellm-database-container--postgresdb--redis) | + use Virtual Keys + Track Spend + load balance across multiple litellm containers                                                                    |
 
-## Deploy with Database
-### Docker, Kubernetes, Helm Chart
+### Deploy with Database
+##### Docker, Kubernetes, Helm Chart
 
 Requirements:
 - Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc) Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
@@ -491,7 +536,7 @@ Your LiteLLM Proxy Server is now running on `http://127.0.0.1:4000`.
 </TabItem>
 </Tabs>
 
-## LiteLLM container + Redis
+### Deploy with Redis
 Use Redis when you need litellm to load balance across multiple litellm containers
 
 The only change required is setting Redis on your `config.yaml`
@@ -523,7 +568,7 @@ Start docker container with config
 docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
 ```
 
-## LiteLLM Database container + PostgresDB + Redis
+### Deploy with Database + Redis
 
 The only change required is setting Redis on your `config.yaml`
 LiteLLM Proxy supports sharing rpm/tpm shared across multiple litellm instances, pass `redis_host`, `redis_password` and `redis_port` to enable this. (LiteLLM will use Redis to track rpm/tpm usage )
@@ -558,7 +603,7 @@ docker run --name litellm-proxy \
 ghcr.io/berriai/litellm-database:main-latest --config your_config.yaml
 ```
 
-## LiteLLM without Internet Connection
+###  (Non Root) - without Internet Connection
 
 By default `prisma generate` downloads [prisma's engine binaries](https://www.prisma.io/docs/orm/reference/environment-variables-reference#custom-engine-file-locations). This might cause errors when running without internet connection. 
 
@@ -572,7 +617,7 @@ docker pull ghcr.io/berriai/litellm-non_root:main-stable
 
 ## Advanced Deployment Settings
 
-### 1. Customization of the server root path (custom Proxy base url)
+### 1. Custom server root path (Proxy base url)
 
 💥 Use this when you want to serve LiteLLM on a custom base url path like `https://localhost:4000/api/v1` 
 
@@ -670,7 +715,7 @@ After running the proxy you can access it on `http://0.0.0.0:4000/api/v1/` (sinc
 
 **That's it**, that's all you need to run the proxy on a custom root path
 
-### 2. Setting SSL Certification 
+### 2. SSL Certification 
 
 Use this, If you need to set ssl certificates for your on prem litellm proxy
 
@@ -684,7 +729,7 @@ docker run ghcr.io/berriai/litellm:main-latest \
 
 Provide an ssl certificate when starting litellm proxy server 
 
-### 3. Using Http/2 with Hypercorn
+### 3. Http/2 with Hypercorn
 
 Use this if you want to run the proxy with hypercorn to support http/2
 
@@ -731,7 +776,7 @@ docker run \
     --run_hypercorn
 ```
 
-### 4. Providing LiteLLM config.yaml file as a s3, GCS Bucket Object/url
+### 4. config.yaml file on s3, GCS Bucket Object/url
 
 Use this if you cannot mount a config file on your deployment service (example - AWS Fargate, Railway etc)
 
@@ -787,7 +832,7 @@ docker run --name litellm-proxy \
 <Tabs>
 <TabItem value="AWS EKS" label="AWS EKS - Kubernetes">
 
-### Kubernetes - Deploy on EKS
+### Kubernetes (AWS EKS)
 
 Step1. Create an EKS Cluster with the following spec
 
@@ -880,7 +925,7 @@ Once the container is running, you can access the application by going to `http:
 </TabItem>
 <TabItem value="google-cloud-run" label="Google Cloud Run">
 
-### Deploy on Google Cloud Run
+### Google Cloud Run
 
 1. Fork this repo - [github.com/BerriAI/example_litellm_gcp_cloud_run](https://github.com/BerriAI/example_litellm_gcp_cloud_run)
 
@@ -907,7 +952,9 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 </TabItem>
 <TabItem value="render" label="Render deploy">
 
-### Deploy on Render https://render.com/
+### Render 
+
+https://render.com/
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
@@ -916,7 +963,9 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 </TabItem>
 <TabItem value="railway" label="Railway">
 
-### Deploy on Railway https://railway.app
+### Railway 
+
+https://railway.app
 
 **Step 1: Click the button** to deploy to Railway
 
@@ -930,7 +979,7 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 
 ## Extras 
 
-### Run with docker compose
+### Docker compose
 
 **Step 1**
 

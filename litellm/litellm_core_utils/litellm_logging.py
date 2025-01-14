@@ -12,6 +12,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime as dt_object
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
@@ -22,14 +23,15 @@ from litellm import (
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
-    verbose_logger,
 )
+from litellm._logging import _is_debugging_on, verbose_logger
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.cost_calculator import _select_model_name_for_cost_calc
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -58,11 +60,12 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingPromptManagementMetadata,
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import _get_base_model_from_metadata, print_verbose
+from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
@@ -76,6 +79,7 @@ from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
+from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
@@ -93,7 +97,11 @@ from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.weights_biases import WeightsBiasesLogger
 from .exception_mapping_utils import _get_response_headers
+from .initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params as _initialize_standard_callback_dynamic_params,
+)
 from .logging_utils import _assemble_complete_response_from_streaming_chunks
+from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 try:
     from ..proxy.enterprise.enterprise_callbacks.generic_api_callback import (
@@ -152,39 +160,6 @@ class ServiceTraceIDCache:
     def set_cache(self, litellm_call_id: str, service_name: str, trace_id: str) -> None:
         key_name = "{}:{}".format(service_name, litellm_call_id)
         self.cache.set_cache(key=key_name, value=trace_id)
-        return None
-
-
-import hashlib
-
-
-class DynamicLoggingCache:
-    """
-    Prevent memory leaks caused by initializing new logging clients on each request.
-
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/5695
-    """
-
-    def __init__(self) -> None:
-        self.cache = InMemoryCache()
-
-    def get_cache_key(self, args: dict) -> str:
-        args_str = json.dumps(args, sort_keys=True)
-        cache_key = hashlib.sha256(args_str.encode("utf-8")).hexdigest()
-        return cache_key
-
-    def get_cache(self, credentials: dict, service_name: str) -> Optional[Any]:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
-        response = self.cache.get_cache(key=key_name)
-        return response
-
-    def set_cache(self, credentials: dict, service_name: str, logging_obj: Any) -> None:
-        key_name = self.get_cache_key(
-            args={**credentials, "service_name": service_name}
-        )
-        self.cache.set_cache(key=key_name, value=logging_obj)
         return None
 
 
@@ -369,24 +344,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
         """
-        from litellm.secret_managers.main import get_secret_str
-
-        standard_callback_dynamic_params = StandardCallbackDynamicParams()
-        if kwargs:
-            _supported_callback_params = (
-                StandardCallbackDynamicParams.__annotations__.keys()
-            )
-            for param in _supported_callback_params:
-                if param in kwargs:
-                    _param_value = kwargs.pop(param)
-                    if (
-                        _param_value is not None
-                        and isinstance(_param_value, str)
-                        and "os.environ/" in _param_value
-                    ):
-                        _param_value = get_secret_str(secret_name=_param_value)
-                    standard_callback_dynamic_params[param] = _param_value  # type: ignore
-        return standard_callback_dynamic_params
+        return _initialize_standard_callback_dynamic_params(kwargs)
 
     def update_environment_variables(
         self,
@@ -442,10 +400,10 @@ class Logging(LiteLLMLoggingBaseClass):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        headers: dict,
         prompt_id: str,
         prompt_variables: Optional[dict],
     ) -> Tuple[str, List[AllMessageValues], dict]:
+
         for (
             custom_logger_compatible_callback
         ) in litellm._known_custom_logger_compatible_callbacks:
@@ -455,19 +413,23 @@ class Logging(LiteLLMLoggingBaseClass):
                     internal_usage_cache=None,
                     llm_router=None,
                 )
+
                 if custom_logger is None:
                     continue
+                old_name = model
+
                 model, messages, non_default_params = (
                     custom_logger.get_chat_completion_prompt(
                         model=model,
                         messages=messages,
                         non_default_params=non_default_params,
-                        headers=headers,
                         prompt_id=prompt_id,
                         prompt_variables=prompt_variables,
                         dynamic_callback_params=self.standard_callback_dynamic_params,
                     )
                 )
+                self.model_call_details["prompt_integration"] = old_name.split("/")[0]
+        self.messages = messages
 
         return model, messages, non_default_params
 
@@ -475,6 +437,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Common helper function across the sync + async pre-call function
         """
+
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = additional_args
@@ -496,55 +459,11 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             # User Logging -> if you pass in a custom logging function
-            headers = additional_args.get("headers", {})
-            if headers is None:
-                headers = {}
-            data = additional_args.get("complete_input_dict", {})
-            api_base = str(additional_args.get("api_base", ""))
-            query_params = additional_args.get("query_params", {})
-            if "key=" in api_base:
-                # Find the position of "key=" in the string
-                key_index = api_base.find("key=") + 4
-                # Mask the last 5 characters after "key="
-                masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-            else:
-                masked_api_base = api_base
-            self.model_call_details["litellm_params"]["api_base"] = masked_api_base
-            masked_headers = {
-                k: (
-                    (v[:-44] + "*" * 44)
-                    if (isinstance(v, str) and len(v) > 44)
-                    else "*****"
-                )
-                for k, v in headers.items()
-            }
-            formatted_headers = " ".join(
-                [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+            self._print_llm_call_debugging_log(
+                api_base=additional_args.get("api_base", ""),
+                headers=additional_args.get("headers", {}),
+                additional_args=additional_args,
             )
-
-            verbose_logger.debug(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
-
-            curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
-            curl_command += "curl -X POST \\\n"
-            curl_command += f"{api_base} \\\n"
-            curl_command += (
-                f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
-            )
-            curl_command += f"-d '{str(data)}'\n"
-            if additional_args.get("request_str", None) is not None:
-                # print the sagemaker / bedrock client request
-                curl_command = "\nRequest Sent from LiteLLM:\n"
-                curl_command += additional_args.get("request_str", None)
-            elif api_base == "":
-                curl_command = self.model_call_details
-
-            if json_logs:
-                verbose_logger.debug(
-                    "POST Request Sent from LiteLLM",
-                    extra={"api_base": {api_base}, **masked_headers},
-                )
-            else:
-                print_verbose(f"\033[92m{curl_command}\033[0m\n", log_level="DEBUG")
             # log raw request to provider (like LangFuse) -- if opted in.
             if log_raw_request_response is True:
                 _litellm_params = self.model_call_details.get("litellm_params", {})
@@ -560,6 +479,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             'litellm.turn_off_message_logging=True'"
                         )
                     else:
+                        curl_command = self._get_request_curl_command(
+                            api_base=additional_args.get("api_base", ""),
+                            headers=additional_args.get("headers", {}),
+                            additional_args=additional_args,
+                            data=additional_args.get("complete_input_dict", {}),
+                        )
                         _metadata["raw_request"] = str(curl_command)
                 except Exception as e:
                     _metadata["raw_request"] = (
@@ -652,6 +577,89 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
+
+    def _print_llm_call_debugging_log(
+        self,
+        api_base: str,
+        headers: dict,
+        additional_args: dict,
+    ):
+        """
+        Internal debugging helper function
+
+        Prints the RAW curl command sent from LiteLLM
+        """
+        if _is_debugging_on():
+            if json_logs:
+                masked_headers = self._get_masked_headers(headers)
+                verbose_logger.debug(
+                    "POST Request Sent from LiteLLM",
+                    extra={"api_base": {api_base}, **masked_headers},
+                )
+            else:
+                headers = additional_args.get("headers", {})
+                if headers is None:
+                    headers = {}
+                data = additional_args.get("complete_input_dict", {})
+                api_base = str(additional_args.get("api_base", ""))
+                if "key=" in api_base:
+                    # Find the position of "key=" in the string
+                    key_index = api_base.find("key=") + 4
+                    # Mask the last 5 characters after "key="
+                    masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
+                else:
+                    masked_api_base = api_base
+                self.model_call_details["litellm_params"]["api_base"] = masked_api_base
+
+                verbose_logger.debug(
+                    "PRE-API-CALL ADDITIONAL ARGS: %s", additional_args
+                )
+
+                curl_command = self._get_request_curl_command(
+                    api_base=api_base,
+                    headers=headers,
+                    additional_args=additional_args,
+                    data=data,
+                )
+                verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
+
+    def _get_request_curl_command(
+        self, api_base: str, headers: dict, additional_args: dict, data: dict
+    ) -> str:
+        curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
+        curl_command += "curl -X POST \\\n"
+        curl_command += f"{api_base} \\\n"
+        masked_headers = self._get_masked_headers(headers)
+        formatted_headers = " ".join(
+            [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
+        )
+
+        curl_command += (
+            f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
+        )
+        curl_command += f"-d '{str(data)}'\n"
+        if additional_args.get("request_str", None) is not None:
+            # print the sagemaker / bedrock client request
+            curl_command = "\nRequest Sent from LiteLLM:\n"
+            curl_command += additional_args.get("request_str", None)
+        elif api_base == "":
+            curl_command = str(self.model_call_details)
+        return curl_command
+
+    def _get_masked_headers(self, headers: dict):
+        """
+        Internal debugging helper function
+
+        Masks the headers of the request sent from LiteLLM
+        """
+        return {
+            k: (
+                (v[:-44] + "*" * 44)
+                if (isinstance(v, str) and len(v) > 44)
+                else "*****"
+            )
+            for k, v in headers.items()
+        }
 
     def post_call(
         self, original_response, input=None, api_key=None, additional_args={}
@@ -749,6 +757,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             )
 
+    def get_response_ms(self) -> float:
+        return (
+            self.model_call_details.get("end_time", datetime.datetime.now())
+            - self.model_call_details.get("start_time", datetime.datetime.now())
+        ).total_seconds() * 1000
+
     def _response_cost_calculator(
         self,
         result: Union[
@@ -822,7 +836,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str=_get_traceback_str_for_error(str(e)),
                 model=response_cost_calculator_kwargs["model"],
                 cache_hit=response_cost_calculator_kwargs["cache_hit"],
                 custom_llm_provider=response_cost_calculator_kwargs[
@@ -881,13 +895,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     or isinstance(result, Batch)
                     or isinstance(result, FineTuningJob)
                 ):
-                    ## RESPONSE COST ##
-                    self.model_call_details["response_cost"] = (
-                        self._response_cost_calculator(result=result)
-                    )
-
                     ## HIDDEN PARAMS ##
-                    if hasattr(result, "_hidden_params"):
+                    hidden_params = getattr(result, "_hidden_params", {})
+                    if hidden_params:
                         # add to metadata for logging
                         if self.model_call_details.get("litellm_params") is not None:
                             self.model_call_details["litellm_params"].setdefault(
@@ -906,6 +916,15 @@ class Logging(LiteLLMLoggingBaseClass):
                             ] = getattr(
                                 result, "_hidden_params", {}
                             )
+                    ## RESPONSE COST - Only calculate if not in hidden_params ##
+                    if "response_cost" in hidden_params:
+                        self.model_call_details["response_cost"] = hidden_params[
+                            "response_cost"
+                        ]
+                    else:
+                        self.model_call_details["response_cost"] = (
+                            self._response_cost_calculator(result=result)
+                        )
                     ## STANDARDIZED LOGGING PAYLOAD
 
                     self.model_call_details["standard_logging_object"] = (
@@ -960,7 +979,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        print_verbose(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
+        verbose_logger.debug(
+            f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
+        )
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -968,9 +989,7 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
-        # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
 
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
@@ -1014,7 +1033,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         status="success",
                     )
                 )
-            callbacks = get_combined_callback_list(
+            callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
             )
@@ -1047,7 +1066,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             isinstance(callback, CustomLogger)
                             and "_PROXY_" in callback.__class__.__name__
                         ):
-                            print_verbose("no-log request, skipping logging")
+                            verbose_logger.info("no-log request, skipping logging")
                             continue
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
@@ -1550,7 +1569,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     status="success",
                 )
             )
-        callbacks = get_combined_callback_list(
+        callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
         )
@@ -1820,7 +1839,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 start_time=start_time,
                 end_time=end_time,
             )
-            callbacks = get_combined_callback_list(
+            callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_failure_callbacks,
                 global_callbacks=litellm.failure_callback,
             )
@@ -2006,12 +2025,13 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time=end_time,
         )
 
-        callbacks = get_combined_callback_list(
+        callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
             global_callbacks=litellm._async_failure_callback,
         )
 
         result = None  # result sent to all loggers, init this to None incase it's not created
+
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):  # custom logger class
@@ -2034,7 +2054,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
             except Exception as e:
                 verbose_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success \
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure \
                         logging {}\nCallback={}".format(
                         str(e), callback
                     )
@@ -2101,6 +2121,116 @@ class Logging(LiteLLMLoggingBaseClass):
             return langFuseLogger
 
         return None
+
+    def handle_sync_success_callbacks_for_async_calls(
+        self,
+        result: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        """
+        Handles calling success callbacks for Async calls.
+
+        Why: Some callbacks - `langfuse`, `s3` are sync callbacks. We need to call them in the executor.
+        """
+        if self._should_run_sync_callbacks_for_async_calls() is False:
+            return
+
+        executor.submit(
+            self.success_handler,
+            result,
+            start_time,
+            end_time,
+        )
+
+    def _should_run_sync_callbacks_for_async_calls(self) -> bool:
+        """
+        Returns:
+            - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`
+        """
+        _combined_sync_callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_success_callbacks,
+            global_callbacks=litellm.success_callback,
+        )
+        _filtered_success_callbacks = self._remove_internal_custom_logger_callbacks(
+            _combined_sync_callbacks
+        )
+        _filtered_success_callbacks = self._remove_internal_litellm_callbacks(
+            _filtered_success_callbacks
+        )
+        return len(_filtered_success_callbacks) > 0
+
+    def get_combined_callback_list(
+        self, dynamic_success_callbacks: Optional[List], global_callbacks: List
+    ) -> List:
+        if dynamic_success_callbacks is None:
+            return global_callbacks
+        return list(set(dynamic_success_callbacks + global_callbacks))
+
+    def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
+        """
+        Creates a filtered list of callbacks, excluding internal LiteLLM callbacks.
+
+        Args:
+            callbacks: List of callback functions/strings to filter
+
+        Returns:
+            List of filtered callbacks with internal ones removed
+        """
+        filtered = [
+            cb for cb in callbacks if not self._is_internal_litellm_proxy_callback(cb)
+        ]
+
+        verbose_logger.debug(f"Filtered callbacks: {filtered}")
+        return filtered
+
+    def _get_callback_name(self, cb) -> str:
+        """
+        Helper to get the name of a callback function
+
+        Args:
+            cb: The callback function/string to get the name of
+
+        Returns:
+            The name of the callback
+        """
+        if hasattr(cb, "__name__"):
+            return cb.__name__
+        if hasattr(cb, "__func__"):
+            return cb.__func__.__name__
+        return str(cb)
+
+    def _is_internal_litellm_proxy_callback(self, cb) -> bool:
+        """Helper to check if a callback is internal"""
+        INTERNAL_PREFIXES = [
+            "_PROXY",
+            "_service_logger.ServiceLogging",
+            "sync_deployment_callback_on_success",
+        ]
+        if isinstance(cb, str):
+            return False
+
+        if not callable(cb):
+            return True
+
+        cb_name = self._get_callback_name(cb)
+        return any(prefix in cb_name for prefix in INTERNAL_PREFIXES)
+
+    def _remove_internal_custom_logger_callbacks(self, callbacks: List) -> List:
+        """
+        Removes internal custom logger callbacks from the list.
+        """
+        _new_callbacks = []
+        for _c in callbacks:
+            if isinstance(_c, CustomLogger):
+                continue
+            elif (
+                isinstance(_c, str)
+                and _c in litellm._known_custom_logger_compatible_callbacks
+            ):
+                continue
+            _new_callbacks.append(_c)
+        return _new_callbacks
 
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
@@ -2205,346 +2335,382 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     llm_router: Optional[
         Any
     ],  # expect litellm.Router, but typing errors due to circular import
+    custom_logger_init_args: Optional[dict] = {},
 ) -> Optional[CustomLogger]:
-    if logging_integration == "lago":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LagoLogger):
-                return callback  # type: ignore
+    """
+    Initialize a custom logger compatible class
+    """
+    try:
+        custom_logger_init_args = custom_logger_init_args or {}
+        if logging_integration == "lago":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LagoLogger):
+                    return callback  # type: ignore
 
-        lago_logger = LagoLogger()
-        _in_memory_loggers.append(lago_logger)
-        return lago_logger  # type: ignore
-    elif logging_integration == "openmeter":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenMeterLogger):
-                return callback  # type: ignore
+            lago_logger = LagoLogger()
+            _in_memory_loggers.append(lago_logger)
+            return lago_logger  # type: ignore
+        elif logging_integration == "openmeter":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenMeterLogger):
+                    return callback  # type: ignore
 
-        _openmeter_logger = OpenMeterLogger()
-        _in_memory_loggers.append(_openmeter_logger)
-        return _openmeter_logger  # type: ignore
-    elif logging_integration == "braintrust":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, BraintrustLogger):
-                return callback  # type: ignore
+            _openmeter_logger = OpenMeterLogger()
+            _in_memory_loggers.append(_openmeter_logger)
+            return _openmeter_logger  # type: ignore
+        elif logging_integration == "braintrust":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BraintrustLogger):
+                    return callback  # type: ignore
 
-        braintrust_logger = BraintrustLogger()
-        _in_memory_loggers.append(braintrust_logger)
-        return braintrust_logger  # type: ignore
-    elif logging_integration == "langsmith":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LangsmithLogger):
-                return callback  # type: ignore
+            braintrust_logger = BraintrustLogger()
+            _in_memory_loggers.append(braintrust_logger)
+            return braintrust_logger  # type: ignore
+        elif logging_integration == "langsmith":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LangsmithLogger):
+                    return callback  # type: ignore
 
-        _langsmith_logger = LangsmithLogger()
-        _in_memory_loggers.append(_langsmith_logger)
-        return _langsmith_logger  # type: ignore
-    elif logging_integration == "argilla":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, ArgillaLogger):
-                return callback  # type: ignore
+            _langsmith_logger = LangsmithLogger()
+            _in_memory_loggers.append(_langsmith_logger)
+            return _langsmith_logger  # type: ignore
+        elif logging_integration == "argilla":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ArgillaLogger):
+                    return callback  # type: ignore
 
-        _argilla_logger = ArgillaLogger()
-        _in_memory_loggers.append(_argilla_logger)
-        return _argilla_logger  # type: ignore
-    elif logging_integration == "literalai":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LiteralAILogger):
-                return callback  # type: ignore
+            _argilla_logger = ArgillaLogger()
+            _in_memory_loggers.append(_argilla_logger)
+            return _argilla_logger  # type: ignore
+        elif logging_integration == "literalai":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LiteralAILogger):
+                    return callback  # type: ignore
 
-        _literalai_logger = LiteralAILogger()
-        _in_memory_loggers.append(_literalai_logger)
-        return _literalai_logger  # type: ignore
-    elif logging_integration == "prometheus":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, PrometheusLogger):
-                return callback  # type: ignore
+            _literalai_logger = LiteralAILogger()
+            _in_memory_loggers.append(_literalai_logger)
+            return _literalai_logger  # type: ignore
+        elif logging_integration == "prometheus":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrometheusLogger):
+                    return callback  # type: ignore
 
-        _prometheus_logger = PrometheusLogger()
-        _in_memory_loggers.append(_prometheus_logger)
-        return _prometheus_logger  # type: ignore
-    elif logging_integration == "datadog":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, DataDogLogger):
-                return callback  # type: ignore
+            _prometheus_logger = PrometheusLogger()
+            _in_memory_loggers.append(_prometheus_logger)
+            return _prometheus_logger  # type: ignore
+        elif logging_integration == "datadog":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DataDogLogger):
+                    return callback  # type: ignore
 
-        _datadog_logger = DataDogLogger()
-        _in_memory_loggers.append(_datadog_logger)
-        return _datadog_logger  # type: ignore
-    elif logging_integration == "datadog_llm_observability":
-        _datadog_llm_obs_logger = DataDogLLMObsLogger()
-        _in_memory_loggers.append(_datadog_llm_obs_logger)
-        return _datadog_llm_obs_logger  # type: ignore
-    elif logging_integration == "gcs_bucket":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, GCSBucketLogger):
-                return callback  # type: ignore
+            _datadog_logger = DataDogLogger()
+            _in_memory_loggers.append(_datadog_logger)
+            return _datadog_logger  # type: ignore
+        elif logging_integration == "datadog_llm_observability":
+            _datadog_llm_obs_logger = DataDogLLMObsLogger()
+            _in_memory_loggers.append(_datadog_llm_obs_logger)
+            return _datadog_llm_obs_logger  # type: ignore
+        elif logging_integration == "gcs_bucket":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GCSBucketLogger):
+                    return callback  # type: ignore
 
-        _gcs_bucket_logger = GCSBucketLogger()
-        _in_memory_loggers.append(_gcs_bucket_logger)
-        return _gcs_bucket_logger  # type: ignore
-    elif logging_integration == "azure_storage":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, AzureBlobStorageLogger):
-                return callback  # type: ignore
+            _gcs_bucket_logger = GCSBucketLogger()
+            _in_memory_loggers.append(_gcs_bucket_logger)
+            return _gcs_bucket_logger  # type: ignore
+        elif logging_integration == "azure_storage":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AzureBlobStorageLogger):
+                    return callback  # type: ignore
 
-        _azure_storage_logger = AzureBlobStorageLogger()
-        _in_memory_loggers.append(_azure_storage_logger)
-        return _azure_storage_logger  # type: ignore
-    elif logging_integration == "opik":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpikLogger):
-                return callback  # type: ignore
+            _azure_storage_logger = AzureBlobStorageLogger()
+            _in_memory_loggers.append(_azure_storage_logger)
+            return _azure_storage_logger  # type: ignore
+        elif logging_integration == "opik":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpikLogger):
+                    return callback  # type: ignore
 
-        _opik_logger = OpikLogger()
-        _in_memory_loggers.append(_opik_logger)
-        return _opik_logger  # type: ignore
-    elif logging_integration == "arize":
-        from litellm.integrations.opentelemetry import (
-            OpenTelemetry,
-            OpenTelemetryConfig,
-        )
-
-        otel_config = ArizeLogger.get_arize_opentelemetry_config()
-        if otel_config is None:
-            raise ValueError(
-                "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
+            _opik_logger = OpikLogger()
+            _in_memory_loggers.append(_opik_logger)
+            return _opik_logger  # type: ignore
+        elif logging_integration == "arize":
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
             )
-        os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-            f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
-        )
-        for callback in _in_memory_loggers:
-            if (
-                isinstance(callback, OpenTelemetry)
-                and callback.callback_name == "arize"
-            ):
-                return callback  # type: ignore
-        _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
-        _in_memory_loggers.append(_otel_logger)
-        return _otel_logger  # type: ignore
-    elif logging_integration == "otel":
-        from litellm.integrations.opentelemetry import OpenTelemetry
 
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenTelemetry):
-                return callback  # type: ignore
-        otel_logger = OpenTelemetry(
-            **_get_custom_logger_settings_from_proxy_server(
-                callback_name=logging_integration
+            otel_config = ArizeLogger.get_arize_opentelemetry_config()
+            if otel_config is None:
+                raise ValueError(
+                    "No valid endpoint found for Arize, please set 'ARIZE_ENDPOINT' to your GRPC endpoint or 'ARIZE_HTTP_ENDPOINT' to your HTTP endpoint"
+                )
+            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+                f"space_key={os.getenv('ARIZE_SPACE_KEY')},api_key={os.getenv('ARIZE_API_KEY')}"
             )
-        )
-        _in_memory_loggers.append(otel_logger)
-        return otel_logger  # type: ignore
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "arize"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = OpenTelemetry(config=otel_config, callback_name="arize")
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
+        elif logging_integration == "otel":
+            from litellm.integrations.opentelemetry import OpenTelemetry
 
-    elif logging_integration == "galileo":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, GalileoObserve):
-                return callback  # type: ignore
-
-        galileo_logger = GalileoObserve()
-        _in_memory_loggers.append(galileo_logger)
-        return galileo_logger  # type: ignore
-    elif logging_integration == "logfire":
-        if "LOGFIRE_TOKEN" not in os.environ:
-            raise ValueError("LOGFIRE_TOKEN not found in environment variables")
-        from litellm.integrations.opentelemetry import (
-            OpenTelemetry,
-            OpenTelemetryConfig,
-        )
-
-        otel_config = OpenTelemetryConfig(
-            exporter="otlp_http",
-            endpoint="https://logfire-api.pydantic.dev/v1/traces",
-            headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
-        )
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenTelemetry):
-                return callback  # type: ignore
-        _otel_logger = OpenTelemetry(config=otel_config)
-        _in_memory_loggers.append(_otel_logger)
-        return _otel_logger  # type: ignore
-    elif logging_integration == "dynamic_rate_limiter":
-        from litellm.proxy.hooks.dynamic_rate_limiter import (
-            _PROXY_DynamicRateLimitHandler,
-        )
-
-        for callback in _in_memory_loggers:
-            if isinstance(callback, _PROXY_DynamicRateLimitHandler):
-                return callback  # type: ignore
-
-        if internal_usage_cache is None:
-            raise Exception(
-                "Internal Error: Cache cannot be empty - internal_usage_cache={}".format(
-                    internal_usage_cache
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry):
+                    return callback  # type: ignore
+            otel_logger = OpenTelemetry(
+                **_get_custom_logger_settings_from_proxy_server(
+                    callback_name=logging_integration
                 )
             )
+            _in_memory_loggers.append(otel_logger)
+            return otel_logger  # type: ignore
 
-        dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandler(
-            internal_usage_cache=internal_usage_cache
+        elif logging_integration == "galileo":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GalileoObserve):
+                    return callback  # type: ignore
+
+            galileo_logger = GalileoObserve()
+            _in_memory_loggers.append(galileo_logger)
+            return galileo_logger  # type: ignore
+        elif logging_integration == "logfire":
+            if "LOGFIRE_TOKEN" not in os.environ:
+                raise ValueError("LOGFIRE_TOKEN not found in environment variables")
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            otel_config = OpenTelemetryConfig(
+                exporter="otlp_http",
+                endpoint="https://logfire-api.pydantic.dev/v1/traces",
+                headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
+            )
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry):
+                    return callback  # type: ignore
+            _otel_logger = OpenTelemetry(config=otel_config)
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
+        elif logging_integration == "dynamic_rate_limiter":
+            from litellm.proxy.hooks.dynamic_rate_limiter import (
+                _PROXY_DynamicRateLimitHandler,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, _PROXY_DynamicRateLimitHandler):
+                    return callback  # type: ignore
+
+            if internal_usage_cache is None:
+                raise Exception(
+                    "Internal Error: Cache cannot be empty - internal_usage_cache={}".format(
+                        internal_usage_cache
+                    )
+                )
+
+            dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandler(
+                internal_usage_cache=internal_usage_cache
+            )
+
+            if llm_router is not None and isinstance(llm_router, litellm.Router):
+                dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
+            _in_memory_loggers.append(dynamic_rate_limiter_obj)
+            return dynamic_rate_limiter_obj  # type: ignore
+        elif logging_integration == "langtrace":
+            if "LANGTRACE_API_KEY" not in os.environ:
+                raise ValueError("LANGTRACE_API_KEY not found in environment variables")
+
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            otel_config = OpenTelemetryConfig(
+                exporter="otlp_http",
+                endpoint="https://langtrace.ai/api/trace",
+            )
+            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
+                f"api_key={os.getenv('LANGTRACE_API_KEY')}"
+            )
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "langtrace"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
+
+        elif logging_integration == "mlflow":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, MlflowLogger):
+                    return callback  # type: ignore
+
+            _mlflow_logger = MlflowLogger()
+            _in_memory_loggers.append(_mlflow_logger)
+            return _mlflow_logger  # type: ignore
+        elif logging_integration == "langfuse":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LangfusePromptManagement):
+                    return callback
+
+            langfuse_logger = LangfusePromptManagement()
+            _in_memory_loggers.append(langfuse_logger)
+            return langfuse_logger  # type: ignore
+        elif logging_integration == "pagerduty":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PagerDutyAlerting):
+                    return callback
+            pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
+            _in_memory_loggers.append(pagerduty_logger)
+            return pagerduty_logger  # type: ignore
+        elif logging_integration == "humanloop":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, HumanloopLogger):
+                    return callback
+
+            humanloop_logger = HumanloopLogger()
+            _in_memory_loggers.append(humanloop_logger)
+            return humanloop_logger  # type: ignore
+    except Exception as e:
+        verbose_logger.exception(
+            f"[Non-Blocking Error] Error initializing custom logger: {e}"
         )
-
-        if llm_router is not None and isinstance(llm_router, litellm.Router):
-            dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
-        _in_memory_loggers.append(dynamic_rate_limiter_obj)
-        return dynamic_rate_limiter_obj  # type: ignore
-    elif logging_integration == "langtrace":
-        if "LANGTRACE_API_KEY" not in os.environ:
-            raise ValueError("LANGTRACE_API_KEY not found in environment variables")
-
-        from litellm.integrations.opentelemetry import (
-            OpenTelemetry,
-            OpenTelemetryConfig,
-        )
-
-        otel_config = OpenTelemetryConfig(
-            exporter="otlp_http",
-            endpoint="https://langtrace.ai/api/trace",
-        )
-        os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = (
-            f"api_key={os.getenv('LANGTRACE_API_KEY')}"
-        )
-        for callback in _in_memory_loggers:
-            if (
-                isinstance(callback, OpenTelemetry)
-                and callback.callback_name == "langtrace"
-            ):
-                return callback  # type: ignore
-        _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
-        _in_memory_loggers.append(_otel_logger)
-        return _otel_logger  # type: ignore
-
-    elif logging_integration == "mlflow":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, MlflowLogger):
-                return callback  # type: ignore
-
-        _mlflow_logger = MlflowLogger()
-        _in_memory_loggers.append(_mlflow_logger)
-        return _mlflow_logger  # type: ignore
-    elif logging_integration == "langfuse":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LangfusePromptManagement):
-                return callback
-
-        langfuse_logger = LangfusePromptManagement()
-        _in_memory_loggers.append(langfuse_logger)
-        return langfuse_logger  # type: ignore
+        return None
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
-    if logging_integration == "lago":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LagoLogger):
-                return callback
-    elif logging_integration == "openmeter":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenMeterLogger):
-                return callback
-    elif logging_integration == "braintrust":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, BraintrustLogger):
-                return callback
-    elif logging_integration == "galileo":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, GalileoObserve):
-                return callback
-    elif logging_integration == "langsmith":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LangsmithLogger):
-                return callback
-    elif logging_integration == "argilla":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, ArgillaLogger):
-                return callback
-    elif logging_integration == "literalai":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LiteralAILogger):
-                return callback
-    elif logging_integration == "prometheus":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, PrometheusLogger):
-                return callback
-    elif logging_integration == "datadog":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, DataDogLogger):
-                return callback
-    elif logging_integration == "datadog_llm_observability":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, DataDogLLMObsLogger):
-                return callback
-    elif logging_integration == "gcs_bucket":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, GCSBucketLogger):
-                return callback
-    elif logging_integration == "azure_storage":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, AzureBlobStorageLogger):
-                return callback
-    elif logging_integration == "opik":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpikLogger):
-                return callback
-    elif logging_integration == "langfuse":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LangfusePromptManagement):
-                return callback
-    elif logging_integration == "otel":
-        from litellm.integrations.opentelemetry import OpenTelemetry
+    try:
+        if logging_integration == "lago":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LagoLogger):
+                    return callback
+        elif logging_integration == "openmeter":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenMeterLogger):
+                    return callback
+        elif logging_integration == "braintrust":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BraintrustLogger):
+                    return callback
+        elif logging_integration == "galileo":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "langsmith":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LangsmithLogger):
+                    return callback
+        elif logging_integration == "argilla":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ArgillaLogger):
+                    return callback
+        elif logging_integration == "literalai":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LiteralAILogger):
+                    return callback
+        elif logging_integration == "prometheus":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PrometheusLogger):
+                    return callback
+        elif logging_integration == "datadog":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DataDogLogger):
+                    return callback
+        elif logging_integration == "datadog_llm_observability":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DataDogLLMObsLogger):
+                    return callback
+        elif logging_integration == "gcs_bucket":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GCSBucketLogger):
+                    return callback
+        elif logging_integration == "azure_storage":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AzureBlobStorageLogger):
+                    return callback
+        elif logging_integration == "opik":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpikLogger):
+                    return callback
+        elif logging_integration == "langfuse":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LangfusePromptManagement):
+                    return callback
+        elif logging_integration == "otel":
+            from litellm.integrations.opentelemetry import OpenTelemetry
 
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenTelemetry):
-                return callback
-    elif logging_integration == "arize":
-        from litellm.integrations.opentelemetry import OpenTelemetry
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry):
+                    return callback
+        elif logging_integration == "arize":
+            from litellm.integrations.opentelemetry import OpenTelemetry
 
-        if "ARIZE_SPACE_KEY" not in os.environ:
-            raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
-        if "ARIZE_API_KEY" not in os.environ:
-            raise ValueError("ARIZE_API_KEY not found in environment variables")
-        for callback in _in_memory_loggers:
-            if (
-                isinstance(callback, OpenTelemetry)
-                and callback.callback_name == "arize"
-            ):
-                return callback
-    elif logging_integration == "logfire":
-        if "LOGFIRE_TOKEN" not in os.environ:
-            raise ValueError("LOGFIRE_TOKEN not found in environment variables")
-        from litellm.integrations.opentelemetry import OpenTelemetry
+            if "ARIZE_SPACE_KEY" not in os.environ:
+                raise ValueError("ARIZE_SPACE_KEY not found in environment variables")
+            if "ARIZE_API_KEY" not in os.environ:
+                raise ValueError("ARIZE_API_KEY not found in environment variables")
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "arize"
+                ):
+                    return callback
+        elif logging_integration == "logfire":
+            if "LOGFIRE_TOKEN" not in os.environ:
+                raise ValueError("LOGFIRE_TOKEN not found in environment variables")
+            from litellm.integrations.opentelemetry import OpenTelemetry
 
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenTelemetry):
-                return callback  # type: ignore
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry):
+                    return callback  # type: ignore
 
-    elif logging_integration == "dynamic_rate_limiter":
-        from litellm.proxy.hooks.dynamic_rate_limiter import (
-            _PROXY_DynamicRateLimitHandler,
+        elif logging_integration == "dynamic_rate_limiter":
+            from litellm.proxy.hooks.dynamic_rate_limiter import (
+                _PROXY_DynamicRateLimitHandler,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, _PROXY_DynamicRateLimitHandler):
+                    return callback  # type: ignore
+
+        elif logging_integration == "langtrace":
+            from litellm.integrations.opentelemetry import OpenTelemetry
+
+            if "LANGTRACE_API_KEY" not in os.environ:
+                raise ValueError("LANGTRACE_API_KEY not found in environment variables")
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, OpenTelemetry)
+                    and callback.callback_name == "langtrace"
+                ):
+                    return callback
+
+        elif logging_integration == "mlflow":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, MlflowLogger):
+                    return callback
+        elif logging_integration == "pagerduty":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PagerDutyAlerting):
+                    return callback
+
+        return None
+    except Exception as e:
+        verbose_logger.exception(
+            f"[Non-Blocking Error] Error getting custom logger: {e}"
         )
-
-        for callback in _in_memory_loggers:
-            if isinstance(callback, _PROXY_DynamicRateLimitHandler):
-                return callback  # type: ignore
-
-    elif logging_integration == "langtrace":
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
-        if "LANGTRACE_API_KEY" not in os.environ:
-            raise ValueError("LANGTRACE_API_KEY not found in environment variables")
-
-        for callback in _in_memory_loggers:
-            if (
-                isinstance(callback, OpenTelemetry)
-                and callback.callback_name == "langtrace"
-            ):
-                return callback
-
-    elif logging_integration == "mlflow":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, MlflowLogger):
-                return callback
-
-    return None
+        return None
 
 
 def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
@@ -2565,19 +2731,22 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
 
 
 def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
+    """
+    Check if the model uses custom pricing
+
+    Returns True if any of `SPECIAL_MODEL_INFO_PARAMS` are present in `litellm_params` or `model_info`
+    """
     if litellm_params is None:
         return False
-    for k, v in litellm_params.items():
-        if k in SPECIAL_MODEL_INFO_PARAMS and v is not None:
+
+    metadata: dict = litellm_params.get("metadata", {}) or {}
+    model_info: dict = metadata.get("model_info", {}) or {}
+
+    for _custom_cost_param in SPECIAL_MODEL_INFO_PARAMS:
+        if litellm_params.get(_custom_cost_param, None) is not None:
             return True
-    metadata: Optional[dict] = litellm_params.get("metadata", {})
-    if metadata is None:
-        return False
-    model_info: Optional[dict] = metadata.get("model_info", {})
-    if model_info is not None:
-        for k, v in model_info.items():
-            if k in SPECIAL_MODEL_INFO_PARAMS:
-                return True
+        elif model_info.get(_custom_cost_param, None) is not None:
+            return True
 
     return False
 
@@ -2635,7 +2804,9 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_standard_logging_metadata(
-        metadata: Optional[Dict[str, Any]]
+        metadata: Optional[Dict[str, Any]],
+        litellm_params: Optional[dict] = None,
+        prompt_integration: Optional[str] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -2650,6 +2821,22 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+        prompt_management_metadata: Optional[
+            StandardLoggingPromptManagementMetadata
+        ] = None
+        if litellm_params is not None:
+            prompt_id = cast(Optional[str], litellm_params.get("prompt_id", None))
+            prompt_variables = cast(
+                Optional[dict], litellm_params.get("prompt_variables", None)
+            )
+
+            if prompt_id is not None and prompt_integration is not None:
+                prompt_management_metadata = StandardLoggingPromptManagementMetadata(
+                    prompt_id=prompt_id,
+                    prompt_variables=prompt_variables,
+                    prompt_integration=prompt_integration,
+                )
+
         # Initialize with default values
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
@@ -2662,6 +2849,7 @@ class StandardLoggingPayloadSetup:
             requester_ip_address=None,
             requester_metadata=None,
             user_api_key_end_user_id=None,
+            prompt_management_metadata=prompt_management_metadata,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -2956,7 +3144,9 @@ def get_standard_logging_object_payload(
         )
         # clean up litellm metadata
         clean_metadata = StandardLoggingPayloadSetup.get_standard_logging_metadata(
-            metadata=metadata
+            metadata=metadata,
+            litellm_params=litellm_params,
+            prompt_integration=kwargs.get("prompt_integration", None),
         )
 
         saved_cache_cost: float = 0.0
@@ -2973,6 +3163,7 @@ def get_standard_logging_object_payload(
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
+
         model_cost_information = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
             custom_pricing=custom_pricing,
@@ -3038,6 +3229,9 @@ def get_standard_logging_object_payload(
             response_cost_failure_debug_info=kwargs.get(
                 "response_cost_failure_debug_information"
             ),
+            guardrail_information=metadata.get(
+                "standard_logging_guardrail_information", None
+            ),
         )
 
         return payload
@@ -3046,60 +3240,6 @@ def get_standard_logging_object_payload(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
-
-
-def truncate_standard_logging_payload_content(
-    standard_logging_object: StandardLoggingPayload,
-):
-    """
-    Truncate error strings and message content in logging payload
-
-    Some loggers like DataDog have a limit on the size of the payload. (1MB)
-
-    This function truncates the error string and the message content if they exceed a certain length.
-    """
-    MAX_STR_LENGTH = 10_000
-
-    # Truncate fields that might exceed max length
-    fields_to_truncate = ["error_str", "messages", "response"]
-    for field in fields_to_truncate:
-        _truncate_field(
-            standard_logging_object=standard_logging_object,
-            field_name=field,
-            max_length=MAX_STR_LENGTH,
-        )
-
-
-def _truncate_text(text: str, max_length: int) -> str:
-    """Truncate text if it exceeds max_length"""
-    return (
-        text[:max_length]
-        + "...truncated by litellm, this logger does not support large content"
-        if len(text) > max_length
-        else text
-    )
-
-
-def _truncate_field(
-    standard_logging_object: StandardLoggingPayload, field_name: str, max_length: int
-) -> None:
-    """
-    Helper function to truncate a field in the logging payload
-
-    This converts the field to a string and then truncates it if it exceeds the max length.
-
-    Why convert to string ?
-    1. User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
-        - Converting to string and then truncating the logged content catches this
-    2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
-    """
-    field_value = standard_logging_object.get(field_name)  # type: ignore
-    if field_value:
-        str_value = str(field_value)
-        if len(str_value) > max_length:
-            standard_logging_object[field_name] = _truncate_text(  # type: ignore
-                text=str_value, max_length=max_length
-            )
 
 
 def get_standard_logging_metadata(
@@ -3130,6 +3270,7 @@ def get_standard_logging_metadata(
         requester_ip_address=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
+        prompt_management_metadata=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
@@ -3182,9 +3323,9 @@ def modify_integration(integration_name, integration_params):
             Supabase.supabase_table_name = integration_params["table_name"]
 
 
-def get_combined_callback_list(
-    dynamic_success_callbacks: Optional[List], global_callbacks: List
-) -> List:
-    if dynamic_success_callbacks is None:
-        return global_callbacks
-    return list(set(dynamic_success_callbacks + global_callbacks))
+@lru_cache(maxsize=16)
+def _get_traceback_str_for_error(error_str: str) -> str:
+    """
+    function wrapped with lru_cache to limit the number of times `traceback.format_exc()` is called
+    """
+    return traceback.format_exc()

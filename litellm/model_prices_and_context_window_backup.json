@@ -1,6 +1,6 @@
 {
     "sample_spec": {
-        "max_tokens": "set to max_output_tokens if provider specifies it. IF not set to max_tokens provider specifies", 
+        "max_tokens": "LEGACY parameter. set to max_output_tokens if provider specifies it. IF not set to max_input_tokens, if provider specifies it.", 
         "max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens",
         "max_output_tokens": "max output tokens, if the provider specifies it. if not default to max_tokens", 
         "input_cost_per_token": 0.0000,
@@ -16,75 +16,32 @@
         "supports_response_schema": true,
         "supports_system_messages": true
     },
-    "sambanova/Meta-Llama-3.1-8B-Instruct": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000002,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
+    "omni-moderation-latest": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": "moderation"
     },
-    "sambanova/Meta-Llama-3.1-70B-Instruct": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000, 
-        "input_cost_per_token": 0.0000006,
-        "output_cost_per_token": 0.0000012,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
+    "omni-moderation-latest-intents": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": "moderation"
     },
-    "sambanova/Meta-Llama-3.1-405B-Instruct": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.000005,
-        "output_cost_per_token": 0.000010,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Meta-Llama-3.2-1B-Instruct": {
-        "max_tokens": 16000,
-        "max_input_tokens": 16000,
-        "max_output_tokens": 16000, 
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000008,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Meta-Llama-3.2-3B-Instruct": {
-        "max_tokens": 4000,
-        "max_input_tokens": 4000,
-        "max_output_tokens": 4000, 
-        "input_cost_per_token": 0.0000008,
-        "output_cost_per_token": 0.0000016,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Qwen2.5-Coder-32B-Instruct": {
-        "max_tokens": 8000,
-        "max_input_tokens": 8000,
-        "max_output_tokens": 8000, 
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000003,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
-    },
-    "sambanova/Qwen2.5-72B-Instruct": {
-        "max_tokens": 8000,
-        "max_input_tokens": 8000,
-        "max_output_tokens": 8000, 
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000004,
-        "litellm_provider": "sambanova",
-        "supports_function_calling": true,
-        "mode": "chat"
+    "omni-moderation-2024-09-26": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 0, 
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": "moderation"
     },
     "gpt-4": {
         "max_tokens": 4096, 
@@ -988,6 +945,20 @@
         "supports_vision": false,
         "supports_prompt_caching": true
     },
+    "azure/o1": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000060,
+        "cache_read_input_token_cost": 0.0000075,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true
+    },
     "azure/o1-preview": {
         "max_tokens": 32768,
         "max_input_tokens": 128000,
@@ -1810,8 +1781,19 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000009,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true
+    },
+    "mistral/mistral-large-2411": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
         "litellm_provider": "mistral",
         "mode": "chat",
         "supports_function_calling": true,
@@ -1838,6 +1820,30 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_assistant_prefill": true
+    },
+    "mistral/pixtral-large-latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_vision": true
+    },
+    "mistral/pixtral-large-2411": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_vision": true
     },
     "mistral/pixtral-12b-2409": {
         "max_tokens": 128000,
@@ -1954,7 +1960,7 @@
         "litellm_provider": "mistral",
         "mode": "embedding"
     },
-    "deepseek-chat": {
+    "deepseek/deepseek-chat": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -2023,7 +2029,7 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
-    "deepseek-coder": {
+    "deepseek/deepseek-coder": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -2264,17 +2270,7 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "friendliai/mixtral-8x7b-instruct-v0-1": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004,
-        "litellm_provider": "friendliai",
-        "mode": "chat",
-        "supports_function_calling": true
-    },
-    "friendliai/meta-llama-3-8b-instruct": {
+    "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
@@ -2282,17 +2278,23 @@
         "output_cost_per_token": 0.0000001,
         "litellm_provider": "friendliai",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
-    "friendliai/meta-llama-3-70b-instruct": {
+    "friendliai/meta-llama-3.1-70b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0000008,
-        "output_cost_per_token": 0.0000008,
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "friendliai",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "claude-instant-1.2": {
         "max_tokens": 8191,
@@ -2837,6 +2839,8 @@
         "output_cost_per_character_above_128k_tokens": 0.0000025,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "supports_system_messages": true,
         "supports_function_calling": true,
         "supports_tool_choice": true, 
@@ -2863,6 +2867,7 @@
         "output_cost_per_character_above_128k_tokens": 0.0000025,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
+        "supports_vision": true,
         "supports_system_messages": true,
         "supports_function_calling": true,
         "supports_tool_choice": true, 
@@ -2889,6 +2894,7 @@
         "output_cost_per_character_above_128k_tokens": 0.0000025,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
+        "supports_vision": true,
         "supports_system_messages": true,
         "supports_function_calling": true,
         "supports_tool_choice": true, 
@@ -3480,8 +3486,28 @@
         "max_tokens": 8191,
         "max_input_tokens": 128000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000009,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "vertex_ai/mistral-large@2411-001": {
+        "max_tokens": 8191,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "vertex_ai/mistral-large-2411": {
+        "max_tokens": 8191,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
         "litellm_provider": "vertex_ai-mistral_models",
         "mode": "chat",
         "supports_function_calling": true
@@ -3490,8 +3516,8 @@
         "max_tokens": 8191,
         "max_input_tokens": 128000,
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000009,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000006,
         "litellm_provider": "vertex_ai-mistral_models",
         "mode": "chat",
         "supports_function_calling": true
@@ -3500,8 +3526,8 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000015,
         "litellm_provider": "vertex_ai-mistral_models",
         "mode": "chat",
         "supports_function_calling": true
@@ -3565,8 +3591,8 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "vertex_ai-mistral_models",
         "mode": "chat",
         "supports_function_calling": true
@@ -3575,8 +3601,8 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "vertex_ai-mistral_models",
         "mode": "chat",
         "supports_function_calling": true
@@ -4214,6 +4240,17 @@
         "mode": "chat",
         "supports_function_calling": true
     },
+    "command-r7b-12-2024": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000000375,
+        "litellm_provider": "cohere_chat",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://docs.cohere.com/v2/docs/command-r7b"
+    },
     "command-light": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
@@ -4487,13 +4524,24 @@
         "litellm_provider": "replicate",
         "mode": "chat"
     },
-    "openrouter/deepseek/deepseek-coder": {
-        "max_tokens": 4096,
-        "max_input_tokens": 32000,
+    "openrouter/deepseek/deepseek-chat": {
+        "max_tokens": 8192,
+        "max_input_tokens": 66000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 0.00000014,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "openrouter",
+        "supports_prompt_caching": true,
+        "mode": "chat"
+    },
+    "openrouter/deepseek/deepseek-coder": {
+        "max_tokens": 8192,
+        "max_input_tokens": 66000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000014,
+        "output_cost_per_token": 0.00000028,
+        "litellm_provider": "openrouter",
+        "supports_prompt_caching": true,
         "mode": "chat"
     },
     "openrouter/microsoft/wizardlm-2-8x22b:nitro": {
@@ -4670,6 +4718,22 @@
         "output_cost_per_token": 0.00000079,
         "litellm_provider": "openrouter",
         "mode": "chat"
+    },
+    "openrouter/openai/o1": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.00006,
+        "cache_read_input_token_cost": 0.0000075,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true
     },
     "openrouter/openai/o1-mini": {
         "max_tokens": 65536,
@@ -5338,9 +5402,9 @@
         "supports_vision": true
     },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000005,
         "litellm_provider": "bedrock",
@@ -5406,9 +5470,9 @@
         "supports_vision": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000005,
         "litellm_provider": "bedrock",
@@ -5473,9 +5537,9 @@
         "supports_vision": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 4096,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 0.000001,
         "output_cost_per_token": 0.000005,
         "litellm_provider": "bedrock",
@@ -7332,6 +7396,18 @@
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v3": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing"
+    },
+
     "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -7590,6 +7666,22 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
+    "voyage/voyage-finance-2": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000012,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-lite-02-instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
     "voyage/voyage-law-2": {
         "max_tokens": 16000,
         "max_input_tokens": 16000,
@@ -7614,21 +7706,67 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
-    "voyage/voyage-lite-02-instruct": {
-        "max_tokens": 4000,
-        "max_input_tokens": 4000,
-        "input_cost_per_token": 0.0000001,
+    "voyage/voyage-3-large": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000018,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
-    "voyage/voyage-finance-2": {
-        "max_tokens": 4000,
-        "max_input_tokens": 4000,
+    "voyage/voyage-3": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000006,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-3-lite": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000002,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-code-3": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "input_cost_per_token": 0.00000018,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-multimodal-3": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
         "input_cost_per_token": 0.00000012,
         "output_cost_per_token": 0.000000,
         "litellm_provider": "voyage",
         "mode": "embedding"
+    },
+    "voyage/rerank-2": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000,
+        "max_query_tokens": 16000,
+        "input_cost_per_token": 0.00000005,
+        "input_cost_per_query": 0.00000005,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "voyage",
+        "mode": "rerank"
+    },
+    "voyage/rerank-2-lite": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "max_query_tokens": 8000,
+        "input_cost_per_token": 0.00000002,
+        "input_cost_per_query": 0.00000002,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "voyage",
+        "mode": "rerank"
     },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
         "max_tokens": 128000,
@@ -7772,5 +7910,75 @@
         "mode": "embedding",
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "metadata": {"notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."}
+    },
+    "sambanova/Meta-Llama-3.1-8B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.1-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000, 
+        "input_cost_per_token": 0.0000006,
+        "output_cost_per_token": 0.0000012,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.1-405B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.000005,
+        "output_cost_per_token": 0.000010,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.2-1B-Instruct": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000, 
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000008,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Meta-Llama-3.2-3B-Instruct": {
+        "max_tokens": 4000,
+        "max_input_tokens": 4000,
+        "max_output_tokens": 4000, 
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000016,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Qwen2.5-Coder-32B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000003,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "sambanova/Qwen2.5-72B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat"
     }
 }

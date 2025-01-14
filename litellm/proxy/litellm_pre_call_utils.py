@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
@@ -285,7 +286,6 @@ class LiteLLMProxyRequestSetup:
     def add_key_level_controls(
         key_metadata: dict, data: dict, _metadata_variable_name: str
     ):
-        data = data.copy()
         if "cache" in key_metadata:
             data["cache"] = {}
             if isinstance(key_metadata["cache"], dict):
@@ -602,7 +602,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     verbose_proxy_logger.debug(
-        f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+        "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
 
     ## ENFORCED PARAMS CHECK
@@ -616,13 +616,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     end_time = time.time()
-    await service_logger_obj.async_service_success_hook(
-        service=ServiceTypes.PROXY_PRE_CALL,
-        duration=end_time - start_time,
-        call_type="add_litellm_data_to_request",
-        start_time=start_time,
-        end_time=end_time,
-        parent_otel_span=user_api_key_dict.parent_otel_span,
+    asyncio.create_task(
+        service_logger_obj.async_service_success_hook(
+            service=ServiceTypes.PROXY_PRE_CALL,
+            duration=end_time - start_time,
+            call_type="add_litellm_data_to_request",
+            start_time=start_time,
+            end_time=end_time,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
     )
     return data
 

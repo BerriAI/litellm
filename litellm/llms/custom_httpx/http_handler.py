@@ -492,16 +492,17 @@ class HTTPHandler:
         headers: Optional[dict] = None,
         stream: bool = False,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        files: Optional[dict] = None,
+        content: Any = None,
     ):
         try:
-
             if timeout is not None:
                 req = self.client.build_request(
-                    "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout  # type: ignore
+                    "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout, files=files, content=content  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "POST", url, data=data, json=json, params=params, headers=headers  # type: ignore
+                    "POST", url, data=data, json=json, params=params, headers=headers, files=files, content=content  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -513,7 +514,6 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-
             if stream is True:
                 setattr(e, "message", mask_sensitive_info(e.response.read()))
                 setattr(e, "text", mask_sensitive_info(e.response.read()))

@@ -2,7 +2,7 @@
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-### INIT VARIABLES ###
+### INIT VARIABLES #####
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
@@ -18,6 +18,7 @@ from litellm._logging import (
     _turn_on_json,
     log_level,
 )
+import re
 from litellm.constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
@@ -26,6 +27,8 @@ from litellm.constants import (
     DEFAULT_REPLICATE_POLLING_RETRIES,
     DEFAULT_REPLICATE_POLLING_DELAY_SECONDS,
     LITELLM_CHAT_PROVIDERS,
+    HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
+    OPENAI_CHAT_COMPLETION_PARAMS,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -42,11 +45,11 @@ from enum import Enum
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-#############################################
+###############################################
 if set_verbose == True:
     _turn_on_debug()
-#############################################
-### Callbacks /Logging / Success / Failure Handlers ####
+###############################################
+### Callbacks /Logging / Success / Failure Handlers #####
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
@@ -72,6 +75,8 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "argilla",
     "mlflow",
     "langfuse",
+    "pagerduty",
+    "humanloop",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -151,6 +156,7 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_certificate: Optional[str] = None
 disable_streaming_logging: bool = False
+disable_add_transform_inline_image_block: bool = False
 in_memory_llm_clients_cache: InMemoryCache = InMemoryCache()
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
@@ -303,6 +309,7 @@ tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
 max_end_user_budget: Optional[float] = None
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
+custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
 #### RELIABILITY ####
@@ -419,6 +426,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-1-405b-instruct-v1:0",
     "meta.llama3-70b-instruct-v1:0",
     "mistral.mistral-large-2407-v1:0",
+    "mistral.mistral-large-2402-v1:0",
     "meta.llama3-2-1b-instruct-v1:0",
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
@@ -477,9 +485,44 @@ galadriel_models: List = []
 sambanova_models: List = []
 
 
+def is_bedrock_pricing_only_model(key: str) -> bool:
+    """
+    Excludes keys with the pattern 'bedrock/<region>/<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
+
+    Args:
+        key (str): A key to filter.
+
+    Returns:
+        bool: True if the key matches the Bedrock pattern, False otherwise.
+    """
+    # Regex to match 'bedrock/<region>/<model>'
+    bedrock_pattern = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
+
+    if "month-commitment" in key:
+        return True
+
+    is_match = bedrock_pattern.match(key)
+    return is_match is not None
+
+
+def is_openai_finetune_model(key: str) -> bool:
+    """
+    Excludes model cost keys with the pattern 'ft:<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
+
+    Args:
+        key (str): A key to filter.
+
+    Returns:
+        bool: True if the key matches the OpenAI finetune pattern, False otherwise.
+    """
+    return key.startswith("ft:") and not key.count(":") > 1
+
+
 def add_known_models():
     for key, value in model_cost.items():
-        if value.get("litellm_provider") == "openai":
+        if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
+            key
+        ):
             open_ai_chat_completion_models.append(key)
         elif value.get("litellm_provider") == "text-completion-openai":
             open_ai_text_completion_models.append(key)
@@ -535,7 +578,9 @@ def add_known_models():
             nlp_cloud_models.append(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.append(key)
-        elif value.get("litellm_provider") == "bedrock":
+        elif value.get(
+            "litellm_provider"
+        ) == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.append(key)
         elif value.get("litellm_provider") == "bedrock_converse":
             bedrock_converse_models.append(key)
@@ -603,7 +648,7 @@ openai_compatible_endpoints: List = [
     "api.deepseek.com/v1",
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
-    "inference.friendli.ai/v1",
+    "https://api.friendli.ai/serverless/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
@@ -854,6 +899,7 @@ model_list = (
     + azure_text_models
 )
 
+model_list_set = set(model_list)
 
 provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 
@@ -1011,6 +1057,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
 
 from .llms.custom_llm import CustomLLM
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
+from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
@@ -1106,7 +1153,13 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
+from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
+from .llms.deepgram.audio_transcription.transformation import (
+    DeepgramAudioTranscriptionConfig,
+)
+from .llms.topaz.common_utils import TopazModelInfo
+from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
@@ -1158,6 +1211,7 @@ from .llms.azure.azure import (
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig

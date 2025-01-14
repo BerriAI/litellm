@@ -370,7 +370,7 @@ async def user_info(
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-        team_list.sort(key=lambda x: (getattr(x, "team_alias", "")))
+        team_list.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
         _user_info = (
             user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
         )
@@ -404,7 +404,7 @@ async def _get_user_info_for_proxy_admin():
     sql_query = """
         SELECT 
             (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
-            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard') as keys
+            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL) as keys
     """
     if prisma_client is None:
         raise Exception(
@@ -412,6 +412,8 @@ async def _get_user_info_for_proxy_admin():
         )
 
     results = await prisma_client.db.query_raw(sql_query)
+
+    verbose_proxy_logger.debug("results_keys: %s", results)
 
     _keys_in_db: List = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken

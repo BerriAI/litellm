@@ -257,17 +257,13 @@ class AnthropicConfig(BaseConfig):
     ) -> Optional[List[str]]:
         new_stop: Optional[List[str]] = None
         if isinstance(stop, str):
-            if (
-                stop == "\n"
-            ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+            if stop.isspace() and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
                 return new_stop
             new_stop = [stop]
         elif isinstance(stop, list):
             new_v = []
             for v in stop:
-                if (
-                    v == "\n"
-                ) and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                if v.isspace() and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
                     continue
                 new_v.append(v)
             if len(new_v) > 0:
@@ -741,6 +737,7 @@ class AnthropicConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Dict:
         if api_key is None:
             raise litellm.AuthenticationError(

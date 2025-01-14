@@ -1107,6 +1107,29 @@ def test_proxy_config_state_post_init_callback_call():
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
 
 
+def test_proxy_config_state_get_config_state_error():
+    """
+    Ensures that get_config_state does not raise an error when the config is not a valid dictionary
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    import threading
+
+    test_config = {
+        "callback_list": [
+            {
+                "lock": threading.RLock(),  # This will cause the deep copy to fail
+                "name": "test_callback",
+            }
+        ],
+        "model_list": ["gpt-4", "claude-3"],
+    }
+
+    pc = ProxyConfig()
+    pc.config = test_config
+    config = pc.get_config_state()
+    assert config == {}
+
+
 @pytest.mark.parametrize(
     "associated_budget_table, expected_user_api_key_auth_key, expected_user_api_key_auth_value",
     [
@@ -1191,3 +1214,171 @@ def test_litellm_verification_token_view_response_with_budget_table(
             getattr(resp, expected_user_api_key_auth_key)
             == expected_user_api_key_auth_value
         )
+
+
+def test_is_allowed_to_create_key():
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _is_allowed_to_create_key,
+    )
+
+    assert (
+        _is_allowed_to_create_key(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user_id", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+            user_id="test_user_id",
+            team_id="test_team_id",
+        )
+        is True
+    )
+
+    assert (
+        _is_allowed_to_create_key(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user_id",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                team_id="litellm-dashboard",
+            ),
+            user_id="test_user_id",
+            team_id="test_team_id",
+        )
+        is True
+    )
+
+
+def test_get_model_group_info():
+    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/tts-1",
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "sk-1234",
+                },
+            },
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "sk-1234",
+                },
+            },
+        ]
+    )
+    model_list = _get_model_group_info(
+        llm_router=router,
+        all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
+        model_group="openai/tts-1",
+    )
+    assert len(model_list) == 1
+
+
+import pytest
+import asyncio
+from unittest.mock import AsyncMock, patch
+import json
+
+
+@pytest.fixture
+def mock_team_data():
+    return [
+        {"team_id": "team1", "team_name": "Test Team 1"},
+        {"team_id": "team2", "team_name": "Test Team 2"},
+    ]
+
+
+@pytest.fixture
+def mock_key_data():
+    return [
+        {"token": "test_token_1", "key_name": "key1", "team_id": None, "spend": 0},
+        {"token": "test_token_2", "key_name": "key2", "team_id": "team1", "spend": 100},
+        {
+            "token": "test_token_3",
+            "key_name": "key3",
+            "team_id": "litellm-dashboard",
+            "spend": 50,
+        },
+    ]
+
+
+class MockDb:
+    def __init__(self, mock_team_data, mock_key_data):
+        self.mock_team_data = mock_team_data
+        self.mock_key_data = mock_key_data
+
+    async def query_raw(self, query: str, *args):
+        # Simulate the SQL query response
+        filtered_keys = [
+            k
+            for k in self.mock_key_data
+            if k["team_id"] != "litellm-dashboard" or k["team_id"] is None
+        ]
+
+        return [{"teams": self.mock_team_data, "keys": filtered_keys}]
+
+
+class MockPrismaClientDB:
+    def __init__(
+        self,
+        mock_team_data,
+        mock_key_data,
+    ):
+        self.db = MockDb(mock_team_data, mock_key_data)
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
+    # Patch the prisma_client import
+    from litellm.proxy._types import UserInfoResponse
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MockPrismaClientDB(mock_team_data, mock_key_data),
+    ):
+
+        from litellm.proxy.management_endpoints.internal_user_endpoints import (
+            _get_user_info_for_proxy_admin,
+        )
+
+        # Execute the function
+        result = await _get_user_info_for_proxy_admin()
+
+        # Verify the result structure
+        assert isinstance(result, UserInfoResponse)
+        assert len(result.keys) == 2
+
+
+def test_custom_openid_response():
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    from litellm.proxy.management_endpoints.ui_sso import JWTHandler
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.caching import DualCache
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client={},
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="department",
+        ),
+    )
+    response = {
+        "sub": "3f196e06-7484-451e-be5a-ea6c6bb86c5b",
+        "email_verified": True,
+        "name": "Krish Dholakia",
+        "preferred_username": "krrishd",
+        "given_name": "Krish",
+        "department": ["/test-group"],
+        "family_name": "Dholakia",
+        "email": "krrishdholakia@gmail.com",
+    }
+
+    resp = generic_response_convertor(
+        response=response,
+        jwt_handler=jwt_handler,
+    )
+    assert resp.team_ids == ["/test-group"]

@@ -6,6 +6,7 @@ import UserDashboard from "../components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
+import Organizations from "@/components/organizations";
 import AdminPanel from "@/components/admins";
 import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
@@ -67,6 +68,7 @@ const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
+  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
@@ -115,6 +117,8 @@ const CreateKeyPage = () => {
         console.log("Decoded key:", decoded.key);
         // set accessToken
         setAccessToken(decoded.key);
+
+        setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
 
         // check if userRole is defined
         if (decoded.user_role) {
@@ -219,6 +223,7 @@ const CreateKeyPage = () => {
               userRole={userRole}
               token={token}
               accessToken={accessToken}
+              disabledPersonalKeyCreation={disabledPersonalKeyCreation}
             />
           ) : page == "users" ? (
             <ViewUserDashboard
@@ -238,6 +243,16 @@ const CreateKeyPage = () => {
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
+            />
+          ) : page == "organizations" ? (
+            <Organizations
+              teams={teams}
+              setTeams={setTeams}
+              searchParams={searchParams}
+              accessToken={accessToken}
+              userID={userID}
+              userRole={userRole}
+              premiumUser={premiumUser}
             />
           ) : page == "admin-panel" ? (
             <AdminPanel

@@ -229,6 +229,11 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
+        # realtime
+        "/realtime",
+        "/v1/realtime",
+        "/realtime?{model}",
+        "/v1/realtime?{model}",
     ]
 
     mapped_pass_through_routes = [
@@ -307,16 +312,18 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
     ]
 
-    public_routes = [
-        "/routes",
-        "/",
-        "/health/liveliness",
-        "/health/liveness",
-        "/health/readiness",
-        "/test",
-        "/config/yaml",
-        "/metrics",
-    ]
+    public_routes = set(
+        [
+            "/routes",
+            "/",
+            "/health/liveliness",
+            "/health/liveness",
+            "/health/readiness",
+            "/test",
+            "/config/yaml",
+            "/metrics",
+        ]
+    )
 
     ui_routes = [
         "/sso",
@@ -420,6 +427,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "info_routes",
     ]
     team_id_jwt_field: Optional[str] = None
+    team_ids_jwt_field: Optional[str] = None
+    upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
     ] = ["openai_routes", "info_routes"]
@@ -690,7 +699,17 @@ class RegenerateKeyRequest(GenerateKeyRequest):
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
-    keys: List[str]
+    keys: Optional[List[str]] = None
+    key_aliases: Optional[List[str]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_at_least_one(cls, values):
+        if not values.get("keys") and not values.get("key_aliases"):
+            raise ValueError(
+                "At least one of 'keys' or 'key_aliases' must be provided."
+            )
+        return values
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
@@ -1146,6 +1165,7 @@ class KeyManagementSystem(enum.Enum):
     AZURE_KEY_VAULT = "azure_key_vault"
     AWS_SECRET_MANAGER = "aws_secret_manager"
     GOOGLE_SECRET_MANAGER = "google_secret_manager"
+    HASHICORP_VAULT = "hashicorp_vault"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
 
@@ -1626,6 +1646,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
 
     spend: float
     max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
     token: Optional[str] = Field(default=None, description="Hashed value of that key")
     customer_id: Optional[str] = None
     user_id: Optional[str] = None
@@ -1640,6 +1661,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
 class WebhookEvent(CallInfo):
     event: Literal[
         "budget_crossed",
+        "soft_budget_crossed",
         "threshold_crossed",
         "projected_limit_exceeded",
         "key_created",
@@ -2058,12 +2080,13 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 
 
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
-    max_budget_in_team: float
+    max_budget_in_team: Optional[float] = None
+    role: Optional[Literal["admin", "user"]] = None
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
-    max_budget_in_team: float
+    max_budget_in_team: Optional[float] = None
 
 
 # Organization Member Requests
@@ -2237,3 +2260,6 @@ class ProxyStateVariables(TypedDict):
     """
 
     spend_logs_row_count: int
+
+
+UI_TEAM_ID = "litellm-dashboard"

@@ -20,6 +20,7 @@ from prometheus_client import REGISTRY, CollectorRegistry
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.braintrust_logging import BraintrustLogger
+from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
 from litellm.integrations.galileo import GalileoObserve
 from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.literal_ai import LiteralAILogger
@@ -35,6 +36,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
 )
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.integrations.humanloop import HumanloopLogger
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 from unittest.mock import patch
 
@@ -59,6 +61,7 @@ callback_class_str_to_classType = {
     "argilla": ArgillaLogger,
     "opentelemetry": OpenTelemetry,
     "azure_storage": AzureBlobStorageLogger,
+    "humanloop": HumanloopLogger,
     # OTEL compatible loggers
     "logfire": OpenTelemetry,
     "arize": OpenTelemetry,
@@ -66,6 +69,7 @@ callback_class_str_to_classType = {
     "mlflow": MlflowLogger,
     "langfuse": LangfusePromptManagement,
     "otel": OpenTelemetry,
+    "pagerduty": PagerDutyAlerting,
 }
 
 expected_env_vars = {
@@ -85,6 +89,7 @@ expected_env_vars = {
     "ARIZE_SPACE_KEY": "arize_space_key",
     "ARIZE_API_KEY": "arize_api_key",
     "ARGILLA_API_KEY": "argilla_api_key",
+    "PAGERDUTY_API_KEY": "pagerduty_api_key",
 }
 
 
@@ -178,7 +183,9 @@ async def use_callback_in_llm_call(
             assert isinstance(litellm.success_callback[0], expected_class)
             assert isinstance(litellm.failure_callback[0], expected_class)
 
-            assert len(litellm._async_success_callback) == 1
+            assert (
+                len(litellm._async_success_callback) == 1
+            ), f"Got={litellm._async_success_callback}"
             assert len(litellm._async_failure_callback) == 1
             assert len(litellm.success_callback) == 1
             assert len(litellm.failure_callback) == 1
@@ -288,11 +295,21 @@ def test_dynamic_logging_global_callback():
 
 
 def test_get_combined_callback_list():
-    from litellm.litellm_core_utils.litellm_logging import get_combined_callback_list
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    assert "langfuse" in get_combined_callback_list(
+    _logging = LiteLLMLoggingObj(
+        model="claude-3-opus-20240229",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="123",
+        function_id="456",
+    )
+
+    assert "langfuse" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )
-    assert "lago" in get_combined_callback_list(
+    assert "lago" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )

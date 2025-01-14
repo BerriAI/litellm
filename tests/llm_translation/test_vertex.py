@@ -5,6 +5,10 @@ import traceback
 
 from dotenv import load_dotenv
 
+import litellm.litellm_core_utils
+import litellm.litellm_core_utils.prompt_templates
+import litellm.litellm_core_utils.prompt_templates.factory
+
 load_dotenv()
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +20,8 @@ import pytest
 import litellm
 from litellm import get_optional_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+from litellm.types.llms.vertex_ai import PartType, BlobType
 import httpx
 
 
@@ -1240,3 +1246,53 @@ def test_vertex_embedding_url(model, expected_url):
 
     assert url == expected_url
     assert endpoint == "predict"
+
+
+import pytest
+from unittest.mock import Mock, patch
+from typing import Dict, Any
+
+# Import your actual module here
+# from your_module import _process_gemini_image, PartType, FileDataType, BlobType
+
+
+@pytest.fixture
+def mock_convert_url_to_base64():
+    with patch(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
+    ) as mock:
+        # Setup the mock to return a valid image object
+        mock.return_value = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+        yield mock
+
+
+@pytest.fixture
+def mock_blob():
+    return Mock(spec=BlobType)
+
+
+@pytest.mark.parametrize(
+    "http_url",
+    [
+        "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
+        "http://example.com/image.jpg",
+        "http://subdomain.domain.com/path/to/image.png",
+    ],
+)
+def test_process_gemini_image_http_url(
+    http_url: str, mock_convert_url_to_base64: Mock, mock_blob: Mock
+) -> None:
+    """
+    Test that _process_gemini_image correctly handles HTTP URLs.
+
+    Args:
+        http_url: Test HTTP URL
+        mock_convert_to_anthropic: Mocked convert_to_anthropic_image_obj function
+        mock_blob: Mocked BlobType instance
+    """
+    # Arrange
+    expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
+    mock_convert_url_to_base64.return_value = expected_image_data
+
+    # Act
+    result = _process_gemini_image(http_url)

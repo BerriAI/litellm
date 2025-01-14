@@ -2,11 +2,12 @@
 anyio==4.4.0 # openai + http req.
 httpx==0.27.0 # Pin Httpx dependency
 openai==1.55.3  # openai req. 
-fastapi==0.111.0 # server dep
+fastapi==0.115.5 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
 gunicorn==22.0.0 # server dep
+uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
 numpy==2.1.1 # semantic caching
@@ -19,6 +20,7 @@ google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.45.0 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
+ddtrace==2.19.0rc1       # for advanced DD tracing / profiling
 orjson==3.10.12 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
 fastapi-sso==0.16.0 # admin UI, SSO

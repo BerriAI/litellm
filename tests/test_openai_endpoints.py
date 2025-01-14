@@ -1,5 +1,5 @@
 # What this tests ?
-## Tests /chat/completions by generating a key and then making a chat completions request
+## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
 import asyncio
 import aiohttp, openai

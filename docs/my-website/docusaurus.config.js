@@ -40,11 +40,16 @@ const config = {
     [
       '@docusaurus/plugin-content-blog',
       {
-        id: 'release_notes', 
-        path: './release_notes', // Folder where your release notes are stored
-        routeBasePath: '/release_notes', // URL path for the release notes
-        include: ['**/*.md', '**/*.mdx'], // Files to include
-        // Other blog options
+        id: 'release_notes',
+        path: './release_notes',
+        routeBasePath: 'release_notes',
+        blogTitle: 'Release Notes',
+        blogSidebarTitle: 'All Releases',
+        blogSidebarCount: 'ALL',
+        postsPerPage: 'ALL',
+        showReadingTime: false,
+        sortPosts: 'descending',
+        include: ['**/*.{md,mdx}'],
       },
     ],
 

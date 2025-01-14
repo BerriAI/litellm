@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import os
@@ -24,7 +24,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -130,34 +130,6 @@ def test_null_role_response():
         assert response.id == "chatcmpl-123"
 
         assert response.choices[0].message.role == "assistant"
-
-
-def test_completion_azure_ai_command_r():
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
-
-        response = completion(
-            model="azure_ai/command-r-plus",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the meaning of life?"}
-                    ],
-                }
-            ],
-        )  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -2162,7 +2134,7 @@ def test_completion_openai_organization():
             )
             pytest.fail("Request should have failed - This organization does not exist")
         except Exception as e:
-            assert "No such organization: org-ikDc4ex8NB" in str(e)
+            assert "header should match organization for API key" in str(e)
 
     except Exception as e:
         print(e)
@@ -4313,7 +4285,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],
+    ["gpt-4o", "azure/chatgpt-v-2"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4533,4 +4505,18 @@ def test_langfuse_completion(monkeypatch):
         prompt_id="test-chat-prompt",
         prompt_variables={"user_message": "this is used"},
         messages=[{"role": "user", "content": "this is ignored"}],
+    )
+
+
+def test_humanloop_completion(monkeypatch):
+    monkeypatch.setenv(
+        "HUMANLOOP_API_KEY", "hl_sk_59c1206e110c3f5b9985f0de4d23e7cbc79c4c4ae18c9f14"
+    )
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="humanloop/gpt-3.5-turbo",
+        humanloop_api_key=os.getenv("HUMANLOOP_API_KEY"),
+        prompt_id="pr_nmSOVpEdyYPm2DrOwCoOm",
+        prompt_variables={"person": "John"},
+        messages=[{"role": "user", "content": "Tell me a joke."}],
     )

@@ -26,6 +26,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
+import random
 
 
 def load_vertex_ai_credentials():
@@ -33,7 +34,7 @@ def load_vertex_ai_credentials():
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
+    vertex_key_path = filepath + "/pathrise-convert-1606954137718.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
@@ -296,6 +297,11 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
+    if random.randint(1, 20) == 1:
+        print("Running random cleanup of Azure files and models...")
+        cleanup_azure_files()
+        cleanup_azure_ft_models()
+
 
 def cleanup_azure_files():
     """
@@ -303,6 +309,8 @@ def cleanup_azure_files():
     """
     azure_files = litellm.file_list(
         custom_llm_provider="azure",
+        api_key=os.getenv("AZURE_FT_API_KEY"),
+        api_base=os.getenv("AZURE_FT_API_BASE"),
     )
     print("azure_files=", azure_files)
     for _file in azure_files:
@@ -310,9 +318,52 @@ def cleanup_azure_files():
         delete_file_response = litellm.file_delete(
             file_id=_file.id,
             custom_llm_provider="azure",
+            api_key=os.getenv("AZURE_FT_API_KEY"),
+            api_base=os.getenv("AZURE_FT_API_BASE"),
         )
         print("delete_file_response=", delete_file_response)
         assert delete_file_response.id == _file.id
+
+
+def cleanup_azure_ft_models():
+    """
+    Test CLEANUP: Delete all existing fine tuning jobs for Azure
+    """
+    try:
+        from openai import AzureOpenAI
+        import requests
+
+        client = AzureOpenAI(
+            api_key=os.getenv("AZURE_FT_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_FT_API_BASE"),
+            api_version=os.getenv("AZURE_API_VERSION"),
+        )
+
+        _list_ft_jobs = client.fine_tuning.jobs.list()
+        print("_list_ft_jobs=", _list_ft_jobs)
+
+        # delete all ft jobs make post request to this
+        # Delete all fine-tuning jobs
+        for job in _list_ft_jobs:
+            try:
+                endpoint = os.getenv("AZURE_FT_API_BASE").rstrip("/")
+                url = f"{endpoint}/openai/fine_tuning/jobs/{job.id}?api-version=2024-10-21"
+                print("url=", url)
+
+                headers = {
+                    "api-key": os.getenv("AZURE_FT_API_KEY"),
+                    "Content-Type": "application/json",
+                }
+
+                response = requests.delete(url, headers=headers)
+                print(f"Deleting job {job.id}: Status {response.status_code}")
+                if response.status_code != 204:
+                    print(f"Error deleting job {job.id}: {response.text}")
+
+            except Exception as e:
+                print(f"Error deleting job {job.id}: {str(e)}")
+    except Exception as e:
+        print(f"Error on cleanup_azure_ft_models: {str(e)}")
 
 
 @pytest.mark.asyncio
@@ -342,4 +393,10 @@ async def test_avertex_batch_prediction():
         metadata={"key1": "value1", "key2": "value2"},
     )
     print("create_batch_response=", create_batch_response)
+
+    retrieved_batch = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider="vertex_ai",
+    )
+    print("retrieved_batch=", retrieved_batch)
     pass

@@ -1,6 +1,7 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
 import time
+from functools import lru_cache
 from typing import Any, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel
@@ -51,7 +52,12 @@ from litellm.llms.vertex_ai.image_generation.cost_calculator import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypesLiteral, PassthroughCallTypes, Usage
+from litellm.types.utils import (
+    CallTypesLiteral,
+    LlmProvidersSet,
+    PassthroughCallTypes,
+    Usage,
+)
 from litellm.utils import (
     CallTypes,
     CostPerToken,
@@ -60,7 +66,7 @@ from litellm.utils import (
     ModelResponse,
     TextCompletionResponse,
     TranscriptionResponse,
-    print_verbose,
+    _cached_get_model_info_helper,
     token_counter,
 )
 
@@ -278,7 +284,7 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
     else:
-        model_info = litellm.get_model_info(
+        model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
@@ -291,8 +297,11 @@ def cost_per_token(  # noqa: PLR0915
             model_info.get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
-            print_verbose(
-                f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; response time: {response_time_ms}"
+            verbose_logger.debug(
+                "For model=%s - input_cost_per_second: %s; response time: %s",
+                model,
+                model_info.get("input_cost_per_second", None),
+                response_time_ms,
             )
             ## COST PER SECOND ##
             prompt_tokens_cost_usd_dollar = (
@@ -307,16 +316,22 @@ def cost_per_token(  # noqa: PLR0915
             model_info.get("output_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
-            print_verbose(
-                f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; response time: {response_time_ms}"
+            verbose_logger.debug(
+                "For model=%s - output_cost_per_second: %s; response time: %s",
+                model,
+                model_info.get("output_cost_per_second", None),
+                response_time_ms,
             )
             ## COST PER SECOND ##
             completion_tokens_cost_usd_dollar = (
                 model_info["output_cost_per_second"] * response_time_ms / 1000  # type: ignore
             )
 
-        print_verbose(
-            f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
+        verbose_logger.debug(
+            "Returned custom cost for model=%s - prompt_tokens_cost_usd_dollar: %s, completion_tokens_cost_usd_dollar: %s",
+            model,
+            prompt_tokens_cost_usd_dollar,
+            completion_tokens_cost_usd_dollar,
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 
@@ -383,23 +398,18 @@ def _select_model_name_for_cost_calc(
     if base_model is not None:
         return_model = base_model
 
-    completion_response_model: Optional[str] = None
-    if completion_response is not None and isinstance(completion_response, BaseModel):
-        completion_response_model = getattr(completion_response, "model", None)
-        hidden_params = getattr(completion_response, "_hidden_params", None)
-        if completion_response_model is None and hidden_params is not None:
-            if (
-                hidden_params.get("model", None) is not None
-                and len(hidden_params["model"]) > 0
-            ):
-                return_model = hidden_params.get("model", model)
+    completion_response_model: Optional[str] = getattr(
+        completion_response, "model", None
+    )
+    hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
+    if completion_response_model is None and hidden_params is not None:
         if (
-            hidden_params is not None
-            and hidden_params.get("region_name", None) is not None
+            hidden_params.get("model", None) is not None
+            and len(hidden_params["model"]) > 0
         ):
-            region_name = hidden_params.get("region_name", None)
-    elif completion_response is not None and isinstance(completion_response, dict):
-        completion_response_model = completion_response.get("model", None)
+            return_model = hidden_params.get("model", model)
+    if hidden_params is not None and hidden_params.get("region_name", None) is not None:
+        region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model
@@ -410,7 +420,7 @@ def _select_model_name_for_cost_calc(
     if (
         return_model is not None
         and custom_llm_provider is not None
-        and not return_model.startswith(custom_llm_provider)
+        and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
         if region_name is not None:
             return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
@@ -418,6 +428,15 @@ def _select_model_name_for_cost_calc(
             return_model = f"{custom_llm_provider}/{return_model}"
 
     return return_model
+
+
+@lru_cache(maxsize=16)
+def _model_contains_known_llm_provider(model: str) -> bool:
+    """
+    Check if the model contains a known llm provider
+    """
+    _provider_prefix = model.split("/")[0]
+    return _provider_prefix in LlmProvidersSet
 
 
 def _get_usage_object(
@@ -538,13 +557,17 @@ def completion_cost(  # noqa: PLR0915
             custom_pricing=custom_pricing,
             base_model=base_model,
         )
+
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
         ):  # tts returns a custom class
-            usage_obj: Optional[Union[dict, Usage]] = completion_response.get(  # type: ignore
-                "usage", {}
-            )
+            if isinstance(completion_response, dict):
+                usage_obj: Optional[Union[dict, Usage]] = completion_response.get(
+                    "usage", {}
+                )
+            else:
+                usage_obj = getattr(completion_response, "usage", {})
             if isinstance(usage_obj, BaseModel) and not isinstance(
                 usage_obj, litellm.Usage
             ):
@@ -606,17 +629,17 @@ def completion_cost(  # noqa: PLR0915
             raise ValueError(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
-
-        try:
-            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model
-            )  # strip the llm provider from the model name -> for image gen cost calculation
-        except Exception as e:
-            verbose_logger.debug(
-                "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
-                    str(e)
+        if custom_llm_provider is None:
+            try:
+                model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=model
+                )  # strip the llm provider from the model name -> for image gen cost calculation
+            except Exception as e:
+                verbose_logger.debug(
+                    "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - {}".format(
+                        str(e)
+                    )
                 )
-            )
         if (
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
@@ -899,8 +922,19 @@ def default_image_cost_calculator(
     elif base_model_name in litellm.model_cost:
         cost_info = litellm.model_cost[base_model_name]
     else:
-        raise Exception(
-            f"Model not found in cost map. Tried {model_name_with_quality} and {base_model_name}"
+        # Try without provider prefix
+        model_without_provider = f"{size_str}/{model.split('/')[-1]}"
+        model_with_quality_without_provider = (
+            f"{quality}/{model_without_provider}" if quality else model_without_provider
         )
+
+        if model_with_quality_without_provider in litellm.model_cost:
+            cost_info = litellm.model_cost[model_with_quality_without_provider]
+        elif model_without_provider in litellm.model_cost:
+            cost_info = litellm.model_cost[model_without_provider]
+        else:
+            raise Exception(
+                f"Model not found in cost map. Tried {model_name_with_quality}, {base_model_name}, {model_with_quality_without_provider}, and {model_without_provider}"
+            )
 
     return cost_info["input_cost_per_pixel"] * height * width * n

@@ -168,6 +168,42 @@ Expected Response
 }
 ```
 
+### Realtime Models 
+
+To run realtime health checks, specify the mode as "realtime" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o-realtime-audio
+    litellm_params:
+      model: openai/gpt-4o-realtime-audio
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
+```
+
+### Wildcard Routes
+
+For wildcard routes, you can specify a `health_check_model` in your config.yaml. This model will be used for health checks for that wildcard route.
+
+In this example, when running a health check for `openai/*`, the health check will make a `/chat/completions` request to `openai/gpt-4o-mini`.
+
+```yaml
+model_list:
+  - model_name: openai/*
+    litellm_params:
+      model:  openai/*
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_model: openai/gpt-4o-mini
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      health_check_model: anthropic/claude-3-5-sonnet-20240620
+```
+
 ## Background Health Checks 
 
 You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`. 

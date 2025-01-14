@@ -1,7 +1,9 @@
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+
+import litellm
 
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
@@ -68,7 +70,21 @@ class UserAPIKeyLabelNames(Enum):
     FALLBACK_MODEL = "fallback_model"
 
 
-class PrometheusMetricLabels(Enum):
+DEFINED_PROMETHEUS_METRICS = Literal[
+    "litellm_llm_api_latency_metric",
+    "litellm_request_total_latency_metric",
+    "litellm_proxy_total_requests_metric",
+    "litellm_proxy_failed_requests_metric",
+    "litellm_deployment_latency_per_output_token",
+    "litellm_requests_metric",
+    "litellm_input_tokens_metric",
+    "litellm_output_tokens_metric",
+    "litellm_deployment_successful_fallbacks",
+    "litellm_deployment_failed_fallbacks",
+]
+
+
+class PrometheusMetricLabels:
     litellm_llm_api_latency_metric = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -114,24 +130,6 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
     ]
 
-    litellm_proxy_failed_requests_by_tag_metric = (
-        litellm_proxy_failed_requests_metric
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
-    litellm_request_total_latency_by_tag_metric = (
-        litellm_request_total_latency_metric
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
-    litellm_llm_api_latency_by_tag_metric = litellm_llm_api_latency_metric + [
-        UserAPIKeyLabelNames.TAG.value,
-    ]
-
     litellm_deployment_latency_per_output_token = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -143,13 +141,6 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
-    litellm_deployment_latency_per_output_token_by_tag = (
-        litellm_deployment_latency_per_output_token
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
     litellm_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -160,8 +151,26 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.USER.value,
     ]
 
-    litellm_proxy_total_requests_by_tag_metric = litellm_proxy_total_requests_metric + [
-        UserAPIKeyLabelNames.TAG.value,
+    litellm_input_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+    ]
+
+    litellm_output_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
     ]
 
     litellm_deployment_successful_fallbacks = [
@@ -175,18 +184,15 @@ class PrometheusMetricLabels(Enum):
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
     ]
 
-    litellm_deployment_successful_fallbacks_by_tag = (
-        litellm_deployment_successful_fallbacks
-        + [
-            UserAPIKeyLabelNames.TAG.value,
-        ]
-    )
-
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
-    litellm_deployment_failed_fallbacks_by_tag = (
-        litellm_deployment_successful_fallbacks_by_tag
-    )
+    @staticmethod
+    def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
+        default_labels = getattr(PrometheusMetricLabels, label_name)
+        return default_labels + [
+            metric.replace(".", "_")
+            for metric in litellm.custom_prometheus_metadata_labels
+        ]
 
 
 from typing import List, Optional
@@ -205,6 +211,7 @@ class UserAPIKeyLabelValues(BaseModel):
     model: Optional[str] = None
     litellm_model_name: Optional[str] = None
     tags: List[str] = []
+    custom_metadata_labels: Dict[str, str] = {}
     model_id: Optional[str] = None
     api_base: Optional[str] = None
     api_provider: Optional[str] = None

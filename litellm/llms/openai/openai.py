@@ -1,11 +1,12 @@
 import hashlib
-import os
 import types
 from typing import (
     Any,
+    AsyncIterator,
     Callable,
     Coroutine,
     Iterable,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -25,10 +26,16 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
-from litellm.types.utils import EmbeddingResponse, ImageResponse, ModelResponse
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -37,7 +44,6 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_transformation import OpenAIGPTConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 
 
@@ -233,6 +239,7 @@ class OpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
 
     def transform_response(
@@ -249,9 +256,20 @@ class OpenAIConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        raise NotImplementedError(
-            "OpenAI handler does this transformation as it uses the OpenAI SDK."
+
+        logging_obj.post_call(original_response=raw_response.text)
+        logging_obj.model_call_details["response_headers"] = raw_response.headers
+        final_response_obj = cast(
+            ModelResponse,
+            convert_to_model_response_object(
+                response_object=raw_response.json(),
+                model_response_object=model_response,
+                hidden_params={"headers": raw_response.headers},
+                _response_headers=dict(raw_response.headers),
+            ),
         )
+
+        return final_response_obj
 
     def validate_environment(
         self,
@@ -260,10 +278,35 @@ class OpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
-        raise NotImplementedError(
-            "OpenAI handler does this validation as it uses the OpenAI SDK."
+        return {
+            "Authorization": f"Bearer {api_key}",
+            **headers,
+        }
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return OpenAIChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
         )
+
+
+class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        """
+        {'choices': [{'delta': {'content': '', 'role': 'assistant'}, 'finish_reason': None, 'index': 0, 'logprobs': None}], 'created': 1735763082, 'id': 'a83a2b0fbfaf4aab9c2c93cb8ba346d7', 'model': 'mistral-large', 'object': 'chat.completion.chunk'}
+        """
+        try:
+            return ModelResponseStream(**chunk)
+        except Exception as e:
+            raise e
 
 
 class OpenAIChatCompletion(BaseLLM):
@@ -276,6 +319,7 @@ class OpenAIChatCompletion(BaseLLM):
         is_async: bool,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
         timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
         max_retries: Optional[int] = 2,
         organization: Optional[str] = None,
@@ -424,6 +468,9 @@ class OpenAIChatCompletion(BaseLLM):
         print_verbose: Optional[Callable] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
+        dynamic_params: Optional[bool] = None,
+        azure_ad_token: Optional[str] = None,
         acompletion: bool = False,
         logger_fn=None,
         headers: Optional[dict] = None,
@@ -433,6 +480,7 @@ class OpenAIChatCompletion(BaseLLM):
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
     ):
+
         super().completion()
         try:
             fake_stream: bool = False
@@ -442,6 +490,7 @@ class OpenAIChatCompletion(BaseLLM):
             )
             stream: Optional[bool] = inference_params.pop("stream", False)
             provider_config: Optional[BaseConfig] = None
+
             if custom_llm_provider is not None and model is not None:
                 provider_config = ProviderConfigManager.get_provider_chat_config(
                     model=model, provider=LlmProviders(custom_llm_provider)
@@ -451,6 +500,7 @@ class OpenAIChatCompletion(BaseLLM):
                 fake_stream = provider_config.should_fake_stream(
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
                 )
+
             if headers:
                 inference_params["extra_headers"] = headers
             if model is None or messages is None:
@@ -466,14 +516,6 @@ class OpenAIChatCompletion(BaseLLM):
 
             if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
-
-            if messages is not None and provider_config is not None:
-                if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
-                    provider_config, OpenAIConfig
-                ):
-                    messages = provider_config._transform_messages(
-                        messages=messages, model=model
-                    )
 
             for _ in range(
                 2
@@ -505,6 +547,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 model=model,
                                 api_base=api_base,
                                 api_key=api_key,
+                                api_version=api_version,
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
@@ -521,6 +564,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 model_response=model_response,
                                 api_base=api_base,
                                 api_key=api_key,
+                                api_version=api_version,
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
@@ -536,6 +580,7 @@ class OpenAIChatCompletion(BaseLLM):
                             model=model,
                             api_base=api_base,
                             api_key=api_key,
+                            api_version=api_version,
                             timeout=timeout,
                             client=client,
                             max_retries=max_retries,
@@ -547,11 +592,11 @@ class OpenAIChatCompletion(BaseLLM):
                             raise OpenAIError(
                                 status_code=422, message="max retries must be an int"
                             )
-
                         openai_client: OpenAI = self._get_openai_client(  # type: ignore
                             is_async=False,
                             api_key=api_key,
                             api_base=api_base,
+                            api_version=api_version,
                             timeout=timeout,
                             max_retries=max_retries,
                             organization=organization,
@@ -638,12 +683,10 @@ class OpenAIChatCompletion(BaseLLM):
                         new_messages = messages
                         new_messages.append({"role": "user", "content": ""})
                         messages = new_messages
-                    elif (
-                        "unknown field: parameter index is not a valid field" in str(e)
-                    ) and "tools" in data:
-                        litellm.remove_index_from_tool_calls(
-                            tool_calls=data["tools"], messages=messages
-                        )
+                    elif "unknown field: parameter index is not a valid field" in str(
+                        e
+                    ):
+                        litellm.remove_index_from_tool_calls(messages=messages)
                     else:
                         raise e
         except OpenAIError as e:
@@ -670,6 +713,7 @@ class OpenAIChatCompletion(BaseLLM):
         timeout: Union[float, httpx.Timeout],
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
         organization: Optional[str] = None,
         client=None,
         max_retries=None,
@@ -687,6 +731,7 @@ class OpenAIChatCompletion(BaseLLM):
                     is_async=True,
                     api_key=api_key,
                     api_base=api_base,
+                    api_version=api_version,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -761,6 +806,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
         organization: Optional[str] = None,
         client=None,
         max_retries=None,
@@ -770,10 +816,12 @@ class OpenAIChatCompletion(BaseLLM):
         data["stream"] = True
         if stream_options is not None:
             data["stream_options"] = stream_options
+
         openai_client: OpenAI = self._get_openai_client(  # type: ignore
             is_async=False,
             api_key=api_key,
             api_base=api_base,
+            api_version=api_version,
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
@@ -815,6 +863,7 @@ class OpenAIChatCompletion(BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
         organization: Optional[str] = None,
         client=None,
         max_retries=None,
@@ -832,6 +881,7 @@ class OpenAIChatCompletion(BaseLLM):
                     is_async=True,
                     api_key=api_key,
                     api_base=api_base,
+                    api_version=api_version,
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -1307,94 +1357,6 @@ class OpenAIChatCompletion(BaseLLM):
         )
 
         return HttpxBinaryResponseContent(response=response.response)
-
-    async def ahealth_check(
-        self,
-        model: Optional[str],
-        api_key: Optional[str],
-        timeout: float,
-        mode: str,
-        messages: Optional[list] = None,
-        input: Optional[list] = None,
-        prompt: Optional[str] = None,
-        organization: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ):
-        client = AsyncOpenAI(
-            api_key=api_key,
-            timeout=timeout,
-            organization=organization,
-            base_url=api_base,
-        )
-        if model is None and mode != "image_generation":
-            raise Exception("model is not set")
-
-        completion = None
-
-        if mode == "completion":
-            completion = await client.completions.with_raw_response.create(
-                model=model,  # type: ignore
-                prompt=prompt,  # type: ignore
-            )
-        elif mode == "chat":
-            if messages is None:
-                raise Exception("messages is not set")
-            completion = await client.chat.completions.with_raw_response.create(
-                model=model,  # type: ignore
-                messages=messages,  # type: ignore
-            )
-        elif mode == "embedding":
-            if input is None:
-                raise Exception("input is not set")
-            completion = await client.embeddings.with_raw_response.create(
-                model=model,  # type: ignore
-                input=input,  # type: ignore
-            )
-        elif mode == "image_generation":
-            if prompt is None:
-                raise Exception("prompt is not set")
-            completion = await client.images.with_raw_response.generate(
-                model=model,  # type: ignore
-                prompt=prompt,  # type: ignore
-            )
-        elif mode == "audio_transcription":
-            # Get the current directory of the file being run
-            pwd = os.path.dirname(os.path.realpath(__file__))
-            file_path = os.path.join(
-                pwd, "../../../tests/gettysburg.wav"
-            )  # proxy address
-            audio_file = open(file_path, "rb")
-            completion = await client.audio.transcriptions.with_raw_response.create(
-                file=audio_file,
-                model=model,  # type: ignore
-                prompt=prompt,  # type: ignore
-            )
-        elif mode == "audio_speech":
-            # Get the current directory of the file being run
-            completion = await client.audio.speech.with_raw_response.create(
-                model=model,  # type: ignore
-                input=prompt,  # type: ignore
-                voice="alloy",
-            )
-        else:
-            raise ValueError("mode not set, passed in mode: " + mode)
-        response = {}
-
-        if completion is None or not hasattr(completion, "headers"):
-            raise Exception("invalid completion response")
-
-        if (
-            completion.headers.get("x-ratelimit-remaining-requests", None) is not None
-        ):  # not provided for dall-e requests
-            response["x-ratelimit-remaining-requests"] = completion.headers[
-                "x-ratelimit-remaining-requests"
-            ]
-
-        if completion.headers.get("x-ratelimit-remaining-tokens", None) is not None:
-            response["x-ratelimit-remaining-tokens"] = completion.headers[
-                "x-ratelimit-remaining-tokens"
-            ]
-        return response
 
 
 class OpenAIFilesAPI(BaseLLM):
@@ -1968,6 +1930,10 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[AsyncOpenAI],
+        order: Optional[str] = "desc",
+        limit: Optional[int] = 20,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
     ) -> AsyncCursorPage[Assistant]:
         openai_client = self.async_get_openai_client(
             api_key=api_key,
@@ -1977,8 +1943,16 @@ class OpenAIAssistantsAPI(BaseLLM):
             organization=organization,
             client=client,
         )
+        request_params = {
+            "order": order,
+            "limit": limit,
+        }
+        if before:
+            request_params["before"] = before
+        if after:
+            request_params["after"] = after
 
-        response = await openai_client.beta.assistants.list()
+        response = await openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 
@@ -2021,6 +1995,10 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: Optional[str],
         client=None,
         aget_assistants=None,
+        order: Optional[str] = "desc",
+        limit: Optional[int] = 20,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
     ):
         if aget_assistants is not None and aget_assistants is True:
             return self.async_get_assistants(
@@ -2040,7 +2018,17 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response = openai_client.beta.assistants.list()
+        request_params = {
+            "order": order,
+            "limit": limit,
+        }
+
+        if before:
+            request_params["before"] = before
+        if after:
+            request_params["after"] = after
+
+        response = openai_client.beta.assistants.list(**request_params)  # type: ignore
 
         return response
 

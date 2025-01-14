@@ -1,7 +1,9 @@
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union, cast
 
+import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.utils import ModelInfoBase, ProviderSpecificModelInfo
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -110,6 +112,80 @@ class FireworksAIConfig(OpenAIGPTConfig):
                     optional_params[param] = value
         return optional_params
 
+    def _add_transform_inline_image_block(
+        self,
+        content: ChatCompletionImageObject,
+        model: str,
+        disable_add_transform_inline_image_block: Optional[bool],
+    ) -> ChatCompletionImageObject:
+        """
+        Add transform_inline to the image_url (allows non-vision models to parse documents/images/etc.)
+        - ignore if model is a vision model
+        - ignore if user has disabled this feature
+        """
+        if (
+            "vision" in model or disable_add_transform_inline_image_block
+        ):  # allow user to toggle this feature.
+            return content
+        if isinstance(content["image_url"], str):
+            content["image_url"] = f"{content['image_url']}#transform=inline"
+        elif isinstance(content["image_url"], dict):
+            content["image_url"][
+                "url"
+            ] = f"{content['image_url']['url']}#transform=inline"
+        return content
+
+    def _transform_messages_helper(
+        self, messages: List[AllMessageValues], model: str, litellm_params: dict
+    ) -> List[AllMessageValues]:
+        """
+        Add 'transform=inline' to the url of the image_url
+        """
+        disable_add_transform_inline_image_block = cast(
+            Optional[bool],
+            litellm_params.get(
+                "disable_add_transform_inline_image_block",
+                litellm.disable_add_transform_inline_image_block,
+            ),
+        )
+        for message in messages:
+            if message["role"] == "user":
+                _message_content = message.get("content")
+                if _message_content is not None and isinstance(_message_content, list):
+                    for content in _message_content:
+                        if content["type"] == "image_url":
+                            content = self._add_transform_inline_image_block(
+                                content=content,
+                                model=model,
+                                disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+                            )
+        return messages
+
+    def get_model_info(
+        self, model: str, existing_model_info: Optional[ModelInfoBase] = None
+    ) -> ModelInfoBase:
+        provider_specific_model_info = ProviderSpecificModelInfo(
+            supports_function_calling=True,
+            supports_prompt_caching=True,  # https://docs.fireworks.ai/guides/prompt-caching
+            supports_pdf_input=True,  # via document inlining
+            supports_vision=True,  # via document inlining
+        )
+        if existing_model_info is not None:
+            return ModelInfoBase(
+                **{**existing_model_info, **provider_specific_model_info}
+            )
+        return ModelInfoBase(
+            key=model,
+            litellm_provider="fireworks_ai",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            **provider_specific_model_info,
+        )
+
     def transform_request(
         self,
         model: str,
@@ -120,6 +196,9 @@ class FireworksAIConfig(OpenAIGPTConfig):
     ) -> dict:
         if not model.startswith("accounts/"):
             model = f"accounts/fireworks/models/{model}"
+        messages = self._transform_messages_helper(
+            messages=messages, model=model, litellm_params=litellm_params
+        )
         return super().transform_request(
             model=model,
             messages=messages,
@@ -129,8 +208,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
         )
 
     def _get_openai_compatible_provider_info(
-        self, model: str, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[str, Optional[str], Optional[str]]:
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         api_base = (
             api_base
             or get_secret_str("FIREWORKS_API_BASE")
@@ -142,4 +221,43 @@ class FireworksAIConfig(OpenAIGPTConfig):
             or get_secret_str("FIREWORKSAI_API_KEY")
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
-        return model, api_base, dynamic_api_key
+        return api_base, dynamic_api_key
+
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+
+        api_base, api_key = self._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
+        if api_base is None or api_key is None:
+            raise ValueError(
+                "FIREWORKS_API_BASE or FIREWORKS_API_KEY is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+            )
+
+        account_id = get_secret_str("FIREWORKS_ACCOUNT_ID")
+        if account_id is None:
+            raise ValueError(
+                "FIREWORKS_ACCOUNT_ID is not set. Please set the environment variable, to query Fireworks AI's `/models` endpoint."
+            )
+
+        response = litellm.module_level_client.get(
+            url=f"{api_base}/v1/accounts/{account_id}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        if response.status_code != 200:
+            raise ValueError(
+                f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
+            )
+
+        models = response.json()["models"]
+
+        return ["fireworks_ai/" + model["name"] for model in models]
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        return api_key or (
+            get_secret_str("FIREWORKS_API_KEY")
+            or get_secret_str("FIREWORKS_AI_API_KEY")
+            or get_secret_str("FIREWORKSAI_API_KEY")
+            or get_secret_str("FIREWORKS_AI_TOKEN")
+        )

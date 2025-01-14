@@ -44,7 +44,7 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
-            "proxy/pass_through",
+            "proxy/spending_monitoring",
         ],
         },
         "proxy/demo",
@@ -64,6 +64,7 @@ const sidebars = {
           label: "Making LLM Requests",
           items: [
             "proxy/user_keys",
+            "proxy/clientside_auth",
             "proxy/response_headers", 
           ],
         },
@@ -82,19 +83,20 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Model Access",
+          items: [
+            "proxy/model_access",
+            "proxy/team_model_add"
+          ]
+        },
+        {
+          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui", 
             "proxy/admin_ui_sso",
             "proxy/self_serve", 
             "proxy/custom_sso"
-          ],
-        },
-        {
-          type: "category",
-          label: "Team Management",
-          items: [
-            "proxy/team_model_add"
           ],
         },
         {
@@ -115,7 +117,13 @@ const sidebars = {
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/logging_spec", "proxy/team_logging","proxy/alerting", "proxy/prometheus"],
+          items: [
+            "proxy/logging", 
+            "proxy/logging_spec", 
+            "proxy/team_logging",
+            "proxy/prometheus", 
+            "proxy/alerting", 
+            "proxy/pagerduty"],
         },
         {
           type: "category",
@@ -181,6 +189,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/huggingface", 
         "providers/databricks",
+        "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim", 
@@ -278,12 +287,14 @@ const sidebars = {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
           items: [
+            "pass_through/intro",
             "pass_through/vertex_ai",
             "pass_through/google_ai_studio",
             "pass_through/cohere",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
             "pass_through/langfuse",
+            "proxy/pass_through",
           ],
         },
         "rerank",
@@ -351,7 +362,6 @@ const sidebars = {
       label: "Load Testing",
       items: [
         "benchmarks",
-        "load_test",
         "load_test_advanced",
         "load_test_sdk",
         "load_test_rpm",
@@ -380,6 +390,7 @@ const sidebars = {
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",
+        "observability/humanloop",
         "observability/scrub_data",
         "observability/braintrust",
         "observability/sentry",

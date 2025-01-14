@@ -166,6 +166,7 @@ class IBMWatsonXMixin:
         messages: List[AllMessageValues],
         optional_params: Dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
@@ -174,7 +175,12 @@ class IBMWatsonXMixin:
 
         if "Authorization" in headers:
             return {**default_headers, **headers}
-        token = cast(Optional[str], optional_params.get("token"))
+        token = cast(
+            Optional[str],
+            optional_params.get("token")
+            or get_secret_str("WATSONX_ZENAPIKEY")
+            or get_secret_str("WATSONX_TOKEN"),
+        )
         if token:
             headers["Authorization"] = f"Bearer {token}"
         else:
@@ -244,6 +250,7 @@ class IBMWatsonXMixin:
         )
 
         token: Optional[str] = None
+
         if wx_credentials is not None:
             api_base = wx_credentials.get("url", api_base)
             api_key = wx_credentials.get(

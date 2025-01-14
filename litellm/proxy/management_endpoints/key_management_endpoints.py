@@ -16,13 +16,14 @@ import secrets
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple, cast
+from typing import List, Literal, Optional, Tuple, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -34,10 +35,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
+    PrismaClient,
     _hash_token_if_needed,
     duration_in_seconds,
     handle_exception_on_proxy,
 )
+from litellm.router import Router
 from litellm.secret_managers.main import get_secret
 from litellm.types.utils import (
     BudgetConfig,
@@ -61,30 +64,84 @@ def _get_user_in_team(
     return None
 
 
-def _team_key_generation_team_member_check(
-    team_table: LiteLLM_TeamTableCachedObj,
-    user_api_key_dict: UserAPIKeyAuth,
-    team_key_generation: Optional[TeamUIKeyGenerationConfig],
-):
+def _is_allowed_to_create_key(
+    user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
+) -> bool:
+    """
+    Assert user only creates keys for themselves
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/7336
+    """
+    ## BASE CASE - PROXY ADMIN
     if (
-        team_key_generation is None
-        or "allowed_team_member_roles" not in team_key_generation
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     ):
         return True
 
-    user_in_team = _get_user_in_team(
+    if user_id is not None:
+        assert (
+            user_id == user_api_key_dict.user_id
+        ), "User can only create keys for themselves. Got user_id={}, Your ID={}".format(
+            user_id, user_api_key_dict.user_id
+        )
+
+    if team_id is not None:
+        if (
+            user_api_key_dict.team_id is not None
+            and user_api_key_dict.team_id == UI_TEAM_ID
+        ):
+            return True  # handle https://github.com/BerriAI/litellm/issues/7482
+        assert (
+            user_api_key_dict.team_id == team_id
+        ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
+            team_id, user_api_key_dict.team_id
+        )
+
+    return True
+
+
+def _team_key_generation_team_member_check(
+    assigned_user_id: Optional[str],
+    team_table: LiteLLM_TeamTableCachedObj,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_key_generation: TeamUIKeyGenerationConfig,
+):
+    if assigned_user_id is not None:
+        key_assigned_user_in_team = _get_user_in_team(
+            team_table=team_table, user_id=assigned_user_id
+        )
+
+        if key_assigned_user_in_team is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User={assigned_user_id} not assigned to team={team_table.team_id}",
+            )
+
+    key_creating_user_in_team = _get_user_in_team(
         team_table=team_table, user_id=user_api_key_dict.user_id
     )
-    if user_in_team is None:
+
+    is_admin = (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
+    if is_admin:
+        return True
+    elif key_creating_user_in_team is None:
         raise HTTPException(
             status_code=400,
             detail=f"User={user_api_key_dict.user_id} not assigned to team={team_table.team_id}",
         )
-
-    if user_in_team.role not in team_key_generation["allowed_team_member_roles"]:
+    elif (
+        "allowed_team_member_roles" in team_key_generation
+        and key_creating_user_in_team.role
+        not in team_key_generation["allowed_team_member_roles"]
+    ):
         raise HTTPException(
             status_code=400,
-            detail=f"Team member role {user_in_team.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
+            detail=f"Team member role {key_creating_user_in_team.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
     return True
 
@@ -111,14 +168,17 @@ def _team_key_generation_check(
     data: GenerateKeyRequest,
 ):
     if (
-        litellm.key_generation_settings is None
-        or litellm.key_generation_settings.get("team_key_generation") is None
+        litellm.key_generation_settings is not None
+        and "team_key_generation" in litellm.key_generation_settings
     ):
-        return True
-
-    _team_key_generation = litellm.key_generation_settings["team_key_generation"]  # type: ignore
+        _team_key_generation = litellm.key_generation_settings["team_key_generation"]
+    else:
+        _team_key_generation = TeamUIKeyGenerationConfig(
+            allowed_team_member_roles=["admin", "member"],
+        )
 
     _team_key_generation_team_member_check(
+        assigned_user_id=data.user_id,
         team_table=team_table,
         user_api_key_dict=user_api_key_dict,
         team_key_generation=_team_key_generation,
@@ -183,21 +243,17 @@ def key_generation_check(
     """
     Check if admin has restricted key creation to certain roles for teams or individuals
     """
-    if (
-        litellm.key_generation_settings is None
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        return True
 
     ## check if key is for team or individual
     is_team_key = _is_team_key(data=data)
-
     if is_team_key:
-        if team_table is None:
+        if team_table is None and litellm.key_generation_settings is not None:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unable to find team object in database. Team ID: {data.team_id}",
             )
+        elif team_table is None:
+            return True  # assume user is assigning team_id without using the team table
         return _team_key_generation_check(
             team_table=team_table,
             user_api_key_dict=user_api_key_dict,
@@ -282,6 +338,8 @@ async def generate_key_fn(  # noqa: PLR0915
     try:
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
+            llm_router,
+            premium_user,
             prisma_client,
             user_api_key_cache,
             user_custom_key_generate,
@@ -300,21 +358,50 @@ async def generate_key_fn(  # noqa: PLR0915
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
-        elif litellm.key_generation_settings is not None:
-            if data.team_id is None:
-                team_table: Optional[LiteLLM_TeamTableCachedObj] = None
-            else:
+        team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        if data.team_id is not None:
+            try:
                 team_table = await get_team_object(
                     team_id=data.team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
-            key_generation_check(
-                team_table=team_table,
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Error getting team object in `/key/generate`: {e}"
+                )
+                team_table = None
+
+        key_generation_check(
+            team_table=team_table,
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+        )
+
+        try:
+            _is_allowed_to_create_key(
                 user_api_key_dict=user_api_key_dict,
-                data=data,
+                user_id=data.user_id,
+                team_id=data.team_id,
             )
+        except AssertionError as e:
+            raise HTTPException(
+                status_code=403,
+                detail=str(e),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=str(e),
+            )
+
+        _check_model_access_group(
+            models=data.models,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
+
         # check if user set default key/generate params on config.yaml
         if litellm.default_key_generate_params is not None:
             for elem in data:
@@ -687,6 +774,7 @@ async def delete_key_fn(
 
     Parameters::
     - keys (List[str]): A list of keys or hashed keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
+    - key_aliases (List[str]): A list of key aliases to delete. Can be passed instead of `keys`.Example {"key_aliases": ["alias1", "alias2"]}
 
     Returns:
     - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
@@ -710,15 +798,6 @@ async def delete_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        keys = data.keys
-        if len(keys) == 0:
-            raise ProxyException(
-                message=f"No keys provided, passed in: keys={keys}",
-                type=ProxyErrorTypes.auth_error,
-                param="keys",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-
         ## only allow user to delete keys they own
         user_id = user_api_key_dict.user_id
         verbose_proxy_logger.debug(
@@ -730,9 +809,28 @@ async def delete_key_fn(
         ):
             user_id = None  # unless they're admin
 
-        number_deleted_keys, _keys_being_deleted = await delete_verification_token(
-            tokens=keys, user_id=user_id
-        )
+        num_keys_to_be_deleted = 0
+        deleted_keys = []
+        if data.keys:
+            number_deleted_keys, _keys_being_deleted = await delete_verification_token(
+                tokens=data.keys,
+                user_api_key_cache=user_api_key_cache,
+                user_id=user_id,
+            )
+            num_keys_to_be_deleted = len(data.keys)
+            deleted_keys = data.keys
+        elif data.key_aliases:
+            number_deleted_keys, _keys_being_deleted = await delete_key_aliases(
+                key_aliases=data.key_aliases,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id=user_id,
+            )
+            num_keys_to_be_deleted = len(data.key_aliases)
+            deleted_keys = data.key_aliases
+        else:
+            raise ValueError("Invalid request type")
+
         if number_deleted_keys is None:
             raise ProxyException(
                 message="Failed to delete keys got None response from delete_verification_token",
@@ -745,20 +843,14 @@ async def delete_key_fn(
         )
 
         try:
-            assert len(keys) == number_deleted_keys["deleted_keys"]
+            assert num_keys_to_be_deleted == number_deleted_keys["deleted_keys"]
         except Exception:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={len(keys)}, Deleted keys ={number_deleted_keys['deleted_keys']}"
+                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={num_keys_to_be_deleted}, Deleted keys ={number_deleted_keys['deleted_keys']}"
                 },
             )
-
-        for key in keys:
-            user_api_key_cache.delete_cache(key)
-            # remove hash token from cache
-            hashed_token = hash_token(key)
-            user_api_key_cache.delete_cache(hashed_token)
 
         verbose_proxy_logger.debug(
             f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
@@ -774,8 +866,13 @@ async def delete_key_fn(
             )
         )
 
-        return {"deleted_keys": keys}
+        return {"deleted_keys": deleted_keys}
     except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {}".format(
+                str(e)
+            )
+        )
         raise handle_exception_on_proxy(e)
 
 
@@ -919,6 +1016,34 @@ async def info_key_fn(
         return {"key": key, "info": key_info}
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+def _check_model_access_group(
+    models: Optional[List[str]], llm_router: Optional[Router], premium_user: bool
+) -> Literal[True]:
+    """
+    if is_model_access_group is True + is_wildcard_route is True, check if user is a premium user
+
+    Return True if user is a premium user, False otherwise
+    """
+    if models is None or llm_router is None:
+        return True
+
+    for model in models:
+        if llm_router._is_model_access_group_for_wildcard_route(
+            model_access_group=model
+        ):
+            if not premium_user:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Setting a model access group on a wildcard model is only available for LiteLLM Enterprise users.{}".format(
+                            CommonProxyErrors.not_premium_user.value
+                        )
+                    },
+                )
+
+    return True
 
 
 async def generate_key_helper_fn(  # noqa: PLR0915
@@ -1164,7 +1289,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
 
 
 async def delete_verification_token(
-    tokens: List, user_id: Optional[str] = None
+    tokens: List,
+    user_api_key_cache: DualCache,
+    user_id: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
@@ -1214,14 +1341,37 @@ async def delete_verification_token(
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.delete_verification_token(): Exception occured - {}".format(
                 str(e)
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
+
+    for key in tokens:
+        user_api_key_cache.delete_cache(key)
+        # remove hash token from cache
+        hashed_token = hash_token(key)
+        user_api_key_cache.delete_cache(hashed_token)
+
     return deleted_tokens, _keys_being_deleted
+
+
+async def delete_key_aliases(
+    key_aliases: List[str],
+    user_api_key_cache: DualCache,
+    prisma_client: PrismaClient,
+    user_id: Optional[str] = None,
+) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
+    _keys_being_deleted = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"key_alias": {"in": key_aliases}}
+    )
+
+    tokens = [key.token for key in _keys_being_deleted]
+    return await delete_verification_token(
+        tokens=tokens, user_api_key_cache=user_api_key_cache, user_id=user_id
+    )
 
 
 @router.post(

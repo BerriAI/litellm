@@ -613,9 +613,15 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
 
+    class Config:
+        extra = "allow"  # This allows the model to accept additional fields
+
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
     "language", "prompt", "temperature", "response_format", "timestamp_granularities"
 ]
+
+
+OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]

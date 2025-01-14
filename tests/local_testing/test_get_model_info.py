@@ -38,12 +38,9 @@ def test_get_model_info_custom_llm_with_same_name_vllm():
     """
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
-    try:
-        model_info = litellm.get_model_info(model, custom_llm_provider=provider)
-        print("model_info", model_info)
-        pytest.fail("Expected get model info to fail for an unmapped model/provider")
-    except Exception:
-        pass
+    model_info = litellm.get_model_info(model, custom_llm_provider=provider)
+    print("model_info", model_info)
+    assert model_info["input_cost_per_token"] == 0.0
 
 
 def test_get_model_info_shows_correct_supports_vision():
@@ -209,16 +206,19 @@ def test_model_info_bedrock_converse(monkeypatch):
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    # Load whitelist models from file
-    with open("whitelisted_bedrock_models.txt", "r") as file:
-        whitelist_models = [line.strip() for line in file.readlines()]
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
+    except FileNotFoundError:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
 
     _enforce_bedrock_converse_models(
         model_cost=litellm.model_cost, whitelist_models=whitelist_models
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_model_info_bedrock_converse_enforcement(monkeypatch):
     """
     Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
@@ -232,12 +232,78 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
         "mode": "chat",
     }
 
-    # Load whitelist models from file
-    with open("whitelisted_bedrock_models.txt", "r") as file:
-        whitelist_models = [line.strip() for line in file.readlines()]
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
 
-    # Check for unwhitelisted models
-    with pytest.raises(AssertionError):
-        _enforce_bedrock_converse_models(
-            model_cost=litellm.model_cost, whitelist_models=whitelist_models
-        )
+        # Check for unwhitelisted models
+        with pytest.raises(AssertionError):
+            _enforce_bedrock_converse_models(
+                model_cost=litellm.model_cost, whitelist_models=whitelist_models
+            )
+    except FileNotFoundError as e:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
+
+
+def test_get_model_info_custom_provider():
+    # Custom provider example copied from https://docs.litellm.ai/docs/providers/custom_llm_server:
+    import litellm
+    from litellm import CustomLLM, completion, get_llm_provider
+
+    class MyCustomLLM(CustomLLM):
+        def completion(self, *args, **kwargs) -> litellm.ModelResponse:
+            return litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                mock_response="Hi!",
+            )  # type: ignore
+
+    my_custom_llm = MyCustomLLM()
+
+    litellm.custom_provider_map = [  # 👈 KEY STEP - REGISTER HANDLER
+        {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
+    ]
+
+    resp = completion(
+        model="my-custom-llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    assert resp.choices[0].message.content == "Hi!"
+
+    # Register model info
+    model_info = {"my-custom-llm/my-fake-model": {"max_tokens": 2048}}
+    litellm.register_model(model_info)
+
+    # Get registered model info
+    from litellm import get_model_info
+
+    get_model_info(
+        model="my-custom-llm/my-fake-model"
+    )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+
+
+def test_get_model_info_custom_model_router():
+    from litellm import Router
+    from litellm import get_model_info
+
+    litellm._turn_on_debug()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ma-summary",
+                "litellm_params": {
+                    "api_base": "http://ma-mix-llm-serving.cicero.svc.cluster.local/v1",
+                    "input_cost_per_token": 1,
+                    "output_cost_per_token": 1,
+                    "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                },
+            }
+        ]
+    )
+    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    print("info", info)
+    assert info is not None

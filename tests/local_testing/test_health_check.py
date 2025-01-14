@@ -6,6 +6,7 @@ import sys
 import traceback
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -33,6 +34,17 @@ async def test_azure_health_check():
 
 
 # asyncio.run(test_azure_health_check())
+
+
+@pytest.mark.asyncio
+async def test_text_completion_health_check():
+    response = await litellm.ahealth_check(
+        model_params={"model": "gpt-3.5-turbo-instruct"},
+        mode="completion",
+        prompt="What's the weather in SF?",
+    )
+    print(f"response: {response}")
+    return response
 
 
 @pytest.mark.asyncio
@@ -128,7 +140,6 @@ async def test_groq_health_check():
         mode=None,
         prompt="What's 1 + 1?",
         input=["test from litellm"],
-        default_timeout=6000,
     )
     print(f"response: {response}")
     assert response == {}
@@ -141,8 +152,6 @@ async def test_cohere_rerank_health_check():
     response = await litellm.ahealth_check(
         model_params={
             "model": "cohere/rerank-english-v3.0",
-            "query": "Hey, how's it going",
-            "documents": ["my sample text"],
             "api_key": os.getenv("COHERE_API_KEY"),
         },
         mode="rerank",
@@ -152,3 +161,139 @@ async def test_cohere_rerank_health_check():
     assert "error" not in response
 
     print(response)
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_health_check():
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/tts-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+        mode="audio_speech",
+        prompt="Hey",
+    )
+
+    assert "error" not in response
+
+    print(response)
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_health_check():
+    litellm.set_verbose = True
+    response = await litellm.ahealth_check(
+        model_params={
+            "model": "openai/whisper-1",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+        mode="audio_transcription",
+    )
+
+    assert "error" not in response
+
+    print(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["azure/gpt-4o-realtime-preview", "openai/gpt-4o-realtime-preview"]
+)
+async def test_async_realtime_health_check(model, mocker):
+    """
+    Test Health Check with Valid models passes
+
+    """
+    mock_websocket = AsyncMock()
+    mock_connect = AsyncMock().__aenter__.return_value = mock_websocket
+    mocker.patch("websockets.connect", return_value=mock_connect)
+
+    litellm.set_verbose = True
+    model_params = {
+        "model": model,
+    }
+    if model == "azure/gpt-4o-realtime-preview":
+        model_params["api_base"] = os.getenv("AZURE_REALTIME_API_BASE")
+        model_params["api_key"] = os.getenv("AZURE_REALTIME_API_KEY")
+        model_params["api_version"] = os.getenv("AZURE_REALTIME_API_VERSION")
+    response = await litellm.ahealth_check(
+        model_params=model_params,
+        mode="realtime",
+    )
+    print(response)
+    assert response == {}
+
+
+def test_update_litellm_params_for_health_check():
+    """
+    Test if _update_litellm_params_for_health_check correctly:
+    1. Updates messages with a random message
+    2. Updates model name when health_check_model is provided
+    """
+    from litellm.proxy.health_check import _update_litellm_params_for_health_check
+
+    # Test with health_check_model
+    model_info = {"health_check_model": "gpt-3.5-turbo"}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "messages" in updated_params
+    assert isinstance(updated_params["messages"], list)
+    assert updated_params["model"] == "gpt-3.5-turbo"
+
+    # Test without health_check_model
+    model_info = {}
+    litellm_params = {
+        "model": "gpt-4",
+        "api_key": "fake_key",
+    }
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "messages" in updated_params
+    assert isinstance(updated_params["messages"], list)
+    assert updated_params["model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_with_health_check_model():
+    """
+    Test if _perform_health_check correctly uses `health_check_model` when model=`openai/*`:
+    1. Verifies that health_check_model overrides the original model when model=`openai/*`
+    2. Ensures the health check is performed with the override model
+    """
+    from litellm.proxy.health_check import _perform_health_check
+
+    # Mock model list with health_check_model specified
+    model_list = [
+        {
+            "litellm_params": {"model": "openai/*", "api_key": "fake-key"},
+            "model_info": {
+                "mode": "chat",
+                "health_check_model": "openai/gpt-4o-mini",  # Override model for health check
+            },
+        }
+    ]
+
+    # Track which model is actually used in the health check
+    health_check_calls = []
+
+    async def mock_health_check(litellm_params, **kwargs):
+        health_check_calls.append(litellm_params["model"])
+        return {"status": "healthy"}
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
+        print("health check calls: ", health_check_calls)
+
+        # Verify the health check used the override model
+        assert health_check_calls[0] == "openai/gpt-4o-mini"
+        # Verify the result still shows the original model
+        print("healthy endpoints: ", healthy_endpoints)
+        assert healthy_endpoints[0]["model"] == "openai/gpt-4o-mini"
+        assert len(healthy_endpoints) == 1
+        assert len(unhealthy_endpoints) == 0

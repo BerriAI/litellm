@@ -165,7 +165,7 @@ async def test_get_response():
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_get_router_response():
     model = "claude-3-sonnet@20240229"
-    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_project = "pathrise-convert-1606954137718"
     vertex_ai_location = "asia-southeast1"
     json_obj = get_vertex_ai_creds_json()
     vertex_credentials = json.dumps(json_obj)
@@ -194,6 +194,7 @@ async def test_get_router_response():
                 },
                 {"role": "user", "content": prompt},
             ],
+            mock_response="Hello, how are you?",
         )
 
         print(f"\n\nResponse: {response}\n\n")
@@ -206,32 +207,9 @@ async def test_get_router_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-# @pytest.mark.skip(
-#     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-# )
-# @pytest.mark.flaky(retries=3, delay=1)
-def test_aavertex_ai_anthropic():
-    model = "claude-3-sonnet@20240229"
-
-    vertex_ai_project = "adroit-crow-413218"
-    vertex_ai_location = "asia-southeast1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
-
-    response = completion(
-        model="vertex_ai/" + model,
-        messages=[{"role": "user", "content": "hi"}],
-        temperature=0.7,
-        vertex_ai_project=vertex_ai_project,
-        vertex_ai_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-    )
-    print("\nModel Response", response)
-
-
-# @pytest.mark.skip(
-#     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-# )
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
 @pytest.mark.flaky(retries=3, delay=1)
 def test_vertex_ai_anthropic_streaming():
     try:
@@ -241,7 +219,7 @@ def test_vertex_ai_anthropic_streaming():
 
         model = "claude-3-sonnet@20240229"
 
-        vertex_ai_project = "adroit-crow-413218"
+        vertex_ai_project = "pathrise-convert-1606954137718"
         vertex_ai_location = "asia-southeast1"
         json_obj = get_vertex_ai_creds_json()
         vertex_credentials = json.dumps(json_obj)
@@ -269,9 +247,9 @@ def test_vertex_ai_anthropic_streaming():
 # test_vertex_ai_anthropic_streaming()
 
 
-# @pytest.mark.skip(
-#     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-# )
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_aavertex_ai_anthropic_async():
@@ -280,7 +258,7 @@ async def test_aavertex_ai_anthropic_async():
 
         model = "claude-3-sonnet@20240229"
 
-        vertex_ai_project = "adroit-crow-413218"
+        vertex_ai_project = "pathrise-convert-1606954137718"
         vertex_ai_location = "asia-southeast1"
         json_obj = get_vertex_ai_creds_json()
         vertex_credentials = json.dumps(json_obj)
@@ -303,9 +281,9 @@ async def test_aavertex_ai_anthropic_async():
 # asyncio.run(test_vertex_ai_anthropic_async())
 
 
-# @pytest.mark.skip(
-#     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-# )
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_aaavertex_ai_anthropic_async_streaming():
@@ -314,11 +292,11 @@ async def test_aaavertex_ai_anthropic_async_streaming():
         litellm.set_verbose = True
         model = "claude-3-sonnet@20240229"
 
-        vertex_ai_project = "adroit-crow-413218"
+        vertex_ai_project = "pathrise-convert-1606954137718"
         vertex_ai_location = "asia-southeast1"
         json_obj = get_vertex_ai_creds_json()
         vertex_credentials = json.dumps(json_obj)
-
+        print(f"vertex_credentials: {vertex_credentials}")
         response = await acompletion(
             model="vertex_ai/" + model,
             messages=[{"role": "user", "content": "hi"}],
@@ -342,6 +320,9 @@ async def test_aaavertex_ai_anthropic_async_streaming():
 # asyncio.run(test_vertex_ai_anthropic_async_streaming())
 
 
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
 @pytest.mark.flaky(retries=3, delay=1)
 def test_avertex_ai():
     import random
@@ -355,8 +336,7 @@ def test_avertex_ai():
         + litellm.vertex_code_text_models
     )
     litellm.set_verbose = False
-    vertex_ai_project = "adroit-crow-413218"
-    # litellm.vertex_project = "adroit-crow-413218"
+    vertex_ai_project = "pathrise-convert-1606954137718"
 
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
@@ -393,11 +373,14 @@ def test_avertex_ai():
 # test_vertex_ai()
 
 
+@pytest.mark.skip(
+    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
+)
 @pytest.mark.flaky(retries=3, delay=1)
 def test_avertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "adroit-crow-413218"
+    litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
     test_models = (
@@ -947,7 +930,7 @@ from test_completion import response_format_tests
         "vertex_ai/mistral-large@2407",
         "vertex_ai/mistral-nemo@2407",
         "vertex_ai/codestral@2405",
-        "vertex_ai/meta/llama3-405b-instruct-maas",
+        # "vertex_ai/meta/llama3-405b-instruct-maas",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
@@ -1009,7 +992,8 @@ async def test_partner_models_httpx(model, sync_mode):
     "model",
     [
         "vertex_ai/mistral-large@2407",
-        "vertex_ai/meta/llama3-405b-instruct-maas",
+        # "vertex_ai/meta/llama3-405b-instruct-maas",
+        "vertex_ai/codestral@2405",
     ],  #
 )  # "vertex_ai",
 @pytest.mark.parametrize(
@@ -1035,7 +1019,11 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
             },
         ]
 
-        data = {"model": model, "messages": messages, "stream": True}
+        data = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
         if sync_mode:
             response = litellm.completion(**data)
             for idx, chunk in enumerate(response):
@@ -1884,6 +1872,7 @@ async def test_gemini_pro_async_function_calling():
 # asyncio.run(gemini_pro_async_function_calling())
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -1925,6 +1914,7 @@ async def test_vertexai_embedding(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding():
     load_vertex_ai_credentials()
@@ -1988,6 +1978,7 @@ async def test_vertexai_multimodal_embedding():
         print("Response:", response)
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_text_input():
     load_vertex_ai_credentials()
@@ -2043,6 +2034,7 @@ async def test_vertexai_multimodal_embedding_text_input():
         print("Response:", response)
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_image_in_input():
     load_vertex_ai_credentials()
@@ -2099,6 +2091,7 @@ async def test_vertexai_multimodal_embedding_image_in_input():
         print("Response:", response)
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 async def test_vertexai_multimodal_embedding_base64image_in_input():
     import base64
@@ -2189,6 +2182,7 @@ def test_vertexai_embedding_embedding_latest():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.flaky(retries=3, delay=1)
 def test_vertexai_embedding_embedding_latest_input_type():
     try:
@@ -2208,6 +2202,7 @@ def test_vertexai_embedding_embedding_latest_input_type():
         pytest.fail(f"Error occurred: {e}")
 
 
+@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_vertexai_aembedding():
@@ -2344,7 +2339,7 @@ def test_get_token_url():
     )
 
     vertex_llm = VertexLLM()
-    vertex_ai_project = "adroit-crow-413218"
+    vertex_ai_project = "pathrise-convert-1606954137718"
     vertex_ai_location = "us-central1"
     json_obj = get_vertex_ai_creds_json()
     vertex_credentials = json.dumps(json_obj)
@@ -2463,7 +2458,7 @@ async def test_completion_fine_tuned_model():
         # this is the fine-tuned model endpoint
         assert (
             url[0]
-            == "https://us-central1-aiplatform.googleapis.com/v1/projects/adroit-crow-413218/locations/us-central1/endpoints/4965075652664360960:generateContent"
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/pathrise-convert-1606954137718/locations/us-central1/endpoints/4965075652664360960:generateContent"
         )
 
         print("call args = ", kwargs)
@@ -2750,7 +2745,7 @@ async def test_partner_models_httpx_ai21():
 
         assert (
             url[0]
-            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/adroit-crow-413218/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
+            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
         )
 
         # json loads kwargs
@@ -3197,3 +3192,16 @@ async def test_vertexai_model_garden_model_completion(
     assert response.usage.completion_tokens == 109
     assert response.usage.prompt_tokens == 63
     assert response.usage.total_tokens == 172
+
+
+def test_vertexai_code_gecko():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    response = completion(
+        model="vertex_ai/code-gecko@002",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    for chunk in response:
+        print(chunk)

@@ -69,6 +69,7 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
+            pip install "websockets==10.4"
       - save_cache:
           paths:
             - ./venv
@@ -104,7 +105,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -421,7 +422,6 @@ jobs:
             username: ${DOCKERHUB_USERNAME}
             password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
     steps:
       - checkout
 
@@ -490,7 +490,6 @@ jobs:
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
             set -e
-
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -670,6 +669,51 @@ jobs:
           paths:
             - batches_coverage.xml
             - batches_coverage
+  secret_manager_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "respx==0.21.1"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/secret_manager_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml secret_manager_coverage.xml
+            mv .coverage secret_manager_coverage
+        
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - secret_manager_coverage.xml
+            - secret_manager_coverage
+
   pass_through_unit_testing:
     docker:
       - image: cimg/python:3.11
@@ -823,6 +867,7 @@ jobs:
             pip install "boto3==1.34.34"
             pip install jinja2
             pip install tokenizers=="0.20.0"
+            pip install uvloop==0.21.0
             pip install jsonschema
       - run:
           name: Run tests
@@ -850,6 +895,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
+            pip install "tomli==2.2.1"
       - run:
           name: Run tests
           command: |
@@ -1322,7 +1368,103 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-
+  proxy_build_from_pip_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+      - run:
+          name: Build Docker image
+          command: |
+            cd docker/build_from_pip
+            docker build -t my-app:latest -f Dockerfile.build_from_pip .
+      - run:
+          name: Run Docker container
+          # intentionally give bad redis credentials here
+          # the OTEL test - should get this as a trace
+          command: |
+            cd docker/build_from_pip
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e OTEL_EXPORTER="in_memory" \
+              -e APORIA_API_BASE_2=$APORIA_API_BASE_2 \
+              -e APORIA_API_KEY_2=$APORIA_API_KEY_2 \
+              -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME=$AWS_REGION_NAME \
+              -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
+              -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e GCS_FLUSH_INTERVAL="1" \
+              --name my-app \
+              -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
+          no_output_timeout: 120m
+           # Clean up first container
+      - run:
+          name: Stop and remove first container
+          command: |
+            docker stop my-app
+            docker rm my-app
   proxy_pass_through_endpoint_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -1602,7 +1744,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DATABASE_URL=$SMALL_DATABASE_URL \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e UI_USERNAME="admin" \
@@ -1748,6 +1890,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - proxy_build_from_pip_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - proxy_pass_through_endpoint_tests:
           filters:
             branches:
@@ -1761,6 +1909,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - batches_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - secret_manager_testing:
           filters:
             branches:
               only:
@@ -1788,6 +1942,7 @@ workflows:
           requires:
             - llm_translation_testing
             - batches_testing
+            - secret_manager_testing
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
@@ -1837,6 +1992,7 @@ workflows:
             - test_bad_database_url
             - llm_translation_testing
             - batches_testing
+            - secret_manager_testing
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
@@ -1851,6 +2007,7 @@ workflows:
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
+            - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality
           filters:

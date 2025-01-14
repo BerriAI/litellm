@@ -19,6 +19,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -45,6 +46,7 @@ from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -117,7 +119,10 @@ from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
+    Rules,
+    function_setup,
     get_llm_provider,
+    get_non_default_completion_params,
     get_secret,
     get_utc_datetime,
     is_region_allowed,
@@ -296,6 +301,7 @@ class Router:
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
+        litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -773,19 +779,19 @@ class Router:
 
     @overload
     async def acompletion(
-        self, model: str, messages: List[Dict[str, str]], stream: Literal[True], **kwargs
+        self, model: str, messages: List[AllMessageValues], stream: Literal[True], **kwargs
     ) -> CustomStreamWrapper: 
         ...
 
     @overload
     async def acompletion(
-        self, model: str, messages: List[Dict[str, str]], stream: Literal[False] = False, **kwargs
+        self, model: str, messages: List[AllMessageValues], stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
 
     @overload
     async def acompletion(
-        self, model: str, messages: List[Dict[str, str]], stream: Union[Literal[True], Literal[False]] = False, **kwargs
+        self, model: str, messages: List[AllMessageValues], stream: Union[Literal[True], Literal[False]] = False, **kwargs
     ) -> Union[CustomStreamWrapper, ModelResponse]: 
         ...
 
@@ -793,7 +799,11 @@ class Router:
 
     # The actual implementation of the function
     async def acompletion(
-        self, model: str, messages: List[Dict[str, str]], stream: bool = False, **kwargs
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        stream: bool = False,
+        **kwargs,
     ):
         try:
             kwargs["model"] = model
@@ -801,10 +811,16 @@ class Router:
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-
             request_priority = kwargs.get("priority") or self.default_priority
-
             start_time = time.time()
+            _is_prompt_management_model = self._is_prompt_management_model(model)
+
+            if _is_prompt_management_model:
+                return await self._prompt_management_factory(
+                    model=model,
+                    messages=messages,
+                    kwargs=kwargs,
+                )
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
@@ -1082,7 +1098,7 @@ class Router:
         ############## Helpers for async completion ##################
 
         async def _async_completion_no_exceptions(
-            model: str, messages: List[Dict[str, str]], **kwargs
+            model: str, messages: List[AllMessageValues], **kwargs
         ):
             """
             Wrapper around self.async_completion that catches exceptions and returns them as a result
@@ -1094,7 +1110,7 @@ class Router:
 
         async def _async_completion_no_exceptions_return_idx(
             model: str,
-            messages: List[Dict[str, str]],
+            messages: List[AllMessageValues],
             idx: int,  # index of message this response corresponds to
             **kwargs,
         ):
@@ -1138,7 +1154,7 @@ class Router:
             return final_responses
 
     async def abatch_completion_one_model_multiple_requests(
-        self, model: str, messages: List[List[Dict[str, str]]], **kwargs
+        self, model: str, messages: List[List[AllMessageValues]], **kwargs
     ):
         """
         Async Batch Completion - Batch Process multiple Messages to one model_group on litellm.Router
@@ -1160,7 +1176,7 @@ class Router:
         """
 
         async def _async_completion_no_exceptions(
-            model: str, messages: List[Dict[str, str]], **kwargs
+            model: str, messages: List[AllMessageValues], **kwargs
         ):
             """
             Wrapper around self.async_completion that catches exceptions and returns them as a result
@@ -1283,13 +1299,13 @@ class Router:
 
     @overload
     async def schedule_acompletion(
-        self, model: str, messages: List[Dict[str, str]], priority: int, stream: Literal[False] = False, **kwargs
+        self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
     
     @overload
     async def schedule_acompletion(
-        self, model: str, messages: List[Dict[str, str]], priority: int, stream: Literal[True], **kwargs
+        self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
     ) -> CustomStreamWrapper: 
         ...
 
@@ -1298,7 +1314,7 @@ class Router:
     async def schedule_acompletion(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[AllMessageValues],
         priority: int,
         stream=False,
         **kwargs,
@@ -1356,6 +1372,153 @@ class Router:
                 model=model,
                 llm_provider="openai",
             )
+
+    async def _schedule_factory(
+        self,
+        model: str,
+        priority: int,
+        original_function: Callable,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ):
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+        ### FLOW ITEM ###
+        _request_id = str(uuid.uuid4())
+        item = FlowItem(
+            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
+            request_id=_request_id,  # 👈 SET REQUEST ID
+            model_name=model,  # 👈 SAME as 'Router'
+        )
+        ### [fin] ###
+
+        ## ADDS REQUEST TO QUEUE ##
+        await self.scheduler.add_request(request=item)
+
+        ## POLL QUEUE
+        end_time = time.time() + self.timeout
+        curr_time = time.time()
+        poll_interval = self.scheduler.polling_interval  # poll every 3ms
+        make_request = False
+
+        while curr_time < end_time:
+            _healthy_deployments, _ = await self._async_get_healthy_deployments(
+                model=model, parent_otel_span=parent_otel_span
+            )
+            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
+                id=item.request_id,
+                model_name=item.model_name,
+                health_deployments=_healthy_deployments,
+            )
+            if make_request:  ## IF TRUE -> MAKE REQUEST
+                break
+            else:  ## ELSE -> loop till default_timeout
+                await asyncio.sleep(poll_interval)
+                curr_time = time.time()
+
+        if make_request:
+            try:
+                _response = await original_function(*args, **kwargs)
+                if isinstance(_response._hidden_params, dict):
+                    _response._hidden_params.setdefault("additional_headers", {})
+                    _response._hidden_params["additional_headers"].update(
+                        {"x-litellm-request-prioritization-used": True}
+                    )
+                return _response
+            except Exception as e:
+                setattr(e, "priority", priority)
+                raise e
+        else:
+            raise litellm.Timeout(
+                message="Request timed out while polling queue",
+                model=model,
+                llm_provider="openai",
+            )
+
+    def _is_prompt_management_model(self, model: str) -> bool:
+        model_list = self.get_model_list(model_name=model)
+        if model_list is None:
+            return False
+        if len(model_list) != 1:
+            return False
+
+        litellm_model = model_list[0]["litellm_params"].get("model", None)
+
+        if litellm_model is None:
+            return False
+
+        if "/" in litellm_model:
+            split_litellm_model = litellm_model.split("/")[0]
+            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
+                return True
+        return False
+
+    async def _prompt_management_factory(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        kwargs: Dict[str, Any],
+    ):
+        litellm_logging_object = kwargs.get("litellm_logging_obj", None)
+        if litellm_logging_object is None:
+            litellm_logging_object, kwargs = function_setup(
+                **{
+                    "original_function": "acompletion",
+                    "rules_obj": Rules(),
+                    "start_time": get_utc_datetime(),
+                    **kwargs,
+                }
+            )
+        litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
+        prompt_management_deployment = self.get_available_deployment(
+            model=model,
+            messages=[{"role": "user", "content": "prompt"}],
+            specific_deployment=kwargs.pop("specific_deployment", None),
+        )
+
+        litellm_model = prompt_management_deployment["litellm_params"].get(
+            "model", None
+        )
+        prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
+            "litellm_params"
+        ].get("prompt_id", None)
+        prompt_variables = kwargs.get(
+            "prompt_variables"
+        ) or prompt_management_deployment["litellm_params"].get(
+            "prompt_variables", None
+        )
+
+        if prompt_id is None or not isinstance(prompt_id, str):
+            raise ValueError(
+                f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
+            )
+        if prompt_variables is not None and not isinstance(prompt_variables, dict):
+            raise ValueError(
+                f"Prompt variables is set but not a dictionary. Got={prompt_variables}, type={type(prompt_variables)}"
+            )
+
+        model, messages, optional_params = (
+            litellm_logging_object.get_chat_completion_prompt(
+                model=litellm_model,
+                messages=messages,
+                non_default_params=get_non_default_completion_params(kwargs=kwargs),
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+            )
+        )
+
+        kwargs = {**kwargs, **optional_params}
+        kwargs["model"] = model
+        kwargs["messages"] = messages
+        kwargs["litellm_logging_obj"] = litellm_logging_object
+        kwargs["prompt_id"] = prompt_id
+        kwargs["prompt_variables"] = prompt_variables
+
+        _model_list = self.get_model_list(model_name=model)
+        if _model_list is None or len(_model_list) == 0:  # if direct call to model
+            kwargs.pop("original_function")
+            return await litellm.acompletion(**kwargs)
+
+        return await self.async_function_with_fallbacks(**kwargs)
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
@@ -1422,7 +1585,7 @@ class Router:
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._aimage_generation
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1660,13 +1823,7 @@ class Router:
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
             )
-            kwargs.setdefault("metadata", {}).update(
-                {
-                    "deployment": deployment["litellm_params"]["model"],
-                    "model_info": deployment.get("model_info", {}),
-                }
-            )
-            kwargs["model_info"] = deployment.get("model_info", {})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             data["model"]
             for k, v in self.default_litellm_params.items():
@@ -1777,7 +1934,7 @@ class Router:
         messages = [{"role": "user", "content": "dummy-text"}]
         try:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = await self.async_get_available_deployment(
@@ -1851,10 +2008,19 @@ class Router:
         is_async: Optional[bool] = False,
         **kwargs,
     ):
+        if kwargs.get("priority", None) is not None:
+            return await self._schedule_factory(
+                model=model,
+                priority=kwargs.pop("priority"),
+                original_function=self.atext_completion,
+                args=(model, prompt),
+                kwargs=kwargs,
+            )
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._atext_completion
+
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -2215,7 +2381,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_file
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -2320,7 +2486,7 @@ class Router:
             kwargs["model"] = model
             kwargs["original_function"] = self._acreate_batch
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -3099,32 +3265,7 @@ class Router:
 
         Wrapped to reduce code duplication and prevent bugs.
         """
-        from concurrent.futures import ThreadPoolExecutor
-
-        def run_in_new_loop():
-            """Run the coroutine in a new event loop within this thread."""
-            new_loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    self.async_function_with_fallbacks(*args, **kwargs)
-                )
-            finally:
-                new_loop.close()
-                asyncio.set_event_loop(None)
-
-        try:
-            # First, try to get the current event loop
-            _ = asyncio.get_running_loop()
-            # If we're already in an event loop, run in a separate thread
-            # to avoid nested event loop issues
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
-                return future.result()
-
-        except RuntimeError:
-            # No running event loop, we can safely run in this thread
-            return run_in_new_loop()
+        return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)
 
     def _get_fallback_model_group_from_fallbacks(
         self,
@@ -3820,6 +3961,7 @@ class Router:
             _model_name = (
                 deployment.litellm_params.custom_llm_provider + "/" + _model_name
             )
+
         litellm.register_model(
             model_cost={
                 _model_name: _model_info,
@@ -3997,31 +4139,6 @@ class Router:
         InitalizeOpenAISDKClient.set_client(
             litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         )
-
-        # set region (if azure model) ## PREVIEW FEATURE ##
-        if litellm.enable_preview_features is True:
-            print("Auto inferring region")  # noqa
-            """
-            Hiding behind a feature flag
-            When there is a large amount of LLM deployments this makes startup times blow up
-            """
-            try:
-                if (
-                    "azure" in deployment.litellm_params.model
-                    and deployment.litellm_params.region_name is None
-                ):
-                    region = litellm.utils.get_model_region(
-                        litellm_params=deployment.litellm_params, mode=None
-                    )
-
-                    deployment.litellm_params.region_name = region
-            except Exception as e:
-                verbose_router_logger.debug(
-                    "Unable to get the region for azure model - {}, {}".format(
-                        deployment.litellm_params.model, str(e)
-                    )
-                )
-                pass  # [NON-BLOCKING]
 
         return deployment
 
@@ -4217,7 +4334,7 @@ class Router:
                         pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
-        if not model.startswith(custom_llm_provider):
+        if not model.startswith("{}/".format(custom_llm_provider)):
             model_info_name = "{}/{}".format(custom_llm_provider, model)
         else:
             model_info_name = model
@@ -4556,11 +4673,19 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
+    @lru_cache(maxsize=64)
+    def _cached_get_model_group_info(
+        self, model_group: str
+    ) -> Optional[ModelGroupInfo]:
+        """
+        Cached version of get_model_group_info, uses @lru_cache wrapper
+
+        This is a speed optimization, since set_response_headers makes a call to get_model_group_info on every request
+        """
+        return self.get_model_group_info(model_group)
+
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
-
-        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
-
-        model_group_info = self.get_model_group_info(model_group)
+        model_group_info = self._cached_get_model_group_info(model_group)
 
         if model_group_info is not None and model_group_info.tpm is not None:
             tpm_limit = model_group_info.tpm
@@ -4571,6 +4696,11 @@ class Router:
             rpm_limit = model_group_info.rpm
         else:
             rpm_limit = None
+
+        if tpm_limit is None and rpm_limit is None:
+            return {}
+
+        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
         returned_dict = {}
         if tpm_limit is not None:
@@ -4721,10 +4851,14 @@ class Router:
         return None
 
     def get_model_access_groups(
-        self, model_name: Optional[str] = None
+        self, model_name: Optional[str] = None, model_access_group: Optional[str] = None
     ) -> Dict[str, List[str]]:
         """
         If model_name is provided, only return access groups for that model.
+
+        Parameters:
+        - model_name: Optional[str] - the received model name from the user (can be a wildcard route). If set, will only return access groups for that model.
+        - model_access_group: Optional[str] - the received model access group from the user. If set, will only return models for that access group.
         """
         from collections import defaultdict
 
@@ -4734,10 +4868,38 @@ class Router:
         if model_list:
             for m in model_list:
                 for group in m.get("model_info", {}).get("access_groups", []):
-                    model_name = m["model_name"]
-                    access_groups[group].append(model_name)
+                    if model_access_group is not None:
+                        if group == model_access_group:
+                            model_name = m["model_name"]
+                            access_groups[group].append(model_name)
+                    else:
+                        model_name = m["model_name"]
+                        access_groups[group].append(model_name)
 
         return access_groups
+
+    def _is_model_access_group_for_wildcard_route(
+        self, model_access_group: str
+    ) -> bool:
+        """
+        Return True if model access group is a wildcard route
+        """
+        # GET ACCESS GROUPS
+        access_groups = self.get_model_access_groups(
+            model_access_group=model_access_group
+        )
+
+        if len(access_groups) == 0:
+            return False
+
+        models = access_groups.get(model_access_group, [])
+
+        for model in models:
+            # CHECK IF MODEL ACCESS GROUP IS A WILDCARD ROUTE
+            if self.pattern_router.route(request=model) is not None:
+                return True
+
+        return False
 
     def get_settings(self):
         """

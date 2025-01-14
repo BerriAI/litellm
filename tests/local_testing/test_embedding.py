@@ -1019,6 +1019,37 @@ def test_hosted_vllm_embedding(monkeypatch):
         assert json_data["model"] == "jina-embeddings-v3"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_lm_studio_embedding(monkeypatch, sync_mode):
+    monkeypatch.setenv("LM_STUDIO_API_BASE", "http://localhost:8000")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            if sync_mode:
+                embedding(
+                    model="lm_studio/jina-embeddings-v3",
+                    input=["Hello world"],
+                    client=client,
+                )
+            else:
+                await litellm.aembedding(
+                    model="lm_studio/jina-embeddings-v3",
+                    input=["Hello world"],
+                    client=client,
+                )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
+
+
 @pytest.mark.parametrize(
     "model",
     [

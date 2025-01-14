@@ -69,6 +69,46 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
 ]
 
+
+OPENAI_CHAT_COMPLETION_PARAMS = [
+    "functions",
+    "function_call",
+    "temperature",
+    "temperature",
+    "top_p",
+    "n",
+    "stream",
+    "stream_options",
+    "stop",
+    "max_completion_tokens",
+    "modalities",
+    "prediction",
+    "audio",
+    "max_tokens",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "user",
+    "request_timeout",
+    "api_base",
+    "api_version",
+    "api_key",
+    "deployment_id",
+    "organization",
+    "base_url",
+    "default_headers",
+    "timeout",
+    "response_format",
+    "seed",
+    "tools",
+    "tool_choice",
+    "max_retries",
+    "parallel_tool_calls",
+    "logprobs",
+    "top_logprobs",
+    "extra_headers",
+]
+HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = 60  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
 ########################### Logging Callback Constants ###########################

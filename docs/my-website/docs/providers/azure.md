@@ -528,6 +528,39 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+### Entrata ID - use client_id, username, password
+
+Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      client_id: os.environ/AZURE_CLIENT_ID
+      azure_username: os.environ/AZURE_USERNAME
+      azure_password: os.environ/AZURE_PASSWORD
+```
+
+Test it 
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+
 ### Azure AD Token Refresh - `DefaultAzureCredential`
 
 Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests
@@ -554,6 +587,16 @@ response = completion(
 </TabItem>
 <TabItem value="proxy" label="PROXY config.yaml">
 
+1. Add relevant env vars
+
+```bash
+export AZURE_TENANT_ID=""
+export AZURE_CLIENT_ID=""
+export AZURE_CLIENT_SECRET=""
+```
+
+2. Setup config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -563,6 +606,12 @@ model_list:
 
 litellm_settings:
     enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
+3. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
 ```
 
 </TabItem>
