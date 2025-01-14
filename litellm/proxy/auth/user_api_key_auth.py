@@ -1011,11 +1011,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                 # collect information for alerting #
                 ####################################
 
-                if valid_token.spend >= valid_token.max_budget:
-                    raise litellm.BudgetExceededError(
-                        current_cost=valid_token.spend,
-                        max_budget=valid_token.max_budget,
-                    )
+                _check_key_budget_exceeded(valid_token)
             if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
                 verbose_proxy_logger.debug(
                     "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
@@ -1383,3 +1379,29 @@ def get_api_key_from_custom_header(
             f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key
+
+
+def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
+    valid_token_metadata = valid_token.metadata
+    if (
+        "temp_budget_increase" in valid_token_metadata
+        and "temp_budget_expiry" in valid_token_metadata
+    ):
+        expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
+        if expiry > datetime.now():
+            return valid_token_metadata["temp_budget_increase"]
+    return None
+
+
+def _check_key_budget_exceeded(valid_token: UserAPIKeyAuth) -> bool:
+    if valid_token.max_budget is None:
+        return False
+    temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
+    max_budget = valid_token.max_budget + temp_budget_increase
+    if valid_token.spend >= max_budget:
+        raise litellm.BudgetExceededError(
+            current_cost=valid_token.spend,
+            max_budget=max_budget,
+        )
+
+    return False

@@ -661,6 +661,8 @@ async def update_key_fn(
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
+    - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
+    - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
 
     Example:
     ```bash
