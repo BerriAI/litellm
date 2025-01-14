@@ -101,11 +101,20 @@ class BraintrustLogger(CustomLogger):
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
         """
-        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
+        Adds metadata from proxy request headers to Braintrust logging if keys start with "braintrust_"
         and overwrites litellm_params.metadata if already included.
 
         For example if you want to append your trace to an existing `trace_id` via header, send
-        `headers: { ..., langfuse_existing_trace_id: your-existing-trace-id }` via proxy request.
+        `headers: { ..., braintrust_existing_trace_id: your-existing-trace-id }` via proxy request.
+
+        Handles special case for span_attributes, which should be nested under metadata.
+        Allowable span_attribute keys are 'name' and 'type'.
+
+        Headers can be:
+        - braintrust_span_attributes_name: value
+        - braintrust_span_attributes_type: value
+        Or metadata can contain:
+        - span_attributes: {"name": value, "type": value}
         """
         if litellm_params is None:
             return metadata
@@ -116,10 +125,29 @@ class BraintrustLogger(CustomLogger):
         if metadata is None:
             metadata = {}
 
+        # Initialize span_attributes if not present
+        if "span_attributes" not in metadata:
+            metadata["span_attributes"] = {}
+
+        # Handle span_attributes from metadata
+        if isinstance(metadata.get("span_attributes"), dict):
+            # Only keep allowed keys
+            filtered_attrs = {k: v for k, v in metadata["span_attributes"].items() if k in ["name", "type"]}
+            metadata["span_attributes"] = filtered_attrs
+
         proxy_headers = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
         for metadata_param_key in proxy_headers:
             if metadata_param_key.startswith("braintrust"):
+                # Handle span attributes from headers
+                if metadata_param_key.startswith("braintrust_span_attributes_"):
+                    # Extract the attribute name (e.g., "name" or "type")
+                    attr_name = metadata_param_key.replace("braintrust_span_attributes_", "", 1)
+                    if attr_name in ["name", "type"]:
+                        metadata["span_attributes"][attr_name] = proxy_headers.get(metadata_param_key)
+                    continue
+
+                # Handle regular metadata
                 trace_param_key = metadata_param_key.replace("braintrust", "", 1)
                 if trace_param_key in metadata:
                     verbose_logger.warning(f"Overwriting Braintrust `{trace_param_key}` from request header")
@@ -244,7 +272,10 @@ class BraintrustLogger(CustomLogger):
                 "input": prompt["messages"],
                 "metadata": clean_metadata,
                 "tags": tags,
-                "span_attributes": {"name": "Chat Completion", "type": "llm"},
+                "span_attributes": {
+                    "name": clean_metadata.get("span_attributes", {}).get("name", "Chat Completion"),
+                    "type": clean_metadata.get("span_attributes", {}).get("type", "llm")
+                },
             }
             if choices is not None:
                 request_data["output"] = [choice.dict() for choice in choices]
@@ -371,7 +402,10 @@ class BraintrustLogger(CustomLogger):
                 "output": output,
                 "metadata": clean_metadata,
                 "tags": tags,
-                "span_attributes": {"name": "Chat Completion", "type": "llm"},
+                "span_attributes": {
+                    "name": clean_metadata.get("span_attributes", {}).get("name", "Chat Completion"),
+                    "type": clean_metadata.get("span_attributes", {}).get("type", "llm")
+                },
             }
             if choices is not None:
                 request_data["output"] = [choice.dict() for choice in choices]
