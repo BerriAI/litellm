@@ -14,6 +14,8 @@ else:
 
 import os
 
+ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://app.phoenix.arize.com/v1/traces"
+
 class ArizePhoenixLogger:
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
@@ -23,10 +25,10 @@ class ArizePhoenixLogger:
     @staticmethod
     def get_arize_phoenix_config() -> ArizePhoenixConfig:
         """
-        Retrieves the Arize configuration based on environment variables.
+        Retrieves the Arize Phoenix configuration based on environment variables.
 
         Returns:
-            ArizePhoenixConfig: A Pydantic model containing Arize configuration.
+            ArizePhoenixConfig: A Pydantic model containing Arize Phoenix configuration.
         """
         api_key = os.environ.get("PHOENIX_API_KEY")
         grpc_endpoint = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT")
@@ -40,14 +42,16 @@ class ArizePhoenixLogger:
             endpoint = http_endpoint
             protocol = "http"
         else:
-            endpoint = "https://app.phoenix.arize.com/v1/traces"
+            endpoint = ARIZE_HOSTED_PHOENIX_ENDPOINT
             protocol = "grpc"       
             verbose_logger.debug(
-                "No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint: https://app.phoenix.arize.com/v1/traces"
+                f"No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
             )
 
         otlp_auth_headers = None
-        if endpoint.startswith("https://app.phoenix.arize.com/v1/traces"):
+        # If the endpoint is the Arize hosted Phoenix endpoint, use the api_key as the auth header as currently it is uses
+        # a slightly different auth header format than self hosted phoenix
+        if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
             otlp_auth_headers = f"api_key={api_key}"
         else:
             otlp_auth_headers = f"Authorization=Bearer {api_key}"
