@@ -29,24 +29,11 @@ LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
 
 
 class KeyManagementEventHooks:
-    @staticmethod
-    def hash_key_object(key_object: UserAPIKeyAuth) -> str:
-        """
-        Generates a stable hash of a key object.
-
-        Useful for updating key alias in secret manager, when no initial key alias is set.
-        """
-        json_str = key_object.model_dump_json()
-
-        # Generate hash
-        hash_obj = hashlib.sha256()
-        hash_obj.update(json_str.encode("utf-8"))
-        return hash_obj.hexdigest()
 
     @staticmethod
     async def async_key_generated_hook(
         data: GenerateKeyRequest,
-        response: dict,
+        response: GenerateKeyResponse,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
     ):
@@ -64,11 +51,13 @@ class KeyManagementEventHooks:
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if data.send_invite_email is True:
-            await KeyManagementEventHooks._send_key_created_email(response)
+            await KeyManagementEventHooks._send_key_created_email(
+                response.model_dump(exclude_none=True)
+            )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(response, default=str)
+            _updated_values = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -79,7 +68,7 @@ class KeyManagementEventHooks:
                         or litellm_proxy_admin_name,
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=response.get("token_id", ""),
+                        object_id=response.token_id or "",
                         action="created",
                         updated_values=_updated_values,
                         before_value=None,
@@ -87,10 +76,9 @@ class KeyManagementEventHooks:
                 )
             )
         # store the generated key in the secret manager
-        stable_key_hash = KeyManagementEventHooks.hash_key_object(user_api_key_dict)
         await KeyManagementEventHooks._store_virtual_key_in_secret_manager(
-            secret_name=data.key_alias or f"virtual-key-{stable_key_hash}",
-            secret_token=response.get("token", ""),
+            secret_name=data.key_alias or f"virtual-key-{response.token_id}",
+            secret_token=response.key,
         )
 
     @staticmethod
@@ -146,16 +134,13 @@ class KeyManagementEventHooks:
         litellm_changed_by: Optional[str] = None,
     ):
         # store the generated key in the secret manager
-        if data is not None and (
-            data.key_alias is not None or existing_key_row.key_alias is not None
-        ):
-            stable_key_hash = KeyManagementEventHooks.hash_key_object(user_api_key_dict)
+        if data is not None and response.token_id is not None:
             initial_secret_name = (
-                existing_key_row.key_alias or f"virtual-key-{stable_key_hash}"
+                existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}"
             )
             await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
                 current_secret_name=initial_secret_name,
-                new_secret_name=data.key_alias or f"virtual-key-{stable_key_hash}",
+                new_secret_name=data.key_alias or f"virtual-key-{response.token_id}",
                 new_secret_value=response.key,
             )
 

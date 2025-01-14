@@ -252,7 +252,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             # If everything is successful, delete the old secret
             await self.async_delete_secret(
                 secret_name=current_secret_name,
-                recovery_window_in_days=0,  # Keep for recovery if needed
+                recovery_window_in_days=7,  # Keep for recovery if needed
                 optional_params=optional_params,
                 timeout=timeout,
             )
