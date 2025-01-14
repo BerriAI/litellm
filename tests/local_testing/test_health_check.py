@@ -257,3 +257,43 @@ def test_update_litellm_params_for_health_check():
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
     assert updated_params["model"] == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_perform_health_check_with_health_check_model():
+    """
+    Test if _perform_health_check correctly uses `health_check_model` when model=`openai/*`:
+    1. Verifies that health_check_model overrides the original model when model=`openai/*`
+    2. Ensures the health check is performed with the override model
+    """
+    from litellm.proxy.health_check import _perform_health_check
+
+    # Mock model list with health_check_model specified
+    model_list = [
+        {
+            "litellm_params": {"model": "openai/*", "api_key": "fake-key"},
+            "model_info": {
+                "mode": "chat",
+                "health_check_model": "openai/gpt-4o-mini",  # Override model for health check
+            },
+        }
+    ]
+
+    # Track which model is actually used in the health check
+    health_check_calls = []
+
+    async def mock_health_check(litellm_params, **kwargs):
+        health_check_calls.append(litellm_params["model"])
+        return {"status": "healthy"}
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
+        print("health check calls: ", health_check_calls)
+
+        # Verify the health check used the override model
+        assert health_check_calls[0] == "openai/gpt-4o-mini"
+        # Verify the result still shows the original model
+        print("healthy endpoints: ", healthy_endpoints)
+        assert healthy_endpoints[0]["model"] == "openai/gpt-4o-mini"
+        assert len(healthy_endpoints) == 1
+        assert len(unhealthy_endpoints) == 0
