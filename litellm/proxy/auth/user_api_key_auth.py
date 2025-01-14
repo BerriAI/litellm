@@ -811,7 +811,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 valid_token.allowed_model_region = end_user_params.get(
                     "allowed_model_region"
                 )
-
+                # update key budget with temp budget increase
+                valid_token = _update_key_budget_with_temp_budget_increase(
+                    valid_token
+                )  # updating it here, allows all downstream reporting / checks to use the updated budget
             except Exception:
                 verbose_logger.info(
                     "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to find token={} in cache or `LiteLLM_VerificationTokenTable`. Defaulting 'valid_token' to None'".format(
@@ -1011,7 +1014,12 @@ async def user_api_key_auth(  # noqa: PLR0915
                 # collect information for alerting #
                 ####################################
 
-                _check_key_budget_exceeded(valid_token)
+                if valid_token.spend >= valid_token.max_budget:
+                    raise litellm.BudgetExceededError(
+                        current_cost=valid_token.spend,
+                        max_budget=valid_token.max_budget,
+                    )
+
             if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
                 verbose_proxy_logger.debug(
                     "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
@@ -1393,15 +1401,9 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
     return None
 
 
-def _check_key_budget_exceeded(valid_token: UserAPIKeyAuth) -> bool:
+def _update_key_budget_with_temp_budget_increase(valid_token: UserAPIKeyAuth):
     if valid_token.max_budget is None:
-        return False
+        return
     temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
-    max_budget = valid_token.max_budget + temp_budget_increase
-    if valid_token.spend >= max_budget:
-        raise litellm.BudgetExceededError(
-            current_cost=valid_token.spend,
-            max_budget=max_budget,
-        )
-
-    return False
+    valid_token.max_budget = valid_token.max_budget + temp_budget_increase
+    return valid_token
