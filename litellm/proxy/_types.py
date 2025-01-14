@@ -688,6 +688,7 @@ class UpdateKeyRequest(KeyRequestBase):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    soft_budget: Optional[float] = None
 
 
 class RegenerateKeyRequest(GenerateKeyRequest):
@@ -696,6 +697,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    soft_budget: Optional[float] = None
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):

@@ -3759,3 +3759,53 @@ def test_should_track_cost_callback():
         team_id=None,
         end_user_id="1234",
     )
+
+
+@pytest.mark.asyncio
+async def test_key_soft_budget_update(prisma_client):
+    """
+    Test creating and updating a key with soft_budget:
+    1. Create key with soft_budget = 2
+    2. Update key with soft_budget = 5
+    3. Verify soft_budget via key info
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    try:
+        # Create key with soft_budget = 2
+        request = GenerateKeyRequest(
+            soft_budget=2, metadata={"description": "test key with soft budget"}
+        )
+        key = await generate_key_fn(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+        )
+        print("Generated key:", key)
+        generated_key = key.key
+
+        # Update key with soft_budget = 5
+        update_request = UpdateKeyRequest(key=generated_key, soft_budget=5)
+        _request = Request(scope={"type": "http"})
+        _request._url = URL(url="/update/key")
+
+        await update_key_fn(data=update_request, request=_request)
+
+        # Get key info and verify soft_budget
+        result = await info_key_fn(
+            key=generated_key,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        print("Key info result:", result)
+
+        assert result["info"]["litellm_budget_table"]["soft_budget"] == 5
+        assert result["info"]["metadata"]["description"] == "test key with soft budget"
+
+    except Exception as e:
+        print("Got Exception:", e)
+        pytest.fail(f"An exception occurred - {str(e)}")
