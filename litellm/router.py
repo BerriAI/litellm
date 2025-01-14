@@ -19,6 +19,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -45,11 +46,9 @@ from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.litellm_logging import (
-    _init_custom_logger_compatible_class,
-)
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -120,6 +119,8 @@ from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
+    Rules,
+    function_setup,
     get_llm_provider,
     get_non_default_completion_params,
     get_secret,
@@ -1457,6 +1458,17 @@ class Router:
         messages: List[AllMessageValues],
         kwargs: Dict[str, Any],
     ):
+        litellm_logging_object = kwargs.get("litellm_logging_obj", None)
+        if litellm_logging_object is None:
+            litellm_logging_object, kwargs = function_setup(
+                **{
+                    "original_function": "acompletion",
+                    "rules_obj": Rules(),
+                    "start_time": get_utc_datetime(),
+                    **kwargs,
+                }
+            )
+        litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
         prompt_management_deployment = self.get_available_deployment(
             model=model,
             messages=[{"role": "user", "content": "prompt"}],
@@ -1475,38 +1487,31 @@ class Router:
             "prompt_variables", None
         )
 
-        if litellm_model is None or "/" not in litellm_model:
+        if prompt_id is None or not isinstance(prompt_id, str):
             raise ValueError(
-                f"Model is not a custom logger compatible callback. Got={litellm_model}"
+                f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
+            )
+        if prompt_variables is not None and not isinstance(prompt_variables, dict):
+            raise ValueError(
+                f"Prompt variables is set but not a dictionary. Got={prompt_variables}, type={type(prompt_variables)}"
             )
 
-        custom_logger_compatible_callback = litellm_model.split("/", 1)[0]
-        split_litellm_model = litellm_model.split("/", 1)[1]
-
-        custom_logger = _init_custom_logger_compatible_class(
-            logging_integration=custom_logger_compatible_callback,
-            internal_usage_cache=None,
-            llm_router=None,
-        )
-
-        if custom_logger is None:
-            raise ValueError(
-                f"Custom logger is not initialized. Got={custom_logger_compatible_callback}"
-            )
         model, messages, optional_params = (
-            await custom_logger.async_get_chat_completion_prompt(
-                model=split_litellm_model,
+            litellm_logging_object.get_chat_completion_prompt(
+                model=litellm_model,
                 messages=messages,
                 non_default_params=get_non_default_completion_params(kwargs=kwargs),
                 prompt_id=prompt_id,
                 prompt_variables=prompt_variables,
-                dynamic_callback_params={},
             )
         )
 
         kwargs = {**kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
+        kwargs["litellm_logging_obj"] = litellm_logging_object
+        kwargs["prompt_id"] = prompt_id
+        kwargs["prompt_variables"] = prompt_variables
 
         _model_list = self.get_model_list(model_name=model)
         if _model_list is None or len(_model_list) == 0:  # if direct call to model
@@ -3260,32 +3265,7 @@ class Router:
 
         Wrapped to reduce code duplication and prevent bugs.
         """
-        from concurrent.futures import ThreadPoolExecutor
-
-        def run_in_new_loop():
-            """Run the coroutine in a new event loop within this thread."""
-            new_loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    self.async_function_with_fallbacks(*args, **kwargs)
-                )
-            finally:
-                new_loop.close()
-                asyncio.set_event_loop(None)
-
-        try:
-            # First, try to get the current event loop
-            _ = asyncio.get_running_loop()
-            # If we're already in an event loop, run in a separate thread
-            # to avoid nested event loop issues
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
-                return future.result()
-
-        except RuntimeError:
-            # No running event loop, we can safely run in this thread
-            return run_in_new_loop()
+        return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)
 
     def _get_fallback_model_group_from_fallbacks(
         self,
@@ -4160,31 +4140,6 @@ class Router:
             litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         )
 
-        # set region (if azure model) ## PREVIEW FEATURE ##
-        if litellm.enable_preview_features is True:
-            print("Auto inferring region")  # noqa
-            """
-            Hiding behind a feature flag
-            When there is a large amount of LLM deployments this makes startup times blow up
-            """
-            try:
-                if (
-                    "azure" in deployment.litellm_params.model
-                    and deployment.litellm_params.region_name is None
-                ):
-                    region = litellm.utils.get_model_region(
-                        litellm_params=deployment.litellm_params, mode=None
-                    )
-
-                    deployment.litellm_params.region_name = region
-            except Exception as e:
-                verbose_router_logger.debug(
-                    "Unable to get the region for azure model - {}, {}".format(
-                        deployment.litellm_params.model, str(e)
-                    )
-                )
-                pass  # [NON-BLOCKING]
-
         return deployment
 
     def add_deployment(self, deployment: Deployment) -> Optional[Deployment]:
@@ -4718,11 +4673,19 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
+    @lru_cache(maxsize=64)
+    def _cached_get_model_group_info(
+        self, model_group: str
+    ) -> Optional[ModelGroupInfo]:
+        """
+        Cached version of get_model_group_info, uses @lru_cache wrapper
+
+        This is a speed optimization, since set_response_headers makes a call to get_model_group_info on every request
+        """
+        return self.get_model_group_info(model_group)
+
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
-
-        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
-
-        model_group_info = self.get_model_group_info(model_group)
+        model_group_info = self._cached_get_model_group_info(model_group)
 
         if model_group_info is not None and model_group_info.tpm is not None:
             tpm_limit = model_group_info.tpm
@@ -4733,6 +4696,11 @@ class Router:
             rpm_limit = model_group_info.rpm
         else:
             rpm_limit = None
+
+        if tpm_limit is None and rpm_limit is None:
+            return {}
+
+        current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
         returned_dict = {}
         if tpm_limit is not None:

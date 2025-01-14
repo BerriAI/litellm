@@ -306,6 +306,7 @@ router_settings:
 | ARGILLA_DATASET_NAME | Dataset name for Argilla logging
 | ARGILLA_BASE_URL | Base URL for Argilla service
 | ATHINA_API_KEY | API key for Athina service
+| ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_PROFILE_NAME | AWS CLI profile name to be used

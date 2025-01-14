@@ -53,7 +53,11 @@ def test_routes_on_litellm_proxy():
     print("ALL OPENAI ROUTES:", LiteLLMRoutes.openai_routes.value)
 
     for route in LiteLLMRoutes.openai_routes.value:
-        assert route in _all_routes
+        # realtime routes - /realtime?model=gpt-4o
+        if "realtime" in route:
+            assert "/realtime" in _all_routes
+        else:
+            assert route in _all_routes
 
 
 @pytest.mark.parametrize(

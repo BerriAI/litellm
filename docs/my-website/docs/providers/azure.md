@@ -587,6 +587,16 @@ response = completion(
 </TabItem>
 <TabItem value="proxy" label="PROXY config.yaml">
 
+1. Add relevant env vars
+
+```bash
+export AZURE_TENANT_ID=""
+export AZURE_CLIENT_ID=""
+export AZURE_CLIENT_SECRET=""
+```
+
+2. Setup config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -596,6 +606,12 @@ model_list:
 
 litellm_settings:
     enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
+3. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
 ```
 
 </TabItem>

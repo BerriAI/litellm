@@ -1653,7 +1653,15 @@ class ProxyConfig:
 
         Do this, to avoid mutating the config state outside of allowed methods
         """
-        return copy.deepcopy(self.config)
+        try:
+            return copy.deepcopy(self.config)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "ProxyConfig:get_config_state(): Error returning copy of config state. self.config={}\nError: {}".format(
+                    self.config, e
+                )
+            )
+            return {}
 
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
@@ -2565,7 +2573,6 @@ class ProxyConfig:
         for response in responses:
             if response is not None:
                 param_name = getattr(response, "param_name", None)
-                verbose_proxy_logger.info(f"loading {param_name} settings from db")
                 if param_name == "litellm_settings":
                     verbose_proxy_logger.info(
                         f"litellm_settings: {response.param_value}"
@@ -4390,6 +4397,7 @@ from litellm import _arealtime
 
 
 @app.websocket("/v1/realtime")
+@app.websocket("/realtime")
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str,

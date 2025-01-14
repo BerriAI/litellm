@@ -229,6 +229,11 @@ class LiteLLMRoutes(enum.Enum):
         # rerank
         "/rerank",
         "/v1/rerank",
+        # realtime
+        "/realtime",
+        "/v1/realtime",
+        "/realtime?{model}",
+        "/v1/realtime?{model}",
     ]
 
     mapped_pass_through_routes = [
@@ -307,16 +312,18 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
     ]
 
-    public_routes = [
-        "/routes",
-        "/",
-        "/health/liveliness",
-        "/health/liveness",
-        "/health/readiness",
-        "/test",
-        "/config/yaml",
-        "/metrics",
-    ]
+    public_routes = set(
+        [
+            "/routes",
+            "/",
+            "/health/liveliness",
+            "/health/liveness",
+            "/health/readiness",
+            "/test",
+            "/config/yaml",
+            "/metrics",
+        ]
+    )
 
     ui_routes = [
         "/sso",
@@ -2073,12 +2080,13 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 
 
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
-    max_budget_in_team: float
+    max_budget_in_team: Optional[float] = None
+    role: Optional[Literal["admin", "user"]] = None
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
-    max_budget_in_team: float
+    max_budget_in_team: Optional[float] = None
 
 
 # Organization Member Requests

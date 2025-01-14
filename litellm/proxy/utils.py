@@ -473,10 +473,8 @@ class ProxyLogging:
         3. /image/generation
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
-        ## ALERTING ###
-        asyncio.create_task(
-            self.slack_alerting_instance.response_taking_too_long(request_data=data)
-        )
+
+        self._init_response_taking_too_long_task(data=data)
 
         if data is None:
             return None
@@ -1011,6 +1009,23 @@ class ProxyLogging:
             except Exception as e:
                 raise e
         return new_response
+
+    def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
+        """
+        Initialize the response taking too long task if user is using slack alerting
+
+        Only run task if user is using slack alerting
+
+        This handles checking for if a request is hanging for too long
+        """
+        ## ALERTING ###
+        if (
+            self.slack_alerting_instance
+            and self.slack_alerting_instance.alerting is not None
+        ):
+            asyncio.create_task(
+                self.slack_alerting_instance.response_taking_too_long(request_data=data)
+            )
 
 
 ### DB CONNECTOR ###
