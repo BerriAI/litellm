@@ -327,7 +327,9 @@ def test_bedrock_parallel_tool_calling_pt(provider):
     """
     Make sure parallel tool call blocks are merged correctly - https://github.com/BerriAI/litellm/issues/5277
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
     messages = [
@@ -682,7 +684,9 @@ def test_alternating_roles_e2e():
 
 
 def test_just_system_message():
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     with pytest.raises(litellm.BadRequestError) as e:
         _bedrock_converse_messages_pt(
