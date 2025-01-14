@@ -1531,9 +1531,20 @@ async def regenerate_key_fn(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        return GenerateKeyResponse(
+        response = GenerateKeyResponse(
             **updated_token_dict,
         )
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=data,
+                existing_key_row=_key_in_db,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+        )
+
+        return response
     except Exception as e:
         raise handle_exception_on_proxy(e)
 

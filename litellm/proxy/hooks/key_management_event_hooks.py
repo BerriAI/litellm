@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -10,12 +11,14 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    GenerateKeyResponse,
     KeyRequest,
     LiteLLM_AuditLogs,
     LiteLLM_VerificationToken,
     LitellmTableNames,
     ProxyErrorTypes,
     ProxyException,
+    RegenerateKeyRequest,
     UpdateKeyRequest,
     UserAPIKeyAuth,
     WebhookEvent,
@@ -26,6 +29,19 @@ LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
 
 
 class KeyManagementEventHooks:
+    @staticmethod
+    def hash_key_object(key_object: UserAPIKeyAuth) -> str:
+        """
+        Generates a stable hash of a key object.
+
+        Useful for updating key alias in secret manager, when no initial key alias is set.
+        """
+        json_str = key_object.model_dump_json()
+
+        # Generate hash
+        hash_obj = hashlib.sha256()
+        hash_obj.update(json_str.encode("utf-8"))
+        return hash_obj.hexdigest()
 
     @staticmethod
     async def async_key_generated_hook(
@@ -71,8 +87,9 @@ class KeyManagementEventHooks:
                 )
             )
         # store the generated key in the secret manager
+        stable_key_hash = KeyManagementEventHooks.hash_key_object(user_api_key_dict)
         await KeyManagementEventHooks._store_virtual_key_in_secret_manager(
-            secret_name=data.key_alias or f"virtual-key-{uuid.uuid4()}",
+            secret_name=data.key_alias or f"virtual-key-{stable_key_hash}",
             secret_token=response.get("token", ""),
         )
 
@@ -119,7 +136,28 @@ class KeyManagementEventHooks:
                     )
                 )
             )
-        pass
+
+    @staticmethod
+    async def async_key_rotated_hook(
+        data: Optional[RegenerateKeyRequest],
+        existing_key_row: Any,
+        response: GenerateKeyResponse,
+        user_api_key_dict: UserAPIKeyAuth,
+        litellm_changed_by: Optional[str] = None,
+    ):
+        # store the generated key in the secret manager
+        if data is not None and (
+            data.key_alias is not None or existing_key_row.key_alias is not None
+        ):
+            stable_key_hash = KeyManagementEventHooks.hash_key_object(user_api_key_dict)
+            initial_secret_name = (
+                existing_key_row.key_alias or f"virtual-key-{stable_key_hash}"
+            )
+            await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
+                current_secret_name=initial_secret_name,
+                new_secret_name=data.key_alias or f"virtual-key-{stable_key_hash}",
+                new_secret_value=response.key,
+            )
 
     @staticmethod
     async def async_key_deleted_hook(
@@ -205,6 +243,35 @@ class KeyManagementEventHooks:
                             secret_name
                         ),
                         secret_value=secret_token,
+                    )
+
+    @staticmethod
+    async def _rotate_virtual_key_in_secret_manager(
+        current_secret_name: str, new_secret_name: str, new_secret_value: str
+    ):
+        """
+        Update a virtual key in the secret manager
+
+        Args:
+            secret_name: Name of the virtual key
+            secret_token: Value of the virtual key (example: sk-1234)
+        """
+        if litellm._key_management_settings is not None:
+            if litellm._key_management_settings.store_virtual_keys is True:
+                from litellm.secret_managers.base_secret_manager import (
+                    BaseSecretManager,
+                )
+
+                # store the key in the secret manager
+                if isinstance(litellm.secret_manager_client, BaseSecretManager):
+                    await litellm.secret_manager_client.async_rotate_secret(
+                        current_secret_name=KeyManagementEventHooks._get_secret_name(
+                            current_secret_name
+                        ),
+                        new_secret_name=KeyManagementEventHooks._get_secret_name(
+                            new_secret_name
+                        ),
+                        new_secret_value=new_secret_value,
                     )
 
     @staticmethod

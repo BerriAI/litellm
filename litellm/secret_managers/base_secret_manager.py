@@ -93,3 +93,14 @@ class BaseSecretManager(ABC):
             dict: Response from the secret manager containing deletion details
         """
         pass
+
+    @abstractmethod
+    async def async_rotate_secret(
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        pass
