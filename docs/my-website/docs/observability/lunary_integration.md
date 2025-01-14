@@ -1,4 +1,4 @@
-# 🌙 Lunary - Logging LLM Input/Output and Traces
+# 🌙 Lunary - GenAI Observability 
 
 [Lunary](https://lunary.ai/) is an open-source platform providing [observability](https://lunary.ai/docs/features/observe), [prompt management](https://lunary.ai/docs/features/prompts), and [analytics](https://lunary.ai/docs/features/observe#analytics) to help team manage and improve LLM chatbots.
 
