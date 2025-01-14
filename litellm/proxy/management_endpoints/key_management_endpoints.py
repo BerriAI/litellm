@@ -604,10 +604,7 @@ async def prepare_key_update_data(
             non_default_values["budget_duration"] = budget_duration
 
     # Handle soft budget updates
-    if non_default_values.get("soft_budget") is not None:
-        if user_api_key_dict is None:
-            raise Exception("user_api_key_dict is required for budget updates")
-
+    if "soft_budget" in non_default_values:
         budget_id = await handle_soft_budget_update(
             soft_budget=non_default_values.pop("soft_budget"),
             existing_budget_id=existing_key_row.budget_id,
