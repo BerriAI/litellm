@@ -4128,21 +4128,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-
-            if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
-                # Check if the provider string exists in LlmProviders enum
-                provider_config = ProviderConfigManager.get_provider_model_info(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
-
-            if _model_info is None and provider_config is not None:
-                _model_info = cast(
-                    Optional[Dict],
-                    provider_config.get_model_info(
-                        model=model, existing_model_info=_model_info
-                    ),
-                )
-                key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -4339,6 +4324,31 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
     )
 
     return returned_model_info
+
+
+def get_custom_llm_provider_info(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> ModelInfo:
+    if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        # Check if the provider string exists in LlmProviders enum
+        provider_config = ProviderConfigManager.get_provider_model_info(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+
+        if provider_config is not None:
+            _model_info = cast(
+                Optional[Dict],
+                provider_config.get_model_info(model=model, existing_model_info=None),
+            )
+            if _model_info is None:
+                raise ValueError(
+                    f"Unable to lookup provider info for: {model} with custom_llm_provider: {custom_llm_provider}"
+                )
+            key = "provider_specific_model_info"
+            _model_info["key"] = key
+            return ModelInfo(**_model_info)
+
+    raise ValueError(f"Unknown custom_llm_provider: {custom_llm_provider}")
 
 
 def json_schema_type(python_type_name: str):
