@@ -1731,9 +1731,15 @@ def supports_response_schema(
     Does not raise error. Defaults to 'False'. Outputs logging.error.
     """
     ## GET LLM PROVIDER ##
-    model, custom_llm_provider, _, _ = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    try:
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking response schema support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return False
 
     # providers that globally support response schema
     PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA = [

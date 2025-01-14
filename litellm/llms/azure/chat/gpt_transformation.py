@@ -109,10 +109,10 @@ class AzureOpenAIConfig(BaseConfig):
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
         - all 4o models are supported
-        - all 3.5 models are supported
         - check if 'supports_response_format' is True from get_model_info
+        - [TODO] support smart retries for 3.5 models (some supported, some not)
         """
-        if "4o" in model or "3.5" in model:
+        if "4o" in model:
             return True
         elif supports_response_schema(model):
             return True
