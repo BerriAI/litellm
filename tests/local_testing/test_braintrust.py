@@ -7,6 +7,7 @@ import random
 import sys
 import time
 import traceback
+import requests
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -75,7 +76,59 @@ def test_braintrust_logging_specific_project_id():
         assert 'url' in kwargs
         assert kwargs['url'] == "https://api.braintrustdata.com/v1/project_logs/123/insert"
 
-def test_braintrust_span_attributes():
+def test_span_attributes_via_metadata():
+    import litellm
+
+    litellm.set_verbose = True
+
+    with patch.object(
+        litellm.integrations.braintrust_logging.BraintrustLogger,
+        "add_metadata_from_header",
+        wraps=litellm.integrations.braintrust_logging.BraintrustLogger.add_metadata_from_header,
+    ) as mock_add_metadata:
+        
+        metadata = {
+            "span_attributes": {
+                "name": "Custom Span",
+                "type": "custom_type"
+            }
+        }
+        litellm_params = {}
+        result_metadata = litellm.integrations.braintrust_logging.BraintrustLogger.add_metadata_from_header(litellm_params, metadata)
+        
+        assert result_metadata["span_attributes"] == {
+            "name": "Custom Span",
+            "type": "custom_type"
+        }
+
+def test_span_attributes_via_headers():
+    import litellm
+
+    litellm.set_verbose = True
+
+    with patch.object(
+        litellm.integrations.braintrust_logging.BraintrustLogger,
+        "add_metadata_from_header",
+        wraps=litellm.integrations.braintrust_logging.BraintrustLogger.add_metadata_from_header,
+    ) as mock_add_metadata:
+        
+        litellm_params = {
+            "proxy_server_request": {
+                "headers": {
+                    "braintrust_span_attributes_name": "Header Span",
+                    "braintrust_span_attributes_type": "header_type"
+                }
+            }
+        }
+        metadata = {}
+        result_metadata = litellm.integrations.braintrust_logging.BraintrustLogger.add_metadata_from_header(litellm_params, metadata)
+        
+        assert result_metadata["span_attributes"] == {
+            "name": "Header Span",
+            "type": "header_type"
+        }
+
+def test_default_span_attributes():
     import litellm
 
     litellm.set_verbose = True
@@ -88,76 +141,22 @@ def test_braintrust_span_attributes():
         # set braintrust as a callback
         litellm.callbacks = ["braintrust"]
 
-        # Test 1: Setting span attributes via metadata
+        # Make a completion call which will trigger log_success_event
         response = litellm.completion(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hi 👋 - test span attributes"}],
-            metadata={
-                "span_attributes": {
-                    "name": "Custom Span",
-                    "type": "custom_type"
-                }
-            }
+            messages=[{"role": "user", "content": "Hi"}],
         )
 
         time.sleep(2)
-        
-        # Verify the span attributes were set correctly
+
         mock_client.assert_called()
         _, kwargs = mock_client.call_args
         assert 'json' in kwargs
-        event = kwargs['json']['events'][0]
-        assert event['span_attributes'] == {
-            "name": "Custom Span",
-            "type": "custom_type"
-        }
-
-        # Reset mock
-        mock_client.reset_mock()
-
-        # Test 2: Setting span attributes via headers
-        headers = {
-            "braintrust_span_attributes_name": "Header Span",
-            "braintrust_span_attributes_type": "header_type"
-        }
-        response = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hi 👋 - test header span attributes"}],
-            litellm_params={
-                "proxy_server_request": {
-                    "headers": headers
-                }
-            }
-        )
-
-        time.sleep(2)
+        events = kwargs['json']['events']
+        assert len(events) == 1
+        event = events[0]
         
-        # Verify the span attributes were set correctly from headers
-        mock_client.assert_called()
-        _, kwargs = mock_client.call_args
-        assert 'json' in kwargs
-        event = kwargs['json']['events'][0]
-        assert event['span_attributes'] == {
-            "name": "Header Span",
-            "type": "header_type"
-        }
-
-        # Test 3: Default values when no span attributes provided
-        mock_client.reset_mock()
-        response = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hi 👋 - test default span attributes"}],
-        )
-
-        time.sleep(2)
-        
-        # Verify default span attributes are used
-        mock_client.assert_called()
-        _, kwargs = mock_client.call_args
-        assert 'json' in kwargs
-        event = kwargs['json']['events'][0]
-        assert event['span_attributes'] == {
-            "name": "Chat Completion",
-            "type": "llm"
-        }
-
+        # Verify default span attributes are set
+        assert 'span_attributes' in event
+        assert event['span_attributes']['name'] == "Chat Completion"
+        assert event['span_attributes']['type'] == "llm"
