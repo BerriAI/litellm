@@ -75,9 +75,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     Usage,
-    async_completion_with_fallbacks,
     async_mock_completion_streaming_obj,
-    completion_with_fallbacks,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
@@ -98,6 +96,10 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
+from .litellm_core_utils.fallback_utils import (
+    async_completion_with_fallbacks,
+    completion_with_fallbacks,
+)
 from .litellm_core_utils.prompt_templates.common_utils import get_completion_messages
 from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
