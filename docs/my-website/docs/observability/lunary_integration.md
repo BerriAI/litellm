@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # 🌙 Lunary - GenAI Observability 
 
 [Lunary](https://lunary.ai/) is an open-source platform providing [observability](https://lunary.ai/docs/features/observe), [prompt management](https://lunary.ai/docs/features/prompts), and [analytics](https://lunary.ai/docs/features/observe#analytics) to help team manage and improve LLM chatbots.
@@ -92,6 +94,39 @@ litellm.success_callback = ["lunary"]
 
 result = completion(**template)
 ```
+
+### Usage with custom chains
+You can wrap your LLM calls inside custom chains, so that you can visualize them as traces.
+
+```python
+import litellm
+from litellm import completion
+import lunary
+
+litellm.success_callback = ["lunary"]
+litellm.failure_callback = ["lunary"]
+
+@lunary.chain("My custom chain name")
+def my_chain(chain_input):
+  chain_run_id = lunary.run_manager.current_run_id
+  response = completion(
+    model="gpt-4o", 
+    messages=[{"role": "user", "content": "Say 1"}],
+    metadata={"parent_run_id": chain_run_id},
+  )
+
+  response = completion(
+    model="gpt-4o", 
+    messages=[{"role": "user", "content": "Say 2"}],
+    metadata={"parent_run_id": chain_run_id},
+  )
+  chain_output = response.choices[0].message
+  return chain_output
+
+my_chain("Chain input")
+```
+
+<Image img={require('../../img/lunary-trace.png')} />
 
 ## Usage with LiteLLM Proxy Server
 ### Step1: Install dependencies and set your environment variables 
