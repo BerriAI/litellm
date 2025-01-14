@@ -13,11 +13,11 @@ from litellm._logging import verbose_logger
 from opentelemetry.trace import Span
 
 if TYPE_CHECKING:
-    from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.types.integrations.arize import Protocol as _Protocol
 
-    OpenTelemetryConfig = _OpenTelemetryConfig
+    Protocol = _Protocol
 else:
-    OpenTelemetryConfig = Any
+    Protocol = Any
 
 
 class ArizeLogger:
@@ -51,17 +51,17 @@ class ArizeLogger:
         grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
         http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
 
-        protocol = None
         endpoint = None
+        protocol: Protocol = "otlp_grpc"
 
         if grpc_endpoint:
-            protocol="grpc"
+            protocol="otlp_grpc"
             endpoint=grpc_endpoint
         elif http_endpoint:
-            protocol="http"
+            protocol="otlp_http"
             endpoint=http_endpoint
         else:
-            protocol="grpc"
+            protocol="otlp_grpc"
             endpoint = "https://otlp.arize.com/v1"
 
         return ArizeConfig(

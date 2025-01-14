@@ -7,12 +7,16 @@ from opentelemetry.trace import Span as Span
 
 if TYPE_CHECKING:
     from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.types.integrations.arize import Protocol as _Protocol
 
+    Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
 else:
+    Protocol = Any
     OpenTelemetryConfig = Any
 
 import os
+from typing import Literal
 
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://app.phoenix.arize.com/v1/traces"
 
@@ -35,15 +39,17 @@ class ArizePhoenixLogger:
         http_endpoint = os.environ.get("PHOENIX_COLLECTOR_HTTP_ENDPOINT")
 
         endpoint = None
+        protocol: Protocol = "otlp_grpc"
+
         if grpc_endpoint is not None:
             endpoint = grpc_endpoint
-            protocol = "grpc"
+            protocol = "otlp_grpc"
         elif http_endpoint is not None:
             endpoint = http_endpoint
-            protocol = "http"
+            protocol = "otlp_http"
         else:
             endpoint = ARIZE_HOSTED_PHOENIX_ENDPOINT
-            protocol = "grpc"       
+            protocol = "otlp_grpc"       
             verbose_logger.debug(
                 f"No PHOENIX_COLLECTOR_ENDPOINT or PHOENIX_COLLECTOR_HTTP_ENDPOINT found, using default endpoint: {ARIZE_HOSTED_PHOENIX_ENDPOINT}"
             )
