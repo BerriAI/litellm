@@ -558,7 +558,10 @@ def prepare_metadata_fields(
     try:
         for k, v in data_json.items():
             if k in LiteLLM_ManagementEndpoint_MetadataFields:
-                casted_metadata[k] = v
+                if isinstance(v, datetime):
+                    casted_metadata[k] = v.isoformat()
+                else:
+                    casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -707,9 +710,8 @@ async def update_key_fn(
             existing_key_token=existing_key_row.token,
         )
 
-        response = await prisma_client.update_data(
-            token=key, data={**non_default_values, "token": key}
-        )
+        _data = {**non_default_values, "token": key}
+        response = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done

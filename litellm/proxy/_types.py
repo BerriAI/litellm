@@ -688,6 +688,8 @@ class UpdateKeyRequest(KeyRequestBase):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
+    temp_budget_increase: Optional[float] = None
+    temp_budget_expiry: Optional[datetime] = None
 
 
 class RegenerateKeyRequest(GenerateKeyRequest):
@@ -2229,6 +2231,8 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "guardrails",
     "tags",
     "enforced_params",
+    "temp_budget_increase",
+    "temp_budget_expiry",
 ]
 
 
