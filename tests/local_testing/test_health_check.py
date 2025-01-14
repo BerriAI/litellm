@@ -124,7 +124,14 @@ async def test_sagemaker_embedding_health_check():
 
 
 @pytest.mark.asyncio
-async def test_groq_health_check():
+@pytest.mark.parametrize(
+    "custom_llm_provider,api_key",
+    [
+        ("groq", "GROQ_API_KEY"),
+        ("openai", "OPENAI_API_KEY"),
+    ],
+)
+async def test_health_check_with_wildcard_model(custom_llm_provider, api_key):
     """
     This should not fail
 
@@ -133,8 +140,8 @@ async def test_groq_health_check():
     litellm.set_verbose = True
     response = await litellm.ahealth_check(
         model_params={
-            "api_key": os.environ.get("GROQ_API_KEY"),
-            "model": "groq/*",
+            "api_key": os.environ.get(api_key),
+            "model": f"{custom_llm_provider}/*",
             "messages": [{"role": "user", "content": "What's 1 + 1?"}],
         },
         mode=None,
