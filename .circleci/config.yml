@@ -70,6 +70,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "websockets==10.4"
+            pip install "openinference-semantic-conventions==0.1.12"
       - save_cache:
           paths:
             - ./venv
@@ -186,6 +187,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "openinference-semantic-conventions==0.1.12"
       - save_cache:
           paths:
             - ./venv
@@ -285,6 +287,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "openinference-semantic-conventions==0.1.12"
       - save_cache:
           paths:
             - ./venv
@@ -479,6 +482,7 @@ jobs:
             pip install "diskcache==5.6.1"
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
+            pip install "openinference-semantic-conventions==0.1.12"
       - save_cache:
           paths:
             - ./venv

@@ -44,7 +44,7 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         """
 
         parent_otel_span = MagicMock()
-        litellm.callbacks = ["otel"]
+        litellm.callbacks = ["arize_phoenix"]
 
         await litellm.acompletion(
             model="gpt-3.5-turbo",
