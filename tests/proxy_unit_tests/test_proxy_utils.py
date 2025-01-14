@@ -1382,3 +1382,28 @@ def test_custom_openid_response():
         jwt_handler=jwt_handler,
     )
     assert resp.team_ids == ["/test-group"]
+
+
+def test_update_key_request_validation():
+    """
+    Ensures that the UpdateKeyRequest model validates the temp_budget_increase and temp_budget_expiry fields together
+    """
+    from litellm.proxy._types import UpdateKeyRequest
+
+    with pytest.raises(Exception):
+        UpdateKeyRequest(
+            key="test_key",
+            temp_budget_increase=100,
+        )
+
+    with pytest.raises(Exception):
+        UpdateKeyRequest(
+            key="test_key",
+            temp_budget_expiry="2024-01-20T00:00:00Z",
+        )
+
+    UpdateKeyRequest(
+        key="test_key",
+        temp_budget_increase=100,
+        temp_budget_expiry="2024-01-20T00:00:00Z",
+    )
