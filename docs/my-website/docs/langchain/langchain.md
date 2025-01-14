@@ -124,17 +124,9 @@ os.environ['OPENAI_API_KEY']="sk-..."
 litellm.success_callback = ["lunary"] 
 litellm.failure_callback = ["lunary"] 
 
-TODO: verify if it's model_kwargs or metadata directly + add all possible metadata
 chat = ChatLiteLLM(
   model="gpt-4o"
-  model_kwargs={
-      "metadata": {
-        "user_id": "user-id2", #
-        "tags": ["tag1", "tag2"] 
-      }
-    }
-  )
-messages = [
+  messages = [
     HumanMessage(
         content="what model are you"
     )
