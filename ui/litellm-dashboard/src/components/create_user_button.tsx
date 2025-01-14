@@ -53,11 +53,9 @@ const Createuser: React.FC<CreateuserProps> = ({
     useState<InvitationLink | null>(null);
   const router = useRouter();
   const isLocal = process.env.NODE_ENV === "development";
-  if (isLocal != true) {
-    console.log = function() {};
-  }
+
   const [baseUrl, setBaseUrl] = useState(
-    isLocal ? "http://localhost:4000" : ""
+    isLocal ? "http://localhost:4000" : "",
   );
   // get all models
   useEffect(() => {
@@ -67,7 +65,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         const modelDataResponse = await modelAvailableCall(
           accessToken,
           userID,
-          userRole
+          userRole,
         );
         // Assuming modelDataResponse.data contains an array of model objects with a 'model_name' property
         const availableModels = [];
@@ -81,27 +79,26 @@ const Createuser: React.FC<CreateuserProps> = ({
         // Assuming modelDataResponse.data contains an array of model names
         setUserModels(availableModels);
 
-        // get ui settings 
+        // get ui settings
         const uiSettingsResponse = await getProxyUISettings(accessToken);
         console.log("uiSettingsResponse:", uiSettingsResponse);
-        
+
         setUISettings(uiSettingsResponse);
       } catch (error) {
         console.error("Error fetching model data:", error);
       }
     };
 
-    
-
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
 
   useEffect(() => {
-    if (router) {
-      const { protocol, host } = window.location;
-      const baseUrl = `${protocol}/${host}`;
-      setBaseUrl(baseUrl);
+    if (!router) {
+      return;
     }
+
+    const base = new URL("/", window.location.href);
+    setBaseUrl(base.toString());
   }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
@@ -123,7 +120,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       console.log("user create Response:", response);
       setApiuser(response["key"]);
       const user_id = response.data?.user_id || response.user_id;
-      
+
       // only do invite link flow if sso is not enabled
       if (!uiSettings?.SSO_ENABLED) {
         invitationCreateCall(accessToken, user_id).then((data) => {
@@ -132,7 +129,7 @@ const Createuser: React.FC<CreateuserProps> = ({
           setIsInvitationLinkModalVisible(true);
         });
       } else {
-        // create an InvitationLink Object for this user for the SSO flow 
+        // create an InvitationLink Object for this user for the SSO flow
         // for SSO the invite link is the proxy base url since the User just needs to login
         const invitationLink: InvitationLink = {
           id: crypto.randomUUID(), // Generate a unique ID
@@ -198,7 +195,7 @@ const Createuser: React.FC<CreateuserProps> = ({
                         </p>
                       </div>
                     </SelectItem>
-                  )
+                  ),
                 )}
             </Select2>
           </Form.Item>

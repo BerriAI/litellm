@@ -23,7 +23,6 @@ import { Typography } from "antd";
 import { setGlobalLitellmHeaderName } from "../components/networking";
 
 function getCookie(name: string) {
-  console.log("COOKIES", document.cookie);
   const cookieValue = document.cookie
     .split("; ")
     .find((row) => row.startsWith(name + "="));
@@ -80,9 +79,10 @@ const CreateKeyPage = () => {
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
+  const [token, setToken] = useState<string | null>(null);
+
   const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
-  const token = getCookie("token");
 
   // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
@@ -104,53 +104,60 @@ const CreateKeyPage = () => {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    if (token) {
-      const decoded = jwtDecode(token) as { [key: string]: any };
-      if (decoded) {
-        // cast decoded to dictionary
-        console.log("Decoded token:", decoded);
+    const token = getCookie("token");
+    setToken(token);
+  }, []);
 
-        console.log("Decoded key:", decoded.key);
-        // set accessToken
-        setAccessToken(decoded.key);
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
 
-        setDisabledPersonalKeyCreation(
-          decoded.disabled_non_admin_personal_key_creation,
+    const decoded = jwtDecode(token) as { [key: string]: any };
+    if (decoded) {
+      // cast decoded to dictionary
+      console.log("Decoded token:", decoded);
+
+      console.log("Decoded key:", decoded.key);
+      // set accessToken
+      setAccessToken(decoded.key);
+
+      setDisabledPersonalKeyCreation(
+        decoded.disabled_non_admin_personal_key_creation,
+      );
+
+      // check if userRole is defined
+      if (decoded.user_role) {
+        const formattedUserRole = formatUserRole(decoded.user_role);
+        console.log("Decoded user_role:", formattedUserRole);
+        setUserRole(formattedUserRole);
+        if (formattedUserRole == "Admin Viewer") {
+          setPage("usage");
+        }
+      } else {
+        console.log("User role not defined");
+      }
+
+      if (decoded.user_email) {
+        setUserEmail(decoded.user_email);
+      } else {
+        console.log(`User Email is not set ${decoded}`);
+      }
+
+      if (decoded.login_method) {
+        setShowSSOBanner(
+          decoded.login_method == "username_password" ? true : false,
         );
+      } else {
+        console.log(`User Email is not set ${decoded}`);
+      }
 
-        // check if userRole is defined
-        if (decoded.user_role) {
-          const formattedUserRole = formatUserRole(decoded.user_role);
-          console.log("Decoded user_role:", formattedUserRole);
-          setUserRole(formattedUserRole);
-          if (formattedUserRole == "Admin Viewer") {
-            setPage("usage");
-          }
-        } else {
-          console.log("User role not defined");
-        }
+      if (decoded.premium_user) {
+        setPremiumUser(decoded.premium_user);
+      }
 
-        if (decoded.user_email) {
-          setUserEmail(decoded.user_email);
-        } else {
-          console.log(`User Email is not set ${decoded}`);
-        }
-
-        if (decoded.login_method) {
-          setShowSSOBanner(
-            decoded.login_method == "username_password" ? true : false,
-          );
-        } else {
-          console.log(`User Email is not set ${decoded}`);
-        }
-
-        if (decoded.premium_user) {
-          setPremiumUser(decoded.premium_user);
-        }
-
-        if (decoded.auth_header_name) {
-          setGlobalLitellmHeaderName(decoded.auth_header_name);
-        }
+      if (decoded.auth_header_name) {
+        setGlobalLitellmHeaderName(decoded.auth_header_name);
       }
     }
   }, [token]);
