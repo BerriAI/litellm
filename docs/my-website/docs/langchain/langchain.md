@@ -111,5 +111,38 @@ chat.invoke(messages)
 </TabItem>
 </Tabs>
 
+## Use Langchain ChatLiteLLM with Lunary
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+from langchain.schema import HumanMessage
+import litellm
+
+os.environ["LUNARY_PUBLIC_KEY"] = "" # from https://app.lunary.ai/settings
+os.environ['OPENAI_API_KEY']="sk-..."
+
+litellm.success_callback = ["lunary"] 
+litellm.failure_callback = ["lunary"] 
+
+TODO: verify if it's model_kwargs or metadata directly + add all possible metadata
+chat = ChatLiteLLM(
+  model="gpt-4o"
+  model_kwargs={
+      "metadata": {
+        "user_id": "user-id2", #
+        "tags": ["tag1", "tag2"] 
+      }
+    }
+  )
+messages = [
+    HumanMessage(
+        content="what model are you"
+    )
+]
+chat(messages)
+```
+
+Get more details [here](../observability/lunary_integration.md)
+
 ## Use LangChain ChatLiteLLM + Langfuse
 Checkout this section [here](../observability/langfuse_integration#use-langchain-chatlitellm--langfuse) for more details on how to integrate Langfuse with ChatLiteLLM.
