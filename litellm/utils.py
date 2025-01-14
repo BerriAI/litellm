@@ -5914,6 +5914,8 @@ class ProviderConfigManager:
             return litellm.OpenAILikeChatConfig()
         elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
             return litellm.AiohttpOpenAIChatConfig()
+        elif litellm.LlmProviders.HEROKU == provider:
+            return litellm.HerokuChatConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMChatConfig()
         elif litellm.LlmProviders.LM_STUDIO == provider:

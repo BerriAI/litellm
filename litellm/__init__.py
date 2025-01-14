@@ -469,6 +469,7 @@ watsonx_models: List = []
 gemini_models: List = []
 xai_models: List = []
 deepseek_models: List = []
+heroku_models: List = []
 azure_ai_models: List = []
 voyage_models: List = []
 databricks_models: List = []
@@ -606,6 +607,8 @@ def add_known_models():
             xai_models.append(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.append(key)
+        elif value.get("litellm_provider") == "heroku":
+            heroku_models.append(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.append(key)
         elif value.get("litellm_provider") == "voyage":
@@ -883,6 +886,7 @@ model_list = (
     + text_completion_codestral_models
     + xai_models
     + deepseek_models
+    + heroku_models
     + azure_ai_models
     + voyage_models
     + databricks_models
@@ -934,6 +938,7 @@ models_by_provider: dict = {
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
     "deepseek": deepseek_models,
+    "heroku": heroku_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,
@@ -1211,6 +1216,7 @@ from .llms.azure.azure import (
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 from .llms.vllm.completion.transformation import VLLMConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
