@@ -70,8 +70,10 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
     for model in model_list:
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
-        litellm_params["messages"] = _get_random_llm_message()
         mode = model_info.get("mode", None)
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info, litellm_params
+        )
         tasks.append(
             litellm.ahealth_check(
                 litellm_params,
@@ -101,6 +103,22 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
             unhealthy_endpoints.append(_clean_endpoint_data(litellm_params, details))
 
     return healthy_endpoints, unhealthy_endpoints
+
+
+def _update_litellm_params_for_health_check(
+    model_info: dict, litellm_params: dict
+) -> dict:
+    """
+    Update the litellm params for health check.
+
+    - gets a short `messages` param for health check
+    - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
+    """
+    litellm_params["messages"] = _get_random_llm_message()
+    _health_check_model = model_info.get("health_check_model", None)
+    if _health_check_model is not None:
+        litellm_params["model"] = _health_check_model
+    return litellm_params
 
 
 async def perform_health_check(
