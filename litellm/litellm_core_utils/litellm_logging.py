@@ -3,6 +3,7 @@
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 import copy
 import datetime
+from functools import lru_cache
 import json
 import os
 import re
@@ -818,7 +819,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str=_get_traceback_str_for_error(str(e)),
             )
             verbose_logger.debug(
                 f"response_cost_failure_debug_information: {debug_info}"
@@ -3351,3 +3352,11 @@ def modify_integration(integration_name, integration_params):
     if integration_name == "supabase":
         if "table_name" in integration_params:
             Supabase.supabase_table_name = integration_params["table_name"]
+
+
+@lru_cache(maxsize=16)
+def _get_traceback_str_for_error(error_str: str) -> str:
+     """
+     function wrapped with lru_cache to limit the number of times `traceback.format_exc()` is called
+     """
+     return traceback.format_exc()
