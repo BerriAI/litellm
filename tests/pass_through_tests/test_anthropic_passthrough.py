@@ -267,4 +267,4 @@ async def test_anthropic_streaming_with_headers():
 
                 assert "claude" in log_entry["model"]
 
-                assert log_entry["user"] == "test-user-1"
+                assert log_entry["end_user"] == "test-user-1"
