@@ -1255,6 +1255,7 @@ class PrometheusLogger(CustomLogger):
     async def _initialize_remaining_budget_metrics(self):
         """
         Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+
         Runs when prometheus logger starts up.
         """
         from litellm.proxy.management_endpoints.team_endpoints import (
