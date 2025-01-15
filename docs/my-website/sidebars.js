@@ -107,7 +107,7 @@ const sidebars = {
         {
           type: "category",
           label: "Budgets + Rate Limits",
-          items: ["proxy/users", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/customers"],
+          items: ["proxy/users", "proxy/temporary_budget_increase", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/customers"],
         },
         {
           type: "link",

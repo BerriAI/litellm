@@ -747,6 +747,8 @@ def get_custom_headers(
         "x-litellm-response-cost": str(response_cost),
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
+        "x-litellm-key-spend": str(user_api_key_dict.spend),
         "x-litellm-fastest_response_batch_completion": (
             str(fastest_response_batch_completion)
             if fastest_response_batch_completion is not None

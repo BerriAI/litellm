@@ -248,3 +248,38 @@ def test_get_azure_ad_token_from_username_password(
 
     # Verify the result is the mock token provider
     assert result == mock_token_provider
+
+
+def test_azure_openai_gpt_4o_naming(monkeypatch):
+    from openai import AzureOpenAI
+    from pydantic import BaseModel, Field
+
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-10-21")
+
+    client = AzureOpenAI(
+        api_key="test-api-key",
+        base_url="https://my-endpoint-sweden-berri992.openai.azure.com",
+        api_version="2023-12-01-preview",
+    )
+
+    class ResponseFormat(BaseModel):
+
+        number: str = Field(description="total number of days in a week")
+        days: list[str] = Field(description="name of days in a week")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+        try:
+            completion(
+                model="azure/gpt4o",
+                messages=[{"role": "user", "content": "Hello world"}],
+                response_format=ResponseFormat,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        print(mock_post.call_args.kwargs)
+
+        assert "tool_calls" not in mock_post.call_args.kwargs
