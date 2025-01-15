@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Union, cast
+from typing import List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -1465,3 +1465,37 @@ async def list_team(
     # Sort the responses by team_alias
     returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     return returned_responses
+
+
+async def get_paginated_teams(
+    prisma_client: PrismaClient,
+    page_size: int = 10,
+    page: int = 1,
+) -> Tuple[List[LiteLLM_TeamTable], int]:
+    """
+    Get paginated list of teams from team table
+
+    Parameters:
+        prisma_client: PrismaClient - The database client
+        page_size: int - Number of teams per page
+        page: int - Page number (1-based)
+
+    Returns:
+        Tuple[List[LiteLLM_TeamTable], int] - (list of teams, total count)
+    """
+    try:
+        # Calculate skip for pagination
+        skip = (page - 1) * page_size
+        # Get total count
+        total_count = await prisma_client.db.litellm_teamtable.count()
+
+        # Get paginated teams
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+            skip=skip, take=page_size, order={"team_alias": "asc"}  # Sort by team_alias
+        )
+        return teams, total_count
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"[Non-Blocking] Error getting paginated teams: {e}"
+        )
+        return [], 0
