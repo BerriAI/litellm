@@ -3,13 +3,6 @@ import Image from '@theme/IdealImage';
 # Langsmith - Logging LLM Input/Output
 
 
-:::tip
-
-This is community maintained, Please make an issue if you run into a bug
-https://github.com/BerriAI/litellm
-
-:::
-
 
 An all-in-one developer platform for every step of the application lifecycle
 https://smith.langchain.com/
