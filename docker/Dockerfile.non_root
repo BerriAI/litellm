@@ -74,6 +74,7 @@ RUN pip install --no-cache-dir nodejs-bin prisma
 
 # Make a /non-existent folder and assign chown to nobody
 RUN mkdir -p /nonexistent && \
+    chown -R nobody:nogroup /app && \
     chown -R nobody:nogroup /nonexistent && \
     chown -R nobody:nogroup /usr/local/lib/python3.13/site-packages/prisma/
 
@@ -89,7 +90,6 @@ RUN prisma generate
 EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
-
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs
