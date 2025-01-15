@@ -35,6 +35,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
+    get_end_user_id_from_request_body,
     get_request_route,
     is_pass_through_provider_route,
     pre_db_read_auth_checks,
@@ -211,6 +212,16 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+
+
+def update_valid_token_with_end_user_params(
+    valid_token: UserAPIKeyAuth, end_user_params: dict
+) -> UserAPIKeyAuth:
+    valid_token.end_user_id = end_user_params.get("end_user_id")
+    valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
+    valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+    valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
+    return valid_token
 
 
 async def user_api_key_auth(  # noqa: PLR0915
@@ -608,9 +619,9 @@ async def user_api_key_auth(  # noqa: PLR0915
         ## Check END-USER OBJECT
         _end_user_object = None
         end_user_params = {}
-        if "user" in request_data:
+        end_user_id = get_end_user_id_from_request_body(request_data)
+        if end_user_id:
             try:
-                end_user_id = request_data["user"]
                 end_user_params["end_user_id"] = end_user_id
 
                 # get end-user object
@@ -671,11 +682,8 @@ async def user_api_key_auth(  # noqa: PLR0915
             and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             # update end-user params on valid token
-            valid_token.end_user_id = end_user_params.get("end_user_id")
-            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
-            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-            valid_token.allowed_model_region = end_user_params.get(
-                "allowed_model_region"
+            valid_token = update_valid_token_with_end_user_params(
+                valid_token=valid_token, end_user_params=end_user_params
             )
             valid_token.parent_otel_span = parent_otel_span
 
@@ -751,6 +759,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+            )
+
+            _user_api_key_obj = update_valid_token_with_end_user_params(
+                valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
 
             return _user_api_key_obj

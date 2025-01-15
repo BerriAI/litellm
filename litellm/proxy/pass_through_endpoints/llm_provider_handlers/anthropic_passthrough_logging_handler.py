@@ -15,6 +15,7 @@ from litellm.llms.anthropic.chat.handler import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
@@ -78,12 +79,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> Optional[str]:
         request_body = passthrough_logging_payload.get("request_body")
         if request_body:
-            end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
-            if end_user_id:
-                return end_user_id
-            return request_body.get("metadata", {}).get(
-                "user_id", None
-            )  # support anthropic param - https://docs.anthropic.com/en/api/messages
+            return get_end_user_id_from_request_body(request_body)
         return None
 
     @staticmethod
@@ -107,18 +103,18 @@ class AnthropicPassthroughLoggingHandler:
             )
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
-            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
-                kwargs.get("passthrough_logging_payload")
-            )
-            if passthrough_logging_payload:
-                user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
-                    passthrough_logging_payload=passthrough_logging_payload,
-                )
-                if user:
-                    kwargs.setdefault("litellm_params", {})
-                    kwargs["litellm_params"].update(
-                        {"proxy_server_request": {"body": {"user": user}}}
-                    )
+            # passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
+            #     kwargs.get("passthrough_logging_payload")
+            # )
+            # if passthrough_logging_payload:
+            #     user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
+            #         passthrough_logging_payload=passthrough_logging_payload,
+            #     )
+            #     if user:
+            #         kwargs.setdefault("litellm_params", {})
+            #         kwargs["litellm_params"].update(
+            #             {"proxy_server_request": {"body": {"user": user}}}
+            #         )
 
             # Make standard logging object for Anthropic
             standard_logging_object = get_standard_logging_object_payload(

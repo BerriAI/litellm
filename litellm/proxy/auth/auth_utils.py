@@ -493,3 +493,16 @@ def _has_user_setup_sso():
     )
 
     return sso_setup
+
+
+def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
+    # openai - check 'user'
+    if "user" in request_body:
+        return request_body["user"]
+    # anthropic - check 'litellm_metadata'
+    end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
+    if end_user_id:
+        return end_user_id
+    return request_body.get("metadata", {}).get(
+        "user_id", None
+    )  # support anthropic param - https://docs.anthropic.com/en/api/messages
