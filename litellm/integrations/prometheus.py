@@ -1,9 +1,10 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import List, Optional, cast
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -12,6 +13,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_TeamTable
+else:
+    LiteLLM_TeamTable = Any
 
 
 class PrometheusLogger(CustomLogger):
@@ -305,6 +311,8 @@ class PrometheusLogger(CustomLogger):
                     label_name="litellm_requests_metric"
                 ),
             )
+
+            self._initialize_prometheus_startup_metrics()
 
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
@@ -1242,6 +1250,73 @@ class PrometheusLogger(CustomLogger):
             return max_budget
 
         return max_budget - spend
+
+    def _initialize_prometheus_startup_metrics(self):
+        """
+        Initialize prometheus startup metrics
+
+        Helper to create tasks for initializing metrics that are required on startup - eg. remaining budget metrics
+        """
+        try:
+            if asyncio.get_running_loop():
+                asyncio.create_task(self._initialize_remaining_budget_metrics())
+        except RuntimeError as e:  # no running event loop
+            verbose_logger.exception(
+                f"No running event loop - skipping budget metrics initialization: {str(e)}"
+            )
+
+    async def _initialize_remaining_budget_metrics(self):
+        """
+        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+
+        Runs when prometheus logger starts up.
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            get_paginated_teams,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        try:
+            page = 1
+            page_size = 50
+            teams, total_count = await get_paginated_teams(
+                prisma_client=prisma_client, page_size=page_size, page=page
+            )
+
+            # Calculate total pages needed
+            total_pages = (total_count + page_size - 1) // page_size
+
+            # Set metrics for first page of teams
+            await self._set_team_budget_metrics(teams)
+
+            # Get and set metrics for remaining pages
+            for page in range(2, total_pages + 1):
+                teams, _ = await get_paginated_teams(
+                    prisma_client=prisma_client, page_size=page_size, page=page
+                )
+                await self._set_team_budget_metrics(teams)
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error initializing team budget metrics: {str(e)}"
+            )
+
+    async def _set_team_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
+        """Helper function to set budget metrics for a list of teams"""
+        for team in teams:
+            if team.max_budget is not None:
+                self.litellm_remaining_team_budget_metric.labels(
+                    team.team_id,
+                    team.team_alias or "",
+                ).set(
+                    self._safe_get_remaining_budget(
+                        max_budget=team.max_budget,
+                        spend=team.spend,
+                    )
+                )
 
 
 def prometheus_label_factory(
