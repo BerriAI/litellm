@@ -59,7 +59,7 @@ os.environ["LANGSMITH_API_KEY"] = ""
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 
-# set langfuse as a callback, litellm will send the data to langfuse
+# set langsmith as a callback, litellm will send the data to langsmith
 litellm.success_callback = ["langsmith"] 
  
 response = litellm.completion(
