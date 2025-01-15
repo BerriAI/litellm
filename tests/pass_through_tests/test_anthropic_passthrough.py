@@ -1,6 +1,5 @@
 """
 This test ensures that the proxy can passthrough anthropic requests
-
 """
 
 import pytest
