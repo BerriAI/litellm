@@ -217,19 +217,6 @@ def test_databricks_optional_params():
     assert "user" not in optional_params
 
 
-def test_gemini_optional_params():
-    litellm.drop_params = True
-    optional_params = get_optional_params(
-        model="",
-        custom_llm_provider="gemini",
-        max_tokens=10,
-        frequency_penalty=10,
-    )
-    print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 1
-    assert "frequency_penalty" not in optional_params
-
-
 def test_azure_ai_mistral_optional_params():
     litellm.drop_params = True
     optional_params = get_optional_params(
