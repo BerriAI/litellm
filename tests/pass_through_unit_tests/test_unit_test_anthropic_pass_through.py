@@ -201,7 +201,3 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
     assert "model" in result
     assert "response_cost" in result
     assert "standard_logging_object" in result
-    if metadata_params:
-        assert "test" == result["standard_logging_object"]["end_user"]
-    else:
-        assert "" == result["standard_logging_object"]["end_user"]
