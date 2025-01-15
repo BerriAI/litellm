@@ -10,14 +10,23 @@ metadata:
 spec:
   containers:
     - name: env-test
-      image: curlimages/curl:latest
+      image: busybox:latest
       command: ['sh', '-c']
       args:
         - |
-          # Test 1: Check if environment variables are set in the proxy
-          echo "Test 1: Checking environment variables in proxy..."
-          response=$(curl -s http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness)
-          if [ $? -ne 0 ]; then
+          # Wait for service to be ready (up to 30 seconds)
+          echo "Waiting for service to be ready..."
+          for i in $(seq 1 30); do
+            if wget -q -T 2 http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness; then
+              break
+            fi
+            echo "Attempt $i: Service not ready, waiting..."
+            sleep 1
+          done
+
+          # Test 1: Check if service is accessible
+          echo "Test 1: Checking if service is accessible..."
+          if ! wget -q -T 5 -O - http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness; then
             echo "Failed to connect to proxy"
             exit 1
           fi
@@ -26,7 +35,7 @@ spec:
           echo "Test 2: Verifying environment variables..."
           {{- range $key, $val := .Values.envVars }}
           echo "Checking {{ $key }}..."
-          if [ "$(curl -s http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness | grep {{ $key }})" ]; then
+          if wget -q -T 5 -O - http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness | grep -q "{{ $key }}"; then
             echo "✅ {{ $key }} is set"
           else
             echo "❌ {{ $key }} is not set"
