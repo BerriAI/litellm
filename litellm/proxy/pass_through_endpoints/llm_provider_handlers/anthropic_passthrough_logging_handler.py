@@ -103,18 +103,18 @@ class AnthropicPassthroughLoggingHandler:
             )
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
-            # passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
-            #     kwargs.get("passthrough_logging_payload")
-            # )
-            # if passthrough_logging_payload:
-            #     user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
-            #         passthrough_logging_payload=passthrough_logging_payload,
-            #     )
-            #     if user:
-            #         kwargs.setdefault("litellm_params", {})
-            #         kwargs["litellm_params"].update(
-            #             {"proxy_server_request": {"body": {"user": user}}}
-            #         )
+            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
+                kwargs.get("passthrough_logging_payload")
+            )
+            if passthrough_logging_payload:
+                user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
+                    passthrough_logging_payload=passthrough_logging_payload,
+                )
+                if user:
+                    kwargs.setdefault("litellm_params", {})
+                    kwargs["litellm_params"].update(
+                        {"proxy_server_request": {"body": {"user": user}}}
+                    )
 
             # Make standard logging object for Anthropic
             standard_logging_object = get_standard_logging_object_payload(

@@ -464,6 +464,7 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     if premium_user is not True:
+
         return False
 
     # premium use has opted into using client credentials
