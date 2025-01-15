@@ -1,3 +1,4 @@
+fullnameOverride: ""
 # Disable database deployment and configuration
 db:
   deployStandalone: false
