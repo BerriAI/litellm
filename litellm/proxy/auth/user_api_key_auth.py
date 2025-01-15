@@ -811,7 +811,10 @@ async def user_api_key_auth(  # noqa: PLR0915
                 valid_token.allowed_model_region = end_user_params.get(
                     "allowed_model_region"
                 )
-
+                # update key budget with temp budget increase
+                valid_token = _update_key_budget_with_temp_budget_increase(
+                    valid_token
+                )  # updating it here, allows all downstream reporting / checks to use the updated budget
             except Exception:
                 verbose_logger.info(
                     "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to find token={} in cache or `LiteLLM_VerificationTokenTable`. Defaulting 'valid_token' to None'".format(
@@ -1016,6 +1019,7 @@ async def user_api_key_auth(  # noqa: PLR0915
                         current_cost=valid_token.spend,
                         max_budget=valid_token.max_budget,
                     )
+
             if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
                 verbose_proxy_logger.debug(
                     "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
@@ -1383,3 +1387,25 @@ def get_api_key_from_custom_header(
             f"No LiteLLM Virtual Key pass. Please set header={custom_litellm_key_header_name}: Bearer <api_key>"
         )
     return api_key
+
+
+def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
+    valid_token_metadata = valid_token.metadata
+    if (
+        "temp_budget_increase" in valid_token_metadata
+        and "temp_budget_expiry" in valid_token_metadata
+    ):
+        expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
+        if expiry > datetime.now():
+            return valid_token_metadata["temp_budget_increase"]
+    return None
+
+
+def _update_key_budget_with_temp_budget_increase(
+    valid_token: UserAPIKeyAuth,
+) -> UserAPIKeyAuth:
+    if valid_token.max_budget is None:
+        return valid_token
+    temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
+    valid_token.max_budget = valid_token.max_budget + temp_budget_increase
+    return valid_token
