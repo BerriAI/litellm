@@ -224,16 +224,13 @@ def update_valid_token_with_end_user_params(
     return valid_token
 
 
-async def user_api_key_auth(  # noqa: PLR0915
+async def _user_api_key_auth_builder(  # noqa: PLR0915
     request: Request,
-    api_key: str = fastapi.Security(api_key_header),
-    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
-    anthropic_api_key_header: Optional[str] = fastapi.Security(
-        anthropic_api_key_header
-    ),
-    google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
-        google_ai_studio_api_key_header
-    ),
+    api_key: str,
+    azure_api_key_header: str,
+    anthropic_api_key_header: Optional[str],
+    google_ai_studio_api_key_header: Optional[str],
+    request_data: dict,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -254,8 +251,9 @@ async def user_api_key_auth(  # noqa: PLR0915
     start_time = datetime.now()
     route: str = get_request_route(request=request)
     try:
+
         # get the request body
-        request_data = await _read_request_body(request=request)
+
         await pre_db_read_auth_checks(
             request_data=request_data,
             request=request,
@@ -1276,6 +1274,39 @@ async def user_api_key_auth(  # noqa: PLR0915
             param=getattr(e, "param", "None"),
             code=status.HTTP_401_UNAUTHORIZED,
         )
+
+
+async def user_api_key_auth(
+    request: Request,
+    api_key: str = fastapi.Security(api_key_header),
+    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
+    anthropic_api_key_header: Optional[str] = fastapi.Security(
+        anthropic_api_key_header
+    ),
+    google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
+        google_ai_studio_api_key_header
+    ),
+) -> UserAPIKeyAuth:
+    """
+    Parent function to authenticate user api key / jwt token.
+    """
+
+    request_data = await _read_request_body(request=request)
+
+    user_api_key_auth_obj = await _user_api_key_auth_builder(
+        request=request,
+        api_key=api_key,
+        azure_api_key_header=azure_api_key_header,
+        anthropic_api_key_header=anthropic_api_key_header,
+        google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+        request_data=request_data,
+    )
+
+    end_user_id = get_end_user_id_from_request_body(request_data)
+    if end_user_id is not None:
+        user_api_key_auth_obj.end_user_id = end_user_id
+
+    return user_api_key_auth_obj
 
 
 async def _return_user_api_key_auth_obj(
