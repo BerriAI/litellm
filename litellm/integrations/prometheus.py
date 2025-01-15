@@ -1300,7 +1300,9 @@ class PrometheusLogger(CustomLogger):
                 await self._set_team_budget_metrics(teams)
 
         except Exception as e:
-            print_verbose(f"Error initializing team budget metrics: {str(e)}")
+            verbose_logger.exception(
+                f"Error initializing team budget metrics: {str(e)}"
+            )
 
     async def _set_team_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""
