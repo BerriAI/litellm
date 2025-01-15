@@ -917,10 +917,49 @@ jobs:
           name: Install Helm
           command: |
             curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      
+      # Install kind
+      - run:
+          name: Install Kind
+          command: |
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            chmod +x ./kind
+            sudo mv ./kind /usr/local/bin/kind
+      
+      # Install kubectl
+      - run:
+          name: Install kubectl
+          command: |
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+      
+      # Create kind cluster
+      - run:
+          name: Create Kind Cluster
+          command: |
+            kind create cluster --name litellm-test
+      
+      # Run helm lint
       - run:
           name: Run helm lint
           command: |
             helm lint ./deploy/charts/litellm-helm
+      
+      # Run helm tests
+      - run:
+          name: Run helm tests
+          command: |
+            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/tests/test-values.yaml
+            helm test litellm --logs
+      
+      # Cleanup
+      - run:
+          name: Cleanup
+          command: |
+            kind delete cluster --name litellm-test
+          when: always  # This ensures cleanup runs even if previous steps fail
+
 
   check_code_and_doc_quality:
     docker:
@@ -1985,6 +2024,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - helm_chart_testing:
           filters:
             branches:
               only:
