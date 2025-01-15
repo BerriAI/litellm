@@ -222,6 +222,16 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error writing secret to Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
+    async def async_rotate_secret(
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
+        optional_params: Dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Dict:
+        raise NotImplementedError("Hashicorp does not support secret rotation")
+
     async def async_delete_secret(
         self,
         secret_name: str,

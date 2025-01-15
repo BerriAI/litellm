@@ -657,6 +657,7 @@ class GenerateKeyResponse(KeyRequestBase):
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
+    token: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod

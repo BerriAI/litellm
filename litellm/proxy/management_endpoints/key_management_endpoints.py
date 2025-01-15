@@ -523,6 +523,8 @@ async def generate_key_fn(  # noqa: PLR0915
             data.soft_budget
         )  # include the user-input soft budget in the response
 
+        response = GenerateKeyResponse(**response)
+
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(
                 data=data,
@@ -532,7 +534,7 @@ async def generate_key_fn(  # noqa: PLR0915
             )
         )
 
-        return GenerateKeyResponse(**response)
+        return response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -1517,7 +1519,7 @@ async def regenerate_key_fn(
             updated_token_dict = dict(updated_token)
 
         updated_token_dict["key"] = new_token
-        updated_token_dict.pop("token")
+        updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
         ### 3. remove existing key entry from cache
         ######################################################################
@@ -1535,9 +1537,21 @@ async def regenerate_key_fn(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        return GenerateKeyResponse(
+        response = GenerateKeyResponse(
             **updated_token_dict,
         )
+
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=data,
+                existing_key_row=_key_in_db,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+        )
+
+        return response
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
