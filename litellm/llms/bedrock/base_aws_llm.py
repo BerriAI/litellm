@@ -295,7 +295,7 @@ class BaseAWSLLM:
         sts_expiry = sts_credentials["Expiration"]
         # Convert to timezone-aware datetime for comparison
         current_time = datetime.now(sts_expiry.tzinfo)
-        sts_ttl = (sts_expiry - current_time).total_seconds()
+        sts_ttl = (sts_expiry - current_time).total_seconds() - 60
         return credentials, sts_ttl
 
     def _auth_with_aws_profile(
