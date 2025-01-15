@@ -949,6 +949,16 @@ jobs:
           name: Run helm tests
           command: |
             helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/tests/test-values.yaml
+            # Wait for pod to be ready
+            echo "Waiting 30 seconds for pod to be ready..."
+            sleep 30
+            
+            # Print pod logs before running tests
+            echo "Printing pod logs..."
+            kubectl logs $(kubectl get pods -l app.kubernetes.io/name=litellm -o jsonpath="{.items[0].metadata.name}")
+            
+            # Run the helm tests
+            helm test litellm --logs
             helm test litellm --logs
       
       # Cleanup
