@@ -78,6 +78,7 @@ RUN mkdir -p /nonexistent && \
     chown -R nobody:nogroup /usr/local/lib/python3.13/site-packages/prisma/
 
 RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/prod_entrypoint.sh
 
 # Run Prisma generate as user = nobody
 USER nobody
