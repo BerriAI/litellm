@@ -204,6 +204,26 @@ def anthropic_messages():
     ]
 
 
+def test_anthropic_vertex_ai_prompt_caching(anthropic_messages):
+    litellm._turn_on_debug()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            response = completion(
+                model="vertex_ai/claude-3-5-sonnet-v2@20241022 ",
+                messages=anthropic_messages,
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["headers"])
+        assert "anthropic-beta" not in mock_post.call_args.kwargs["headers"]
+
+
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_basic():
     litellm.set_verbose = True
