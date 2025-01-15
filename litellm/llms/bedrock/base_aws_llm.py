@@ -64,8 +64,6 @@ class BaseAWSLLM:
         """
         Return a boto3.Credentials object
         """
-        from botocore.credentials import Credentials
-
         ## CHECK IS  'os.environ/' passed in
         param_names = [
             "aws_access_key_id",
