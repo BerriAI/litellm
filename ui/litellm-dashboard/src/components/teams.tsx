@@ -211,7 +211,7 @@ const Team: React.FC<TeamProps> = ({
             ></Form.Item>
           </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Edit Team</Button2>
+            <Button2 htmlType="submit">Save</Button2>
           </div>
         </Form>
       </Modal>
