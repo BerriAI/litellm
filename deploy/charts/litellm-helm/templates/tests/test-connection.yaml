@@ -11,5 +11,5 @@ spec:
     - name: wget
       image: busybox
       command: ['wget']
-      args: ['{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness']
+      args: ['{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health']
   restartPolicy: Never
