@@ -1,0 +1,14 @@
+# Disable database deployment and configuration
+db:
+  deployStandalone: false
+  useExisting: false
+
+# Test environment variables
+envVars:
+  DD_ENV: "dev"
+  DD_SERVICE: "litellm"
+  USE_DDTRACE: "true"
+
+# Disable migration job since we're not using a database
+migrationJob:
+  enabled: false

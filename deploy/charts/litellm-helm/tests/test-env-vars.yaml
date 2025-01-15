@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "litellm.fullname" . }}-env-test"
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  containers:
+    - name: env-test
+      image: curlimages/curl:latest
+      command: ['sh', '-c']
+      args:
+        - |
+          # Test 1: Check if environment variables are set in the proxy
+          echo "Test 1: Checking environment variables in proxy..."
+          response=$(curl -s http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness)
+          if [ $? -ne 0 ]; then
+            echo "Failed to connect to proxy"
+            exit 1
+          fi
+
+          # Test 2: Verify specific environment variables through proxy config
+          echo "Test 2: Verifying environment variables..."
+          {{- range $key, $val := .Values.envVars }}
+          echo "Checking {{ $key }}..."
+          if [ "$(curl -s http://{{ include "litellm.fullname" . }}:{{ .Values.service.port }}/health/readiness | grep {{ $key }})" ]; then
+            echo "✅ {{ $key }} is set"
+          else
+            echo "❌ {{ $key }} is not set"
+            exit 1
+          fi
+          {{- end }}
+
+          echo "All environment variable tests passed! ✨"
+          exit 0
+  restartPolicy: Never
