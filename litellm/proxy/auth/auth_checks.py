@@ -62,7 +62,7 @@ def _allowed_import_check() -> bool:
     caller_function = caller_frame.function
     caller_function_callable = caller_frame.frame.f_globals.get(caller_function)
 
-    allowed_function = "user_api_key_auth"
+    allowed_function = "_allowed_import_check"
     allowed_signature = inspect.signature(user_api_key_auth)
     if caller_function_callable is None or not callable(caller_function_callable):
         raise Exception(f"Caller function {caller_function} is not callable")
@@ -303,7 +303,11 @@ def get_actual_routes(allowed_routes: list) -> list:
     for route_name in allowed_routes:
         try:
             route_value = LiteLLMRoutes[route_name].value
-            actual_routes = actual_routes + route_value
+            if isinstance(route_value, set):
+                actual_routes.extend(list(route_value))
+            else:
+                actual_routes.extend(route_value)
+
         except KeyError:
             actual_routes.append(route_name)
     return actual_routes
