@@ -1447,3 +1447,35 @@ def test_update_key_budget_with_temp_budget_increase():
         },
     )
     assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
+
+
+from unittest.mock import MagicMock, AsyncMock
+
+
+@pytest.mark.asyncio
+async def test_health_check_not_called_when_disabled(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Mock environment variable
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "true")
+
+    # Create mock prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.connect = AsyncMock()
+    mock_prisma.health_check = AsyncMock()
+    mock_prisma.check_view_exists = AsyncMock()
+    mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    # Mock PrismaClient constructor
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.PrismaClient", lambda **kwargs: mock_prisma
+    )
+
+    # Call the setup function
+    await ProxyStartupEvent._setup_prisma_client(
+        database_url="mock_url",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    # Verify health check wasn't called
+    mock_prisma.health_check.assert_not_called()
