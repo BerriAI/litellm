@@ -3233,7 +3233,11 @@ class ProxyStartupEvent:
             )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
-            await prisma_client.health_check()
+            if (
+                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
+                is not True
+            ):
+                await prisma_client.health_check()
         return prisma_client
 
     @classmethod
