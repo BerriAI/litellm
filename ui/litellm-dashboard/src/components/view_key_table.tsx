@@ -1,6 +1,6 @@
 "use client";
+
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall, modelAvailableCall } from "./networking";
 import { add } from "date-fns";
 import {
   InformationCircleIcon,
@@ -8,7 +8,7 @@ import {
   PencilAltIcon,
   RefreshIcon,
 } from "@heroicons/react/outline";
-import { keyUpdateCall, modelInfoCall, regenerateKeyCall } from "./networking";
+
 import {
   Badge,
   Card,
@@ -25,8 +25,9 @@ import {
   Title,
   Icon,
   TextInput,
+  Select as Select3,
+  SelectItem,
 } from "@tremor/react";
-import { Select as Select3, SelectItem } from "@tremor/react";
 import {
   Button as Button2,
   Modal,
@@ -39,6 +40,14 @@ import {
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import TextArea from "antd/es/input/TextArea";
 
+import {
+  keyDeleteCall,
+  modelAvailableCall,
+  keyUpdateCall,
+  modelInfoCall,
+  regenerateKeyCall,
+} from "./networking";
+
 const { Option } = Select;
 
 interface EditKeyModalProps {
@@ -46,6 +55,9 @@ interface EditKeyModalProps {
   onCancel: () => void;
   token: any; // Assuming TeamType is a type representing your team object
   onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
+  selectedTeam: any;
+  teams: any[] | null;
+  userModels: string[];
 }
 
 interface ModelLimitModalProps {
@@ -88,7 +100,7 @@ interface ItemData {
   // Add any other properties that exist in the item data
 }
 
-const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
+export default function ViewKeyTable({
   userID,
   userRole,
   accessToken,
@@ -97,28 +109,21 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   setData,
   teams,
   premiumUser,
-}) => {
-  const [isButtonClicked, setIsButtonClicked] = useState(false);
+}: ViewKeyTableProps) {
+  const initialKnownTeamIDs: Set<string> = new Set();
+  const [regenerateForm] = Form.useForm();
+
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
-  const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
-  const [spendData, setSpendData] = useState<
-    { day: string; spend: number }[] | null
-  >(null);
-  const [predictedSpendString, setPredictedSpendString] = useState("");
-
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [infoDialogVisible, setInfoDialogVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
   const [userModels, setUserModels] = useState([]);
-  const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
   const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
-  const [regenerateForm] = Form.useForm();
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
-
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
   // Function to check if user is admin of a team
@@ -292,436 +297,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       setKnownTeamIDs(teamIDSet);
     }
   }, [teams]);
-  const EditKeyModal: React.FC<EditKeyModalProps> = ({
-    visible,
-    onCancel,
-    token,
-    onSubmit,
-  }) => {
-    const [form] = Form.useForm();
-    const [keyTeam, setKeyTeam] = useState(selectedTeam);
-    const [errorModels, setErrorModels] = useState<string[]>([]);
-    const [errorBudget, setErrorBudget] = useState<boolean>(false);
-
-    let metadataString = "";
-    try {
-      metadataString = JSON.stringify(token.metadata, null, 2);
-    } catch (error) {
-      console.error("Error stringifying metadata:", error);
-      // You can choose a fallback, such as an empty string or a warning message
-      metadataString = "";
-    }
-
-    // Ensure token is defined and handle gracefully if not
-    const initialValues = token
-      ? {
-          ...token,
-          budget_duration: token.budget_duration,
-          metadata: metadataString,
-        }
-      : { metadata: metadataString };
-
-    const handleOk = () => {
-      form
-        .validateFields()
-        .then((values) => {
-          // const updatedValues = {...values, team_id: team.team_id};
-          // onSubmit(updatedValues);
-          form.resetFields();
-        })
-        .catch((error) => {
-          console.error("Validation failed:", error);
-        });
-    };
-
-    return (
-      <Modal
-        title="Edit Key"
-        visible={visible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={onCancel}
-      >
-        <Form
-          form={form}
-          onFinish={handleEditSubmit}
-          initialValues={initialValues}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item name="key_alias" label="Key Alias">
-              <TextInput />
-            </Form.Item>
-
-            <Form.Item
-              label="Models"
-              name="models"
-              rules={[
-                {
-                  validator: (rule, value) => {
-                    const errorModels = value.filter(
-                      (model: string) =>
-                        !keyTeam.models.includes(model) &&
-                        model !== "all-team-models" &&
-                        model !== "all-proxy-models" &&
-                        !keyTeam.models.includes("all-proxy-models"),
-                    );
-                    if (errorModels.length > 0) {
-                      return Promise.reject(
-                        `Some models are not part of the new team\'s models - ${errorModels}Team models: ${keyTeam.models}`,
-                      );
-                    } else {
-                      return Promise.resolve();
-                    }
-                  },
-                },
-              ]}
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-              >
-                <Option key="all-team-models" value="all-team-models">
-                  All Team Models
-                </Option>
-                {keyTeam && keyTeam.models
-                  ? keyTeam.models.includes("all-proxy-models")
-                    ? userModels
-                        .filter((model) => model !== "all-proxy-models")
-                        .map((model: string) => (
-                          <Option key={model} value={model}>
-                            {model}
-                          </Option>
-                        ))
-                    : keyTeam.models.map((model: string) => (
-                        <Option key={model} value={model}>
-                          {model}
-                        </Option>
-                      ))
-                  : userModels.map((model: string) => (
-                      <Option key={model} value={model}>
-                        {model}
-                      </Option>
-                    ))}
-              </Select>
-            </Form.Item>
-            <Form.Item
-              className="mt-8"
-              label="Max Budget (USD)"
-              name="max_budget"
-              help={`Budget cannot exceed team max budget: ${keyTeam?.max_budget !== null && keyTeam?.max_budget !== undefined ? keyTeam?.max_budget : "unlimited"}`}
-              rules={[
-                {
-                  validator: async (_, value) => {
-                    if (
-                      value &&
-                      keyTeam &&
-                      keyTeam.max_budget !== null &&
-                      value > keyTeam.max_budget
-                    ) {
-                      throw new Error(
-                        `Budget cannot exceed team max budget: $${keyTeam.max_budget}`,
-                      );
-                    }
-                  },
-                },
-              ]}
-            >
-              <InputNumber step={0.01} precision={2} width={200} />
-            </Form.Item>
-
-            <Form.Item
-              className="mt-8"
-              label="Reset Budget"
-              name="budget_duration"
-              help={`Current Reset Budget: ${
-                token.budget_duration
-              }, budget will be reset: ${token.budget_reset_at ? new Date(token.budget_reset_at).toLocaleString() : "Never"}`}
-            >
-              <Select placeholder="n/a">
-                <Select.Option value="daily">daily</Select.Option>
-                <Select.Option value="weekly">weekly</Select.Option>
-                <Select.Option value="monthly">monthly</Select.Option>
-              </Select>
-            </Form.Item>
-
-            <Form.Item label="token" name="token" hidden={true}></Form.Item>
-            <Form.Item
-              label="Team"
-              name="team_id"
-              className="mt-8"
-              help="the team this key belongs to"
-            >
-              <Select3 value={token.team_alias}>
-                {teams?.map((team_obj, index) => (
-                  <SelectItem
-                    key={index}
-                    value={team_obj.team_id}
-                    onClick={() => setKeyTeam(team_obj)}
-                  >
-                    {team_obj.team_alias}
-                  </SelectItem>
-                ))}
-              </Select3>
-            </Form.Item>
-
-            <Form.Item
-              className="mt-8"
-              label="TPM Limit (tokens per minute)"
-              name="tpm_limit"
-              help={`tpm_limit cannot exceed team tpm_limit ${keyTeam?.tpm_limit !== null && keyTeam?.tpm_limit !== undefined ? keyTeam?.tpm_limit : "unlimited"}`}
-              rules={[
-                {
-                  validator: async (_, value) => {
-                    if (
-                      value &&
-                      keyTeam &&
-                      keyTeam.tpm_limit !== null &&
-                      value > keyTeam.tpm_limit
-                    ) {
-                      throw new Error(
-                        `tpm_limit cannot exceed team max tpm_limit: $${keyTeam.tpm_limit}`,
-                      );
-                    }
-                  },
-                },
-              ]}
-            >
-              <InputNumber step={1} precision={1} width={200} />
-            </Form.Item>
-            <Form.Item
-              className="mt-8"
-              label="RPM Limit (requests per minute)"
-              name="rpm_limit"
-              help={`rpm_limit cannot exceed team max rpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : "unlimited"}`}
-              rules={[
-                {
-                  validator: async (_, value) => {
-                    if (
-                      value &&
-                      keyTeam &&
-                      keyTeam.rpm_limit !== null &&
-                      value > keyTeam.rpm_limit
-                    ) {
-                      throw new Error(
-                        `rpm_limit cannot exceed team max rpm_limit: $${keyTeam.rpm_limit}`,
-                      );
-                    }
-                  },
-                },
-              ]}
-            >
-              <InputNumber step={1} precision={1} width={200} />
-            </Form.Item>
-            <Form.Item
-              label="Metadata (ensure this is valid JSON)"
-              name="metadata"
-            >
-              <TextArea
-                rows={10}
-                onChange={(e) => {
-                  form.setFieldsValue({ metadata: e.target.value });
-                }}
-              />
-            </Form.Item>
-          </>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Edit Key</Button2>
-          </div>
-        </Form>
-      </Modal>
-    );
-  };
-
-  const ModelLimitModal: React.FC<ModelLimitModalProps> = ({
-    visible,
-    onCancel,
-    token,
-    onSubmit,
-    accessToken,
-  }) => {
-    const [modelLimits, setModelLimits] = useState<{
-      [key: string]: { tpm: number; rpm: number };
-    }>({});
-    const [availableModels, setAvailableModels] = useState<string[]>([]);
-    const [newModelRow, setNewModelRow] = useState<string | null>(null);
-
-    useEffect(() => {
-      if (token.metadata) {
-        const tpmLimits = token.metadata.model_tpm_limit || {};
-        const rpmLimits = token.metadata.model_rpm_limit || {};
-        const combinedLimits: { [key: string]: { tpm: number; rpm: number } } =
-          {};
-
-        Object.keys({ ...tpmLimits, ...rpmLimits }).forEach((model) => {
-          combinedLimits[model] = {
-            tpm: tpmLimits[model] || 0,
-            rpm: rpmLimits[model] || 0,
-          };
-        });
-
-        setModelLimits(combinedLimits);
-      }
-
-      const fetchAvailableModels = async () => {
-        try {
-          const modelDataResponse = await modelInfoCall(accessToken, "", "");
-          const allModelGroups: string[] = Array.from(
-            new Set(
-              modelDataResponse.data.map((model: any) => model.model_name),
-            ),
-          );
-          setAvailableModels(allModelGroups);
-        } catch (error) {
-          console.error("Error fetching model data:", error);
-          message.error("Failed to fetch available models");
-        }
-      };
-
-      fetchAvailableModels();
-    }, [token, accessToken]);
-
-    const handleLimitChange = (
-      model: string,
-      type: "tpm" | "rpm",
-      value: number | null,
-    ) => {
-      setModelLimits((prev) => ({
-        ...prev,
-        [model]: {
-          ...prev[model],
-          [type]: value || 0,
-        },
-      }));
-    };
-
-    const handleAddLimit = () => {
-      setNewModelRow("");
-    };
-
-    const handleModelSelect = (model: string) => {
-      if (!modelLimits[model]) {
-        setModelLimits((prev) => ({
-          ...prev,
-          [model]: { tpm: 0, rpm: 0 },
-        }));
-      }
-      setNewModelRow(null);
-    };
-
-    const handleRemoveModel = (model: string) => {
-      setModelLimits((prev) => {
-        const { [model]: _, ...rest } = prev;
-        return rest;
-      });
-    };
-
-    const handleSubmit = () => {
-      const updatedMetadata = {
-        ...token.metadata,
-        model_tpm_limit: Object.fromEntries(
-          Object.entries(modelLimits).map(([model, limits]) => [
-            model,
-            limits.tpm,
-          ]),
-        ),
-        model_rpm_limit: Object.fromEntries(
-          Object.entries(modelLimits).map(([model, limits]) => [
-            model,
-            limits.rpm,
-          ]),
-        ),
-      };
-      onSubmit(updatedMetadata);
-    };
-
-    return (
-      <Modal
-        title="Edit Model-Specific Limits"
-        visible={visible}
-        onCancel={onCancel}
-        footer={null}
-        width={800}
-      >
-        <div className="space-y-4">
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Model</TableHeaderCell>
-                <TableHeaderCell>TPM Limit</TableHeaderCell>
-                <TableHeaderCell>RPM Limit</TableHeaderCell>
-                <TableHeaderCell>Actions</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {Object.entries(modelLimits).map(([model, limits]) => (
-                <TableRow key={model}>
-                  <TableCell>{model}</TableCell>
-                  <TableCell>
-                    <InputNumber
-                      value={limits.tpm}
-                      onChange={(value) =>
-                        handleLimitChange(model, "tpm", value)
-                      }
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <InputNumber
-                      value={limits.rpm}
-                      onChange={(value) =>
-                        handleLimitChange(model, "rpm", value)
-                      }
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Button onClick={() => handleRemoveModel(model)}>
-                      Remove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {newModelRow !== null && (
-                <TableRow>
-                  <TableCell>
-                    <Select
-                      style={{ width: 200 }}
-                      placeholder="Select a model"
-                      onChange={handleModelSelect}
-                      value={newModelRow || undefined}
-                    >
-                      {availableModels
-                        .filter((m) => !modelLimits.hasOwnProperty(m))
-                        .map((m) => (
-                          <Option key={m} value={m}>
-                            {m}
-                          </Option>
-                        ))}
-                    </Select>
-                  </TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell>-</TableCell>
-                  <TableCell>
-                    <Button onClick={() => setNewModelRow(null)}>Cancel</Button>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          <Button onClick={handleAddLimit} disabled={newModelRow !== null}>
-            Add Limit
-          </Button>
-        </div>
-        <div className="flex justify-end space-x-4 mt-6">
-          <Button onClick={onCancel}>Cancel</Button>
-          <Button onClick={handleSubmit}>Save</Button>
-        </div>
-      </Modal>
-    );
-  };
 
   const handleEditClick = (token: any) => {
     // set token.token to token.token_id if token_id is not null
@@ -924,6 +499,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   if (data == null) {
     return;
   }
+
   return (
     <div>
       <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
@@ -1032,22 +608,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                         <p style={{ fontSize: "0.70rem" }}>Never</p>
                       )}
                     </TableCell>
-                    {/* <TableCell style={{ maxWidth: '2px' }}>
-                  <ViewKeySpendReport
-                    token={item.token}
-                    accessToken={accessToken}
-                    keySpend={item.spend}
-                    keyBudget={item.max_budget}
-                    keyName={item.key_name}
-                  />
-                </TableCell> */}
-                    {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{item.team_alias && item.team_alias != "None" ? item.team_alias : item.team_id}</Text>
-                </TableCell> */}
-                    {/* <TableCell style={{ maxWidth: "4px", whiteSpace: "pre-wrap", overflow: "hidden"  }}>
-                  <Text>{JSON.stringify(item.metadata).slice(0, 400)}</Text>
-                  
-                </TableCell> */}
 
                     <TableCell>
                       {Array.isArray(item.models) ? (
@@ -1362,6 +922,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           onCancel={handleEditCancel}
           token={selectedToken}
           onSubmit={handleEditSubmit}
+          selectedTeam={selectedTeam}
+          teams={teams}
+          userModels={userModels}
         />
       )}
 
@@ -1525,6 +1088,427 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       )}
     </div>
   );
+}
+
+const ModelLimitModal: React.FC<ModelLimitModalProps> = ({
+  visible,
+  onCancel,
+  token,
+  onSubmit,
+  accessToken,
+}) => {
+  const [modelLimits, setModelLimits] = useState<{
+    [key: string]: { tpm: number; rpm: number };
+  }>({});
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [newModelRow, setNewModelRow] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (token.metadata) {
+      const tpmLimits = token.metadata.model_tpm_limit || {};
+      const rpmLimits = token.metadata.model_rpm_limit || {};
+      const combinedLimits: { [key: string]: { tpm: number; rpm: number } } =
+        {};
+
+      Object.keys({ ...tpmLimits, ...rpmLimits }).forEach((model) => {
+        combinedLimits[model] = {
+          tpm: tpmLimits[model] || 0,
+          rpm: rpmLimits[model] || 0,
+        };
+      });
+
+      setModelLimits(combinedLimits);
+    }
+
+    const fetchAvailableModels = async () => {
+      try {
+        const modelDataResponse = await modelInfoCall(accessToken, "", "");
+        const allModelGroups: string[] = Array.from(
+          new Set(modelDataResponse.data.map((model: any) => model.model_name)),
+        );
+        setAvailableModels(allModelGroups);
+      } catch (error) {
+        console.error("Error fetching model data:", error);
+        message.error("Failed to fetch available models");
+      }
+    };
+
+    fetchAvailableModels();
+  }, [token, accessToken]);
+
+  const handleLimitChange = (
+    model: string,
+    type: "tpm" | "rpm",
+    value: number | null,
+  ) => {
+    setModelLimits((prev) => ({
+      ...prev,
+      [model]: {
+        ...prev[model],
+        [type]: value || 0,
+      },
+    }));
+  };
+
+  const handleAddLimit = () => {
+    setNewModelRow("");
+  };
+
+  const handleModelSelect = (model: string) => {
+    if (!modelLimits[model]) {
+      setModelLimits((prev) => ({
+        ...prev,
+        [model]: { tpm: 0, rpm: 0 },
+      }));
+    }
+    setNewModelRow(null);
+  };
+
+  const handleRemoveModel = (model: string) => {
+    setModelLimits((prev) => {
+      const { [model]: _, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const handleSubmit = () => {
+    const updatedMetadata = {
+      ...token.metadata,
+      model_tpm_limit: Object.fromEntries(
+        Object.entries(modelLimits).map(([model, limits]) => [
+          model,
+          limits.tpm,
+        ]),
+      ),
+      model_rpm_limit: Object.fromEntries(
+        Object.entries(modelLimits).map(([model, limits]) => [
+          model,
+          limits.rpm,
+        ]),
+      ),
+    };
+    onSubmit(updatedMetadata);
+  };
+
+  return (
+    <Modal
+      title="Edit Model-Specific Limits"
+      visible={visible}
+      onCancel={onCancel}
+      footer={null}
+      width={800}
+    >
+      <div className="space-y-4">
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell>Model</TableHeaderCell>
+              <TableHeaderCell>TPM Limit</TableHeaderCell>
+              <TableHeaderCell>RPM Limit</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {Object.entries(modelLimits).map(([model, limits]) => (
+              <TableRow key={model}>
+                <TableCell>{model}</TableCell>
+                <TableCell>
+                  <InputNumber
+                    value={limits.tpm}
+                    onChange={(value) => handleLimitChange(model, "tpm", value)}
+                  />
+                </TableCell>
+                <TableCell>
+                  <InputNumber
+                    value={limits.rpm}
+                    onChange={(value) => handleLimitChange(model, "rpm", value)}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Button onClick={() => handleRemoveModel(model)}>
+                    Remove
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {newModelRow !== null && (
+              <TableRow>
+                <TableCell>
+                  <Select
+                    style={{ width: 200 }}
+                    placeholder="Select a model"
+                    onChange={handleModelSelect}
+                    value={newModelRow || undefined}
+                  >
+                    {availableModels
+                      .filter((m) => !modelLimits.hasOwnProperty(m))
+                      .map((m) => (
+                        <Option key={m} value={m}>
+                          {m}
+                        </Option>
+                      ))}
+                  </Select>
+                </TableCell>
+                <TableCell>-</TableCell>
+                <TableCell>-</TableCell>
+                <TableCell>
+                  <Button onClick={() => setNewModelRow(null)}>Cancel</Button>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+        <Button onClick={handleAddLimit} disabled={newModelRow !== null}>
+          Add Limit
+        </Button>
+      </div>
+      <div className="flex justify-end space-x-4 mt-6">
+        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={handleSubmit}>Save</Button>
+      </div>
+    </Modal>
+  );
 };
 
-export default ViewKeyTable;
+const EditKeyModal: React.FC<EditKeyModalProps> = ({
+  visible,
+  onCancel,
+  token,
+  onSubmit,
+  selectedTeam,
+  teams,
+  userModels,
+}) => {
+  const [form] = Form.useForm();
+  const [keyTeam, setKeyTeam] = useState(selectedTeam);
+
+  let metadataString = "";
+  try {
+    metadataString = JSON.stringify(token.metadata, null, 2);
+  } catch (error) {
+    console.error("Error stringifying metadata:", error);
+    // You can choose a fallback, such as an empty string or a warning message
+    metadataString = "";
+  }
+
+  // Ensure token is defined and handle gracefully if not
+  const initialValues = token
+    ? {
+        ...token,
+        budget_duration: token.budget_duration,
+        metadata: metadataString,
+      }
+    : { metadata: metadataString };
+
+  const handleOk = () => {
+    form
+      .validateFields()
+      .then((values) => {
+        form.resetFields();
+      })
+      .catch((error) => {
+        console.error("Validation failed:", error);
+      });
+  };
+
+  return (
+    <Modal
+      title="Edit Key"
+      visible={visible}
+      width={800}
+      footer={null}
+      onOk={handleOk}
+      onCancel={onCancel}
+    >
+      <Form
+        form={form}
+        onFinish={onSubmit}
+        initialValues={initialValues}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+      >
+        <>
+          <Form.Item name="key_alias" label="Key Alias">
+            <TextInput />
+          </Form.Item>
+          <Form.Item
+            label="Models"
+            name="models"
+            rules={[
+              {
+                validator: (rule, value) => {
+                  const errorModels = value.filter(
+                    (model: string) =>
+                      !keyTeam.models.includes(model) &&
+                      model !== "all-team-models" &&
+                      model !== "all-proxy-models" &&
+                      !keyTeam.models.includes("all-proxy-models"),
+                  );
+                  if (errorModels.length > 0) {
+                    return Promise.reject(
+                      `Some models are not part of the new team\'s models - ${errorModels}Team models: ${keyTeam.models}`,
+                    );
+                  } else {
+                    return Promise.resolve();
+                  }
+                },
+              },
+            ]}
+          >
+            <Select
+              mode="multiple"
+              placeholder="Select models"
+              style={{ width: "100%" }}
+            >
+              <Option key="all-team-models" value="all-team-models">
+                All Team Models
+              </Option>
+              {keyTeam && keyTeam.models
+                ? keyTeam.models.includes("all-proxy-models")
+                  ? userModels
+                      .filter((model) => model !== "all-proxy-models")
+                      .map((model: string) => (
+                        <Option key={model} value={model}>
+                          {model}
+                        </Option>
+                      ))
+                  : keyTeam.models.map((model: string) => (
+                      <Option key={model} value={model}>
+                        {model}
+                      </Option>
+                    ))
+                : userModels.map((model: string) => (
+                    <Option key={model} value={model}>
+                      {model}
+                    </Option>
+                  ))}
+            </Select>
+          </Form.Item>
+          <Form.Item
+            className="mt-8"
+            label="Max Budget (USD)"
+            name="max_budget"
+            help={`Budget cannot exceed team max budget: ${keyTeam?.max_budget !== null && keyTeam?.max_budget !== undefined ? keyTeam?.max_budget : "unlimited"}`}
+            rules={[
+              {
+                validator: async (_, value) => {
+                  if (
+                    value &&
+                    keyTeam &&
+                    keyTeam.max_budget !== null &&
+                    value > keyTeam.max_budget
+                  ) {
+                    throw new Error(
+                      `Budget cannot exceed team max budget: $${keyTeam.max_budget}`,
+                    );
+                  }
+                },
+              },
+            ]}
+          >
+            <InputNumber step={0.01} precision={2} width={200} />
+          </Form.Item>
+
+          <Form.Item
+            className="mt-8"
+            label="Reset Budget"
+            name="budget_duration"
+            help={`Current Reset Budget: ${
+              token.budget_duration
+            }, budget will be reset: ${token.budget_reset_at ? new Date(token.budget_reset_at).toLocaleString() : "Never"}`}
+          >
+            <Select placeholder="n/a">
+              <Select.Option value="daily">daily</Select.Option>
+              <Select.Option value="weekly">weekly</Select.Option>
+              <Select.Option value="monthly">monthly</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item label="token" name="token" hidden={true}></Form.Item>
+          <Form.Item
+            label="Team"
+            name="team_id"
+            className="mt-8"
+            help="the team this key belongs to"
+          >
+            <Select3 value={token.team_alias}>
+              {teams?.map((team_obj, index) => (
+                <SelectItem
+                  key={index}
+                  value={team_obj.team_id}
+                  onClick={() => setKeyTeam(team_obj)}
+                >
+                  {team_obj.team_alias}
+                </SelectItem>
+              ))}
+            </Select3>
+          </Form.Item>
+
+          <Form.Item
+            className="mt-8"
+            label="TPM Limit (tokens per minute)"
+            name="tpm_limit"
+            help={`tpm_limit cannot exceed team tpm_limit ${keyTeam?.tpm_limit !== null && keyTeam?.tpm_limit !== undefined ? keyTeam?.tpm_limit : "unlimited"}`}
+            rules={[
+              {
+                validator: async (_, value) => {
+                  if (
+                    value &&
+                    keyTeam &&
+                    keyTeam.tpm_limit !== null &&
+                    value > keyTeam.tpm_limit
+                  ) {
+                    throw new Error(
+                      `tpm_limit cannot exceed team max tpm_limit: $${keyTeam.tpm_limit}`,
+                    );
+                  }
+                },
+              },
+            ]}
+          >
+            <InputNumber step={1} precision={1} width={200} />
+          </Form.Item>
+          <Form.Item
+            className="mt-8"
+            label="RPM Limit (requests per minute)"
+            name="rpm_limit"
+            help={`rpm_limit cannot exceed team max rpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : "unlimited"}`}
+            rules={[
+              {
+                validator: async (_, value) => {
+                  if (
+                    value &&
+                    keyTeam &&
+                    keyTeam.rpm_limit !== null &&
+                    value > keyTeam.rpm_limit
+                  ) {
+                    throw new Error(
+                      `rpm_limit cannot exceed team max rpm_limit: $${keyTeam.rpm_limit}`,
+                    );
+                  }
+                },
+              },
+            ]}
+          >
+            <InputNumber step={1} precision={1} width={200} />
+          </Form.Item>
+          <Form.Item
+            label="Metadata (ensure this is valid JSON)"
+            name="metadata"
+          >
+            <TextArea
+              rows={10}
+              onChange={(e) => {
+                form.setFieldsValue({ metadata: e.target.value });
+              }}
+            />
+          </Form.Item>
+        </>
+        <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <Button2 htmlType="submit">Edit Key</Button2>
+        </div>
+      </Form>
+    </Modal>
+  );
+};
