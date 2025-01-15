@@ -903,11 +903,9 @@ jobs:
             ls
             python -m pytest -vv tests/local_testing/test_basic_python_version.py
   helm_chart_testing:
-    docker:
-      - image: cimg/python:3.13.1
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+    machine:
+      image: ubuntu-2204:2023.10.1  # Use machine executor instead of docker
+    resource_class: medium
     working_directory: ~/project
 
     steps:
