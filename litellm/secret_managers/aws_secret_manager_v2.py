@@ -33,6 +33,10 @@ from .base_secret_manager import BaseSecretManager
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
+    def __init__(self, **kwargs):
+        BaseSecretManager.__init__(self, **kwargs)
+        BaseAWSLLM.__init__(self, **kwargs)
+
     @classmethod
     def validate_environment(cls):
         if "AWS_REGION_NAME" not in os.environ:
