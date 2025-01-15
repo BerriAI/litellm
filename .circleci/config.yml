@@ -902,6 +902,25 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  helm_chart_testing:
+    docker:
+      - image: cimg/python:3.13.1
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      # Install Helm
+      - run:
+          name: Install Helm
+          command: |
+            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - run:
+          name: Run helm lint
+          command: |
+            helm lint ./deploy/charts/litellm-helm
 
   check_code_and_doc_quality:
     docker:
