@@ -948,7 +948,7 @@ jobs:
       - run:
           name: Run helm tests
           command: |
-            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/tests/test-values.yaml
+            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml
             # Wait for pod to be ready
             echo "Waiting 30 seconds for pod to be ready..."
             sleep 30
