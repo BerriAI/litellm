@@ -273,6 +273,7 @@ class BaseAWSLLM:
         Authenticate with AWS Role
         """
         import boto3
+        from botocore.credentials import Credentials
 
         sts_client = boto3.client(
             "sts",
