@@ -155,6 +155,7 @@ def _is_allowed_route(
     """
     - Route b/w ui token check and normal token check
     """
+
     if token_type == "ui" and _is_ui_route(route=route, user_obj=user_obj):
         return True
     else:
