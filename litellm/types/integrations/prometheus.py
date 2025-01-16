@@ -194,48 +194,28 @@ class PrometheusMetricLabels:
             for metric in litellm.custom_prometheus_metadata_labels
         ]
 
-
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
 
 class UserAPIKeyLabelValues(BaseModel):
-    end_user: Optional[str] = None
-    user: Optional[str] = None
-    hashed_api_key: Optional[str] = None
-    api_key_alias: Optional[str] = None
-    team: Optional[str] = None
-    team_alias: Optional[str] = None
-    requested_model: Optional[str] = None
-    model: Optional[str] = None
-    litellm_model_name: Optional[str] = None
-    tags: List[str] = []
-    custom_metadata_labels: Dict[str, str] = {}
-    model_id: Optional[str] = None
-    api_base: Optional[str] = None
-    api_provider: Optional[str] = None
-    exception_status: Optional[str] = None
-    exception_class: Optional[str] = None
-    status_code: Optional[str] = None
-    fallback_model: Optional[str] = None
+    end_user: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.END_USER)
+    user: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.USER)
+    hashed_api_key: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.API_KEY_HASH)
+    api_key_alias: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.API_KEY_ALIAS)
+    team: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.TEAM)
+    team_alias: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.TEAM_ALIAS)
+    requested_model: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.REQUESTED_MODEL)
+    model: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME)
+    litellm_model_name: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME)
+    tags: List[str] = Field(default_factory=list)
+    custom_metadata_labels: Dict[str, str] = Field(default_factory=dict)
+    model_id: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.MODEL_ID)
+    api_base: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.API_BASE)
+    api_provider: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.API_PROVIDER)
+    exception_status: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.EXCEPTION_STATUS)
+    exception_class: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.EXCEPTION_CLASS)
+    status_code: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.STATUS_CODE)
+    fallback_model: Optional[str] = Field(default=None, alias=UserAPIKeyLabelNames.FALLBACK_MODEL)
 
-    class Config:
-        fields = {
-            "end_user": {"alias": UserAPIKeyLabelNames.END_USER},
-            "user": {"alias": UserAPIKeyLabelNames.USER},
-            "hashed_api_key": {"alias": UserAPIKeyLabelNames.API_KEY_HASH},
-            "api_key_alias": {"alias": UserAPIKeyLabelNames.API_KEY_ALIAS},
-            "team": {"alias": UserAPIKeyLabelNames.TEAM},
-            "team_alias": {"alias": UserAPIKeyLabelNames.TEAM_ALIAS},
-            "requested_model": {"alias": UserAPIKeyLabelNames.REQUESTED_MODEL},
-            "model": {"alias": UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME},
-            "litellm_model_name": {"alias": UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME},
-            "model_id": {"alias": UserAPIKeyLabelNames.MODEL_ID},
-            "api_base": {"alias": UserAPIKeyLabelNames.API_BASE},
-            "api_provider": {"alias": UserAPIKeyLabelNames.API_PROVIDER},
-            "exception_status": {"alias": UserAPIKeyLabelNames.EXCEPTION_STATUS},
-            "exception_class": {"alias": UserAPIKeyLabelNames.EXCEPTION_CLASS},
-            "status_code": {"alias": UserAPIKeyLabelNames.STATUS_CODE},
-            "fallback_model": {"alias": UserAPIKeyLabelNames.FALLBACK_MODEL},
-        }
