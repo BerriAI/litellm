@@ -3,6 +3,7 @@
 Log Proxy input, output, and exceptions using:
 
 - Lunary
+- MLflow
 - Langfuse
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
@@ -231,6 +232,58 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
     ]
 }'
 ```
+
+## MLflow
+
+
+### Step1: Install dependencies
+Install the dependencies.
+
+```shell
+pip install litellm mlflow
+```
+
+### Step 2: Create a `config.yaml` with `mlflow` callback
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+litellm_settings:
+  success_callback: ["mlflow"]
+  failure_callback: ["mlflow"]
+```
+
+### Step 3: Start the LiteLLM proxy
+```shell
+litellm --config config.yaml
+```
+
+### Step 4: Make a request
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ]
+}'
+```
+
+### Step 5: Review traces
+
+Run the following command to start MLflow UI and review recorded traces.
+
+```shell
+mlflow ui
+```
+
 
 ## Langfuse
 

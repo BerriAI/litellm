@@ -6,7 +6,7 @@ import Image from '@theme/IdealImage';
 
 **MLflow** is an end-to-end open source MLOps platform for [experiment tracking](https://www.mlflow.org/docs/latest/tracking.html), [model management](https://www.mlflow.org/docs/latest/models.html), [evaluation](https://www.mlflow.org/docs/latest/llms/llm-evaluate/index.html), [observability (tracing)](https://www.mlflow.org/docs/latest/llms/tracing/index.html), and [deployment](https://www.mlflow.org/docs/latest/deployment/index.html). MLflow empowers teams to collaboratively develop and refine LLM applications efficiently.
 
-MLflow’s integration with LiteLLM supports advanced observability **compatible with OpenTelemetry**.
+MLflow’s integration with LiteLLM supports advanced observability compatible with OpenTelemetry.
 
 
 <Image img={require('../../img/mlflow_tracing.png')} />

@@ -94,7 +94,7 @@ os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse", "helicone", "mlflow"] # log input/output to MLflow, langfuse, lunary, helicone
+litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to MLflow, langfuse, lunary, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
