@@ -47,9 +47,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -165,9 +165,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -264,9 +264,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -367,7 +367,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-      
+
       - persist_to_workspace:
           root: .
           paths:
@@ -375,10 +375,10 @@ jobs:
             - auth_ui_unit_tests_coverage
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
-        - image: cimg/python:3.11
-          auth:
-            username: ${DOCKERHUB_USERNAME}
-            password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -417,10 +417,10 @@ jobs:
             - litellm_router_coverage
   litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
     docker:
-        - image: cimg/python:3.11
-          auth:
-            username: ${DOCKERHUB_USERNAME}
-            password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
     steps:
       - checkout
@@ -458,9 +458,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -514,10 +514,10 @@ jobs:
             - litellm_proxy_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-        - image: cimg/python:3.11
-          auth:
-            username: ${DOCKERHUB_USERNAME}
-            password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -616,7 +616,7 @@ jobs:
           command: |
             mv coverage.xml llm_translation_coverage.xml
             mv .coverage llm_translation_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -660,7 +660,7 @@ jobs:
           command: |
             mv coverage.xml batches_coverage.xml
             mv .coverage batches_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -704,7 +704,7 @@ jobs:
           command: |
             mv coverage.xml secret_manager_coverage.xml
             mv .coverage secret_manager_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -747,7 +747,7 @@ jobs:
           command: |
             mv coverage.xml pass_through_unit_tests_coverage.xml
             mv .coverage pass_through_unit_tests_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -789,7 +789,7 @@ jobs:
           command: |
             mv coverage.xml image_gen_coverage.xml
             mv .coverage image_gen_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -835,7 +835,7 @@ jobs:
           command: |
             mv coverage.xml logging_coverage.xml
             mv .coverage logging_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -875,7 +875,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing/test_basic_python_version.py
-  
+
   installing_litellm_on_python_3_13:
     docker:
       - image: cimg/python:3.13.1
@@ -1039,7 +1039,7 @@ jobs:
               cat docker_output.log
               exit 1
             fi
-            
+
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -1085,9 +1085,9 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -1203,9 +1203,9 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -1322,9 +1322,9 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -1387,8 +1387,9 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
-           # Clean up first container
+          no_output_timeout:
+            120m
+            # Clean up first container
       - run:
           name: Stop and remove first container
           command: |
@@ -1524,8 +1525,9 @@ jobs:
           name: Run tests
           command: |
             python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
-          no_output_timeout: 120m
-           # Clean up first container
+          no_output_timeout:
+            120m
+            # Clean up first container
       - run:
           name: Stop and remove first container
           command: |
@@ -1572,9 +1574,9 @@ jobs:
             pip install mypy
             pip install pyarrow
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
@@ -1676,7 +1678,6 @@ jobs:
       - codecov/upload:
           file: ./coverage.xml
 
-
   publish_to_pypi:
     docker:
       - image: cimg/python:3.8
@@ -1702,7 +1703,6 @@ jobs:
               echo "No changes to litellm, tests, or pyproject.toml. Skipping PyPI publish."
               circleci step halt
             fi
-
 
       - run:
           name: Checkout code
@@ -1792,9 +1792,9 @@ jobs:
             pip install mypy
             pip install pyarrow
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
@@ -1844,6 +1844,28 @@ jobs:
           no_output_timeout: 120m
       - store_test_results:
           path: test-results
+
+  test_nonroot_image:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t non_root_image:latest . -f ./docker/Dockerfile.non_root
+      - run:
+          name: Install Container Structure Test
+          command: |
+            curl -LO https://github.com/GoogleContainerTools/container-structure-test/releases/download/v1.19.3/container-structure-test-linux-amd64
+            chmod +x container-structure-test-linux-amd64
+            sudo mv container-structure-test-linux-amd64 /usr/local/bin/container-structure-test
+      - run:
+          name: Run Container Structure Test
+          command: |
+            container-structure-test test --image non_root_image:latest --config docker/tests/nonroot.yaml
 
   test_bad_database_url:
     machine:
@@ -1910,10 +1932,10 @@ workflows:
                 - /litellm_.*/
       - litellm_assistants_api_testing:
           filters:
-              branches:
-                only:
-                  - main
-                  - /litellm_.*/
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_router_testing:
           filters:
             branches:
@@ -2086,4 +2108,3 @@ workflows:
             branches:
               only:
                 - main
-      
