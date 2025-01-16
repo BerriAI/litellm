@@ -20,6 +20,8 @@ from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     get_api_key_from_custom_header,
 )
+from fastapi import WebSocket, HTTPException, status
+
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 
 
@@ -737,9 +739,58 @@ def test_is_user_proxy_admin(user_obj, expected_result):
     assert _is_user_proxy_admin(user_obj) == expected_result
 
 
-def test_get_user_role():
-    pass
+@pytest.mark.parametrize(
+    "user_obj, expected_role",
+    [
+        (None, None),  # Case 1: user_obj is None (should return None)
+        (
+            LiteLLM_UserTable(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            LitellmUserRoles.PROXY_ADMIN,
+        ),  # Case 2: user_role is PROXY_ADMIN (should return LitellmUserRoles.PROXY_ADMIN)
+        (
+            LiteLLM_UserTable(
+                user_role="OTHER_ROLE",
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            LitellmUserRoles.INTERNAL_USER,
+        ),  # Case 3: invalid user_role (should return LitellmUserRoles.INTERNAL_USER)
+    ],
+)
+def test_get_user_role(user_obj, expected_role):
+    from litellm.proxy.auth.user_api_key_auth import _get_user_role
+
+    assert _get_user_role(user_obj) == expected_role
 
 
-def test_user_api_key_auth_websocket():
-    pass
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    # Prepare a mock WebSocket object
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+
+    # Mock the return value of `user_api_key_auth` when it's called within the `user_api_key_auth_websocket` function
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
+
+        # Make the call to the WebSocket function
+        await user_api_key_auth_websocket(mock_websocket)
+
+        # Assert that `user_api_key_auth` was called with the correct parameters
+        mock_user_api_key_auth.assert_called_once()
+
+        assert (
+            mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+        )
