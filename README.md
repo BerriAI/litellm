@@ -385,7 +385,24 @@ Tilt will watch for changes and will rebuild the Docker image and redeploy
 LiteLLM Proxy and Postgres (via the Helm chart at `deploy/charts/litellm-helm`)
 to whatever Kubernetes context you have configured. If you're running a local
 Kubernetes cluster (arguably the most convenient way to use Tilt), then you can
-probably access LiteLLM proxy at http://localhost:4000.
+probably access LiteLLM proxy at http://localhost:4000. The `Tiltfile` sets the LiteLLM Proxy master key to `sk-master` so you can likely do something like this:
+
+```shell
+curl -sSL \
+    --request POST \
+    --url 'http://localhost:4000/chat/completions' \
+    --header "Authorization: Bearer sk-master" \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": "What are the colors of the rainbow in order?"
+            }
+        ]
+    }'
+```
 
 ### Building LiteLLM Docker Image 
 
