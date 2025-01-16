@@ -1460,8 +1460,11 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
             httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
         else:
             httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    resp = None
     with patch.object(client, "post", new=httpx_response) as mock_call:
-        print("SENDING CLIENT POST={}".format(client.post))
+        litellm.set_verbose = True
+        print(f"model entering completion: {model}")
+
         try:
             resp = completion(
                 model=model,
@@ -1502,6 +1505,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                         "text"
                     ]
                 )
+        elif resp is not None:
+
+            assert resp.model == model.split("/")[1].split("@")[0]
 
 
 @pytest.mark.parametrize(
