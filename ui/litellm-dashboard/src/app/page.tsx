@@ -20,16 +20,14 @@ import Usage from "../components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { jwtDecode } from "jwt-decode";
 import { Typography } from "antd";
-import { setGlobalLitellmHeaderName } from "../components/networking"
+import { setGlobalLitellmHeaderName } from "../components/networking";
 
 function getCookie(name: string) {
-  console.log("COOKIES", document.cookie)
   const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith(name + '='));
-  return cookieValue ? cookieValue.split('=')[1] : null;
+    .split("; ")
+    .find((row) => row.startsWith(name + "="));
+  return cookieValue ? cookieValue.split("=")[1] : null;
 }
-
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -68,7 +66,8 @@ const CreateKeyPage = () => {
   const { Title, Paragraph } = Typography;
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
-  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
+  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] =
+    useState(false);
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
@@ -80,244 +79,244 @@ const CreateKeyPage = () => {
   const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
+  const [token, setToken] = useState<string | null>(null);
+
   const userID = searchParams.get("userID");
   const invitation_id = searchParams.get("invitation_id");
-  const token = getCookie('token');
 
   // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
-    return searchParams.get('page') || 'api-keys';
+    return searchParams.get("page") || "api-keys";
   });
 
   // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
     // Update URL without full page reload
     const newSearchParams = new URLSearchParams(searchParams);
-    newSearchParams.set('page', newPage);
-    
+    newSearchParams.set("page", newPage);
+
     // Use Next.js router to update URL
-    window.history.pushState(
-      null, 
-      '', 
-      `?${newSearchParams.toString()}`
-    );
-    
+    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+
     setPage(newPage);
   };
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   useEffect(() => {
-    if (token) {
-      const decoded = jwtDecode(token) as { [key: string]: any };
-      if (decoded) {
-        // cast decoded to dictionary
-        console.log("Decoded token:", decoded);
+    const token = getCookie("token");
+    setToken(token);
+  }, []);
 
-        console.log("Decoded key:", decoded.key);
-        // set accessToken
-        setAccessToken(decoded.key);
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
 
-        setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
+    const decoded = jwtDecode(token) as { [key: string]: any };
+    if (decoded) {
+      // cast decoded to dictionary
+      console.log("Decoded token:", decoded);
 
-        // check if userRole is defined
-        if (decoded.user_role) {
-          const formattedUserRole = formatUserRole(decoded.user_role);
-          console.log("Decoded user_role:", formattedUserRole);
-          setUserRole(formattedUserRole);
-          if (formattedUserRole == "Admin Viewer") {
-            setPage("usage");
-          }
-        } else {
-          console.log("User role not defined");
+      console.log("Decoded key:", decoded.key);
+      // set accessToken
+      setAccessToken(decoded.key);
+
+      setDisabledPersonalKeyCreation(
+        decoded.disabled_non_admin_personal_key_creation,
+      );
+
+      // check if userRole is defined
+      if (decoded.user_role) {
+        const formattedUserRole = formatUserRole(decoded.user_role);
+        console.log("Decoded user_role:", formattedUserRole);
+        setUserRole(formattedUserRole);
+        if (formattedUserRole == "Admin Viewer") {
+          setPage("usage");
         }
+      } else {
+        console.log("User role not defined");
+      }
 
-        if (decoded.user_email) {
-          setUserEmail(decoded.user_email);
-        } else {
-          console.log(`User Email is not set ${decoded}`);
-        }
+      if (decoded.user_email) {
+        setUserEmail(decoded.user_email);
+      } else {
+        console.log(`User Email is not set ${decoded}`);
+      }
 
-        if (decoded.login_method) {
-          setShowSSOBanner(
-            decoded.login_method == "username_password" ? true : false
-          );
-        } else {
-          console.log(`User Email is not set ${decoded}`);
-        }
+      if (decoded.login_method) {
+        setShowSSOBanner(
+          decoded.login_method == "username_password" ? true : false,
+        );
+      } else {
+        console.log(`User Email is not set ${decoded}`);
+      }
 
-        if (decoded.premium_user) {
-          setPremiumUser(decoded.premium_user);
-        }
+      if (decoded.premium_user) {
+        setPremiumUser(decoded.premium_user);
+      }
 
-        if (decoded.auth_header_name) {
-          setGlobalLitellmHeaderName(decoded.auth_header_name);
-        }
-        
+      if (decoded.auth_header_name) {
+        setGlobalLitellmHeaderName(decoded.auth_header_name);
       }
     }
   }, [token]);
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      {
-        invitation_id ? (
-          <UserDashboard
-              userID={userID}
-              userRole={userRole}
-              premiumUser={premiumUser}
-              teams={teams}
-              keys={keys}
-              setUserRole={setUserRole}
-              userEmail={userEmail}
-              setUserEmail={setUserEmail}
-              setTeams={setTeams}
-              setKeys={setKeys}
-            />
-        ) : (
-        <div className="flex flex-col min-h-screen">
-        <Navbar
+      {invitation_id ? (
+        <UserDashboard
           userID={userID}
           userRole={userRole}
-          userEmail={userEmail} 
           premiumUser={premiumUser}
-          setProxySettings={setProxySettings}
-          proxySettings={proxySettings}
+          teams={teams}
+          keys={keys}
+          setUserRole={setUserRole}
+          userEmail={userEmail}
+          setUserEmail={setUserEmail}
+          setTeams={setTeams}
+          setKeys={setKeys}
         />
-        <div className="flex flex-1 overflow-auto">
-          <div className="mt-8">
+      ) : (
+        <div className="flex flex-col min-h-screen">
+          <Navbar
+            userID={userID}
+            userRole={userRole}
+            userEmail={userEmail}
+            premiumUser={premiumUser}
+            setProxySettings={setProxySettings}
+            proxySettings={proxySettings}
+          />
+          <div className="flex flex-1 overflow-auto">
+            <div className="mt-8">
               <Sidebar
                 setPage={updatePage}
                 userRole={userRole}
                 defaultSelectedKey={page}
-              />            
-          </div>
+              />
+            </div>
 
-          {page == "api-keys" ? (
-            <UserDashboard
-              userID={userID}
-              userRole={userRole}
-              premiumUser={premiumUser}
-              teams={teams}
-              keys={keys}
-              setUserRole={setUserRole}
-              userEmail={userEmail}
-              setUserEmail={setUserEmail}
-              setTeams={setTeams}
-              setKeys={setKeys}
-            />
-          ) : page == "models" ? (
-            <ModelDashboard
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              keys={keys}
-              accessToken={accessToken}
-              modelData={modelData}
-              setModelData={setModelData}
-              premiumUser={premiumUser}
-            />
-          ) : page == "llm-playground" ? (
-            <ChatUI
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-            />
-          ) : page == "users" ? (
-            <ViewUserDashboard
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              keys={keys}
-              teams={teams}
-              accessToken={accessToken}
-              setKeys={setKeys}
-            />
-          ) : page == "teams" ? (
-            <Teams
-              teams={teams}
-              setTeams={setTeams}
-              searchParams={searchParams}
-              accessToken={accessToken}
-              userID={userID}
-              userRole={userRole}
-            />
-          ) : page == "organizations" ? (
-            <Organizations
-              teams={teams}
-              setTeams={setTeams}
-              searchParams={searchParams}
-              accessToken={accessToken}
-              userID={userID}
-              userRole={userRole}
-              premiumUser={premiumUser}
-            />
-          ) : page == "admin-panel" ? (
-            <AdminPanel
-              setTeams={setTeams}
-              searchParams={searchParams}
-              accessToken={accessToken}
-              showSSOBanner={showSSOBanner}
-              premiumUser={premiumUser}
-            />
-          ) : page == "api_ref" ? (
-            <APIRef 
-            proxySettings={proxySettings}
-            />
-          ) : page == "settings" ? (
-            <Settings
-              userID={userID}
-              userRole={userRole}
-              accessToken={accessToken}
-              premiumUser={premiumUser}
-            />
-          ) : page == "budgets" ? (
-            <BudgetPanel accessToken={accessToken} />
-          ) : page == "general-settings" ? (
-            <GeneralSettings
-              userID={userID}
-              userRole={userRole}
-              accessToken={accessToken}
-              modelData={modelData}
-            />
-          ) : page == "model-hub" ? (
-            <ModelHub
-              accessToken={accessToken}
-              publicPage={false}
-              premiumUser={premiumUser}
-            />
-          ) : page == "caching" ? (
-            <CacheDashboard
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              premiumUser={premiumUser}
-            />
-          ) : page == "pass-through-settings" ? (
-            <PassThroughSettings
-              userID={userID}
-              userRole={userRole}
-              accessToken={accessToken}
-              modelData={modelData}
-            />
-          ) : (
-            <Usage
-              userID={userID}
-              userRole={userRole}
-              token={token}
-              accessToken={accessToken}
-              keys={keys}
-              premiumUser={premiumUser}
-            />
-          )}
+            {page == "api-keys" ? (
+              <UserDashboard
+                userID={userID}
+                userRole={userRole}
+                premiumUser={premiumUser}
+                teams={teams}
+                keys={keys}
+                setUserRole={setUserRole}
+                userEmail={userEmail}
+                setUserEmail={setUserEmail}
+                setTeams={setTeams}
+                setKeys={setKeys}
+              />
+            ) : page == "models" ? (
+              <ModelDashboard
+                userID={userID}
+                userRole={userRole}
+                token={token}
+                keys={keys}
+                accessToken={accessToken}
+                modelData={modelData}
+                setModelData={setModelData}
+                premiumUser={premiumUser}
+              />
+            ) : page == "llm-playground" ? (
+              <ChatUI
+                userID={userID}
+                userRole={userRole}
+                token={token}
+                accessToken={accessToken}
+                disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+              />
+            ) : page == "users" ? (
+              <ViewUserDashboard
+                userID={userID}
+                userRole={userRole}
+                token={token}
+                keys={keys}
+                teams={teams}
+                accessToken={accessToken}
+                setKeys={setKeys}
+              />
+            ) : page == "teams" ? (
+              <Teams
+                teams={teams}
+                setTeams={setTeams}
+                searchParams={searchParams}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+              />
+            ) : page == "organizations" ? (
+              <Organizations
+                teams={teams}
+                setTeams={setTeams}
+                searchParams={searchParams}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+                premiumUser={premiumUser}
+              />
+            ) : page == "admin-panel" ? (
+              <AdminPanel
+                setTeams={setTeams}
+                searchParams={searchParams}
+                accessToken={accessToken}
+                showSSOBanner={showSSOBanner}
+                premiumUser={premiumUser}
+              />
+            ) : page == "api_ref" ? (
+              <APIRef proxySettings={proxySettings} />
+            ) : page == "settings" ? (
+              <Settings
+                userID={userID}
+                userRole={userRole}
+                accessToken={accessToken}
+                premiumUser={premiumUser}
+              />
+            ) : page == "budgets" ? (
+              <BudgetPanel accessToken={accessToken} />
+            ) : page == "general-settings" ? (
+              <GeneralSettings
+                userID={userID}
+                userRole={userRole}
+                accessToken={accessToken}
+                modelData={modelData}
+              />
+            ) : page == "model-hub" ? (
+              <ModelHub
+                accessToken={accessToken}
+                publicPage={false}
+                premiumUser={premiumUser}
+              />
+            ) : page == "caching" ? (
+              <CacheDashboard
+                userID={userID}
+                userRole={userRole}
+                token={token}
+                accessToken={accessToken}
+                premiumUser={premiumUser}
+              />
+            ) : page == "pass-through-settings" ? (
+              <PassThroughSettings
+                userID={userID}
+                userRole={userRole}
+                accessToken={accessToken}
+                modelData={modelData}
+              />
+            ) : (
+              <Usage
+                userID={userID}
+                userRole={userRole}
+                token={token}
+                accessToken={accessToken}
+                keys={keys}
+                premiumUser={premiumUser}
+              />
+            )}
+          </div>
         </div>
-      </div>
-        )
-      }
-      
+      )}
     </Suspense>
   );
 };
