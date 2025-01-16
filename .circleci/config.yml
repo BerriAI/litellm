@@ -1120,6 +1120,9 @@ jobs:
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
@@ -1239,6 +1242,9 @@ jobs:
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
@@ -1355,6 +1361,9 @@ jobs:
               -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
@@ -1499,6 +1508,9 @@ jobs:
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
               --name my-app \
               -v $(pwd)/litellm_config.yaml:/app/config.yaml \
@@ -1597,6 +1609,9 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
