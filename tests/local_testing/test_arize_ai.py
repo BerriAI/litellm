@@ -1,15 +1,11 @@
 import asyncio
 import logging
-import os
-import time
 
 import pytest
 from dotenv import load_dotenv
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.arize.arize import ArizeConfig, ArizeLogger
 
 load_dotenv()
@@ -49,7 +45,7 @@ def test_get_arize_config(mock_env_vars):
     assert config.space_key == "test_space_key"
     assert config.api_key == "test_api_key"
     assert config.endpoint == "https://otlp.arize.com/v1"
-    assert config.protocol == "grpc"
+    assert config.protocol == "otlp_grpc"
 
 
 def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
@@ -61,4 +57,4 @@ def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
 
     config = ArizeLogger.get_arize_config()
     assert config.endpoint == "grpc://test.endpoint"
-    assert config.protocol == "grpc"
+    assert config.protocol == "otlp_grpc"

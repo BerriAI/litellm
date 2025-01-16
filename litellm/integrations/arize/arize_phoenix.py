@@ -57,11 +57,14 @@ class ArizePhoenixLogger:
         otlp_auth_headers = None
         # If the endpoint is the Arize hosted Phoenix endpoint, use the api_key as the auth header as currently it is uses
         # a slightly different auth header format than self hosted phoenix
-        if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT:
+        if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT: 
+            if api_key is None:
+                raise ValueError("PHOENIX_API_KEY must be set for the Arize hosted Phoenix endpoint.")
             otlp_auth_headers = f"api_key={api_key}"
-        else:
+        elif api_key is not None:
+            # api_key/auth is optional for self hosted phoenix
             otlp_auth_headers = f"Authorization=Bearer {api_key}"
-            
+
         return ArizePhoenixConfig(
             otlp_auth_headers=otlp_auth_headers,
             protocol=protocol,
