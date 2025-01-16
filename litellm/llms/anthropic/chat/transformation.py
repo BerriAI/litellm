@@ -399,7 +399,9 @@ class AnthropicConfig(BaseConfig):
 
         return False
 
-    def is_computer_tool_used(self, tools: Optional[List[AllAnthropicToolsValues]]) -> bool:
+    def is_computer_tool_used(
+        self, tools: Optional[List[AllAnthropicToolsValues]]
+    ) -> bool:
         if tools is None:
             return False
         for tool in tools:
