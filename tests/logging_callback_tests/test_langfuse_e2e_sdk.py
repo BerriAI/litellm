@@ -151,23 +151,25 @@ class TestLangfuseLogging:
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
-                metadata={"trace_id": setup["trace_id"]},
                 mock_response="Hello! How can I assist you today?",
             )
             await self._verify_langfuse_call(setup["mock_post"], "completion.json")
 
-    # @pytest.mark.asyncio
-    # async def test_langfuse_logging_streaming_completion(self, mock_setup):
-    #     """Test Langfuse logging for streaming completion"""
-    #     with patch("httpx.Client.post", mock_setup["mock_post"]):
-    #         async for chunk in await litellm.acompletion( # type: ignore
-    #             model="gpt-3.5-turbo",
-    #             messages=[{"role": "user", "content": "Hello!"}],
-    #             metadata={"trace_id": mock_setup["trace_id"]},
-    #             stream=True
-    #         ):
-    #             pass  # Process chunks if needed
-    #         await self._verify_langfuse_call(mock_setup["mock_post"], "streaming_completion.json")
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_streaming_completion(self, mock_setup):
+        """Test Langfuse logging for streaming completion"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            async for chunk in await litellm.acompletion(  # type: ignore
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                stream=True,
+                mock_response="Hello! How can I assist you today?",
+            ):
+                pass  # Process chunks if needed
+            await self._verify_langfuse_call(
+                setup["mock_post"], "streaming_completion.json"
+            )
 
     # @pytest.mark.asyncio
     # async def test_langfuse_logging_embedding(self, mock_setup):

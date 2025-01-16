@@ -1,16 +1,47 @@
 model_list:
-  - model_name: openai/*
+  - model_name: "text-embedding*"
     litellm_params:
-      model:  openai/*
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      health_check_model: openai/gpt-4o-mini
-  - model_name: anthropic/*
+      model: openai/text-embedding*
+      api_key: os.environ/openai
+  - model_name: "openai/text-embedding*"
     litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
-    model_info:
-      health_check_model: anthropic/claude-3-5-sonnet-20240620
+      model: openai/text-embedding*
+      api_key: os.environ/openai
+
+general_settings:
+  master_key: os.environ/PROXY_MASTER_KEY
+  # Disable default team on UI
+  default_team_disabled: true
+  database_connection_pool_limit: 20
+  # Allow requests to be served even when the database is unavailable
+  allow_requests_on_db_unavailable: true
+  # Disable spend logging to db. Spend won't be visualized in the UI
+  # TODO(dmchoi): remove this once we ingest these metrics via prometheus
+  disable_spend_logs: False
+  key_management_system: "aws_secret_manager"
+  key_management_settings:
+    store_virtual_keys: true
+    access_mode: "write_only"
+    prefix_for_stored_virtual_keys: "team/mlinfra/litellm/staging/virtual-keys"
 
 litellm_settings:
-  success_callback: ["langfuse"]
+  key_generation_settings:
+    team_key_generation:
+      allowed_team_member_roles: ["admin"]
+      required_params: ["tags"] # require team admins to set tags for cost-tracking when generating a team key
+    personal_key_generation: # maps to 'Default Team' on UI
+      allowed_user_roles: ["proxy_admin"]
+  # Default Params used when a new user signs in Via SSO
+  default_internal_user_params:
+    # one of "internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer". New SSO users not in litellm will be created as this user
+    user_role: "internal_user_viewer"
+    # Max budget for a new SSO sign in user
+    max_budget: 0
+    # 30 days budget_duration for a new SSO sign in user
+    budget_duration: "30d"
+
+  json_logs: true
+  force_ipv4: true
+  callbacks: ["prometheus", "datadog"]
+  service_callback: ["datadog"]
+  disable_end_user_cost_tracking_prometheus_only: true
