@@ -504,6 +504,7 @@ def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
     end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
     if end_user_id:
         return end_user_id
-    return request_body.get("metadata", {}).get(
-        "user_id", None
-    )  # support anthropic param - https://docs.anthropic.com/en/api/messages
+    metadata = request_body.get("metadata")
+    if metadata and "user_id" in metadata:
+        return metadata["user_id"]
+    return None

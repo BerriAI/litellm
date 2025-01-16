@@ -232,6 +232,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     google_ai_studio_api_key_header: Optional[str],
     request_data: dict,
 ) -> UserAPIKeyAuth:
+
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -617,6 +618,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ## Check END-USER OBJECT
         _end_user_object = None
         end_user_params = {}
+
         end_user_id = get_end_user_id_from_request_body(request_data)
         if end_user_id:
             try:
@@ -1241,7 +1243,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span=parent_otel_span,
             api_key=api_key,
         )
-        request_data = await _read_request_body(request=request)
         asyncio.create_task(
             proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
