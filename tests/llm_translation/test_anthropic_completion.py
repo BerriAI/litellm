@@ -602,14 +602,6 @@ def test_anthropic_is_computer_tool_used(tool_type, expected_computer_tool_used)
     ]
     assert litellm.AnthropicConfig().is_computer_tool_used(tools) == expected_computer_tool_used
 
-@pytest.mark.parametrize(
-    "cache_control_location",
-    [
-        "inside_function",
-        "outside_function",
-    ],
-)
-
 
 @pytest.mark.parametrize(
     "cache_control_location",
