@@ -20,6 +20,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     get_api_key_from_custom_header,
 )
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 
 
 class Request:
@@ -702,3 +703,43 @@ def test_is_allowed_route():
     }
 
     assert _is_allowed_route(**args)
+
+
+@pytest.mark.parametrize(
+    "user_obj, expected_result",
+    [
+        (None, False),  # Case 1: user_obj is None
+        (
+            LiteLLM_UserTable(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            True,
+        ),  # Case 2: user_role is PROXY_ADMIN
+        (
+            LiteLLM_UserTable(
+                user_role="OTHER_ROLE",
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            False,
+        ),  # Case 3: user_role is not PROXY_ADMIN
+    ],
+)
+def test_is_user_proxy_admin(user_obj, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin
+
+    assert _is_user_proxy_admin(user_obj) == expected_result
+
+
+def test_get_user_role():
+    pass
+
+
+def test_user_api_key_auth_websocket():
+    pass
