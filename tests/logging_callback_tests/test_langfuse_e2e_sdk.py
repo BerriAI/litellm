@@ -22,242 +22,6 @@ import time
 import pytest
 
 
-@pytest.fixture
-def langfuse_client():
-    import langfuse
-
-    _langfuse_cache_key = (
-        f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
-    )
-    # use a in memory langfuse client for testing, RAM util on ci/cd gets too high when we init many langfuse clients
-
-    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_langfuse_cache_key)
-    if _cached_client:
-        langfuse_client = _cached_client
-    else:
-        langfuse_client = langfuse.Langfuse(
-            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host="https://us.cloud.langfuse.com",
-        )
-        litellm.in_memory_llm_clients_cache.set_cache(
-            key=_langfuse_cache_key,
-            value=langfuse_client,
-        )
-
-        print("NEW LANGFUSE CLIENT")
-
-    with patch(
-        "langfuse.Langfuse", MagicMock(return_value=langfuse_client)
-    ) as mock_langfuse_client:
-        yield mock_langfuse_client()
-
-
-def search_logs(log_file_path, num_good_logs=1):
-    """
-    Searches the given log file for logs containing the "/api/public" string.
-
-    Parameters:
-    - log_file_path (str): The path to the log file to be searched.
-
-    Returns:
-    - None
-
-    Raises:
-    - Exception: If there are any bad logs found in the log file.
-    """
-    import re
-
-    print("\n searching logs")
-    bad_logs = []
-    good_logs = []
-    all_logs = []
-    try:
-        with open(log_file_path, "r") as log_file:
-            lines = log_file.readlines()
-            print(f"searching logslines: {lines}")
-            for line in lines:
-                all_logs.append(line.strip())
-                if "/api/public" in line:
-                    print("Found log with /api/public:")
-                    print(line.strip())
-                    print("\n\n")
-                    match = re.search(
-                        r'"POST /api/public/ingestion HTTP/1.1" (\d+) (\d+)',
-                        line,
-                    )
-                    if match:
-                        status_code = int(match.group(1))
-                        print("STATUS CODE", status_code)
-                        if (
-                            status_code != 200
-                            and status_code != 201
-                            and status_code != 207
-                        ):
-                            print("got a BAD log")
-                            bad_logs.append(line.strip())
-                        else:
-                            good_logs.append(line.strip())
-        print("\nBad Logs")
-        print(bad_logs)
-        if len(bad_logs) > 0:
-            raise Exception(f"bad logs, Bad logs = {bad_logs}")
-        assert (
-            len(good_logs) == num_good_logs
-        ), f"Did not get expected number of good logs, expected {num_good_logs}, got {len(good_logs)}. All logs \n {all_logs}"
-        print("\nGood Logs")
-        print(good_logs)
-        if len(good_logs) <= 0:
-            raise Exception(
-                f"There were no Good Logs from Langfuse. No logs with /api/public status 200. \nAll logs:{all_logs}"
-            )
-
-    except Exception as e:
-        raise e
-
-
-def pre_langfuse_setup():
-    """
-    Set up the logging for the 'pre_langfuse_setup' function.
-    """
-    # sends logs to langfuse.log
-    import logging
-
-    # Configure the logging to write to a file
-    logging.basicConfig(filename="langfuse.log", level=logging.DEBUG)
-    logger = logging.getLogger()
-
-    # Add a FileHandler to the logger
-    file_handler = logging.FileHandler("langfuse.log", mode="w")
-    file_handler.setLevel(logging.DEBUG)
-    logger.addHandler(file_handler)
-    return
-
-
-def test_langfuse_logging_async():
-    # this tests time added to make langfuse logging calls, vs just acompletion calls
-    try:
-        pre_langfuse_setup()
-        litellm.set_verbose = True
-
-        # Make 5 calls with an empty success_callback
-        litellm.success_callback = []
-        start_time_empty_callback = asyncio.run(make_async_calls())
-        print("done with no callback test")
-
-        print("starting langfuse test")
-        # Make 5 calls with success_callback set to "langfuse"
-        litellm.success_callback = ["langfuse"]
-        start_time_langfuse = asyncio.run(make_async_calls())
-        print("done with langfuse test")
-
-        # Compare the time for both scenarios
-        print(f"Time taken with success_callback='langfuse': {start_time_langfuse}")
-        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
-
-        # assert the diff is not more than 1 second - this was 5 seconds before the fix
-        assert abs(start_time_langfuse - start_time_empty_callback) < 1
-
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-
-
-async def make_async_calls(metadata=None, **completion_kwargs):
-    tasks = []
-    for _ in range(5):
-        tasks.append(create_async_task())
-
-    # Measure the start time before running the tasks
-    start_time = asyncio.get_event_loop().time()
-
-    # Wait for all tasks to complete
-    responses = await asyncio.gather(*tasks)
-
-    # Print the responses when tasks return
-    for idx, response in enumerate(responses):
-        print(f"Response from Task {idx + 1}: {response}")
-
-    # Calculate the total time taken
-    total_time = asyncio.get_event_loop().time() - start_time
-
-    return total_time
-
-
-def create_async_task(**completion_kwargs):
-    """
-    Creates an async task for the litellm.acompletion function.
-    This is just the task, but it is not run here.
-    To run the task it must be awaited or used in other asyncio coroutine execution functions like asyncio.gather.
-    Any kwargs passed to this function will be passed to the litellm.acompletion function.
-    By default a standard set of arguments are used for the litellm.acompletion function.
-    """
-    completion_args = {
-        "model": "azure/chatgpt-v-2",
-        "api_version": "2024-02-01",
-        "messages": [{"role": "user", "content": "This is a test"}],
-        "max_tokens": 5,
-        "temperature": 0.7,
-        "timeout": 5,
-        "user": "langfuse_latency_test_user",
-        "mock_response": "It's simple to use and easy to get started",
-    }
-    completion_args.update(completion_kwargs)
-    return asyncio.create_task(litellm.acompletion(**completion_args))
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.flaky(retries=12, delay=2)
-async def test_langfuse_logging_without_request_response(stream, langfuse_client):
-    try:
-        import uuid
-
-        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-        litellm.set_verbose = True
-        litellm.turn_off_message_logging = True
-        litellm.success_callback = ["langfuse"]
-        response = await create_async_task(
-            model="gpt-3.5-turbo",
-            stream=stream,
-            metadata={"trace_id": _unique_trace_name},
-        )
-        print(response)
-        if stream:
-            async for chunk in response:
-                print(chunk)
-
-        langfuse_client.flush()
-        await asyncio.sleep(5)
-
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
-
-        print("trace_from_langfuse", trace)
-
-        _trace_data = trace.data
-
-        if (
-            len(_trace_data) == 0
-        ):  # prevent infrequent list index out of range error from langfuse api
-            return
-
-        print(f"_trace_data: {_trace_data}")
-        assert _trace_data[0].input == {
-            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
-        }
-        assert _trace_data[0].output == {
-            "role": "assistant",
-            "content": "redacted-by-litellm",
-            "function_call": None,
-            "tool_calls": None,
-        }
-
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-
-
 # Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
 print(pwd)
@@ -1232,3 +996,126 @@ def test_langfuse_logging_metadata():
     expected_metadata = {"requester_metadata": {"key": "value"}}
 
     assert expected_metadata == got_metadata
+
+
+def test_langfuse_logging_async():
+    # this tests time added to make langfuse logging calls, vs just acompletion calls
+    try:
+        litellm.set_verbose = True
+
+        # Make 5 calls with an empty success_callback
+        litellm.success_callback = []
+        start_time_empty_callback = asyncio.run(make_async_calls())
+        print("done with no callback test")
+
+        print("starting langfuse test")
+        # Make 5 calls with success_callback set to "langfuse"
+        litellm.success_callback = ["langfuse"]
+        start_time_langfuse = asyncio.run(make_async_calls())
+        print("done with langfuse test")
+
+        # Compare the time for both scenarios
+        print(f"Time taken with success_callback='langfuse': {start_time_langfuse}")
+        print(f"Time taken with empty success_callback: {start_time_empty_callback}")
+
+        # assert the diff is not more than 1 second - this was 5 seconds before the fix
+        assert abs(start_time_langfuse - start_time_empty_callback) < 1
+
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
+
+
+async def make_async_calls(metadata=None, **completion_kwargs):
+    tasks = []
+    for _ in range(5):
+        tasks.append(create_async_task())
+
+    # Measure the start time before running the tasks
+    start_time = asyncio.get_event_loop().time()
+
+    # Wait for all tasks to complete
+    responses = await asyncio.gather(*tasks)
+
+    # Print the responses when tasks return
+    for idx, response in enumerate(responses):
+        print(f"Response from Task {idx + 1}: {response}")
+
+    # Calculate the total time taken
+    total_time = asyncio.get_event_loop().time() - start_time
+
+    return total_time
+
+
+def create_async_task(**completion_kwargs):
+    """
+    Creates an async task for the litellm.acompletion function.
+    This is just the task, but it is not run here.
+    To run the task it must be awaited or used in other asyncio coroutine execution functions like asyncio.gather.
+    Any kwargs passed to this function will be passed to the litellm.acompletion function.
+    By default a standard set of arguments are used for the litellm.acompletion function.
+    """
+    completion_args = {
+        "model": "azure/chatgpt-v-2",
+        "api_version": "2024-02-01",
+        "messages": [{"role": "user", "content": "This is a test"}],
+        "max_tokens": 5,
+        "temperature": 0.7,
+        "timeout": 5,
+        "user": "langfuse_latency_test_user",
+        "mock_response": "It's simple to use and easy to get started",
+    }
+    completion_args.update(completion_kwargs)
+    return asyncio.create_task(litellm.acompletion(**completion_args))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.flaky(retries=12, delay=2)
+async def test_langfuse_logging_without_request_response(stream, langfuse_client):
+    try:
+        import uuid
+
+        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
+        litellm.set_verbose = True
+        litellm.turn_off_message_logging = True
+        litellm.success_callback = ["langfuse"]
+        response = await create_async_task(
+            model="gpt-3.5-turbo",
+            stream=stream,
+            metadata={"trace_id": _unique_trace_name},
+        )
+        print(response)
+        if stream:
+            async for chunk in response:
+                print(chunk)
+
+        langfuse_client.flush()
+        await asyncio.sleep(5)
+
+        # get trace with _unique_trace_name
+        trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
+
+        print("trace_from_langfuse", trace)
+
+        _trace_data = trace.data
+
+        if (
+            len(_trace_data) == 0
+        ):  # prevent infrequent list index out of range error from langfuse api
+            return
+
+        print(f"_trace_data: {_trace_data}")
+        assert _trace_data[0].input == {
+            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
+        }
+        assert _trace_data[0].output == {
+            "role": "assistant",
+            "content": "redacted-by-litellm",
+            "function_call": None,
+            "tool_calls": None,
+        }
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
