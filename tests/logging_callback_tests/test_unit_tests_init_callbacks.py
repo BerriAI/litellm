@@ -89,6 +89,7 @@ expected_env_vars = {
     "LOGFIRE_TOKEN": "logfire_token",
     "ARIZE_SPACE_KEY": "arize_space_key",
     "ARIZE_API_KEY": "arize_api_key",
+    "PHOENIX_API_KEY": "phoenix_api_key",
     "ARGILLA_API_KEY": "argilla_api_key",
     "PAGERDUTY_API_KEY": "pagerduty_api_key",
 }
