@@ -1,0 +1,68 @@
+{
+    "batch": [
+        {
+            "id": "e98d7d78-9060-4f9d-ab2d-75af8210e2b8",
+            "type": "trace-create",
+            "body": {
+                "id": "litellm-test-7e274075-79c7-458c-a9e0-4744d3916271",
+                "timestamp": "2025-01-16T19:13:20.656305Z",
+                "name": "litellm-atranscription",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "/Users/ishaanjaffer/Github/litellm/tests/logging_callback_tests/gettysburg.wav"
+                        }
+                    ]
+                },
+                "output": "Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure.",
+                "tags": []
+            },
+            "timestamp": "2025-01-16T19:13:20.656861Z"
+        },
+        {
+            "id": "894fadb6-af7b-4202-8416-0f5f96c25430",
+            "type": "generation-create",
+            "body": {
+                "name": "litellm-atranscription",
+                "startTime": "2025-01-16T11:13:18.852067-08:00",
+                "metadata": {
+                    "file_checksum": "/Users/ishaanjaffer/Github/litellm/tests/logging_callback_tests/gettysburg.wav",
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 0.001756999969482422,
+                        "additional_headers": {}
+                    },
+                    "litellm_response_cost": 0.001756999969482422,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "/Users/ishaanjaffer/Github/litellm/tests/logging_callback_tests/gettysburg.wav"
+                        }
+                    ]
+                },
+                "output": "Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure.",
+                "level": "DEFAULT",
+                "id": "bf959647-4001-4a94-9eaf-18733cb60978",
+                "endTime": "2025-01-16T11:13:20.649957-08:00",
+                "completionStartTime": "2025-01-16T11:13:20.649957-08:00",
+                "model": "whisper-1",
+                "modelParameters": {}
+            },
+            "timestamp": "2025-01-16T19:13:20.657415Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-03734ab3-8790-4c09-b5fb-8c3b663413b6"
+    }
+}

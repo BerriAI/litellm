@@ -13,4 +13,4 @@ model_list:
       health_check_model: anthropic/claude-3-5-sonnet-20240620
 
 litellm_settings:
-  callbacks: ["prometheus"]
+  success_callback: ["langfuse"]

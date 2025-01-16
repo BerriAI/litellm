@@ -13,7 +13,10 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm import completion
 from litellm.caching import InMemoryCache
+import logging
+from litellm._logging import verbose_logger
 
+logging.basicConfig(level=logging.DEBUG)
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
@@ -31,43 +34,111 @@ file_path = os.path.join(pwd, "gettysburg.wav")
 audio_file = open(file_path, "rb")
 
 
+def assert_langfuse_request_matches_expected(
+    actual_request_body: dict, expected_file_name: str
+):
+    """
+    Helper function to compare actual Langfuse request body with expected JSON file.
+
+    Args:
+        actual_request_body (dict): The actual request body received from the API call
+        expected_file_name (str): Name of the JSON file containing expected request body (e.g., "transcription.json")
+    """
+    # Get the current directory and read the expected request body
+    pwd = os.path.dirname(os.path.realpath(__file__))
+    expected_body_path = os.path.join(
+        pwd, "langfuse_expected_request_body", expected_file_name
+    )
+
+    with open(expected_body_path, "r") as f:
+        expected_request_body = json.load(f)
+
+    # Replace dynamic values in actual request body
+    for item in actual_request_body["batch"]:
+        # Replace IDs with expected IDs
+        if item["type"] == "trace-create":
+            item["id"] = expected_request_body["batch"][0]["id"]
+            item["body"]["id"] = expected_request_body["batch"][0]["body"]["id"]
+            item["timestamp"] = expected_request_body["batch"][0]["timestamp"]
+            item["body"]["timestamp"] = expected_request_body["batch"][0]["body"][
+                "timestamp"
+            ]
+        elif item["type"] == "generation-create":
+            item["id"] = expected_request_body["batch"][1]["id"]
+            item["body"]["id"] = expected_request_body["batch"][1]["body"]["id"]
+            item["timestamp"] = expected_request_body["batch"][1]["timestamp"]
+            item["body"]["startTime"] = expected_request_body["batch"][1]["body"][
+                "startTime"
+            ]
+            item["body"]["endTime"] = expected_request_body["batch"][1]["body"][
+                "endTime"
+            ]
+            item["body"]["completionStartTime"] = expected_request_body["batch"][1][
+                "body"
+            ]["completionStartTime"]
+            item["body"].pop("traceId")
+
+    # Replace SDK version with expected version
+    actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"][
+        "sdk_version"
+    ]
+    # Assert the entire request body matches
+    assert (
+        actual_request_body == expected_request_body
+    ), f"Difference in request bodies: {json.dumps(actual_request_body, indent=2)} != {json.dumps(expected_request_body, indent=2)}"
+
+
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=4, delay=2)
-@pytest.mark.skip(
-    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
-)
-async def test_langfuse_logging_audio_transcriptions(langfuse_client):
+async def test_langfuse_logging_audio_transcriptions():
     """
     Test that creates a trace with masked input and output
     """
     import uuid
+    from unittest.mock import AsyncMock, patch
+    import httpx
 
     _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
     litellm.set_verbose = True
     litellm.success_callback = ["langfuse"]
-    await litellm.atranscription(
-        model="whisper-1",
-        file=audio_file,
-        metadata={
-            "trace_id": _unique_trace_name,
-        },
-    )
 
-    langfuse_client.flush()
-    await asyncio.sleep(20)
+    # Create a mock Response object
+    mock_response = AsyncMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"status": "success"}
 
-    # get trace with _unique_trace_name
-    print("lookiing up trace", _unique_trace_name)
-    trace = langfuse_client.get_trace(id=_unique_trace_name)
-    generations = list(
-        reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
-    )
+    # Create mock for httpx.Client.post
+    mock_post = AsyncMock()
+    mock_post.return_value = mock_response
 
-    print("generations for given trace=", generations)
+    with patch("httpx.Client.post", mock_post):
+        await litellm.atranscription(
+            model="whisper-1",
+            file=audio_file,
+            metadata={
+                "trace_id": _unique_trace_name,
+            },
+        )
 
-    assert len(generations) == 1
-    assert generations[0].name == "litellm-atranscription"
-    assert generations[0].output is not None
+        await asyncio.sleep(1)
+
+        # Verify the call
+        assert mock_post.call_count >= 1
+        url = mock_post.call_args[0][0]
+        request_body = mock_post.call_args[1].get(
+            "content"
+        )  # Note: using 'content' instead of 'json'
+
+        # Parse the JSON string into a dict for assertions
+        actual_request_body = json.loads(request_body)
+
+        print("\nMocked Request Details:")
+        print(f"URL: {url}")
+        print(f"Request Body: {json.dumps(actual_request_body, indent=4)}")
+
+        assert url == "https://us.cloud.langfuse.com/api/public/ingestion"
+        assert_langfuse_request_matches_expected(
+            actual_request_body, "transcription.json"
+        )
 
 
 @pytest.mark.asyncio
