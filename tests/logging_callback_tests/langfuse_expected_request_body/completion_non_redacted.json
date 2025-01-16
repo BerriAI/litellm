@@ -1,0 +1,85 @@
+{
+    "batch": [
+        {
+            "id": "51a7c7cf-9855-4629-b92d-cbbd454330f0",
+            "type": "trace-create",
+            "body": {
+                "id": "6388310d-f2d0-4b5c-acf9-3018d2a58224",
+                "timestamp": "2025-01-16T20:41:08.104425Z",
+                "name": "litellm-acompletion",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "This is a test"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "This is a test",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "tags": []
+            },
+            "timestamp": "2025-01-16T20:41:08.104869Z"
+        },
+        {
+            "id": "0fe04290-e093-4bca-a286-f6fff46b4718",
+            "type": "generation-create",
+            "body": {
+                "name": "litellm-acompletion",
+                "startTime": "2025-01-16T12:41:08.100387-08:00",
+                "metadata": {
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 5.4999999999999995e-05,
+                        "additional_headers": {}
+                    },
+                    "litellm_response_cost": 5.4999999999999995e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "This is a test"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "This is a test",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "level": "DEFAULT",
+                "id": "time-12-41-08-100387_chatcmpl-675c53eb-1840-4855-a0bd-b007c1cc4be3",
+                "endTime": "2025-01-16T12:41:08.102579-08:00",
+                "completionStartTime": "2025-01-16T12:41:08.102579-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 5.4999999999999995e-05
+                }
+            },
+            "timestamp": "2025-01-16T20:41:08.105728Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-03734ab3-8790-4c09-b5fb-8c3b663413b6"
+    }
+}

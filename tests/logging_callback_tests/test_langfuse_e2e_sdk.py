@@ -224,51 +224,35 @@ class TestLangfuseLogging:
                 setup["mock_post"], "custom_generation.json", setup["trace_id"]
             )
 
+    @pytest.mark.asyncio
+    async def test_langfuse_masked_input_output(self, mock_setup):
+        """Test Langfuse logging with masked input and output"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            import uuid
 
-@pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
-)
-async def test_langfuse_masked_input_output(langfuse_client):
-    """
-    Test that creates a trace with masked input and output
-    """
-    import uuid
-
-    for mask_value in [True, False]:
-        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-        litellm.set_verbose = True
-        litellm.success_callback = ["langfuse"]
-        response = await create_async_task(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "This is a test"}],
-            metadata={
-                "trace_id": _unique_trace_name,
-                "mask_input": mask_value,
-                "mask_output": mask_value,
-            },
-            mock_response="This is a test response",
-        )
-        print(response)
-        expected_input = "redacted-by-litellm" if mask_value else "This is a test"
-        expected_output = (
-            "redacted-by-litellm" if mask_value else "This is a test response"
-        )
-        langfuse_client.flush()
-        await asyncio.sleep(30)
-
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_trace(id=_unique_trace_name)
-        print("trace_from_langfuse", trace)
-        generations = list(
-            reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
-        )
-
-        assert expected_input in str(trace.input)
-        assert expected_output in str(trace.output)
-        if len(generations) > 0:
-            assert expected_input in str(generations[0].input)
-            assert expected_output in str(generations[0].output)
+            for mask_value in [True, False]:
+                await litellm.acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "This is a test"}],
+                    mock_response="This is a test",
+                    metadata={
+                        "mask_input": mask_value,
+                        "mask_output": mask_value,
+                    },
+                )
+                if mask_value is True:
+                    await self._verify_langfuse_call(
+                        setup["mock_post"],
+                        "completion_redacted.json",
+                        setup["trace_id"],
+                    )
+                else:
+                    await self._verify_langfuse_call(
+                        setup["mock_post"],
+                        "completion_non_redacted.json",
+                        setup["trace_id"],
+                    )
 
 
 @pytest.mark.asyncio

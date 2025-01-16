@@ -1,0 +1,62 @@
+{
+    "batch": [
+        {
+            "id": "7db98e9a-d1aa-4acc-a0e0-09c06d854491",
+            "type": "trace-create",
+            "body": {
+                "id": "579cfd85-5e4d-4e0a-a6c1-8b7593bbf4a8",
+                "timestamp": "2025-01-16T20:40:52.569129Z",
+                "name": "litellm-acompletion",
+                "input": "redacted-by-litellm",
+                "output": "redacted-by-litellm",
+                "tags": []
+            },
+            "timestamp": "2025-01-16T20:40:52.569301Z"
+        },
+        {
+            "id": "fae37c31-1475-4dac-b2aa-77cbdca42590",
+            "type": "generation-create",
+            "body": {
+                "traceId": "579cfd85-5e4d-4e0a-a6c1-8b7593bbf4a8",
+                "name": "litellm-acompletion",
+                "startTime": "2025-01-16T12:40:52.323364-08:00",
+                "metadata": {
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 5.4999999999999995e-05,
+                        "additional_headers": {}
+                    },
+                    "litellm_response_cost": 5.4999999999999995e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": "redacted-by-litellm",
+                "output": "redacted-by-litellm",
+                "level": "DEFAULT",
+                "id": "time-12-40-52-323364_chatcmpl-5a072fa5-aea2-437e-883a-e77c0a537336",
+                "endTime": "2025-01-16T12:40:52.568269-08:00",
+                "completionStartTime": "2025-01-16T12:40:52.568269-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 5.4999999999999995e-05
+                }
+            },
+            "timestamp": "2025-01-16T20:40:52.569691Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-03734ab3-8790-4c09-b5fb-8c3b663413b6"
+    }
+}
