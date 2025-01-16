@@ -1,0 +1,91 @@
+{
+    "batch": [
+        {
+            "id": "a9e24d06-dbac-475a-8001-7420ac1d643e",
+            "type": "trace-create",
+            "body": {
+                "id": "trace-id22",
+                "timestamp": "2025-01-16T19:48:43.530141Z",
+                "name": "litellm-acompletion",
+                "userId": "user-id2",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hi \ud83d\udc4b - i'm claude"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! I'm an AI assistant.",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "tags": []
+            },
+            "timestamp": "2025-01-16T19:48:43.530298Z"
+        },
+        {
+            "id": "b44470b1-481b-437d-8f41-3e035b829e2e",
+            "type": "generation-create",
+            "body": {
+                "traceId": "trace-id22",
+                "name": "ishaan-test-generation",
+                "startTime": "2025-01-16T11:48:43.283459-08:00",
+                "metadata": {
+                    "langfuse/foo": "bar",
+                    "langsmith/fizz": "buzz",
+                    "prompt_hash": "asdf98u0j9131123",
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 5.4999999999999995e-05,
+                        "additional_headers": {}
+                    },
+                    "litellm_response_cost": 5.4999999999999995e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hi \ud83d\udc4b - i'm claude"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! I'm an AI assistant.",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "level": "DEFAULT",
+                "id": "gen-id22",
+                "endTime": "2025-01-16T11:48:43.529452-08:00",
+                "completionStartTime": "2025-01-16T11:48:43.529452-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "max_tokens": 10,
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 5.4999999999999995e-05
+                }
+            },
+            "timestamp": "2025-01-16T19:48:43.530635Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-03734ab3-8790-4c09-b5fb-8c3b663413b6"
+    }
+}

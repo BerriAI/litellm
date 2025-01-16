@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
@@ -35,7 +35,9 @@ audio_file = open(file_path, "rb")
 
 
 def assert_langfuse_request_matches_expected(
-    actual_request_body: dict, expected_file_name: str
+    actual_request_body: dict,
+    expected_file_name: str,
+    trace_id: Optional[str] = None,
 ):
     """
     Helper function to compare actual Langfuse request body with expected JSON file.
@@ -76,7 +78,12 @@ def assert_langfuse_request_matches_expected(
             item["body"]["completionStartTime"] = expected_request_body["batch"][1][
                 "body"
             ]["completionStartTime"]
-            item["body"].pop("traceId")
+            if trace_id is None:
+                print("popping traceId")
+                item["body"].pop("traceId")
+            else:
+                item["body"]["traceId"] = trace_id
+                expected_request_body["batch"][1]["body"]["traceId"] = trace_id
 
     # Replace SDK version with expected version
     actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"][
@@ -110,7 +117,12 @@ class TestLangfuseLogging:
 
         return {"trace_id": f"litellm-test-{str(uuid.uuid4())}", "mock_post": mock_post}
 
-    async def _verify_langfuse_call(self, mock_post, expected_file_name):
+    async def _verify_langfuse_call(
+        self,
+        mock_post,
+        expected_file_name,
+        trace_id: Optional[str] = None,
+    ):
         """Helper method to verify Langfuse API calls"""
         await asyncio.sleep(1)
 
@@ -128,7 +140,7 @@ class TestLangfuseLogging:
 
         assert url == "https://us.cloud.langfuse.com/api/public/ingestion"
         assert_langfuse_request_matches_expected(
-            actual_request_body, expected_file_name
+            actual_request_body, expected_file_name, trace_id
         )
 
     @pytest.mark.asyncio
@@ -141,7 +153,9 @@ class TestLangfuseLogging:
                 file=audio_file,
                 metadata={"trace_id": setup["trace_id"]},
             )
-            await self._verify_langfuse_call(setup["mock_post"], "transcription.json")
+            await self._verify_langfuse_call(
+                setup["mock_post"], "transcription.json", setup["trace_id"]
+            )
 
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion(self, mock_setup):
@@ -152,8 +166,11 @@ class TestLangfuseLogging:
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response="Hello! How can I assist you today?",
+                metadata={"trace_id": setup["trace_id"]},
             )
-            await self._verify_langfuse_call(setup["mock_post"], "completion.json")
+            await self._verify_langfuse_call(
+                setup["mock_post"], "completion.json", setup["trace_id"]
+            )
 
     @pytest.mark.asyncio
     async def test_langfuse_logging_streaming_completion(self, mock_setup):
@@ -165,10 +182,11 @@ class TestLangfuseLogging:
                 messages=[{"role": "user", "content": "Hello!"}],
                 stream=True,
                 mock_response="Hello! How can I assist you today?",
+                metadata={"trace_id": setup["trace_id"]},
             ):
                 pass  # Process chunks if needed
             await self._verify_langfuse_call(
-                setup["mock_post"], "streaming_completion.json"
+                setup["mock_post"], "streaming_completion.json", setup["trace_id"]
             )
 
     @pytest.mark.asyncio
@@ -182,33 +200,29 @@ class TestLangfuseLogging:
             )
             await self._verify_langfuse_call(setup["mock_post"], "embedding.json")
 
-    # @pytest.mark.asyncio
-    # async def test_langfuse_logging_tool_calling(self, mock_setup):
-    #     """Test Langfuse logging for tool calling"""
-    #     tools = [{
-    #         "type": "function",
-    #         "function": {
-    #             "name": "get_weather",
-    #             "description": "Get weather information",
-    #             "parameters": {
-    #                 "type": "object",
-    #                 "properties": {
-    #                     "location": {"type": "string"},
-    #                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
-    #                 },
-    #                 "required": ["location"]
-    #             }
-    #         }
-    #     }]
-
-    #     with patch("httpx.Client.post", mock_setup["mock_post"]):
-    #         await litellm.acompletion(
-    #             model="gpt-3.5-turbo",
-    #             messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-    #             tools=tools,
-    #             metadata={"trace_id": mock_setup["trace_id"]},
-    #         )
-    #         await self._verify_langfuse_call(mock_setup["mock_post"], "tool_calling.json")
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_custom_generation_name(self, mock_setup):
+        """Test Langfuse logging with custom generation name and metadata"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
+                max_tokens=10,
+                metadata={
+                    "langfuse/foo": "bar",
+                    "langsmith/fizz": "buzz",
+                    "prompt_hash": "asdf98u0j9131123",
+                    "generation_name": "ishaan-test-generation",
+                    "generation_id": "gen-id22",
+                    "trace_id": setup["trace_id"],
+                    "trace_user_id": "user-id2",
+                },
+                mock_response="Hello! I'm an AI assistant.",
+            )
+            await self._verify_langfuse_call(
+                setup["mock_post"], "custom_generation.json", setup["trace_id"]
+            )
 
 
 @pytest.mark.asyncio
@@ -389,52 +403,6 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
 
 
 # test_langfuse_logging()
-
-
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_custom_generation_name():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
-            max_tokens=10,
-            metadata={
-                "langfuse/foo": "bar",
-                "langsmith/fizz": "buzz",
-                "prompt_hash": "asdf98u0j9131123",
-                "generation_name": "ishaan-test-generation",
-                "generation_id": "gen-id22",
-                "trace_id": "trace-id22",
-                "trace_user_id": "user-id2",
-            },
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-        print(e)
-
-
-# test_langfuse_logging_custom_generation_name()
-
-
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_embedding():
-    try:
-        litellm.set_verbose = True
-        litellm.success_callback = ["langfuse"]
-        response = litellm.embedding(
-            model="text-embedding-ada-002",
-            input=["gm", "ishaan"],
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-        print(e)
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
