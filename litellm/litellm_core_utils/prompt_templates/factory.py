@@ -2172,7 +2172,7 @@ def get_image_details(image_url) -> Tuple[str, str]:
 
         client = HTTPHandler(concurrent_limit=1)
         # Send a GET request to the image URL
-        response = client.get(image_url)
+        response = client.get(image_url, follow_redirects=True)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -2212,7 +2212,7 @@ def _process_bedrock_converse_image_block(
             image_format = "jpeg"
         _blob = BedrockSourceBlock(bytes=img_without_base_64)
 
-    elif "https:/" in image_url:
+    elif "http://" in image_url or "https://" in image_url:
         # Case 2: Images with direct links
         image_bytes, mime_type = get_image_details(image_url)
         image_format = mime_type.split("/")[1]
