@@ -444,7 +444,11 @@ async def test_async_vertexai_response():
             f"model being tested in async call: {model}, litellm.vertex_language_models: {litellm.vertex_language_models}"
         )
         if model in VERTEX_MODELS_TO_NOT_TEST or (
-            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+            "gecko" in model
+            or "32k" in model
+            or "ultra" in model
+            or "002" in model
+            or "gemini-2.0-flash-thinking-exp" == model
         ):
             # our account does not have access to this model
             continue
