@@ -371,7 +371,32 @@ Step 4: Submit a PR with your changes! 🚀
 ### Developing LiteLLM Proxy with Tilt
 
 You can use [Tilt](https://tilt.dev/) to automatically build a Docker image and
-deploy it to a Kubernetes environment when you change files.
+deploy it to a Kubernetes environment (typically a small development-only
+Kubernetes environment running on your development machine) when you change
+files.
+
+#### Create a local Kubernetes cluster for Tilt to deploy to
+
+If you don't yet have a local Kubernetes environment, here is one way to get a
+Tilt-friendly local Kubernetes environment on a Mac:
+
+```shell
+brew install ctlptl kind
+ctlptl create cluster kind --registry=ctlptl-registry
+```
+
+If this works then it will add a `kind-kind` context to your `~/.kube/config`
+and select it as the current context - e.g.:
+
+```shell
+$ kubectl config get-contexts
+CURRENT   NAME                   CLUSTER                AUTHINFO               NAMESPACE
+...
+*         kind-kind              kind-kind              kind-kind              
+...
+```
+
+#### Use Tilt
 
 A `Tiltfile` is provided, so just run:
 
@@ -394,11 +419,11 @@ curl -sSL \
     --header "Authorization: Bearer sk-master" \
     --header 'Content-Type: application/json' \
     --data '{
-        "model": "gpt-4o-mini",
+        "model": "fake-openai-endpoint",
         "messages": [
             {
                 "role": "user",
-                "content": "What are the colors of the rainbow in order?"
+                "content": "Kinda pointless as we are accessing a fake endpoint :-)"
             }
         ]
     }'
