@@ -668,7 +668,7 @@ class AnthropicConfig(BaseConfig):
         cache_read_input_tokens: int = 0
 
         model_response.created = int(time.time())
-        model_response.model = model
+        model_response.model = completion_response["model"]
         if "cache_creation_input_tokens" in _usage:
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
             prompt_tokens += cache_creation_input_tokens

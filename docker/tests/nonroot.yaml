@@ -1,0 +1,18 @@
+schemaVersion: 2.0.0
+
+metadataTest:
+  entrypoint: ["docker/prod_entrypoint.sh"]
+  user: "nobody"
+  workdir: "/app"
+
+fileExistenceTests:
+  - name: "Prisma Folder"
+    path: "/usr/local/lib/python3.13/site-packages/prisma/"
+    shouldExist: true
+    uid: 65534
+    gid: 65534
+  - name: "Prisma Schema"
+    path: "/usr/local/lib/python3.13/site-packages/prisma/schema.prisma"
+    shouldExist: true
+    uid: 65534
+    gid: 65534

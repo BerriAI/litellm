@@ -86,7 +86,7 @@ LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone
 from litellm import completion
 
 ## set env variables for logging tools
-os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key" # get your public key at https://app.lunary.ai/settings
 os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""

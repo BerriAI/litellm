@@ -2,6 +2,7 @@
 
 Log Proxy input, output, and exceptions using:
 
+- Lunary
 - Langfuse
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
@@ -181,6 +182,55 @@ LiteLLM.Info: "no-log request, skipping logging"
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
 [👉 **Standard Logging Payload Specification**](./logging_spec)
+
+## Lunary
+### Step1: Install dependencies and set your environment variables 
+Install the dependencies
+```shell
+pip install litellm lunary
+```
+
+Get you Lunary public key from from https://app.lunary.ai/settings 
+```shell
+export LUNARY_PUBLIC_KEY="<your-public-key>"
+```
+
+### Step 2: Create a `config.yaml` and set `lunary` callbacks
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+litellm_settings:
+  success_callback: ["lunary"]
+  failure_callback: ["lunary"]
+```
+
+### Step 3: Start the LiteLLM proxy
+```shell
+litellm --config config.yaml
+```
+
+### Step 4: Make a request
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      {
+        "role": "user",
+        "content": "how can I solve 8x + 7 = -23"
+      }
+    ]
+}'
+```
 
 ## Langfuse
 
