@@ -1556,6 +1556,86 @@ async def regenerate_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+async def _list_keys(
+    prisma_client,
+    page: int,
+    size: int,
+    user_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    key_alias: Optional[str] = None,
+    where: Optional[dict] = None,
+) -> dict:
+    """
+    Helper function to list keys with pagination and filtering
+
+    Args:
+        prisma_client: The database client
+        page (int): Page number (1-based)
+        size (int): Number of items per page
+        user_id (Optional[str]): Filter keys by user ID
+        team_id (Optional[str]): Filter keys by team ID
+        key_alias (Optional[str]): Filter keys by key alias
+        where (Optional[dict]): Additional filter conditions
+
+    Returns:
+        dict: Response containing:
+            - keys: List of key tokens
+            - total_count: Total number of keys matching filters
+            - current_page: Current page number
+            - total_pages: Total number of pages
+    """
+    verbose_proxy_logger.debug("Entering _list_keys helper")
+
+    # Prepare filter conditions
+    where = where or {}
+    if user_id and isinstance(user_id, str):
+        where["user_id"] = user_id
+    if team_id and isinstance(team_id, str):
+        where["team_id"] = team_id
+    if key_alias and isinstance(key_alias, str):
+        where["key_alias"] = key_alias
+
+    verbose_proxy_logger.debug(f"Filter conditions: {where}")
+
+    # Calculate skip for pagination
+    skip = (page - 1) * size
+
+    verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
+
+    # Fetch keys with pagination
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where=where,  # type: ignore
+        skip=skip,  # type: ignore
+        take=size,  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
+
+    # Get total count of keys
+    total_count = await prisma_client.db.litellm_verificationtoken.count(
+        where=where  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
+
+    # Calculate total pages
+    total_pages = -(-total_count // size)  # Ceiling division
+
+    # Prepare response
+    key_list = []
+    for key in keys:
+        key_dict = key.dict()
+        _token = key_dict.get("token")
+        key_list.append(_token)
+
+    return {
+        "keys": key_list,
+        "total_count": total_count,
+        "current_page": page,
+        "total_pages": total_pages,
+    }
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -1576,10 +1656,10 @@ async def list_keys(
 
         from litellm.proxy.proxy_server import prisma_client
 
-        logging.debug("Entering list_keys function")
+        verbose_proxy_logger.debug("Entering list_keys function")
 
         if prisma_client is None:
-            logging.error("Database not connected")
+            verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
         # Check for unsupported parameters
@@ -1593,56 +1673,14 @@ async def list_keys(
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Prepare filter conditions
-        where = {}
-        if user_id and isinstance(user_id, str):
-            where["user_id"] = user_id
-        if team_id and isinstance(team_id, str):
-            where["team_id"] = team_id
-        if key_alias and isinstance(key_alias, str):
-            where["key_alias"] = key_alias
-
-        logging.debug(f"Filter conditions: {where}")
-
-        # Calculate skip for pagination
-        skip = (page - 1) * size
-
-        logging.debug(f"Pagination: skip={skip}, take={size}")
-
-        # Fetch keys with pagination
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
+        response = await _list_keys(
+            prisma_client=prisma_client,
+            page=page,
+            size=size,
+            user_id=user_id,
+            team_id=team_id,
+            key_alias=key_alias,
         )
-
-        logging.debug(f"Fetched {len(keys)} keys")
-
-        # Get total count of keys
-        total_count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where  # type: ignore
-        )
-
-        logging.debug(f"Total count of keys: {total_count}")
-
-        # Calculate total pages
-        total_pages = -(-total_count // size)  # Ceiling division
-
-        # Prepare response
-        key_list = []
-        for key in keys:
-            key_dict = key.dict()
-            _token = key_dict.get("token")
-            key_list.append(_token)
-
-        response = {
-            "keys": key_list,
-            "total_count": total_count,
-            "current_page": page,
-            "total_pages": total_pages,
-        }
-
-        logging.debug("Successfully prepared response")
 
         return response
 

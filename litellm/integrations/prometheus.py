@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import LITELLM_SESSION_TOKEN_TEAM_ID
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
@@ -146,7 +147,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_api_key_budget_metric = Gauge(
                 "litellm_remaining_api_key_budget_metric",
                 "Remaining budget for api key",
-                labelnames=["hashed_api_key", "api_key_alias"],
+                labelnames=["hashed_api_key", "api_key_alias", "team_id"],
             )
 
             ########################################
@@ -558,7 +559,7 @@ class PrometheusLogger(CustomLogger):
         ).set(_remaining_team_budget)
 
         self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key, user_api_key_alias
+            user_api_key, user_api_key_alias, user_api_team
         ).set(_remaining_api_key_budget)
 
     def _increment_top_level_request_and_spend_metrics(
@@ -1260,6 +1261,7 @@ class PrometheusLogger(CustomLogger):
         try:
             if asyncio.get_running_loop():
                 asyncio.create_task(self._initialize_remaining_budget_metrics())
+                asyncio.create_task(self._initialize_key_budget_metrics())
         except RuntimeError as e:  # no running event loop
             verbose_logger.exception(
                 f"No running event loop - skipping budget metrics initialization: {str(e)}"
@@ -1317,6 +1319,79 @@ class PrometheusLogger(CustomLogger):
                         spend=team.spend,
                     )
                 )
+
+    async def _initialize_key_budget_metrics(self):
+        """
+        Initialize remaining budget metrics for all keys to avoid metric discrepancies.
+
+        Runs when prometheus logger starts up.
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _list_keys,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        try:
+            page = 1
+            page_size = 50
+
+            # Get first page to calculate total
+            response = await _list_keys(
+                page=page,
+                size=page_size,
+                prisma_client=prisma_client,
+                where={"NOT": {"team_id": LITELLM_SESSION_TOKEN_TEAM_ID}},
+            )
+
+            # Set metrics for first page of keys
+            await self._set_key_budget_metrics(response["keys"])
+
+            # Get and set metrics for remaining pages
+            total_pages = response["total_pages"]
+            for page in range(2, total_pages + 1):
+                response = await _list_keys(
+                    page=page,
+                    size=page_size,
+                    prisma_client=prisma_client,
+                    where={
+                        "NOT": {"team_id": LITELLM_SESSION_TOKEN_TEAM_ID}
+                    },  # Filter out this team
+                )
+                await self._set_key_budget_metrics(response["keys"])
+
+        except Exception as e:
+            verbose_logger.exception(f"Error initializing key budget metrics: {str(e)}")
+
+    async def _set_key_budget_metrics(self, keys: List[str]):
+        """Helper function to set budget metrics for a list of key tokens"""
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+        for key_token in keys:
+            try:
+                key = await prisma_client.db.litellm_verificationtoken.find_unique(
+                    where={"token": key_token}
+                )
+                if key and key.max_budget is not None:
+                    self.litellm_remaining_api_key_budget_metric.labels(
+                        key.token,
+                        key.key_alias or "",
+                        key.team_id,
+                    ).set(
+                        self._safe_get_remaining_budget(
+                            max_budget=key.max_budget,
+                            spend=key.spend,
+                        )
+                    )
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error setting budget metric for key {key_token}: {str(e)}"
+                )
+                continue
 
 
 def prometheus_label_factory(
