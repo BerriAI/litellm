@@ -368,6 +368,25 @@ Step 4: Submit a PR with your changes! 🚀
 - push your fork to your GitHub repo
 - submit a PR from there
 
+### Developing LiteLLM Proxy with Tilt
+
+You can use [Tilt](https://tilt.dev/) to automatically build a Docker image and
+deploy it to a Kubernetes environment when you change files.
+
+A `Tiltfile` is provided, so just run:
+
+```shell
+tilt up
+```
+
+and then hit the space bar to open the Tilt UI in your browser.
+
+Tilt will watch for changes and will rebuild the Docker image and redeploy
+LiteLLM Proxy and Postgres (via the Helm chart at `deploy/charts/litellm-helm`)
+to whatever Kubernetes context you have configured. If you're running a local
+Kubernetes cluster (arguably the most convenient way to use Tilt), then you can
+probably access LiteLLM proxy at http://localhost:4000.
+
 ### Building LiteLLM Docker Image 
 
 Follow these instructions if you want to build / run the LiteLLM Docker Image yourself.
