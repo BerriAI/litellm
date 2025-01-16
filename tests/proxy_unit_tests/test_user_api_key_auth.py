@@ -629,3 +629,76 @@ async def test_soft_budget_alert():
             "budget_alerts",
             original_budget_alerts,
         )
+
+
+def test_is_allowed_route():
+    from litellm.proxy.auth.user_api_key_auth import _is_allowed_route
+    from litellm.proxy._types import UserAPIKeyAuth
+    import datetime
+
+    request = MagicMock()
+
+    args = {
+        "route": "/embeddings",
+        "token_type": "api",
+        "request": request,
+        "request_data": {"input": ["hello world"], "model": "embedding-small"},
+        "api_key": "9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+        "valid_token": UserAPIKeyAuth(
+            token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+            key_name="sk-...CJjQ",
+            key_alias=None,
+            spend=0.0,
+            max_budget=None,
+            expires=None,
+            models=[],
+            aliases={},
+            config={},
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata={},
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            budget_reset_at=None,
+            allowed_cache_controls=[],
+            permissions={},
+            model_spend={},
+            model_max_budget={},
+            soft_budget_cooldown=False,
+            blocked=None,
+            litellm_budget_table=None,
+            org_id=None,
+            created_at=MagicMock(),
+            updated_at=MagicMock(),
+            team_spend=None,
+            team_alias=None,
+            team_tpm_limit=None,
+            team_rpm_limit=None,
+            team_max_budget=None,
+            team_models=[],
+            team_blocked=False,
+            soft_budget=None,
+            team_model_aliases=None,
+            team_member_spend=None,
+            team_member=None,
+            team_metadata=None,
+            end_user_id=None,
+            end_user_tpm_limit=None,
+            end_user_rpm_limit=None,
+            end_user_max_budget=None,
+            last_refreshed_at=1736990277.432638,
+            api_key=None,
+            user_role=None,
+            allowed_model_region=None,
+            parent_otel_span=None,
+            rpm_limit_per_model=None,
+            tpm_limit_per_model=None,
+            user_tpm_limit=None,
+            user_rpm_limit=None,
+        ),
+        "user_obj": None,
+    }
+
+    assert _is_allowed_route(**args)
