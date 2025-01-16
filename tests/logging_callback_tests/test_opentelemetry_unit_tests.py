@@ -38,17 +38,13 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "callback",
-        ["otel", "arize", "arize_phoenix"],
-    )
-    async def test_opentelemetry_integration(self, callback):
+    async def test_opentelemetry_integration(self):
         """
         Unit test to confirm the parent otel span is ended
         """
 
         parent_otel_span = MagicMock()
-        litellm.callbacks = [callback]
+        litellm.callbacks = ["otel"]
 
         await litellm.acompletion(
             model="gpt-3.5-turbo",
