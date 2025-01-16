@@ -386,46 +386,6 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
             print("generation_from_langfuse", generation)
 
 
-# test_langfuse_logging()
-
-
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_function_calling():
-    litellm.set_verbose = True
-    function1 = [
-        {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
-                    },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-                "required": ["location"],
-            },
-        }
-    ]
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what's the weather in boston"}],
-            temperature=0.1,
-            functions=function1,
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        print(e)
-
-
-# test_langfuse_logging_function_calling()
-
-
 @pytest.mark.skip(reason="Need to address this on main")
 def test_aaalangfuse_existing_trace_id():
     """
