@@ -13,6 +13,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+END_USER_ID = "my-test-user-34"
+
 
 async def make_bad_chat_completion_request(session, key):
     url = "http://0.0.0.0:4000/chat/completions"
@@ -41,6 +43,7 @@ async def make_good_chat_completion_request(session, key):
         "model": "fake-openai-endpoint",
         "messages": [{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
         "tags": ["teamB"],
+        "user": END_USER_ID,  # test if disable end user tracking for prometheus works
     }
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -110,7 +113,7 @@ async def test_proxy_failure_metrics():
         assert expected_llm_deployment_failure
 
         assert (
-            'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None",user="default_user_id"} 1.0'
+            'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",status_code="429",team="None",team_alias="None",user="default_user_id"} 1.0'
             in metrics
         )
 
@@ -143,14 +146,16 @@ async def test_proxy_success_metrics():
 
         print("/metrics", metrics)
 
+        assert END_USER_ID not in metrics
+
         # Check if the success metric is present and correct
         assert (
-            'litellm_request_total_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",team="None",team_alias="None"}'
+            'litellm_request_total_latency_metric_bucket{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",requested_model="fake-openai-endpoint",team="None",team_alias="None",user="default_user_id"}'
             in metrics
         )
 
         assert (
-            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",team="None",team_alias="None"}'
+            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",requested_model="fake-openai-endpoint",team="None",team_alias="None",user="default_user_id"}'
             in metrics
         )
 

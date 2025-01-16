@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
@@ -12,12 +13,10 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
-    LiteLLMRoutes,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
@@ -74,8 +73,12 @@ def safe_add_api_version_from_query_params(data: dict, request: Request):
             query_params = dict(request.query_params)
             if "api-version" in query_params:
                 data["api_version"] = query_params["api-version"]
+    except KeyError:
+        pass
     except Exception as e:
-        verbose_logger.error("error checking api version in query params: %s", str(e))
+        verbose_logger.exception(
+            "error checking api version in query params: %s", str(e)
+        )
 
 
 def convert_key_logging_metadata_to_callback(
@@ -118,7 +121,7 @@ def convert_key_logging_metadata_to_callback(
 
 
 def _get_dynamic_logging_metadata(
-    user_api_key_dict: UserAPIKeyAuth,
+    user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
     if (
@@ -130,24 +133,31 @@ def _get_dynamic_logging_metadata(
                 data=AddTeamCallback(**item),
                 team_callback_settings_obj=callback_settings_obj,
             )
-    elif user_api_key_dict.team_metadata is not None:
+    elif (
+        user_api_key_dict.team_metadata is not None
+        and "callback_settings" in user_api_key_dict.team_metadata
+    ):
+        """
+        callback_settings = {
+            {
+            'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'},
+            'failure_callback': [],
+            'success_callback': ['langfuse', 'langfuse']
+        }
+        }
+        """
         team_metadata = user_api_key_dict.team_metadata
-        if "callback_settings" in team_metadata:
-            callback_settings = team_metadata.get("callback_settings", None) or {}
-            callback_settings_obj = TeamCallbackMetadata(**callback_settings)
-            verbose_proxy_logger.debug(
-                "Team callback settings activated: %s", callback_settings_obj
+        callback_settings = team_metadata.get("callback_settings", None) or {}
+        callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+        verbose_proxy_logger.debug(
+            "Team callback settings activated: %s", callback_settings_obj
+        )
+    elif user_api_key_dict.team_id is not None:
+        callback_settings_obj = (
+            LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+                team_id=user_api_key_dict.team_id, proxy_config=proxy_config
             )
-            """
-            callback_settings = {
-              {
-                'callback_vars': {'langfuse_public_key': 'pk', 'langfuse_secret_key': 'sk_'}, 
-                'failure_callback': [], 
-                'success_callback': ['langfuse', 'langfuse']
-            }
-            }
-            """
-
+        )
     return callback_settings_obj
 
 
@@ -214,9 +224,6 @@ class LiteLLMProxyRequestSetup:
         - Checks request headers for forwardable headers
         - Checks if user information should be added to the headers
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            get_standard_logging_metadata,
-        )
 
         returned_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(headers)
 
@@ -271,6 +278,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
+            user_api_key_end_user_id=user_api_key_dict.end_user_id,
         )
         return user_api_key_logged_metadata
 
@@ -278,7 +286,6 @@ class LiteLLMProxyRequestSetup:
     def add_key_level_controls(
         key_metadata: dict, data: dict, _metadata_variable_name: str
     ):
-        data = data.copy()
         if "cache" in key_metadata:
             data["cache"] = {}
             if isinstance(key_metadata["cache"], dict):
@@ -342,6 +349,29 @@ class LiteLLMProxyRequestSetup:
                     final_tags.append(tag)
 
         return final_tags
+
+    @staticmethod
+    def add_team_based_callbacks_from_config(
+        team_id: str,
+        proxy_config: ProxyConfig,
+    ) -> Optional[TeamCallbackMetadata]:
+        """
+        Add team-based callbacks from the config
+        """
+        team_config = proxy_config.load_team_config(team_id=team_id)
+        if len(team_config.keys()) == 0:
+            return None
+
+        callback_vars_dict = {**team_config.get("callback_vars", team_config)}
+        callback_vars_dict.pop("team_id", None)
+        callback_vars_dict.pop("success_callback", None)
+        callback_vars_dict.pop("failure_callback", None)
+
+        return TeamCallbackMetadata(
+            success_callback=team_config.get("success_callback", None),
+            failure_callback=team_config.get("failure_callback", None),
+            callback_vars=callback_vars_dict,
+        )
 
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
@@ -499,6 +529,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_max_budget"
     ] = user_api_key_dict.max_budget
+    data[_metadata_variable_name][
+        "user_api_key_model_max_budget"
+    ] = user_api_key_dict.model_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
@@ -548,24 +581,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "tags" in data:
             data[_metadata_variable_name]["tags"] = data["tags"]
 
-    ### TEAM-SPECIFIC PARAMS ###
-    if user_api_key_dict.team_id is not None:
-        team_config = await proxy_config.load_team_config(
-            team_id=user_api_key_dict.team_id
-        )
-        if len(team_config) == 0:
-            pass
-        else:
-            team_id = team_config.pop("team_id", None)
-            data[_metadata_variable_name]["team_id"] = team_id
-            data = {
-                **team_config,
-                **data,
-            }  # add the team-specific configs to the completion call
-
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
-        user_api_key_dict=user_api_key_dict
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:
         data["success_callback"] = callback_settings_obj.success_callback
@@ -584,7 +602,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     verbose_proxy_logger.debug(
-        f"[PROXY]returned data from litellm_pre_call_utils: {data}"
+        "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
 
     ## ENFORCED PARAMS CHECK
@@ -598,13 +616,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     end_time = time.time()
-    await service_logger_obj.async_service_success_hook(
-        service=ServiceTypes.PROXY_PRE_CALL,
-        duration=end_time - start_time,
-        call_type="add_litellm_data_to_request",
-        start_time=start_time,
-        end_time=end_time,
-        parent_otel_span=user_api_key_dict.parent_otel_span,
+    asyncio.create_task(
+        service_logger_obj.async_service_success_hook(
+            service=ServiceTypes.PROXY_PRE_CALL,
+            duration=end_time - start_time,
+            call_type="add_litellm_data_to_request",
+            start_time=start_time,
+            end_time=end_time,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
     )
     return data
 

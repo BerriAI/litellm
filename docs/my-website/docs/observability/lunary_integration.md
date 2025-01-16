@@ -1,72 +1,78 @@
-# Lunary - Logging and tracing LLM input/output
+import Image from '@theme/IdealImage';
 
-:::tip
+# 🌙 Lunary - GenAI Observability 
 
-This is community maintained, Please make an issue if you run into a bug
-https://github.com/BerriAI/litellm
+[Lunary](https://lunary.ai/) is an open-source platform providing [observability](https://lunary.ai/docs/features/observe), [prompt management](https://lunary.ai/docs/features/prompts), and [analytics](https://lunary.ai/docs/features/observe#analytics) to help team manage and improve LLM chatbots.
 
-:::
-
-
-[Lunary](https://lunary.ai/) is an open-source AI developer platform providing observability, prompt management, and evaluation tools for AI developers.
+You can reach out to us anytime by [email](mailto:hello@lunary.ai) or directly [schedule a Demo](https://lunary.ai/schedule).
 
 <video controls width='900' >
   <source src='https://lunary.ai/videos/demo-annotated.mp4'/>
 </video>
 
-## Use Lunary to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
 
-liteLLM provides `callbacks`, making it easy for you to log data depending on the status of your responses.
+## Usage with LiteLLM Python SDK
+### Pre-Requisites
 
-:::info
-We want to learn how we can make the callbacks better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
-join our [discord](https://discord.gg/wuPM9dRgDw)
-:::
+```shell
+pip install litellm lunary
+```
 
-### Using Callbacks
+### Quick Start
 
-First, sign up to get a public key on the [Lunary dashboard](https://lunary.ai).
+First, get your Lunary public key on the [Lunary dashboard](https://app.lunary.ai/).
 
-Use just 2 lines of code, to instantly log your responses **across all providers** with lunary:
+Use just 2 lines of code, to instantly log your responses **across all providers** with Lunary:
 
 ```python
 litellm.success_callback = ["lunary"]
 litellm.failure_callback = ["lunary"]
 ```
 
-Complete code
-
+Complete code:
 ```python
 from litellm import completion
 
-## set env variables
-os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
-
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key" # from https://app.lunary.ai/)
 os.environ["OPENAI_API_KEY"] = ""
 
-# set callbacks
 litellm.success_callback = ["lunary"]
 litellm.failure_callback = ["lunary"]
 
-#openai call
 response = completion(
-  model="gpt-3.5-turbo",
-  messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+  model="gpt-4o",
+  messages=[{"role": "user", "content": "Hi there 👋"}],
   user="ishaan_litellm"
 )
 ```
 
-## Templates
+### Usage with LangChain ChatLiteLLM 
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+from langchain.schema import HumanMessage
+import litellm
 
-You can use Lunary to manage prompt templates and use them across all your LLM providers.
+os.environ["LUNARY_PUBLIC_KEY"] = "" # from https://app.lunary.ai/settings
+os.environ['OPENAI_API_KEY']="sk-..."
 
-Make sure to have `lunary` installed:
+litellm.success_callback = ["lunary"] 
+litellm.failure_callback = ["lunary"] 
 
-```bash
-pip install lunary
+chat = ChatLiteLLM(
+  model="gpt-4o"
+  messages = [
+    HumanMessage(
+        content="what model are you"
+    )
+]
+chat(messages)
 ```
 
-Then, use the following code to pull templates into Lunary:
+
+### Usage with Prompt Templates
+
+You can use Lunary to manage [prompt templates](https://lunary.ai/docs/features/prompts) and use them across all your LLM providers with LiteLLM.
 
 ```python
 from litellm import completion
@@ -81,9 +87,93 @@ litellm.success_callback = ["lunary"]
 result = completion(**template)
 ```
 
+### Usage with custom chains
+You can wrap your LLM calls inside custom chains, so that you can visualize them as traces.
+
+```python
+import litellm
+from litellm import completion
+import lunary
+
+litellm.success_callback = ["lunary"]
+litellm.failure_callback = ["lunary"]
+
+@lunary.chain("My custom chain name")
+def my_chain(chain_input):
+  chain_run_id = lunary.run_manager.current_run_id
+  response = completion(
+    model="gpt-4o", 
+    messages=[{"role": "user", "content": "Say 1"}],
+    metadata={"parent_run_id": chain_run_id},
+  )
+
+  response = completion(
+    model="gpt-4o", 
+    messages=[{"role": "user", "content": "Say 2"}],
+    metadata={"parent_run_id": chain_run_id},
+  )
+  chain_output = response.choices[0].message
+  return chain_output
+
+my_chain("Chain input")
+```
+
+<Image img={require('../../img/lunary-trace.png')} />
+
+## Usage with LiteLLM Proxy Server
+### Step1: Install dependencies and set your environment variables 
+Install the dependencies
+```shell
+pip install litellm lunary
+```
+
+Get you Lunary public key from from https://app.lunary.ai/settings 
+```shell
+export LUNARY_PUBLIC_KEY="<your-public-key>"
+```
+
+### Step 2: Create a `config.yaml` and set `lunary` callbacks
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+litellm_settings:
+  success_callback: ["lunary"]
+  failure_callback: ["lunary"]
+```
+
+### Step 3: Start the LiteLLM proxy
+```shell
+litellm --config config.yaml
+```
+
+### Step 4: Make a request
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      {
+        "role": "user",
+        "content": "how can I solve 8x + 7 = -23"
+      }
+    ]
+}'
+```
+
+You can find more details about the different ways of making requests to the LiteLLM proxy on [this page](https://docs.litellm.ai/docs/proxy/user_keys)
+
+
 ## Support & Talk to Founders
 
-- Meet the Lunary team via [email](mailto:hello@lunary.ai).
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬

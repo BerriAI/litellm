@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
@@ -15,7 +15,9 @@ from litellm.llms.anthropic.chat.handler import (
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -43,9 +45,7 @@ class AnthropicPassthroughLoggingHandler:
         Transforms Anthropic response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
         model = response_body.get("model", "")
-        litellm_model_response: (
-            litellm.ModelResponse
-        ) = AnthropicConfig().transform_response(
+        litellm_model_response: ModelResponse = AnthropicConfig().transform_response(
             raw_response=httpx_response,
             model_response=litellm.ModelResponse(),
             model=model,
@@ -56,6 +56,7 @@ class AnthropicPassthroughLoggingHandler:
             request_data={},
             encoding=litellm.encoding,
             json_mode=False,
+            litellm_params={},
         )
 
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
@@ -78,19 +79,12 @@ class AnthropicPassthroughLoggingHandler:
     ) -> Optional[str]:
         request_body = passthrough_logging_payload.get("request_body")
         if request_body:
-            end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
-            if end_user_id:
-                return end_user_id
-            return request_body.get("metadata", {}).get(
-                "user_id", None
-            )  # support anthropic param - https://docs.anthropic.com/en/api/messages
+            return get_end_user_id_from_request_body(request_body)
         return None
 
     @staticmethod
     def _create_anthropic_response_logging_payload(
-        litellm_model_response: Union[
-            litellm.ModelResponse, litellm.TextCompletionResponse
-        ],
+        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
         kwargs: dict,
         start_time: datetime,
@@ -168,6 +162,7 @@ class AnthropicPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
+
         model = request_body.get("model", "")
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
@@ -203,7 +198,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[litellm.ModelResponse, litellm.TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         """
         Builds complete response from raw Anthropic chunks
 

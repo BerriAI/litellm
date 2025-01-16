@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -52,6 +51,39 @@ def handle_cohere_chat_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def handle_anthropic_text_model_custom_llm_provider(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Tuple[str, Optional[str]]:
+    """
+    if user sets model = "anthropic/claude-2" -> use custom_llm_provider = "anthropic_text"
+
+    Args:
+        model:
+        custom_llm_provider:
+
+    Returns:
+        model, custom_llm_provider
+    """
+
+    if custom_llm_provider:
+        if (
+            custom_llm_provider == "anthropic"
+            and litellm.AnthropicTextConfig._is_anthropic_text_model(model)
+        ):
+            return model, "anthropic_text"
+
+    if "/" in model:
+        _custom_llm_provider, _model = model.split("/", 1)
+        if (
+            _custom_llm_provider
+            and _custom_llm_provider == "anthropic"
+            and litellm.AnthropicTextConfig._is_anthropic_text_model(_model)
+        ):
+            return _model, "anthropic_text"
+
+    return model, custom_llm_provider
+
+
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -68,6 +100,7 @@ def get_llm_provider(  # noqa: PLR0915
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
+
     try:
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params is not None:
@@ -92,6 +125,10 @@ def get_llm_provider(  # noqa: PLR0915
             model, custom_llm_provider
         )
 
+        model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
+            model, custom_llm_provider
+        )
+
         if custom_llm_provider:
             if (
                 model.split("/")[0] == custom_llm_provider
@@ -105,7 +142,7 @@ def get_llm_provider(  # noqa: PLR0915
         # check if llm provider part of model name
         if (
             model.split("/", 1)[0] in litellm.provider_list
-            and model.split("/", 1)[0] not in litellm.model_list
+            and model.split("/", 1)[0] not in litellm.model_list_set
             and len(model.split("/"))
             > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
         ):
@@ -172,7 +209,7 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
-                    elif endpoint == "inference.friendli.ai/v1":
+                    elif endpoint == "https://api.friendli.ai/serverless/v1":
                         custom_llm_provider = "friendliai"
                         dynamic_api_key = get_secret_str(
                             "FRIENDLIAI_API_KEY"
@@ -210,7 +247,10 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "text-completion-openai"
         ## anthropic
         elif model in litellm.anthropic_models:
-            custom_llm_provider = "anthropic"
+            if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
+                custom_llm_provider = "anthropic_text"
+            else:
+                custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
@@ -245,9 +285,7 @@ def get_llm_provider(  # noqa: PLR0915
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
-        elif model in litellm.ai21_models:
-            custom_llm_provider = "ai21"
-        elif model in litellm.ai21_chat_models:
+        elif model in litellm.ai21_chat_models or model in litellm.ai21_models:
             custom_llm_provider = "ai21_chat"
             api_base = (
                 api_base
@@ -269,7 +307,9 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "petals"
         ## bedrock
         elif (
-            model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
+            model in litellm.bedrock_models
+            or model in litellm.bedrock_embedding_models
+            or model in litellm.bedrock_converse_models
         ):
             custom_llm_provider = "bedrock"
         elif model in litellm.watsonx_models:
@@ -355,6 +395,8 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "aiohttp_openai":
+        return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
         # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret_str("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"  # type: ignore
@@ -451,11 +493,10 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (
-            model,
             api_base,
             dynamic_api_key,
         ) = litellm.FireworksAIConfig()._get_openai_compatible_provider_info(
-            model, api_base, api_key
+            api_base=api_base, api_key=api_key
         )
     elif custom_llm_provider == "azure_ai":
         (
@@ -498,14 +539,6 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
-    elif custom_llm_provider == "voyage":
-        # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
-        api_base = (
-            api_base
-            or get_secret_str("VOYAGE_API_BASE")
-            or "https://api.voyageai.com/v1"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("VOYAGE_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
@@ -522,7 +555,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret("FRIENDLI_API_BASE")
-            or "https://inference.friendli.ai/v1"
+            or "https://api.friendli.ai/serverless/v1"
         )  # type: ignore
         dynamic_api_key = (
             api_key
@@ -531,7 +564,9 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )
     elif custom_llm_provider == "galadriel":
         api_base = (
-            api_base or get_secret("GALADRIEL_API_BASE") or "https://api.galadriel.com/v1"
+            api_base
+            or get_secret("GALADRIEL_API_BASE")
+            or "https://api.galadriel.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("GALADRIEL_API_KEY")
     if api_base is not None and not isinstance(api_base, str):

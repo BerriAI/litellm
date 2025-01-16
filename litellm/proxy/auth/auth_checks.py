@@ -9,12 +9,11 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 
+import inspect
 import time
 import traceback
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
-import httpx
 from pydantic import BaseModel
 
 import litellm
@@ -23,6 +22,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    CommonProxyErrors,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -35,7 +35,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.router import Router
+from litellm.types.services import ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 
@@ -53,6 +54,33 @@ db_cache_expiry = 5  # refresh every 5s
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
+def _allowed_import_check() -> bool:
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    # Get the calling frame
+    caller_frame = inspect.stack()[2]
+    caller_function = caller_frame.function
+    caller_function_callable = caller_frame.frame.f_globals.get(caller_function)
+
+    allowed_function = "_user_api_key_auth_builder"
+    allowed_signature = inspect.signature(_user_api_key_auth_builder)
+    if caller_function_callable is None or not callable(caller_function_callable):
+        raise Exception(f"Caller function {caller_function} is not callable")
+    caller_signature = inspect.signature(caller_function_callable)
+
+    if caller_signature != allowed_signature:
+        raise TypeError(
+            f"The function '{caller_function}' does not match the required signature of 'user_api_key_auth'. {CommonProxyErrors.not_premium_user.value}"
+        )
+    # Check if the caller module is allowed
+    if caller_function != allowed_function:
+        raise ImportError(
+            f"This function can only be imported by '{allowed_function}'. {CommonProxyErrors.not_premium_user.value}"
+        )
+
+    return True
+
+
 def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -61,7 +89,7 @@ def common_checks(  # noqa: PLR0915
     global_proxy_spend: Optional[float],
     general_settings: dict,
     route: str,
-    llm_router: Optional[litellm.Router],
+    llm_router: Optional[Router],
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -77,6 +105,7 @@ def common_checks(  # noqa: PLR0915
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
+    _allowed_import_check()
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
         raise Exception(
@@ -274,7 +303,11 @@ def get_actual_routes(allowed_routes: list) -> list:
     for route_name in allowed_routes:
         try:
             route_value = LiteLLMRoutes[route_name].value
-            actual_routes = actual_routes + route_value
+            if isinstance(route_value, set):
+                actual_routes.extend(list(route_value))
+            else:
+                actual_routes.extend(route_value)
+
         except KeyError:
             actual_routes.append(route_name)
     return actual_routes
@@ -347,7 +380,7 @@ async def get_end_user_object(
 
 
 def model_in_access_group(
-    model: str, team_models: Optional[List[str]], llm_router: Optional[litellm.Router]
+    model: str, team_models: Optional[List[str]], llm_router: Optional[Router]
 ) -> bool:
     from collections import defaultdict
 
@@ -757,6 +790,7 @@ async def get_key_object(
     except DB_CONNECTION_ERROR_TYPES as e:
         return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception:
+        traceback.print_exc()
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
@@ -867,10 +901,9 @@ async def can_key_call_model(
     )
     from collections import defaultdict
 
-    access_groups = defaultdict(list)
+    access_groups: Dict[str, List[str]] = defaultdict(list)
     if llm_router:
         access_groups = llm_router.get_model_access_groups(model_name=model)
-
     if (
         len(access_groups) > 0 and llm_router is not None
     ):  # check if token contains any model access groups

@@ -1,4 +1,11 @@
-# Region-based Routing
+# [DEPRECATED] Region-based Routing
+
+:::info
+
+This is deprecated, please use [Tag Based Routing](./tag_routing.md) instead
+
+:::
+
 
 Route specific customers to eu-only models.
 

@@ -14,6 +14,7 @@ os.environ["WATSONX_TOKEN"] = "" # IAM auth token
 # optional - can also be passed as params to completion() or embedding()
 os.environ["WATSONX_PROJECT_ID"] = "" # Project ID of your WatsonX instance
 os.environ["WATSONX_DEPLOYMENT_SPACE_ID"] = "" # ID of your deployment space to use deployed models
+os.environ["WATSONX_ZENAPIKEY"] = "" # Zen API key (use for long-term api token)
 ```
 
 See [here](https://cloud.ibm.com/apidocs/watsonx-ai#api-authentication) for more information on how to get an access token to authenticate to watsonx.ai.
@@ -31,14 +32,16 @@ from litellm import completion
 os.environ["WATSONX_URL"] = ""
 os.environ["WATSONX_APIKEY"] = ""
 
+## Call WATSONX `/text/chat` endpoint - supports function calling
 response = completion(
-  model="watsonx/ibm/granite-13b-chat-v2",
+  model="watsonx/meta-llama/llama-3-1-8b-instruct",
   messages=[{ "content": "what is your favorite colour?","role": "user"}],
   project_id="<my-project-id>" # or pass with os.environ["WATSONX_PROJECT_ID"]
 )
 
+## Call WATSONX `/text/generation` endpoint - not all models support /chat route. 
 response = completion(
-  model="watsonx/meta-llama/llama-3-8b-instruct",
+  model="watsonx/ibm/granite-13b-chat-v2",
   messages=[{ "content": "what is your favorite colour?","role": "user"}],
   project_id="<my-project-id>"
 )
@@ -54,7 +57,7 @@ os.environ["WATSONX_APIKEY"] = ""
 os.environ["WATSONX_PROJECT_ID"] = ""
 
 response = completion(
-  model="watsonx/ibm/granite-13b-chat-v2",
+  model="watsonx/meta-llama/llama-3-1-8b-instruct",
   messages=[{ "content": "what is your favorite colour?","role": "user"}],
   stream=True
 )

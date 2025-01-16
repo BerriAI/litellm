@@ -3,23 +3,19 @@
 import asyncio
 import os
 import random
-import time
 import traceback
 import types
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, Optional
 
-import dotenv  # type: ignore
 import httpx
-import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -481,7 +477,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
 
         url = f"{langsmith_api_base}/runs/{run_id}"
-        response = requests.get(
+        response = litellm.module_level_client.get(
             url=url,
             headers={"x-api-key": langsmith_api_key},
         )

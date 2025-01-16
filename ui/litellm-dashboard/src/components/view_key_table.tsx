@@ -131,6 +131,57 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
+  // Function to check if user is admin of a team
+  const isUserTeamAdmin = (team: any) => {
+    if (!team.members_with_roles) return false;
+    return team.members_with_roles.some(
+      (member: any) => member.role === "admin" && member.user_id === userID
+    );
+  };
+
+  // Combine all keys that user should have access to
+  const all_keys_to_display = React.useMemo(() => {
+    let allKeys: any[] = [];
+
+    // If no teams, return personal keys
+    if (!teams || teams.length === 0) {
+      return data;
+    }
+
+    teams.forEach(team => {
+      // For default team or when user is not admin, use personal keys (data)
+      if (team.team_id === "default-team" || !isUserTeamAdmin(team)) {
+        if (selectedTeam && selectedTeam.team_id === team.team_id && data) {
+          allKeys = [...allKeys, ...data.filter(key => key.team_id === team.team_id)];
+        }
+      }
+      // For teams where user is admin, use team keys
+      else if (isUserTeamAdmin(team)) {
+        if (selectedTeam && selectedTeam.team_id === team.team_id) {
+          allKeys = [...allKeys, ...(team.keys || [])];
+        }
+      }
+    });
+
+    // If no team is selected, show all accessible keys
+    if (!selectedTeam && data) {
+      const personalKeys = data.filter(key => !key.team_id || key.team_id === "default-team");
+      const adminTeamKeys = teams
+        .filter(team => isUserTeamAdmin(team))
+        .flatMap(team => team.keys || []);
+      allKeys = [...personalKeys, ...adminTeamKeys];
+    }
+
+    // Filter out litellm-dashboard keys
+    allKeys = allKeys.filter(key => key.team_id !== "litellm-dashboard");
+
+    // Remove duplicates based on token
+    const uniqueKeys = Array.from(
+      new Map(allKeys.map(key => [key.token, key])).values()
+    );
+
+    return uniqueKeys;
+  }, [data, teams, selectedTeam, userID]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
@@ -261,6 +312,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     const [errorModels, setErrorModels] = useState<string[]>([]);
     const [errorBudget, setErrorBudget] = useState<boolean>(false);
 
+    let metadataString = '';
+    try {
+      metadataString = JSON.stringify(token.metadata, null, 2);
+    } catch (error) {
+      console.error("Error stringifying metadata:", error);
+      // You can choose a fallback, such as an empty string or a warning message
+      metadataString = '';
+    }
+
+    // Ensure token is defined and handle gracefully if not
+    const initialValues = token ? {
+      ...token,
+      budget_duration: token.budget_duration,
+      metadata: metadataString
+    } : { metadata: metadataString };
+
+
     const handleOk = () => {
       form
         .validateFields()
@@ -286,7 +354,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={{...token, budget_duration: token.budget_duration}} // Pass initial values here
+          initialValues={initialValues}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -426,7 +494,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 className="mt-8"
                 label="RPM Limit (requests per minute)" 
                 name="rpm_limit" 
-                help={`rpm_limit cannot exceed team max tpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
+                help={`rpm_limit cannot exceed team max rpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
                 rules={[
                   {
                       validator: async (_, value) => {
@@ -441,13 +509,14 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <InputNumber step={1} precision={1} width={200} />
               </Form.Item>
               <Form.Item
-                label="Metadata"
+                label="Metadata (ensure this is valid JSON)"
                 name="metadata"
-                initialValue={token.metadata}
               >
                 <TextArea
-                  value={String(token.metadata)}
                   rows={10}
+                  onChange={(e) => {
+                    form.setFieldsValue({ metadata: e.target.value });
+                  }}
                 />
               </Form.Item>
             </>
@@ -675,6 +744,17 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const currentKey = formValues.token; 
   formValues.key = currentKey;
 
+  // Convert metadata back to an object if it exists and is a string
+  if (formValues.metadata && typeof formValues.metadata === 'string') {
+    try {
+      formValues.metadata = JSON.parse(formValues.metadata);
+    } catch (error) {
+      console.error("Error parsing metadata JSON:", error);
+      message.error("Invalid metadata JSON for formValue " + formValues.metadata);
+      return;
+    }
+  }
+
   // Convert the budget_duration back to the API expected format
   if (formValues.budget_duration) {
     switch (formValues.budget_duration) {
@@ -829,7 +909,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           </TableRow>
         </TableHead>
         <TableBody>
-          {data.map((item) => {
+          {all_keys_to_display && all_keys_to_display.map((item) => {
             console.log(item);
             // skip item if item.team_id == "litellm-dashboard"
             if (item.team_id === "litellm-dashboard") {

@@ -1,15 +1,8 @@
 import json
-from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
+from abc import abstractmethod
+from typing import Optional, Union
 
-import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.types.utils import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-    GenericStreamingChunk,
-    ModelResponse,
-)
+from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 
 class BaseModelResponseIterator:
@@ -20,7 +13,9 @@ class BaseModelResponseIterator:
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(
+        self, chunk: dict
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -34,7 +29,9 @@ class BaseModelResponseIterator:
     def __iter__(self):
         return self
 
-    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk:
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
         if "[DONE]" in str_line:
             return GenericStreamingChunk(

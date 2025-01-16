@@ -1,23 +1,15 @@
-import json
 import time
-import types
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 import litellm
-from litellm.llms.base_llm.transformation import BaseConfig, BaseLLMException
-from litellm.llms.prompt_templates.common_utils import convert_content_list_to_str
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionUsageBlock,
-    Choices,
-    GenericStreamingChunk,
-    Message,
-    ModelResponse,
-    Usage,
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
 )
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import CohereError
 from ..common_utils import ModelResponseIterator as CohereModelResponseIterator
@@ -110,6 +102,7 @@ class CohereTextConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return cohere_validate_environment(
             headers=headers,
@@ -118,12 +111,6 @@ class CohereTextConfig(BaseConfig):
             optional_params=optional_params,
             api_key=api_key,
         )
-
-    def _transform_messages(
-        self,
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
-        raise NotImplementedError
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -217,7 +204,8 @@ class CohereTextConfig(BaseConfig):
         request_data: dict,
         messages: List[AllMessageValues],
         optional_params: dict,
-        encoding: str,
+        litellm_params: dict,
+        encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:

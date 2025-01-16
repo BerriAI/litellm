@@ -13,7 +13,6 @@ import asyncio
 import inspect
 import json
 import time
-import traceback
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
@@ -21,8 +20,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from litellm.types.utils import all_litellm_params
+from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
 
@@ -53,7 +51,6 @@ class RedisCache(BaseCache):
         startup_nodes: Optional[List] = None,  # for redis-cluster
         **kwargs,
     ):
-        import redis
 
         from litellm._service_logger import ServiceLogging
 

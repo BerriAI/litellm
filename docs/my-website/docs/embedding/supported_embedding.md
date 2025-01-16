@@ -394,6 +394,32 @@ print(response)
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
 
+## Gemini AI Embedding Models
+
+### API keys
+
+This can be set as env variables or passed as **params to litellm.embedding()**
+```python
+import os
+os.environ["GEMINI_API_KEY"] = ""
+```
+
+### Usage - Embedding
+```python
+from litellm import embedding
+response = embedding(
+  model="gemini/text-embedding-004",
+  input=["good morning from litellm"],
+)
+print(response)
+```
+
+All models listed [here](https://ai.google.dev/gemini-api/docs/models/gemini) are supported:
+
+| Model Name         | Function Call                                         |
+| :---               | :---                                                  |
+| text-embedding-004 | `embedding(model="gemini/text-embedding-004", input)` |
+
 
 ## Vertex AI Embedding Models
 
@@ -411,7 +437,7 @@ response = embedding(
 print(response)
 ```
 
-## Supported Models
+### Supported Models
 All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a0249f630a6792d49dffc2c5d9b7/model_prices_and_context_window.json#L835) are supported
 
 | Model Name               | Function Call                                                                                                                                                      |

@@ -20,6 +20,9 @@ from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     get_api_key_from_custom_header,
 )
+from fastapi import WebSocket, HTTPException, status
+
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 
 
 class Request:
@@ -141,12 +144,13 @@ async def test_check_blocked_team():
         ("proxy_admin_viewer", "proxy_admin_viewer"),
     ],
 )
-def test_returned_user_api_key_auth(user_role, expected_role):
+@pytest.mark.asyncio
+async def test_returned_user_api_key_auth(user_role, expected_role):
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
     from datetime import datetime
 
-    new_obj = _return_user_api_key_auth_obj(
+    new_obj = await _return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(
             user_role=user_role, user_id="", max_budget=None, user_email=""
         ),
@@ -496,3 +500,297 @@ def test_read_request_body():
     request.body = return_body
     result = _read_request_body(request)
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_auth_with_form_data_and_model():
+    """
+    Test user_api_key_auth when:
+    1. Request has form data instead of JSON body
+    2. Virtual key has a model set
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL, FormData
+    from litellm.proxy.proxy_server import (
+        hash_token,
+        user_api_key_cache,
+        user_api_key_auth,
+    )
+
+    # Setup
+    user_key = "sk-12345678"
+
+    # Create a virtual key with a specific model
+    valid_token = UserAPIKeyAuth(
+        token=hash_token(user_key),
+        models=["gpt-4"],
+    )
+
+    # Store the virtual key in cache
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    # Create request with form data
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        }
+    )
+    request._url = URL(url="/chat/completions")
+
+    # Mock form data
+    form_data = FormData([("key1", "value1"), ("key2", "value2")])
+
+    async def return_form_data():
+        return form_data
+
+    request.form = return_form_data
+
+    # Test user_api_key_auth with form data request
+    response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    assert response.models == ["gpt-4"], "Model from virtual key should be preserved"
+
+
+@pytest.mark.asyncio
+async def test_soft_budget_alert():
+    """
+    Test that when a token's spend exceeds soft_budget, it triggers a budget alert but allows the request
+    """
+    import asyncio
+    import time
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    # Setup
+    user_key = "sk-12345"
+    soft_budget = 10
+    current_spend = 15  # Spend exceeds soft budget
+
+    # Create a valid token with soft budget
+    valid_token = UserAPIKeyAuth(
+        token=hash_token(user_key),
+        soft_budget=soft_budget,
+        spend=current_spend,
+        last_refreshed_at=time.time(),
+    )
+
+    # Store in cache
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+
+    # Mock proxy server settings
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
+
+    # Create request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    # Track if budget_alerts was called
+    alert_called = False
+    original_budget_alerts = litellm.proxy.proxy_server.proxy_logging_obj.budget_alerts
+
+    async def mock_budget_alerts(*args, **kwargs):
+        nonlocal alert_called
+        if kwargs.get("type") == "soft_budget":
+            alert_called = True
+        return await original_budget_alerts(*args, **kwargs)
+
+    # Patch the budget_alerts method
+    setattr(
+        litellm.proxy.proxy_server.proxy_logging_obj,
+        "budget_alerts",
+        mock_budget_alerts,
+    )
+
+    try:
+        # Call user_api_key_auth
+        response = await user_api_key_auth(
+            request=request, api_key="Bearer " + user_key
+        )
+
+        # Assert the request was allowed (no exception raised)
+        assert response is not None
+        # Assert the alert was triggered
+        await asyncio.sleep(3)
+        assert alert_called == True, "Soft budget alert should have been triggered"
+
+    finally:
+        # Restore original budget_alerts
+        setattr(
+            litellm.proxy.proxy_server.proxy_logging_obj,
+            "budget_alerts",
+            original_budget_alerts,
+        )
+
+
+def test_is_allowed_route():
+    from litellm.proxy.auth.user_api_key_auth import _is_allowed_route
+    from litellm.proxy._types import UserAPIKeyAuth
+    import datetime
+
+    request = MagicMock()
+
+    args = {
+        "route": "/embeddings",
+        "token_type": "api",
+        "request": request,
+        "request_data": {"input": ["hello world"], "model": "embedding-small"},
+        "api_key": "9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+        "valid_token": UserAPIKeyAuth(
+            token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+            key_name="sk-...CJjQ",
+            key_alias=None,
+            spend=0.0,
+            max_budget=None,
+            expires=None,
+            models=[],
+            aliases={},
+            config={},
+            user_id=None,
+            team_id=None,
+            max_parallel_requests=None,
+            metadata={},
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            budget_reset_at=None,
+            allowed_cache_controls=[],
+            permissions={},
+            model_spend={},
+            model_max_budget={},
+            soft_budget_cooldown=False,
+            blocked=None,
+            litellm_budget_table=None,
+            org_id=None,
+            created_at=MagicMock(),
+            updated_at=MagicMock(),
+            team_spend=None,
+            team_alias=None,
+            team_tpm_limit=None,
+            team_rpm_limit=None,
+            team_max_budget=None,
+            team_models=[],
+            team_blocked=False,
+            soft_budget=None,
+            team_model_aliases=None,
+            team_member_spend=None,
+            team_member=None,
+            team_metadata=None,
+            end_user_id=None,
+            end_user_tpm_limit=None,
+            end_user_rpm_limit=None,
+            end_user_max_budget=None,
+            last_refreshed_at=1736990277.432638,
+            api_key=None,
+            user_role=None,
+            allowed_model_region=None,
+            parent_otel_span=None,
+            rpm_limit_per_model=None,
+            tpm_limit_per_model=None,
+            user_tpm_limit=None,
+            user_rpm_limit=None,
+        ),
+        "user_obj": None,
+    }
+
+    assert _is_allowed_route(**args)
+
+
+@pytest.mark.parametrize(
+    "user_obj, expected_result",
+    [
+        (None, False),  # Case 1: user_obj is None
+        (
+            LiteLLM_UserTable(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            True,
+        ),  # Case 2: user_role is PROXY_ADMIN
+        (
+            LiteLLM_UserTable(
+                user_role="OTHER_ROLE",
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            False,
+        ),  # Case 3: user_role is not PROXY_ADMIN
+    ],
+)
+def test_is_user_proxy_admin(user_obj, expected_result):
+    from litellm.proxy.auth.user_api_key_auth import _is_user_proxy_admin
+
+    assert _is_user_proxy_admin(user_obj) == expected_result
+
+
+@pytest.mark.parametrize(
+    "user_obj, expected_role",
+    [
+        (None, None),  # Case 1: user_obj is None (should return None)
+        (
+            LiteLLM_UserTable(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            LitellmUserRoles.PROXY_ADMIN,
+        ),  # Case 2: user_role is PROXY_ADMIN (should return LitellmUserRoles.PROXY_ADMIN)
+        (
+            LiteLLM_UserTable(
+                user_role="OTHER_ROLE",
+                user_id="1234",
+                user_email="test@test.com",
+                max_budget=None,
+                spend=0.0,
+            ),
+            LitellmUserRoles.INTERNAL_USER,
+        ),  # Case 3: invalid user_role (should return LitellmUserRoles.INTERNAL_USER)
+    ],
+)
+def test_get_user_role(user_obj, expected_role):
+    from litellm.proxy.auth.user_api_key_auth import _get_user_role
+
+    assert _get_user_role(user_obj) == expected_role
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    # Prepare a mock WebSocket object
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+
+    # Mock the return value of `user_api_key_auth` when it's called within the `user_api_key_auth_websocket` function
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
+    ) as mock_user_api_key_auth:
+
+        # Make the call to the WebSocket function
+        await user_api_key_auth_websocket(mock_websocket)
+
+        # Assert that `user_api_key_auth` was called with the correct parameters
+        mock_user_api_key_auth.assert_called_once()
+
+        assert (
+            mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+        )

@@ -10,14 +10,9 @@ services:
     ## Uncomment these lines to start proxy with a config.yaml file ##
     # volumes:
     #  - ./config.yaml:/app/config.yaml <<- this is missing in the docker-compose file currently
-    # The below two are my suggestion
     # command:
     #  - "--config=/app/config.yaml"
     ##############################################
-    #########################################
-    ## Uncomment these lines to start proxy with a config.yaml file ##
-    # volumes:
-    ###############################################
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     environment:

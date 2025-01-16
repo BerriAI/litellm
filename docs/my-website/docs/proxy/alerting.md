@@ -6,17 +6,13 @@ import TabItem from '@theme/TabItem';
 
 Get alerts for:
 
-- Hanging LLM api calls
-- Slow LLM api calls
-- Failed LLM api calls
-- Budget Tracking per key/user
-- Spend Reports - Weekly & Monthly spend per Team, Tag
-- Failed db read/writes
-- Model outage alerting
-- Daily Reports:
-    - **LLM** Top 5 slowest deployments
-    - **LLM** Top 5 deployments with most failed requests
-- **Spend** Weekly & Monthly spend per Team, Tag
+| Category | Alert Type |
+|----------|------------|
+| **LLM Performance** | Hanging API calls, Slow API calls, Failed API calls, Model outage alerting |
+| **Budget & Spend** | Budget tracking per key/user, Soft budget alerts, Weekly & Monthly spend reports per Team/Tag |
+| **System Health** | Failed database read/writes |
+| **Daily Reports** | Top 5 slowest LLM deployments, Top 5 LLM deployments with most failed requests, Weekly & Monthly spend per Team/Tag |
+
 
 
 Works across: 
@@ -48,6 +44,19 @@ general_settings:
     alerting: ["slack"]
     alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
     spend_report_frequency: "1d" # [Optional] set as 1d, 2d, 30d .... Specifiy how often you want a Spend Report to be sent
+    
+    # [OPTIONAL ALERTING ARGS]
+    alerting_args:
+        daily_report_frequency: 43200  # 12 hours in seconds
+        report_check_interval: 3600    # 1 hour in seconds
+        budget_alert_ttl: 86400        # 24 hours in seconds
+        outage_alert_ttl: 60           # 1 minute in seconds
+        region_outage_alert_ttl: 60    # 1 minute in seconds
+        minor_outage_alert_threshold: 5 
+        major_outage_alert_threshold: 10
+        max_outage_alert_list_size: 1000
+        log_to_console: false
+    
 ```
 
 Start proxy 
@@ -80,6 +89,51 @@ litellm_settings:
   redact_messages_in_exceptions: True
 ```
 
+### Soft Budget Alerts for Virtual Keys
+
+Use this to send an alert when a key/team is close to it's budget running out
+
+Step 1. Create a virtual key with a soft budget
+
+Set the `soft_budget` to 0.001
+
+```shell
+curl -X 'POST' \
+  'http://localhost:4000/key/generate' \
+  -H 'accept: application/json' \
+  -H 'x-goog-api-key: sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "key_alias": "prod-app1",
+  "team_id": "113c1a22-e347-4506-bfb2-b320230ea414",
+  "soft_budget": 0.001
+}'
+```
+
+Step 2. Send a request to the proxy with the virtual key
+
+```shell
+curl http://0.0.0.0:4000/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer sk-Nb5eCf427iewOlbxXIH4Ow" \
+-d '{
+  "model": "openai/gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "this is a test request, write a short poem"
+    }
+  ]
+}'
+
+```
+
+Step 3. Check slack for Expected Alert
+
+<Image img={require('../../img/soft_budget_alert.png')}/>
+
+
+
 
 ### Add Metadata to alerts 
 
@@ -110,7 +164,7 @@ response = client.chat.completions.create(
 
 <Image img={require('../../img/alerting_metadata.png')}/>
 
-### Opting into specific alert types
+### Select specific alert types
 
 Set `alert_types` if you want to Opt into only specific alert types. When alert_types is not set, all Default Alert Types are enabled.
 
@@ -132,7 +186,7 @@ general_settings:
   ] 
 ```
 
-### Set specific slack channels per alert type
+### Map slack channels to alert type
 
 Use this if you want to set specific channels per alert type
 
@@ -230,7 +284,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 ```
 
 
-### Using MS Teams Webhooks
+### MS Teams Webhooks
 
 MS Teams provides a slack compatible webhook url that you can use for alerting
 
@@ -272,7 +326,7 @@ curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
 
 <Image img={require('../../img/ms_teams_alerting.png')}/>
 
-### Using Discord Webhooks
+### Discord Webhooks
 
 Discord provides a slack compatible webhook url that you can use for alerting
 
@@ -457,3 +511,18 @@ Management Endpoint Alerts - Virtual Key, Team, Internal User
 | `new_internal_user_created` | Notifications for new internal user accounts | ❌ |
 | `internal_user_updated` | Alerts when an internal user's details are changed | ❌ |
 | `internal_user_deleted` | Notifications when an internal user account is removed | ❌ |
+
+
+## `alerting_args` Specification
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `daily_report_frequency` | 43200 (12 hours) | Frequency of receiving deployment latency/failure reports in seconds |
+| `report_check_interval` | 3600 (1 hour) | How often to check if a report should be sent (background process) in seconds |
+| `budget_alert_ttl` | 86400 (24 hours) | Cache TTL for budget alerts to prevent spam when budget is crossed |
+| `outage_alert_ttl` | 60 (1 minute) | Time window for collecting model outage errors in seconds |
+| `region_outage_alert_ttl` | 60 (1 minute) | Time window for collecting region-based outage errors in seconds |
+| `minor_outage_alert_threshold` | 5 | Number of errors that trigger a minor outage alert (400 errors not counted) |
+| `major_outage_alert_threshold` | 10 | Number of errors that trigger a major outage alert (400 errors not counted) |
+| `max_outage_alert_list_size` | 1000 | Maximum number of errors to store in cache per model/region |
+| `log_to_console` | false | If true, prints alerting payload to console as a `.warning` log. |

@@ -269,6 +269,9 @@ audio_file = open(file_path, "rb")
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=4, delay=2)
+@pytest.mark.skip(
+    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
+)
 async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -304,6 +307,9 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(
+    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
+)
 async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
@@ -1108,6 +1114,7 @@ generation_params = {
 def test_langfuse_prompt_type(prompt):
 
     from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
+    from unittest.mock import patch, MagicMock, Mock
 
     clean_metadata = {
         "prompt": {
@@ -1209,7 +1216,10 @@ def test_langfuse_prompt_type(prompt):
         "cache_hit": False,
     }
     _add_prompt_to_generation_params(
-        generation_params=generation_params, clean_metadata=clean_metadata
+        generation_params=generation_params,
+        clean_metadata=clean_metadata,
+        prompt_management_metadata=None,
+        langfuse_client=Mock(),
     )
 
 

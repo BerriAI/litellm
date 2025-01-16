@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import httpx
@@ -133,7 +133,7 @@ def test_completion_xai(stream):
             for chunk in response:
                 print(chunk)
                 assert chunk is not None
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
                 assert isinstance(chunk.choices[0], litellm.utils.StreamingChoices)
 
         else:

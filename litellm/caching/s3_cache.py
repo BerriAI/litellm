@@ -12,11 +12,9 @@ Has 4 methods:
 import ast
 import asyncio
 import json
-from typing import Any, Optional
+from typing import Optional
 
-import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.types.caching import LiteLLMCacheType
 
 from .base_cache import BaseCache
 
@@ -103,7 +101,6 @@ class S3Cache(BaseCache):
         self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
-        import boto3
         import botocore
 
         try:

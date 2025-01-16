@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
-
+from fastapi.routing import APIRoute
+from fastapi.responses import Response
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_UserTable, LiteLLMRoutes
@@ -1035,6 +1036,7 @@ async def test_end_user_jwt_auth(monkeypatch):
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.proxy_server import user_api_key_auth
+    import json
 
     monkeypatch.delenv("JWT_AUDIENCE", None)
     jwt_handler = JWTHandler()
@@ -1094,21 +1096,70 @@ async def test_end_user_jwt_auth(monkeypatch):
 
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
-    request._url = URL(url="/chat/completions")
+    api_route = APIRoute(path="/chat/completions", endpoint=chat_completion)
+    request = Request(
+        {
+            "type": "http",
+            "route": api_route,
+            "path": "/chat/completions",
+            "headers": [(b"authorization", f"Bearer {bearer_token}".encode("latin-1"))],
+            "method": "POST",
+        }
+    )
+
+    async def return_body():
+        body_dict = {
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        }
+        # Serialize the dictionary to JSON and encode it to bytes
+        return json.dumps(body_dict).encode("utf-8")
+
+    request.body = return_body
 
     ## 1. INITIAL TEAM CALL - should fail
     # use generated key to auth in
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
-        {
-            "enable_jwt_auth": True,
-        },
+        {"enable_jwt_auth": True, "pass_through_all_models": True},
+    )
+    setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        MagicMock(),
     )
     setattr(litellm.proxy.proxy_server, "prisma_client", {})
     setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+    from litellm.proxy.proxy_server import cost_tracking
+
+    cost_tracking()
     result = await user_api_key_auth(request=request, api_key=bearer_token)
     assert (
         result.end_user_id == "81b3e52a-67a6-4efb-9645-70527e101479"
     )  # jwt token decoded sub value
+
+    temp_response = Response()
+    from litellm.proxy.hooks.proxy_track_cost_callback import (
+        _should_track_cost_callback,
+    )
+
+    with patch.object(
+        litellm.proxy.hooks.proxy_track_cost_callback, "_should_track_cost_callback"
+    ) as mock_client:
+        resp = await chat_completion(
+            request=request,
+            fastapi_response=temp_response,
+            model="gpt-4o",
+            user_api_key_dict=result,
+        )
+
+        assert resp is not None
+
+        await asyncio.sleep(1)
+
+        mock_client.assert_called_once()
+
+        mock_client.call_args.kwargs[
+            "end_user_id"
+        ] == "81b3e52a-67a6-4efb-9645-70527e101479"
