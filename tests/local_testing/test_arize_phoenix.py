@@ -30,20 +30,65 @@ async def test_async_otel_callback():
 
 
 @pytest.mark.parametrize(
-    "test_name, env_vars, expected_headers, expected_endpoint, expected_protocol",
+    "env_vars, expected_headers, expected_endpoint, expected_protocol",
     [
-        ("default to grpc protocol and arize hosted phoenix endpoint", {"PHOENIX_API_KEY": "test_api_key"}, "api_key=test_api_key", "https://app.phoenix.arize.com/v1/traces", "otlp_grpc"),
-        ("custom grpc endpoint", {"PHOENIX_COLLECTOR_ENDPOINT": "https://localhost:6006","PHOENIX_API_KEY": "test_api_key"}, "Authorization=Bearer test_api_key", "https://localhost:6006", "otlp_grpc"),
-        ("custom grpc endpoint with no auth", {"PHOENIX_COLLECTOR_ENDPOINT": "https://localhost:6006"}, None, "https://localhost:6006", "otlp_grpc"),
-        ("custom http endpoint", {"PHOENIX_COLLECTOR_HTTP_ENDPOINT": "https://localhost:6006", "PHOENIX_API_KEY": "test_api_key"}, "Authorization=Bearer test_api_key", "https://localhost:6006", "otlp_http"),
+        pytest.param(
+            {"PHOENIX_API_KEY": "test_api_key"},
+            "api_key=test_api_key",
+            "https://app.phoenix.arize.com/v1/traces",
+            "otlp_grpc",
+            id="default to grpc protocol and Arize hosted Phoenix endpoint",
+        ),
+        pytest.param(
+            {"PHOENIX_COLLECTOR_ENDPOINT": "https://localhost:6006", "PHOENIX_API_KEY": "test_api_key"},
+            "Authorization=Bearer test_api_key",
+            "https://localhost:6006",
+            "otlp_grpc",
+            id="custom grpc endpoint",
+        ),
+        pytest.param(
+            {"PHOENIX_COLLECTOR_ENDPOINT": "https://localhost:6006"},
+            None,
+            "https://localhost:6006",
+            "otlp_grpc",
+            id="custom grpc endpoint with no auth",
+        ),
+        pytest.param(
+            {"PHOENIX_COLLECTOR_HTTP_ENDPOINT": "https://localhost:6006", "PHOENIX_API_KEY": "test_api_key"},
+            "Authorization=Bearer test_api_key",
+            "https://localhost:6006",
+            "otlp_http",
+            id="custom http endpoint",
+        ),
     ],
 )
-def test_get_arize_phoenix_config(test_name, monkeypatch, env_vars, expected_headers, expected_endpoint, expected_protocol):
+def test_get_arize_phoenix_config(monkeypatch, env_vars, expected_headers, expected_endpoint, expected_protocol):
     for key, value in env_vars.items():
         monkeypatch.setenv(key, value)
 
     config = ArizePhoenixLogger.get_arize_phoenix_config()
-    assert isinstance(config, ArizePhoenixConfig), f"Failed for {test_name}"
-    assert config.otlp_auth_headers == expected_headers, f"Failed for {test_name}"
-    assert config.endpoint == expected_endpoint, f"Failed for  {test_name}"
-    assert config.protocol == expected_protocol, f"Failed for  {test_name}"
+
+    assert isinstance(config, ArizePhoenixConfig)
+    assert config.otlp_auth_headers == expected_headers
+    assert config.endpoint == expected_endpoint
+    assert config.protocol == expected_protocol
+
+@pytest.mark.parametrize(
+    "env_vars",
+    [
+        pytest.param(
+            {"PHOENIX_COLLECTOR_ENDPOINT": "https://app.phoenix.arize.com/v1/traces"},
+            id="missing api_key with explicit Arize Phoenix endpoint"
+        ),
+        pytest.param(
+            {},
+            id="missing api_key with no endpoint (defaults to Arize Phoenix)"
+        ),
+    ],
+)
+def test_get_arize_phoenix_config_expection_on_missing_api_key(monkeypatch, env_vars):
+    for key, value in env_vars.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(ValueError, match=f"PHOENIX_API_KEY must be set when the Arize hosted Phoenix endpoint is used."):
+        ArizePhoenixLogger.get_arize_phoenix_config()

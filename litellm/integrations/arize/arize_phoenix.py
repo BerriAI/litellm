@@ -59,7 +59,7 @@ class ArizePhoenixLogger:
         # a slightly different auth header format than self hosted phoenix
         if endpoint == ARIZE_HOSTED_PHOENIX_ENDPOINT: 
             if api_key is None:
-                raise ValueError("PHOENIX_API_KEY must be set for the Arize hosted Phoenix endpoint.")
+                raise ValueError("PHOENIX_API_KEY must be set when the Arize hosted Phoenix endpoint is used.")
             otlp_auth_headers = f"api_key={api_key}"
         elif api_key is not None:
             # api_key/auth is optional for self hosted phoenix

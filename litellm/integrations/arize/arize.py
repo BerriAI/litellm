@@ -27,7 +27,6 @@ class ArizeLogger:
         _utils.set_attributes(span, kwargs, response_obj)
         return
     
-    ###################### Helper functions ######################
 
     @staticmethod
     def get_arize_config() -> ArizeConfig:
