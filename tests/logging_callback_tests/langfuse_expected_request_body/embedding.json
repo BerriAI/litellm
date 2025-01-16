@@ -1,0 +1,76 @@
+{
+    "batch": [
+        {
+            "id": "e48fbad7-01ff-4436-b164-dbbb6354517f",
+            "type": "trace-create",
+            "body": {
+                "id": "2a2d9d33-c2ba-4b26-996b-51c55eabb2fa",
+                "timestamp": "2025-01-16T19:46:39.725212Z",
+                "name": "litellm-aembedding",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello world"
+                        }
+                    ]
+                },
+                "tags": []
+            },
+            "timestamp": "2025-01-16T19:46:39.725426Z"
+        },
+        {
+            "id": "41b50ccf-66d8-488a-9b61-9d00b2e12527",
+            "type": "generation-create",
+            "body": {
+                "name": "litellm-aembedding",
+                "startTime": "2025-01-16T11:46:38.911517-08:00",
+                "metadata": {
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 2e-07,
+                        "additional_headers": {
+                            "x_ratelimit_limit_requests": 10000,
+                            "x_ratelimit_limit_tokens": 10000000,
+                            "x_ratelimit_remaining_requests": 9999,
+                            "x_ratelimit_remaining_tokens": 9999998
+                        }
+                    },
+                    "litellm_response_cost": 2e-07,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello world"
+                        }
+                    ]
+                },
+                "level": "DEFAULT",
+                "id": "55cbb8b2-1f5d-4b0b-a645-28e7a911113e",
+                "endTime": "2025-01-16T11:46:39.719941-08:00",
+                "completionStartTime": "2025-01-16T11:46:39.719941-08:00",
+                "model": "text-embedding-ada-002",
+                "modelParameters": {},
+                "usage": {
+                    "input": 2,
+                    "output": 0,
+                    "unit": "TOKENS",
+                    "totalCost": 2e-07
+                }
+            },
+            "timestamp": "2025-01-16T19:46:39.725738Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-03734ab3-8790-4c09-b5fb-8c3b663413b6"
+    }
+}

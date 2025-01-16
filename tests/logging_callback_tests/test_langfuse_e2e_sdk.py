@@ -171,16 +171,16 @@ class TestLangfuseLogging:
                 setup["mock_post"], "streaming_completion.json"
             )
 
-    # @pytest.mark.asyncio
-    # async def test_langfuse_logging_embedding(self, mock_setup):
-    #     """Test Langfuse logging for embeddings"""
-    #     with patch("httpx.Client.post", mock_setup["mock_post"]):
-    #         await litellm.aembedding(
-    #             model="text-embedding-ada-002",
-    #             input=["Hello world"],
-    #             metadata={"trace_id": mock_setup["trace_id"]},
-    #         )
-    #         await self._verify_langfuse_call(mock_setup["mock_post"], "embedding.json")
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_embedding(self, mock_setup):
+        """Test Langfuse logging for embeddings"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.aembedding(
+                model="text-embedding-ada-002",
+                input=["Hello world"],
+            )
+            await self._verify_langfuse_call(setup["mock_post"], "embedding.json")
 
     # @pytest.mark.asyncio
     # async def test_langfuse_logging_tool_calling(self, mock_setup):
@@ -389,35 +389,6 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
 
 
 # test_langfuse_logging()
-
-
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_stream():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a streaming test for llama2 + langfuse",
-                }
-            ],
-            max_tokens=20,
-            temperature=0.2,
-            stream=True,
-        )
-        print(response)
-        for chunk in response:
-            pass
-            # print(chunk)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        print(e)
-
-
-# test_langfuse_logging_stream()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
