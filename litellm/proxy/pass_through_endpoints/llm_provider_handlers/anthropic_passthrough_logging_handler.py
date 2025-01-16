@@ -166,6 +166,7 @@ class AnthropicPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
+
         model = request_body.get("model", "")
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(

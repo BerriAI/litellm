@@ -248,3 +248,108 @@ def test_get_user_from_metadata(end_user_id):
     )
 
     assert response == "test"
+
+
+def test_handle_logging_anthropic_collected_chunks():
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+        PassthroughStandardLoggingPayload,
+        EndpointType,
+    )
+    from litellm.types.utils import ModelResponse
+
+    litellm_logging_obj = Mock()
+    pass_through_logging_obj = Mock()
+
+    sent_args = {
+        "litellm_logging_obj": litellm_logging_obj,
+        "passthrough_success_handler_obj": pass_through_logging_obj,
+        "url_route": "https://api.anthropic.com/v1/messages",
+        "request_body": {
+            "model": "claude-3-5-sonnet-20240620",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "List 5 important events in the XIX century",
+                        }
+                    ],
+                }
+            ],
+            "max_tokens": 4096,
+            "stream": True,
+        },
+        "endpoint_type": "anthropic",
+        "start_time": "2025-01-15T16:04:46.155054",
+        "all_chunks": [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"id":"msg_01G7T4YSBzHjmgTyizv1UfkB","type":"message","role":"assistant","model":"claude-3-5-sonnet-20240620","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":17,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}',
+            "event: content_block_start",
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            "event: ping",
+            'data: {"type": "ping"}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Here are 5 "}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"important events from the 19th century ("}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1801-1900):\\n\\n1. The Industrial"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Revolution (ongoing throughout the century)\\nMajor technological"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" advancements and societal changes as manufacturing shifted from han"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"d production to machines and factories.\\n\\n2. American Civil War (1861"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"-1865)\\nA conflict between the Union and the"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Confederacy over issues including slavery, resulting in the preservation of the"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" United States and the abolition of slavery.\\n\\n3. Publication"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" of Charles Darwin\'s \\"On the Origin of Species\\" ("}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1859)\\nDarwin\'s groundbreaking work"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" on evolution by natural selection revolutionized biology an"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"d scientific thought.\\n\\n4. Unification of Germany"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" (1871)\\nThe consolidation of numerous"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" German states into a single nation-state under Prussian"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" leadership, led by Otto von Bismarck"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":".\\n\\n5. Abolition of Slavery in Various"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Countries\\nIncluding the British Empire (1833),"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" French colonies (1848), and the United States ("}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1865), marking significant progress in human rights."}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\\n\\nThese events had far-reaching consequences that shape"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"d the modern world in various ways, from politics and economics to science an"}}',
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"d social structures."}}',
+            "event: content_block_stop",
+            'data: {"type":"content_block_stop","index":0}',
+            "event: message_delta",
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":249}}',
+            "event: message_stop",
+            'data: {"type":"message_stop"}',
+        ],
+        "end_time": "2025-01-15T16:04:49.603348",
+    }
+
+    result = (
+        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            **sent_args
+        )
+    )
+
+    assert isinstance(result["result"], ModelResponse)
