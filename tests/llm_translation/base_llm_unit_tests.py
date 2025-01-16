@@ -328,8 +328,15 @@ class BaseLLMChatTest(ABC):
         pass
 
     @pytest.mark.parametrize("detail", [None, "low", "high"])
+    @pytest.mark.parametrize(
+        "image_url",
+        [
+            "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+        ],
+    )
     @pytest.mark.flaky(retries=4, delay=1)
-    def test_image_url(self, detail):
+    def test_image_url(self, detail, image_url):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
 
@@ -348,7 +355,7 @@ class BaseLLMChatTest(ABC):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                            "url": image_url,
                         },
                     },
                 ],
