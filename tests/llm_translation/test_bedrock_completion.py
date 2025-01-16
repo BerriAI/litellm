@@ -2056,19 +2056,7 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
         assert "tools" not in supported_openai_params
 
 
-class TestBedrockConverseChat(BaseLLMChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-        litellm.add_known_models()
-        return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
+class TestBedrockChatMixin:
     def test_multilingual_requests(self):
         """
         Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
@@ -2081,6 +2069,20 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         """
         Remove override once we have access to Bedrock prompt caching
         """
+        pass
+
+
+class TestBedrockAnthropicConverseChat(TestBedrockChatMixin, BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
     def test_completion_cost(self):
