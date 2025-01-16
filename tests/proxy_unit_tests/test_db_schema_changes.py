@@ -81,11 +81,15 @@ def check_breaking_changes(
     return breaking_changes
 
 
-def test_schema_compatibility():
+def test_aaaaaschema_compatibility():
     """Test if current schema has breaking changes compared to main"""
+    import os
+
+    print("Current directory:", os.getcwd())
+
     # Get schemas
     old_schema = get_schema_from_branch("main")
-    with open("../../schema.prisma", "r") as f:
+    with open("./schema.prisma", "r") as f:
         new_schema = f.read()
 
     # Parse schemas
