@@ -91,6 +91,12 @@ spec:
                   name: {{ include "redis.secretName" .Subcharts.redis }}
                   key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
             {{- end }}
+            {{- if .Values.envVars }}
+            {{- range $key, $val := .Values.envVars }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
             - secretRef:

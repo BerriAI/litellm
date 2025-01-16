@@ -759,7 +759,7 @@ class AnthropicConfig(BaseConfig):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
-            is_vertex_request=False,
+            is_vertex_request=optional_params.get("is_vertex_request", False),
         )
 
         headers = {**headers, **anthropic_headers}

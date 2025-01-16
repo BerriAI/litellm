@@ -523,6 +523,8 @@ async def generate_key_fn(  # noqa: PLR0915
             data.soft_budget
         )  # include the user-input soft budget in the response
 
+        response = GenerateKeyResponse(**response)
+
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(
                 data=data,
@@ -532,7 +534,7 @@ async def generate_key_fn(  # noqa: PLR0915
             )
         )
 
-        return GenerateKeyResponse(**response)
+        return response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -558,7 +560,10 @@ def prepare_metadata_fields(
     try:
         for k, v in data_json.items():
             if k in LiteLLM_ManagementEndpoint_MetadataFields:
-                casted_metadata[k] = v
+                if isinstance(v, datetime):
+                    casted_metadata[k] = v.isoformat()
+                else:
+                    casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -658,6 +663,8 @@ async def update_key_fn(
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
+    - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
+    - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
 
     Example:
     ```bash
@@ -707,9 +714,8 @@ async def update_key_fn(
             existing_key_token=existing_key_row.token,
         )
 
-        response = await prisma_client.update_data(
-            token=key, data={**non_default_values, "token": key}
-        )
+        _data = {**non_default_values, "token": key}
+        response = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
@@ -1513,7 +1519,7 @@ async def regenerate_key_fn(
             updated_token_dict = dict(updated_token)
 
         updated_token_dict["key"] = new_token
-        updated_token_dict.pop("token")
+        updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
         ### 3. remove existing key entry from cache
         ######################################################################
@@ -1531,9 +1537,21 @@ async def regenerate_key_fn(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        return GenerateKeyResponse(
+        response = GenerateKeyResponse(
             **updated_token_dict,
         )
+
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=data,
+                existing_key_row=_key_in_db,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+        )
+
+        return response
     except Exception as e:
         raise handle_exception_on_proxy(e)
 

@@ -747,6 +747,8 @@ def get_custom_headers(
         "x-litellm-response-cost": str(response_cost),
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
+        "x-litellm-key-spend": str(user_api_key_dict.spend),
         "x-litellm-fastest_response_batch_completion": (
             str(fastest_response_batch_completion)
             if fastest_response_batch_completion is not None
@@ -3231,7 +3233,11 @@ class ProxyStartupEvent:
             )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
-            await prisma_client.health_check()
+            if (
+                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
+                is not True
+            ):
+                await prisma_client.health_check()
         return prisma_client
 
     @classmethod
