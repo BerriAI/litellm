@@ -588,6 +588,30 @@ def test_anthropic_beta_header(
 
 
 @pytest.mark.parametrize(
+    "tool_type,expected_computer_tool_used",
+    [
+        ("computer_20241022", True),
+        ("text_editor_20241022", True),
+        ("bash_20241022", True),
+        ("function", False)
+    ],
+)
+def test_anthropic_is_computer_tool_used(tool_type, expected_computer_tool_used):
+    tools = [
+        { "type": tool_type }
+    ]
+    assert litellm.AnthropicConfig().is_computer_tool_used(tools) == expected_computer_tool_used
+
+@pytest.mark.parametrize(
+    "cache_control_location",
+    [
+        "inside_function",
+        "outside_function",
+    ],
+)
+
+
+@pytest.mark.parametrize(
     "cache_control_location",
     [
         "inside_function",

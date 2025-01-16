@@ -399,13 +399,11 @@ class AnthropicConfig(BaseConfig):
 
         return False
 
-    def is_computer_tool_used(
-        self, tools: Optional[List[AllAnthropicToolsValues]]
-    ) -> bool:
+    def is_computer_tool_used(self, tools: Optional[List[AllAnthropicToolsValues]]) -> bool:
         if tools is None:
             return False
         for tool in tools:
-            if "type" in tool and tool["type"].startswith("computer_"):
+            if "type" in tool and (tool["type"].startswith("computer_") or tool["type"] in ["bash_20241022", "text_editor_20241022"]):
                 return True
         return False
 
