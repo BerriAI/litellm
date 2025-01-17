@@ -299,7 +299,7 @@ class BaseLLMChatTest(ABC):
                 **base_completion_call_args,
                 messages=messages,
                 response_format=EventsList,
-                timeout=5,
+                timeout=60,
             )
             assert res is not None
 
