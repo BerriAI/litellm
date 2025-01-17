@@ -1,7 +1,7 @@
 import json
 import secrets
 from datetime import datetime as dt
-from typing import Optional, cast
+from typing import Optional, Union, cast
 
 from pydantic import BaseModel
 
@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.types.utils import StandardLoggingPayload
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -57,6 +58,9 @@ def get_logging_payload(
         usage = dict(usage)
     id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
     api_key = metadata.get("user_api_key", "")
+    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+        "standard_logging_object", None
+    )
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
@@ -151,6 +155,8 @@ def get_logging_payload(
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
+            messages=_get_messages_for_spend_logs_payload(standard_logging_payload),
+            response=_get_response_for_spend_logs_payload(standard_logging_payload),
         )
 
         verbose_proxy_logger.debug(
@@ -239,3 +245,29 @@ async def get_spend_by_team_and_customer(
         return []
 
     return db_response
+
+
+def _get_messages_for_spend_logs_payload(
+    payload: Optional[StandardLoggingPayload],
+) -> Optional[Union[str, list, dict]]:
+    if payload is None:
+        return None
+    if _should_store_prompts_and_responses_in_spend_logs():
+        return payload.get("messages", {})
+    return None
+
+
+def _get_response_for_spend_logs_payload(
+    payload: Optional[StandardLoggingPayload],
+) -> Optional[Union[str, list, dict]]:
+    if payload is None:
+        return None
+    if _should_store_prompts_and_responses_in_spend_logs():
+        return payload.get("response", {})
+    return None
+
+
+def _should_store_prompts_and_responses_in_spend_logs() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("store_prompts_in_spend_logs") is True

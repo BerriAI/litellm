@@ -1855,6 +1855,8 @@ class SpendLogsPayload(TypedDict):
     end_user: Optional[str]
     requester_ip_address: Optional[str]
     custom_llm_provider: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
 
 
 class SpanAttributes(str, enum.Enum):
