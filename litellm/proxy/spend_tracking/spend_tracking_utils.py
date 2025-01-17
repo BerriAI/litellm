@@ -160,7 +160,8 @@ def get_logging_payload(
         )
 
         verbose_proxy_logger.debug(
-            "SpendTable: created payload - payload: %s\n\n", payload
+            "SpendTable: created payload - payload: %s\n\n",
+            json.dumps(payload, indent=4, default=str),
         )
 
         return payload
@@ -249,22 +250,22 @@ async def get_spend_by_team_and_customer(
 
 def _get_messages_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
-) -> Optional[Union[str, list, dict]]:
+) -> str:
     if payload is None:
-        return None
+        return ""
     if _should_store_prompts_and_responses_in_spend_logs():
-        return payload.get("messages", {})
-    return None
+        return json.dumps(payload.get("messages", {}))
+    return ""
 
 
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
-) -> Optional[Union[str, list, dict]]:
+) -> str:
     if payload is None:
-        return None
+        return ""
     if _should_store_prompts_and_responses_in_spend_logs():
-        return payload.get("response", {})
-    return None
+        return json.dumps(payload.get("response", {}))
+    return ""
 
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
