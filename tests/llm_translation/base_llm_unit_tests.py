@@ -346,6 +346,10 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
+        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
+            "model"
+        ):
+            pytest.skip("Model does not support http:// input")
 
         messages = [
             {
