@@ -11,7 +11,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -131,7 +131,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
 
         messages = standard_logging_payload["messages"]
-        messages = self._ensure_string_content(messages)
+        messages = self._ensure_string_content(messages=messages)
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
@@ -173,11 +173,18 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             return [response_obj["choices"][0]["message"].json()]
         return []
 
-    def _ensure_string_content(self, messages: List[Any]) -> List[Any]:
-        for message in messages:
-            if isinstance(message["content"], list):
-                message["content"] = str(message["content"])
-        return messages
+    def _ensure_string_content(
+        self, messages: Optional[Union[str, List[Any], Dict[Any, Any]]]
+    ) -> List[Any]:
+        if messages is None:
+            return []
+        if isinstance(messages, str):
+            return [messages]
+        elif isinstance(messages, list):
+            return [message for message in messages]
+        elif isinstance(messages, dict):
+            return [str(messages.get("content", ""))]
+        return []
 
     def _get_dd_llm_obs_payload_metadata(
         self, standard_logging_payload: StandardLoggingPayload
