@@ -256,6 +256,8 @@ class BedrockImageGeneration(BaseAWSLLM):
                     "text_prompts": [{"text": prompt, "weight": 1}],
                     **inference_params,
                 }
+        elif provider == "amazon":
+            return litellm.AmazonNovaConfig.transform_request_body(text=prompt, optional_params=optional_params)
         else:
             raise BedrockError(
                 status_code=422, message=f"Unsupported model={model}, passed in"
@@ -291,6 +293,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         config_class = (
             litellm.AmazonStability3Config
             if litellm.AmazonStability3Config._is_stability_3_model(model=model)
+            else litellm.AmazonNovaConfig if litellm.AmazonNovaConfig._is_nova_model(model=model)
             else litellm.AmazonStabilityConfig
         )
         config_class.transform_response_dict_to_openai_response(

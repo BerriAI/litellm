@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, TypedDict, Union
+from typing import Any, List, Literal, Optional, TypedDict, Union, Dict
 
 from typing_extensions import (
     TYPE_CHECKING,
@@ -320,6 +320,42 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     images: List[str]
     seeds: List[str]
     finish_reasons: List[str]
+
+
+class AmazonNovaImageGeneratorConfig(TypedDict, total=False):
+    """
+    Config for Amazon Nova Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    cfgScale: int
+    seed: int
+    quality: Literal["standard"]
+    width: int
+    height: int
+    numberOfImages: int
+
+
+class AmazonNovaTextToImageRequest(TypedDict, total=False):
+    """
+    Request for Amazon Nova Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    textToImageParams: Dict[str, str]
+    taskType: Literal["TEXT_IMAGE"]
+    imageGenerationConfig: AmazonNovaImageGeneratorConfig
+
+
+class AmazonNovaTextToImageResponse(TypedDict, total=False):
+    """
+    Response for Amazon Nova Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+    images: List[str]
 
 
 if TYPE_CHECKING:
