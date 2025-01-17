@@ -39,3 +39,9 @@ k8s_resource(
     # map one or more local ports to ports on your Pod; first number is local port, second is container port
     port_forwards=['4000:4000'],
 )
+
+k8s_resource(
+    'litellm-proxy-postgresql',
+    # map one or more local ports to ports on your Pod; first number is local port, second is container port
+    port_forwards=['5432:5432'],
+)
