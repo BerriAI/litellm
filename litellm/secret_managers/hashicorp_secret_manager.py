@@ -60,6 +60,7 @@ class HashicorpSecretManager(BaseSecretManager):
             --cacert vault-ca.pem \
             --cert cert.pem \
             --key key.pem \
+            --header "X-Vault-Namespace: mynamespace/" \
             --data @payload.json \
             https://127.0.0.1:8200/v1/auth/cert/login
 
@@ -83,11 +84,19 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault endpoint for cert-based login, e.g. '/v1/auth/cert/login'
         login_url = f"{self.vault_addr}/v1/auth/cert/login"
 
+        # Include your Vault namespace in the header if you're using namespaces.
+        # E.g. self.vault_namespace = 'mynamespace/'
+        # If you only have root namespace, you can omit this header entirely.
+        headers = {}
+        if hasattr(self, "vault_namespace") and self.vault_namespace:
+            headers["X-Vault-Namespace"] = self.vault_namespace
+
         try:
             # We use the client cert and key for mutual TLS
             resp = httpx.post(
                 login_url,
                 cert=(self.tls_cert_path, self.tls_key_path),
+                headers=headers,
             )
             resp.raise_for_status()
             token = resp.json()["auth"]["client_token"]
