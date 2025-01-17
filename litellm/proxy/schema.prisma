@@ -204,6 +204,8 @@ model LiteLLM_SpendLogs {
   team_id             String? 
   end_user            String?
   requester_ip_address String?
+  messages            Json?     @default("{}")
+  response            Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
 }
