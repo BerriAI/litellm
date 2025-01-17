@@ -29,6 +29,7 @@ class HashicorpSecretManager(BaseSecretManager):
         # Optional config for TLS cert auth
         self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
         self.tls_key_path = os.getenv("HCP_VAULT_CLIENT_KEY", "")
+        self.vault_cert_role = os.getenv("VAULT_CERT_ROLE", None)
 
         # Validate environment
         if not self.vault_token:
@@ -61,9 +62,8 @@ class HashicorpSecretManager(BaseSecretManager):
             --cert cert.pem \
             --key key.pem \
             --header "X-Vault-Namespace: mynamespace/" \
-            --data @payload.json \
+            --data '{"name": "my-cert-role"}' \
             https://127.0.0.1:8200/v1/auth/cert/login
-
         ```
 
         Response:
@@ -76,11 +76,9 @@ class HashicorpSecretManager(BaseSecretManager):
                 "renewable": true
             }
         }
-
         ```
         """
         verbose_logger.debug("Using TLS cert auth for Hashicorp Vault")
-
         # Vault endpoint for cert-based login, e.g. '/v1/auth/cert/login'
         login_url = f"{self.vault_addr}/v1/auth/cert/login"
 
@@ -90,13 +88,13 @@ class HashicorpSecretManager(BaseSecretManager):
         headers = {}
         if hasattr(self, "vault_namespace") and self.vault_namespace:
             headers["X-Vault-Namespace"] = self.vault_namespace
-
         try:
             # We use the client cert and key for mutual TLS
             resp = httpx.post(
                 login_url,
                 cert=(self.tls_cert_path, self.tls_key_path),
                 headers=headers,
+                json=self._get_tls_cert_auth_body(),
             )
             resp.raise_for_status()
             token = resp.json()["auth"]["client_token"]
@@ -108,6 +106,9 @@ class HashicorpSecretManager(BaseSecretManager):
             return token
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to Vault via TLS cert: {e}")
+
+    def _get_tls_cert_auth_body(self) -> dict:
+        return {"name": self.vault_cert_role}
 
     def get_url(self, secret_name: str) -> str:
         _url = f"{self.vault_addr}/v1/"
