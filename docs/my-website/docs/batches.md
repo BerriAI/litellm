@@ -179,7 +179,7 @@ First, set up where you want to store the batch files. You can use S3, GCS, or A
 
 ```yaml
 model_list:
-  - model_name: vllm-models
+  - model_name: vllm-model
     litellm_params:
       model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
       api_base: http://0.0.0.0:4000/v1
@@ -187,7 +187,7 @@ model_list:
 
 batch_settings:
   # Configure S3 for batch file storage
-  model: vllm-models
+  model: vllm-model
   batch_storage_params:
     s3_bucket_name: my-batch-bucket   # AWS Bucket Name for S3
     s3_region_name: us-west-2         # AWS Region Name for S3
