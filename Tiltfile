@@ -14,6 +14,7 @@ secret_settings(disable_scrub=True)
 
 docker_build(
     ref='litellm:some-tag',
+    dockerfile='docker/Dockerfile.non_root',
     context='.',
 )
 
