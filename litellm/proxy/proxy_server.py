@@ -3251,7 +3251,7 @@ class ProxyStartupEvent:
         if get_secret_bool("USE_DDTRACE", False) is True:
             import ddtrace
 
-            ddtrace.patch_all(logging=True)
+            ddtrace.patch_all(logging=True, openai=False)
 
 
 #### API ENDPOINTS ####
