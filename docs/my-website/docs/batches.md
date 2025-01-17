@@ -166,7 +166,73 @@ Cost calculation:
 - Total `token` and `response_cost` reflect the combined metrics across all batch responses
 
 
+## Batches API with Self-Hosted Models
 
+To use the batches API with self-hosted models, you'll need to:
+
+1. Configure a storage location for batch files (S3, GCS, etc.)
+2. Point to your self-hosted model endpoint
+
+
+### Step 1: Configure Storage in config.yaml
+First, set up where you want to store the batch files. You can use S3, GCS, or Azure Blob Storage
+
+```yaml
+model_list:
+  - model_name: vllm-models
+    litellm_params:
+      model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:4000/v1
+      api_key: none
+
+batch_settings:
+  # Configure S3 for batch file storage
+  model: vllm-models
+  batch_storage_params:
+    s3_bucket_name: my-batch-bucket   # AWS Bucket Name for S3
+    s3_region_name: us-west-2         # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID           # AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY   # AWS Secret Access Key for S3
+```
+
+### Step 2: Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+### Step 3: Create a Batch Request
+
+
+**Create File for Batch Completion**
+
+```shell
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@mydata.jsonl"
+```
+
+**Create Batch Request**
+
+```bash
+curl http://localhost:4000/v1/batches \
+        -H "Authorization: Bearer sk-1234" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "input_file_id": "file-abc123",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h"
+    }'
+```
+
+**Retrieve the Specific Batch**
+
+```bash
+curl http://localhost:4000/v1/batches/batch_abc123 \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+```
 
 
 ## [Swagger API Reference](https://litellm-api.up.railway.app/#/batch)
