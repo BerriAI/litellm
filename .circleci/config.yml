@@ -1472,6 +1472,7 @@ jobs:
           command: |
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
+            pip install "ddtrace==1.19.0"
             pip install aiohttp
             python -m pip install --upgrade pip
             pip install "pytest==7.3.1"
