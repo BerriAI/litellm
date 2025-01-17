@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.constants import (
+    DEFAULT_COOLDOWN_TIME_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD_PERCENT,
+)
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 
 from .router_callbacks.track_deployment_metrics import (
@@ -28,10 +32,6 @@ if TYPE_CHECKING:
 else:
     LitellmRouter = Any
     Span = Any
-DEFAULT_FAILURE_THRESHOLD_PERCENT = (
-    0.5  # default cooldown a deployment if 50% of requests fail in a given minute
-)
-DEFAULT_COOLDOWN_TIME_SECONDS = 5
 
 
 def _is_cooldown_required(
