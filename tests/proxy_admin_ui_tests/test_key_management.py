@@ -100,7 +100,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 def prisma_client():
     from litellm.proxy.proxy_cli import append_query_params
 
-    ### add connection pool + pool timeout args
+    ### add connection pool + pool timeout args.
     params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
     modified_url = append_query_params(database_url, params)
