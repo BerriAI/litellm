@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import copy
+import json
 import os
 import traceback
 from collections.abc import MutableMapping, MutableSequence, MutableSet
@@ -457,7 +458,7 @@ class LangFuseLogger:
             supports_costs = langfuse_version >= Version("2.7.3")
             supports_completion_start_time = langfuse_version >= Version("2.7.3")
 
-            tags = metadata.pop("tags", []) if supports_tags else []
+            tags = json.loads(metadata.pop("tags", "[]")) if supports_tags else []
 
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
