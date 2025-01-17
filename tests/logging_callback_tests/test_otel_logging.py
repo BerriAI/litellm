@@ -102,7 +102,6 @@ def validate_raw_gen_ai_request_openai_non_streaming(span):
         "llm.openai.messages",
         "llm.openai.temperature",
         "llm.openai.user",
-        "llm.openai.extra_body",
         "llm.openai.id",
         "llm.openai.choices",
         "llm.openai.created",
@@ -126,7 +125,6 @@ def validate_raw_gen_ai_request_openai_streaming(span):
         "llm.openai.messages",
         "llm.openai.temperature",
         "llm.openai.user",
-        "llm.openai.extra_body",
         "llm.openai.model",
     ]
 
