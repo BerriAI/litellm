@@ -195,6 +195,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 "custom_llm_provider", "unknown"
             ),
         }
-        _standard_logging_metadata = standard_logging_payload.get("metadata", {}) or {}
+        _standard_logging_metadata: dict = (
+            dict(standard_logging_payload.get("metadata", {})) or {}
+        )
         _metadata.update(_standard_logging_metadata)
         return _metadata
