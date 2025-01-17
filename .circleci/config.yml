@@ -1455,7 +1455,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Install Docker CLI
           command: |
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io
@@ -1464,12 +1464,14 @@ jobs:
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
-            export PATH="$HOME/miniconda/bin:$PATH"
+            echo 'export PATH="$HOME/miniconda/bin:$PATH"' >> $BASH_ENV
+            source $BASH_ENV
             conda init bash
-            source ~/.bashrc
+            source ~/.bashrc || true
             conda create -n myenv python=3.13 -y
-            conda activate myenv
-            python --version
+            echo 'source $HOME/miniconda/etc/profile.d/conda.sh' >> $BASH_ENV
+            echo 'conda activate myenv' >> $BASH_ENV
+            source $BASH_ENV
       - run:
           name: Install Dependencies
           command: |
