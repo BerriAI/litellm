@@ -149,6 +149,20 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["hashed_api_key", "api_key_alias"],
             )
 
+            # Max Budget for Team
+            self.litellm_team_max_budget_metric = Gauge(
+                "litellm_team_max_budget_metric", 
+                "Maximum budget set for team",
+                labelnames=["team_id", "team_alias"],
+            )
+
+            # Max Budget for API Key
+            self.litellm_api_key_max_budget_metric = Gauge(
+                "litellm_api_key_max_budget_metric",
+                "Maximum budget set for api key",
+                labelnames=["hashed_api_key", "api_key_alias"],
+            )
+
             ########################################
             # LiteLLM Virtual API KEY metrics
             ########################################
@@ -557,9 +571,21 @@ class PrometheusLogger(CustomLogger):
             user_api_team, user_api_team_alias
         ).set(_remaining_team_budget)
 
+        # Max Budget Metrics
+        if _team_max_budget is not None:
+            self.litellm_team_max_budget_metric.labels(
+                user_api_team, user_api_team_alias
+            ).set(_team_max_budget)
+
         self.litellm_remaining_api_key_budget_metric.labels(
             user_api_key, user_api_key_alias
         ).set(_remaining_api_key_budget)
+
+        # Max Budget Metrics for API Key
+        if _api_key_max_budget is not None:
+            self.litellm_api_key_max_budget_metric.labels(
+                user_api_key, user_api_key_alias
+            ).set(_api_key_max_budget)
 
     def _increment_top_level_request_and_spend_metrics(
         self,
