@@ -27,6 +27,10 @@ def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
             if _prompt is not None and hasattr(_prompt, "__dict__"):
                 extra_body["metadata"]["prompt"] = _prompt.__dict__
 
+    if len(extra_body) == 0:
+        # don't send empty extra_body, providers like mistral will throw an error
+        return None
+
     return extra_body
 
 

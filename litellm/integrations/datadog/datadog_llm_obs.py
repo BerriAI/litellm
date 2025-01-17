@@ -7,10 +7,11 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 """
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -97,7 +98,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     ),
                 ),
             }
-
+            verbose_logger.debug("payload", json.dumps(payload, indent=4))
             response = await self.async_client.post(
                 url=self.intake_url,
                 json=payload,
@@ -130,12 +131,19 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
 
         messages = standard_logging_payload["messages"]
+        messages = self._ensure_string_content(messages=messages)
+
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
         input_meta = InputMeta(messages=messages)  # type: ignore
         output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
 
-        meta = Meta(kind="llm", input=input_meta, output=output_meta)
+        meta = Meta(
+            kind="llm",
+            input=input_meta,
+            output=output_meta,
+            metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
+        )
 
         # Calculate metrics (you may need to adjust these based on available data)
         metrics = LLMMetrics(
@@ -164,3 +172,31 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         if isinstance(response_obj, litellm.ModelResponse):
             return [response_obj["choices"][0]["message"].json()]
         return []
+
+    def _ensure_string_content(
+        self, messages: Optional[Union[str, List[Any], Dict[Any, Any]]]
+    ) -> List[Any]:
+        if messages is None:
+            return []
+        if isinstance(messages, str):
+            return [messages]
+        elif isinstance(messages, list):
+            return [message for message in messages]
+        elif isinstance(messages, dict):
+            return [str(messages.get("content", ""))]
+        return []
+
+    def _get_dd_llm_obs_payload_metadata(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> Dict:
+        _metadata = {
+            "model_name": standard_logging_payload.get("model", "unknown"),
+            "model_provider": standard_logging_payload.get(
+                "custom_llm_provider", "unknown"
+            ),
+        }
+        _standard_logging_metadata: dict = (
+            dict(standard_logging_payload.get("metadata", {})) or {}
+        )
+        _metadata.update(_standard_logging_metadata)
+        return _metadata

@@ -16,7 +16,7 @@ sys.path.insert(
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
-
+from litellm._logging import verbose_logger
 import pytest
 
 import litellm
@@ -976,6 +976,10 @@ async def test_completion_codestral_chat_api():
 
 def test_completion_mistral_api_mistral_large_function_call():
     litellm.set_verbose = True
+    import logging
+
+    logging.basicConfig(level=logging.DEBUG)
+    verbose_logger.setLevel(logging.DEBUG)
     tools = [
         {
             "type": "function",
