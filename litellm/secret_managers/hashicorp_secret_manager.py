@@ -29,7 +29,7 @@ class HashicorpSecretManager(BaseSecretManager):
         # Optional config for TLS cert auth
         self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
         self.tls_key_path = os.getenv("HCP_VAULT_CLIENT_KEY", "")
-        self.vault_cert_role = os.getenv("VAULT_CERT_ROLE", None)
+        self.vault_cert_role = os.getenv("HCP_VAULT_CERT_ROLE", None)
 
         # Validate environment
         if not self.vault_token:
