@@ -3470,10 +3470,6 @@ def get_optional_params(  # noqa: PLR0915
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
                 extra_body=optional_params["extra_body"]
             )
-
-            if optional_params["extra_body"] is None:
-                # don't pass extra_body if it's empty/None
-                optional_params.pop("extra_body", None)
     else:
         # if user passed in non-default kwargs for specific providers/models, pass them along
         for k in passed_params.keys():
