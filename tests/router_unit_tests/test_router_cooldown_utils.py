@@ -188,6 +188,11 @@ def testing_litellm_router():
                 "litellm_params": {"model": "openai/test_deployment"},
                 "model_id": "test_deployment_2",
             },
+            {
+                "model_name": "test_deployment",
+                "litellm_params": {"model": "openai/test_deployment-2"},
+                "model_id": "test_deployment_3",
+            },
         ]
     )
 
