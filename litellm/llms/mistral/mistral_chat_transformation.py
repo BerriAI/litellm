@@ -200,7 +200,7 @@ class MistralConfig(OpenAIGPTConfig):
         """
         _tool_calls = message.get("tool_calls")
         mistral_tool_calls: List[MistralToolCallMessage] = []
-        if _tool_calls is not None:
+        if _tool_calls is not None and isinstance(_tool_calls, list):
             for _tool in _tool_calls:
                 _tool_call_message = MistralToolCallMessage(
                     id=_tool.get("id"),
