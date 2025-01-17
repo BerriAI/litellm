@@ -595,7 +595,9 @@ class AmazonConverseConfig:
 
         if potential_region in self._supported_cross_region_inference_region():
             return model.split(".", 1)[1]
-        elif alt_potential_region in all_global_regions:
+        elif (
+            alt_potential_region in all_global_regions and len(model.split("/", 1)) > 1
+        ):
             return model.split("/", 1)[1]
 
         return model
