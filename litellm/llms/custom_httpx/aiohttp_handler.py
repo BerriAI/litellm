@@ -462,10 +462,10 @@ class BaseLLMAIOHTTPHandler:
         api_base: Optional[str] = None,
         aimage_variation: bool = False,
         logger_fn=None,
-        client=None,
         organization: Optional[str] = None,
         headers: Optional[dict] = None,
     ) -> ImageResponse:
+        client = litellm_params.get("client", None)
         if model is None:
             raise ValueError("model is required for non-openai image variations")
 

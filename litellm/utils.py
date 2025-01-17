@@ -2048,6 +2048,7 @@ def get_litellm_params(
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
     async_call: Optional[bool] = None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler, Any]] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -2086,6 +2087,7 @@ def get_litellm_params(
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
         "async_call": async_call,
+        "client": client,
     }
     return litellm_params
 
