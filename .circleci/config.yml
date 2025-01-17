@@ -1445,8 +1445,11 @@ jobs:
       - store_test_results:
           path: test-results
   proxy_build_from_pip_tests:
-    machine:
-      image: ubuntu-2204:2023.10.1
+    docker:
+      - image: cimg/python:3.13.1
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     resource_class: xlarge
     working_directory: ~/project
     steps:
