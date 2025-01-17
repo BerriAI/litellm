@@ -458,7 +458,7 @@ class LangFuseLogger:
             supports_costs = langfuse_version >= Version("2.7.3")
             supports_completion_start_time = langfuse_version >= Version("2.7.3")
 
-            tags = json.loads(metadata.pop("tags", "[]")) if supports_tags else []
+            tags = self._get_langfuse_tags(metadata) if supports_tags else []
 
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
@@ -732,6 +732,10 @@ class LangFuseLogger:
         except Exception:
             verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
             return None, None
+
+    @staticmethod
+    def _get_langfuse_tags(metadata: dict) -> list[str]:
+        return json.loads(metadata.pop("tags", "[]"))
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
         """
