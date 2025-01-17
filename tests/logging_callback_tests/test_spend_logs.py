@@ -300,3 +300,63 @@ def test_spend_logs_payload_whisper():
 
     assert payload["call_type"] == "atranscription"
     assert payload["spend"] == 0.00023398580000000003
+
+
+def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
+    """
+    Test that messages and responses are logged in spend logs when store_prompts_in_spend_logs is enabled
+    """
+    # Mock general_settings
+    from litellm.proxy.proxy_server import general_settings
+
+    general_settings["store_prompts_in_spend_logs"] = True
+
+    input_args: dict = {
+        "kwargs": {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "fake_key",
+                }
+            },
+        },
+        "response_obj": litellm.ModelResponse(
+            id="chatcmpl-123",
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=litellm.Message(content="Hi there!", role="assistant"),
+                )
+            ],
+            model="gpt-3.5-turbo",
+            usage=litellm.Usage(completion_tokens=2, prompt_tokens=1, total_tokens=3),
+        ),
+        "start_time": datetime.datetime.now(),
+        "end_time": datetime.datetime.now(),
+        "end_user_id": "user123",
+    }
+
+    # Create a standard logging payload
+    standard_logging_payload = {
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "response": {"role": "assistant", "content": "Hi there!"},
+    }
+    input_args["kwargs"]["standard_logging_object"] = standard_logging_payload
+
+    payload: SpendLogsPayload = get_logging_payload(**input_args)
+
+    print("json payload: ", json.dumps(payload, indent=4, default=str))
+
+    # Verify messages and response are included in payload
+    assert payload["messages"] == [{"role": "user", "content": "Hello!"}]
+    assert payload["response"] == {"role": "assistant", "content": "Hi there!"}
+
+    # Clean up - reset general_settings
+    general_settings["store_prompts_in_spend_logs"] = False
+
+    # Verify messages and response are not included when disabled
+    payload_disabled: SpendLogsPayload = get_logging_payload(**input_args)
+    assert payload_disabled["messages"] is None
+    assert payload_disabled["response"] is None
