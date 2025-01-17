@@ -50,11 +50,6 @@ def _is_cooldown_required(
     Returns:
         bool: True if a cooldown is required, False otherwise.
     """
-    ## BASE CASE - single deployment
-    model_group = litellm_router_instance.get_model_group(id=model_id)
-    if model_group is not None and len(model_group) == 1:
-        return False
-
     try:
         ignored_strings = ["APIConnectionError"]
         if (
