@@ -1445,33 +1445,25 @@ jobs:
       - store_test_results:
           path: test-results
   proxy_build_from_pip_tests:
-    docker:
-      - image: cimg/python:3.13.1
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+    # Change from docker to machine executor
+    machine:
+      image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
-      - run:
-          name: Install Docker CLI
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      # Remove Docker CLI installation since it's already available in machine executor
       - run:
           name: Install Python 3.13
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
-            echo 'export PATH="$HOME/miniconda/bin:$PATH"' >> $BASH_ENV
-            source $BASH_ENV
+            export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
-            source ~/.bashrc || true
+            source ~/.bashrc
             conda create -n myenv python=3.13 -y
-            echo 'source $HOME/miniconda/etc/profile.d/conda.sh' >> $BASH_ENV
-            echo 'conda activate myenv' >> $BASH_ENV
-            source $BASH_ENV
+            conda activate myenv
+            python --version
       - run:
           name: Install Dependencies
           command: |
