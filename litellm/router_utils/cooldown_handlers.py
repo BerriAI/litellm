@@ -186,7 +186,7 @@ def _should_cooldown_deployment(
             num_fails_this_minute,
         )
         exception_status_int = cast_exception_status_to_int(exception_status)
-        if exception_status_int == 429:
+        if exception_status_int == 429 and not is_single_deployment_model_group:
             return True
         elif (
             percent_fails == 1.0

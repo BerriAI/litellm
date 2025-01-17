@@ -477,7 +477,9 @@ def test_no_cooldown_low_traffic(mock_failures, mock_successes, router):
     "litellm.router_utils.cooldown_handlers.get_deployment_failures_for_current_minute"
 )
 def test_cooldown_rate_limit(mock_failures, mock_successes, router):
-    # Traffic doesn't matter for rate limit errors
+    """
+    Don't cooldown single deployment models, for anything besides traffic
+    """
     mock_failures.return_value = 1
     mock_successes.return_value = 0
 
@@ -489,8 +491,8 @@ def test_cooldown_rate_limit(mock_failures, mock_successes, router):
     )
 
     assert (
-        should_cooldown is True
-    ), "Should cooldown on rate limit error regardless of traffic"
+        should_cooldown is False
+    ), "Should not cooldown on rate limit error for single deployment models"
 
 
 @patch(
