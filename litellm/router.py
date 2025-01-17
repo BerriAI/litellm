@@ -2780,6 +2780,8 @@ class Router:
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
 
+        mock_timeout = kwargs.pop("mock_timeout", None)
+
         try:
             self._handle_mock_testing_fallbacks(
                 kwargs=kwargs,
@@ -2789,7 +2791,12 @@ class Router:
                 content_policy_fallbacks=content_policy_fallbacks,
             )
 
-            response = await self.async_function_with_retries(*args, **kwargs)
+            if mock_timeout is not None:
+                response = await self.async_function_with_retries(
+                    *args, **kwargs, mock_timeout=mock_timeout
+                )
+            else:
+                response = await self.async_function_with_retries(*args, **kwargs)
             verbose_router_logger.debug(f"Async Response: {response}")
             return response
         except Exception as e:
