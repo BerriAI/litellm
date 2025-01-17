@@ -106,7 +106,7 @@ def test_watsonx_token_in_env_var(
     else:
         assert (
             mock_post.call_args[1]["headers"]["Authorization"]
-            == "Bearer mock_access_token"
+            == "Bearer my-custom-token"
         )
 
 
