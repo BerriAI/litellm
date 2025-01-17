@@ -14,6 +14,7 @@ from litellm._logging import verbose_router_logger
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     DEFAULT_FAILURE_THRESHOLD_PERCENT,
+    SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 
@@ -151,6 +152,12 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
+    ## BASE CASE - single deployment
+    model_group = litellm_router_instance.get_model_group(id=deployment)
+    is_single_deployment_model_group = False
+    if model_group is not None and len(model_group) == 1:
+        is_single_deployment_model_group = True
+
     if (
         litellm_router_instance.allowed_fails_policy is None
         and _is_allowed_fails_set_on_router(
@@ -182,10 +189,17 @@ def _should_cooldown_deployment(
         if exception_status_int == 429:
             return True
         elif (
-            total_requests_this_minute == 1
-        ):  # if the 1st request fails it's not guaranteed that the deployment should be cooled down
-            return False
-        elif percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT:
+            percent_fails == 1.0
+            and total_requests_this_minute
+            >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD
+        ):
+            # Cooldown if all requests failed and we have reasonable traffic
+            return True
+        elif (
+            percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
+            and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
+        ):
+
             return True
 
         elif (

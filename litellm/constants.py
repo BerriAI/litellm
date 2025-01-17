@@ -11,6 +11,7 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = 1
 DEFAULT_IMAGE_TOKEN_COUNT = 250
 DEFAULT_IMAGE_WIDTH = 300
 DEFAULT_IMAGE_HEIGHT = 300
+SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
