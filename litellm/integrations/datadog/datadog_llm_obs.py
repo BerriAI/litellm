@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -25,7 +24,7 @@ from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import StandardLoggingPayload
 
 
-class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
+class DataDogLLMObsLogger(CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
@@ -53,7 +52,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
-            CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
+            super().__init__(**kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
@@ -90,8 +89,11 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 "data": DDIntakePayload(
                     type="span",
                     attributes=DDSpanAttributes(
-                        ml_app=self._get_datadog_service(),
-                        tags=[self._get_datadog_tags()],
+                        ml_app="litellm",
+                        tags=[
+                            "service:litellm",
+                            f"env:{os.getenv('DD_ENV', 'production')}",
+                        ],
                         spans=self.log_queue,
                     ),
                 ),
