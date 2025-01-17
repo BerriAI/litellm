@@ -810,6 +810,7 @@ class Router:
             kwargs["messages"] = messages
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
+
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority = kwargs.get("priority") or self.default_priority
             start_time = time.time()
@@ -891,8 +892,8 @@ class Router:
                 deployment=deployment, parent_otel_span=parent_otel_span
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-
             data = deployment["litellm_params"].copy()
+
             model_name = data["model"]
 
             model_client = self._get_async_openai_model_client(
@@ -2779,8 +2780,6 @@ class Router:
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
 
-        mock_timeout = kwargs.pop("mock_timeout", None)
-
         try:
             self._handle_mock_testing_fallbacks(
                 kwargs=kwargs,
@@ -2790,9 +2789,7 @@ class Router:
                 content_policy_fallbacks=content_policy_fallbacks,
             )
 
-            response = await self.async_function_with_retries(
-                *args, **kwargs, mock_timeout=mock_timeout
-            )
+            response = await self.async_function_with_retries(*args, **kwargs)
             verbose_router_logger.debug(f"Async Response: {response}")
             return response
         except Exception as e:
