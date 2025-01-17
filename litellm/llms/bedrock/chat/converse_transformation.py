@@ -10,6 +10,7 @@ from typing import List, Literal, Optional, Tuple, Union, overload
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -418,7 +419,9 @@ class AmazonConverseConfig:
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
         ## TRANSFORMATION ##
-        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
+        bedrock_messages: List[MessageBlock] = await asyncify(
+            _bedrock_converse_messages_pt
+        )(
             messages=messages,
             model=model,
             llm_provider="bedrock_converse",
