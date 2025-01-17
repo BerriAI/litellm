@@ -96,7 +96,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                     ),
                 ),
             }
-            verbose_logger.debug("payload", json.dumps(payload, indent=4))
+            verbose_logger.debug("payload %s", json.dumps(payload, indent=4))
             response = await self.async_client.post(
                 url=self.intake_url,
                 json=payload,
