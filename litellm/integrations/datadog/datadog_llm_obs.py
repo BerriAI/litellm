@@ -7,6 +7,7 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 """
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import datetime
@@ -97,7 +98,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     ),
                 ),
             }
-
+            verbose_logger.debug("payload", json.dumps(payload, indent=4))
             response = await self.async_client.post(
                 url=self.intake_url,
                 json=payload,
@@ -130,12 +131,19 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
 
         messages = standard_logging_payload["messages"]
+        messages = self._ensure_string_content(messages)
+
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
         input_meta = InputMeta(messages=messages)  # type: ignore
         output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
 
-        meta = Meta(kind="llm", input=input_meta, output=output_meta)
+        meta = Meta(
+            kind="llm",
+            input=input_meta,
+            output=output_meta,
+            metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
+        )
 
         # Calculate metrics (you may need to adjust these based on available data)
         metrics = LLMMetrics(
@@ -164,3 +172,22 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         if isinstance(response_obj, litellm.ModelResponse):
             return [response_obj["choices"][0]["message"].json()]
         return []
+
+    def _ensure_string_content(self, messages: List[Any]) -> List[Any]:
+        for message in messages:
+            if isinstance(message["content"], list):
+                message["content"] = str(message["content"])
+        return messages
+
+    def _get_dd_llm_obs_payload_metadata(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> Dict:
+        _metadata = {
+            "model_name": standard_logging_payload.get("model", "unknown"),
+            "model_provider": standard_logging_payload.get(
+                "custom_llm_provider", "unknown"
+            ),
+        }
+        _standard_logging_metadata = standard_logging_payload.get("metadata", {}) or {}
+        _metadata.update(_standard_logging_metadata)
+        return _metadata
