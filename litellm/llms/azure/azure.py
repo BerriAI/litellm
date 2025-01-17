@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Callable, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx  # type: ignore
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -230,7 +230,7 @@ class AzureChatCompletion(BaseLLM):
         elif azure_ad_token_provider is not None:
             azure_ad_token = azure_ad_token_provider()
             headers["Authorization"] = f"Bearer {azure_ad_token}"
-            
+
         return headers
 
     def _get_sync_azure_client(
@@ -247,7 +247,7 @@ class AzureChatCompletion(BaseLLM):
         client_type: Literal["sync", "async"],
     ):
         # init AzureOpenAI Client
-        azure_client_params = {
+        azure_client_params: Dict[str, Any] = {
             "api_version": api_version,
             "azure_endpoint": api_base,
             "azure_deployment": model,
@@ -382,8 +382,10 @@ class AzureChatCompletion(BaseLLM):
 
                         azure_client_params["azure_ad_token"] = azure_ad_token
                     elif azure_ad_token_provider is not None:
-                        azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-                        
+                        azure_client_params["azure_ad_token_provider"] = (
+                            azure_ad_token_provider
+                        )
+
                     if acompletion is True:
                         client = AsyncAzureOpenAI(**azure_client_params)
                     else:
@@ -482,8 +484,9 @@ class AzureChatCompletion(BaseLLM):
                         azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
                     azure_client_params["azure_ad_token"] = azure_ad_token
                 elif azure_ad_token_provider is not None:
-                    azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-                    
+                    azure_client_params["azure_ad_token_provider"] = (
+                        azure_ad_token_provider
+                    )
 
                 if (
                     client is None
@@ -583,7 +586,6 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["azure_ad_token"] = azure_ad_token
             elif azure_ad_token_provider is not None:
                 azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-                
 
             # setting Azure client
             if client is None or dynamic_params:
@@ -698,7 +700,6 @@ class AzureChatCompletion(BaseLLM):
             azure_client_params["azure_ad_token"] = azure_ad_token
         elif azure_ad_token_provider is not None:
             azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider
-            
 
         if client is None or dynamic_params:
             azure_client = AzureOpenAI(**azure_client_params)
@@ -1297,7 +1298,7 @@ class AzureChatCompletion(BaseLLM):
                 )
 
             # init AzureOpenAI Client
-            azure_client_params = {
+            azure_client_params: Dict[str, Any] = {
                 "api_version": api_version,
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
