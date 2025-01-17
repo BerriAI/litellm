@@ -1603,6 +1603,8 @@ class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
     requester_ip_address: Optional[str] = None
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
 
 
 class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
