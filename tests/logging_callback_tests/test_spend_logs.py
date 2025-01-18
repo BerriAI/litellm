@@ -350,13 +350,15 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     print("json payload: ", json.dumps(payload, indent=4, default=str))
 
     # Verify messages and response are included in payload
-    assert payload["messages"] == [{"role": "user", "content": "Hello!"}]
-    assert payload["response"] == {"role": "assistant", "content": "Hi there!"}
+    assert payload["messages"] == json.dumps([{"role": "user", "content": "Hello!"}])
+    assert payload["response"] == json.dumps(
+        {"role": "assistant", "content": "Hi there!"}
+    )
 
     # Clean up - reset general_settings
     general_settings["store_prompts_in_spend_logs"] = False
 
     # Verify messages and response are not included when disabled
     payload_disabled: SpendLogsPayload = get_logging_payload(**input_args)
-    assert payload_disabled["messages"] is None
-    assert payload_disabled["response"] is None
+    assert payload_disabled["messages"] is ""
+    assert payload_disabled["response"] is ""
