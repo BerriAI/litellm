@@ -264,8 +264,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ):
         try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
