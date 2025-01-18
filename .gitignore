@@ -35,9 +35,11 @@ proxy_server_config_@.yaml
 proxy_server_config_2.yaml
 litellm/proxy/secret_managers/credentials.json
 hosted_config.yaml
+litellm/proxy/tests/node_modules
 litellm/proxy/tests/package.json
 litellm/proxy/tests/package-lock.json
 ui/litellm-dashboard/.next
+ui/litellm-dashboard/node_modules
 ui/litellm-dashboard/next-env.d.ts
 ui/litellm-dashboard/package.json
 ui/litellm-dashboard/package-lock.json
@@ -46,7 +48,7 @@ deploy/charts/litellm/charts/*
 deploy/charts/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/
-**/node_modules
+/node_modules
 kub.yaml
 loadtest_kub.yaml
 litellm/proxy/_new_secret_config.yaml
@@ -66,5 +68,5 @@ litellm/proxy/google-cloud-sdk/*
 tests/llm_translation/log.txt
 venv/
 tests/local_testing/log.txt
+
 .codegpt
-**/out
