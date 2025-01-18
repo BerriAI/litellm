@@ -805,15 +805,9 @@ async def delete_key_fn(
             raise Exception("Not connected to DB!")
 
         ## only allow user to delete keys they own
-        user_id = user_api_key_dict.user_id
         verbose_proxy_logger.debug(
             f"user_api_key_dict.user_role: {user_api_key_dict.user_role}"
         )
-        if (
-            user_api_key_dict.user_role is not None
-            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        ):
-            user_id = None  # unless they're admin
 
         num_keys_to_be_deleted = 0
         deleted_keys = []
