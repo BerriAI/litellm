@@ -35,10 +35,10 @@ export const columns: ColumnDef<LogEntry>[] = [
             style: { cursor: "pointer" },
           }}
         >
-          {row.getIsExpanded() ? "👇" : "👉"}
+          {row.getIsExpanded() ? "▼" : "▶"}
         </button>
       ) : (
-        "🔵"
+        "●"
       );
     },
   },
