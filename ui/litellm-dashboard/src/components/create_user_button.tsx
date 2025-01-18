@@ -54,9 +54,7 @@ const Createuser: React.FC<CreateuserProps> = ({
   const router = useRouter();
   const isLocal = process.env.NODE_ENV === "development";
 
-  const [baseUrl, setBaseUrl] = useState(
-    isLocal ? "http://localhost:4000" : "",
-  );
+  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
   // get all models
   useEffect(() => {
     const fetchData = async () => {
