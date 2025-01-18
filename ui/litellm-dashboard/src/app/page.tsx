@@ -12,6 +12,7 @@ import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
 import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
+import SpendLogsTable from "@/components/view_logs";
 import ModelHub from "@/components/model_hub";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
@@ -303,6 +304,13 @@ const CreateKeyPage = () => {
                 userRole={userRole}
                 accessToken={accessToken}
                 modelData={modelData}
+              />
+            ) : page == "logs" ? (
+              <SpendLogsTable
+                userID={userID}
+                userRole={userRole}
+                token={token}
+                accessToken={accessToken}
               />
             ) : (
               <Usage
