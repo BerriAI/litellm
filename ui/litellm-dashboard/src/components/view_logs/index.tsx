@@ -46,6 +46,10 @@ export default function SpendLogsTable({
     moment().format("YYYY-MM-DDTHH:mm")
   );
 
+  // Add these new state variables at the top with other useState declarations
+  const [isCustomDate, setIsCustomDate] = useState(false);
+  const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -272,44 +276,93 @@ export default function SpendLogsTable({
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
-                <div>
-                  <label
-                    htmlFor="start-time"
-                    className="block text-xs font-medium text-gray-700"
+              <div className="relative">
+                <button
+                  onClick={() => setQuickSelectOpen(!quickSelectOpen)}
+                  className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    Start Time
-                  </label>
-                  <input
-                    type="datetime-local"
-                    id="start-time"
-                    value={startTime}
-                    onChange={(e) => {
-                      setStartTime(e.target.value);
-                      setCurrentPage(1); // Reset to first page on filter change
-                    }}
-                    className="mt-1 block w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="end-time"
-                    className="block text-xs font-medium text-gray-700"
-                  >
-                    End Time
-                  </label>
-                  <input
-                    type="datetime-local"
-                    id="end-time"
-                    value={endTime}
-                    onChange={(e) => {
-                      setEndTime(e.target.value);
-                      setCurrentPage(1); // Reset to first page on filter change
-                    }}
-                    className="mt-1 block w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                    />
+                  </svg>
+                  Time Range
+                </button>
+
+                {quickSelectOpen && (
+                  <div className="absolute left-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                    <div className="space-y-1">
+                      {[
+                        { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+                        { label: "Last Hour", value: 1, unit: "hours" },
+                        { label: "Last 4 Hours", value: 4, unit: "hours" },
+                        { label: "Last 24 Hours", value: 24, unit: "hours" },
+                        { label: "Last 7 Days", value: 7, unit: "days" },
+                      ].map((option) => (
+                        <button
+                          key={option.label}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md"
+                          onClick={() => {
+                            setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                            setStartTime(
+                              moment()
+                                .subtract(option.value, option.unit as any)
+                                .format("YYYY-MM-DDTHH:mm")
+                            );
+                            setQuickSelectOpen(false);
+                            setIsCustomDate(false);
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                      <div className="border-t my-2" />
+                      <button
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md"
+                        onClick={() => setIsCustomDate(!isCustomDate)}
+                      >
+                        Custom Range
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {isCustomDate && (
+                <div className="flex items-center gap-2">
+                  <div>
+                    <input
+                      type="datetime-local"
+                      value={startTime}
+                      onChange={(e) => {
+                        setStartTime(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  <span className="text-gray-500">to</span>
+                  <div>
+                    <input
+                      type="datetime-local"
+                      value={endTime}
+                      onChange={(e) => {
+                        setEndTime(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center space-x-4">
