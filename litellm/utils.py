@@ -2275,6 +2275,7 @@ def get_optional_params_image_gen(
         config_class = (
             litellm.AmazonStability3Config
             if litellm.AmazonStability3Config._is_stability_3_model(model=model)
+            else litellm.AmazonNovaCanvasConfig if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
             else litellm.AmazonStabilityConfig
         )
         supported_params = config_class.get_supported_openai_params(model=model)

@@ -322,9 +322,9 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     finish_reasons: List[str]
 
 
-class AmazonNovaImageGeneratorConfig(TypedDict, total=False):
+class AmazonNovaCanvasImageGeneratorConfig(TypedDict, total=False):
     """
-    Config for Amazon Nova Text to Image API
+    Config for Amazon Nova Canvas Text to Image API
 
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
     """
@@ -337,21 +337,21 @@ class AmazonNovaImageGeneratorConfig(TypedDict, total=False):
     numberOfImages: int
 
 
-class AmazonNovaTextToImageRequest(TypedDict, total=False):
+class AmazonNovaCanvasTextToImageRequest(TypedDict, total=False):
     """
-    Request for Amazon Nova Text to Image API
+    Request for Amazon Nova Canvas Text to Image API
 
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
     """
 
     textToImageParams: Dict[str, str]
     taskType: Literal["TEXT_IMAGE"]
-    imageGenerationConfig: AmazonNovaImageGeneratorConfig
+    imageGenerationConfig: AmazonNovaCanvasImageGeneratorConfig
 
 
-class AmazonNovaTextToImageResponse(TypedDict, total=False):
+class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
     """
-    Response for Amazon Nova Text to Image API
+    Response for Amazon Nova Canvas Text to Image API
 
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
     """

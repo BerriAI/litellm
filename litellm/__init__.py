@@ -1143,7 +1143,7 @@ from .llms.bedrock.common_utils import (
 )
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image.amazon_nova_transformation import AmazonNovaConfig
+from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
 from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
     AmazonTitanMultimodalEmbeddingG1Config,

@@ -130,11 +130,13 @@ class TestBedrockSd1(BaseImageGenTest):
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
-class TestBedrockNova(BaseImageGenTest):
+class TestBedrockNovaCanvas(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {"model": "bedrock/amazon.nova-canvas-v1:0",
-                "imageGenerationConfig": {"cfgScale":6.5,"seed":12,"width":320,"height":320,"numberOfImages":1},
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
                 "taskType": "TEXT_IMAGE"}
 
 class TestOpenAIDalle3(BaseImageGenTest):
