@@ -1,5 +1,6 @@
 import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { uiSpendLogsCall } from "../networking";
 import { DataTable } from "./table";
@@ -19,6 +20,10 @@ export default function SpendLogsTable({
   userRole,
   userID,
 }: SpendLogsTableProps) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [keyNameFilter, setKeyNameFilter] = useState("");
+  const [teamNameFilter, setTeamNameFilter] = useState("");
+
   const logs = useQuery({
     queryKey: ["logs", "table"],
     queryFn: async () => {
@@ -55,16 +60,53 @@ export default function SpendLogsTable({
     return null;
   }
 
+  const filteredData = logs.data?.filter((log) => {
+    const matchesSearch =
+      !searchTerm ||
+      log.request_id.includes(searchTerm) ||
+      log.model.includes(searchTerm) ||
+      (log.user && log.user.includes(searchTerm));
+    const matchesKeyName =
+      !keyNameFilter ||
+      (log.metadata?.user_api_key_alias &&
+        log.metadata.user_api_key_alias
+          .toLowerCase()
+          .includes(keyNameFilter.toLowerCase()));
+    const matchesTeamName =
+      !teamNameFilter ||
+      (log.metadata?.user_api_key_team_alias &&
+        log.metadata.user_api_key_team_alias
+          .toLowerCase()
+          .includes(teamNameFilter.toLowerCase()));
+    return matchesSearch && matchesKeyName && matchesTeamName;
+  }) || [];
+
   return (
     <div className="px-4 md:px-8 py-8 w-full">
       <h1 className="text-xl font-semibold mb-4">Traces</h1>
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="p-4 border-b flex justify-between items-center">
-          <div className="flex space-x-4 items-center">
+        <div className="p-4 border-b flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+          <div className="flex flex-wrap md:space-x-4 space-y-2 md:space-y-0 items-center">
             <input
               type="text"
               placeholder="Search by request ID, model, or user..."
               className="px-4 py-2 border rounded-lg w-80"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="Filter by Key Name..."
+              className="px-4 py-2 border rounded-lg w-80"
+              value={keyNameFilter}
+              onChange={(e) => setKeyNameFilter(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="Filter by Team Name..."
+              className="px-4 py-2 border rounded-lg w-80"
+              value={teamNameFilter}
+              onChange={(e) => setTeamNameFilter(e.target.value)}
             />
             <button className="px-4 py-2 border rounded-lg flex items-center gap-2">
               <span>Filters</span>
@@ -84,7 +126,7 @@ export default function SpendLogsTable({
         </div>
         <DataTable
           columns={columns}
-          data={logs.data}
+          data={filteredData}
           renderSubComponent={RequestViewer}
           getRowCanExpand={() => true}
         />
