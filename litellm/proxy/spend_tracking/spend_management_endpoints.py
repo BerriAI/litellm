@@ -13,6 +13,7 @@ from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _should_store_prompts_and_responses_in_spend_logs,
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
@@ -1605,6 +1606,80 @@ async def calculate_spend(request: SpendCalculateRequest):
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
+
+
+@router.get(
+    "/spend/logs/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_spend_logs(  # noqa: PLR0915
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on api key",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on user_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    View spend logs for UI
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+    if _should_store_prompts_and_responses_in_spend_logs() is not True:
+        verbose_proxy_logger.debug(
+            "Prompts and responses are not stored in spend logs, returning empty list"
+        )
+        return []
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    # Convert the date strings to datetime objects
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+
+    # Convert to ISO format strings for Prisma
+    start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+    end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+
+    return await prisma_client.db.litellm_spendlogs.find_many(
+        where={
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        },
+        order={
+            "startTime": "desc",
+        },
+    )
 
 
 @router.get(
