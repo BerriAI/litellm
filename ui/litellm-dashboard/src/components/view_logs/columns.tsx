@@ -56,13 +56,25 @@ export const columns: ColumnDef<LogEntry>[] = [
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
-      <span className="font-mono text-xs">{String(info.getValue() || "")}</span>
+      <span className="font-mono text-xs max-w-[100px] truncate block">
+        {String(info.getValue() || "")}
+      </span>
     ),
   },
   {
-    header: "Type",
-    accessorKey: "call_type",
-    cell: (info: any) => <span>{String(info.getValue() || "")}</span>,
+    header: "Country",
+    accessorKey: "requester_ip_address",
+    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
+  },
+  {
+    header: "Team",
+    accessorKey: "metadata.user_api_key_team_alias",
+    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+  },
+  {
+    header: "Key Name",
+    accessorKey: "metadata.user_api_key_alias",
+    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
   },
   {
     header: "Request",
@@ -142,11 +154,6 @@ export const columns: ColumnDef<LogEntry>[] = [
         </div>
       );
     },
-  },
-  {
-    header: "Country",
-    accessorKey: "requester_ip_address",
-    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
 ];
 
