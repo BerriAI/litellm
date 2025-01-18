@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -24,7 +25,7 @@ from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import StandardLoggingPayload
 
 
-class DataDogLLMObsLogger(CustomBatchLogger):
+class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
@@ -52,7 +53,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
-            super().__init__(**kwargs, flush_lock=self.flush_lock)
+            CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
@@ -89,16 +90,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 "data": DDIntakePayload(
                     type="span",
                     attributes=DDSpanAttributes(
-                        ml_app="litellm",
-                        tags=[
-                            "service:litellm",
-                            f"env:{os.getenv('DD_ENV', 'production')}",
-                        ],
+                        ml_app=self._get_datadog_service(),
+                        tags=[self._get_datadog_tags()],
                         spans=self.log_queue,
                     ),
                 ),
             }
-            verbose_logger.debug("payload", json.dumps(payload, indent=4))
+            verbose_logger.debug("payload %s", json.dumps(payload, indent=4))
             response = await self.async_client.post(
                 url=self.intake_url,
                 json=payload,
