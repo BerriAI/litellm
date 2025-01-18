@@ -98,9 +98,16 @@ def test_watsonx_token_in_env_var(
     mock_post, _ = watsonx_chat_completion_call(patch_token_call=False)
 
     assert mock_post.call_count == 1
-    assert (
-        mock_post.call_args[1]["headers"]["Authorization"] == "Bearer my-custom-token"
-    )
+    if env_var_key == "WATSONX_ZENAPIKEY":
+        assert (
+            mock_post.call_args[1]["headers"]["Authorization"]
+            == "ZenApiKey my-custom-token"
+        )
+    else:
+        assert (
+            mock_post.call_args[1]["headers"]["Authorization"]
+            == "Bearer my-custom-token"
+        )
 
 
 def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):

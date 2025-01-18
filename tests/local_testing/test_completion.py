@@ -1005,7 +1005,7 @@ def test_completion_mistral_api_mistral_large_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/mistral-large-latest",
+            model="mistral/open-mistral-7b",
             messages=messages,
             tools=tools,
             tool_choice="auto",
