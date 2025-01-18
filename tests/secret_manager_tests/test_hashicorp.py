@@ -183,7 +183,8 @@ def test_hashicorp_secret_manager_tls_cert_auth():
         test_manager = HashicorpSecretManager()
         test_manager.tls_cert_path = "cert.pem"
         test_manager.tls_key_path = "key.pem"
-
+        test_manager.vault_cert_role = "test-role"
+        test_manager.vault_namespace = "test-namespace"
         # Test the TLS auth method
         token = test_manager._auth_via_tls_cert()
 
@@ -192,6 +193,8 @@ def test_hashicorp_secret_manager_tls_cert_auth():
         mock_post.assert_called_once_with(
             f"{test_manager.vault_addr}/v1/auth/cert/login",
             cert=("cert.pem", "key.pem"),
+            headers={"X-Vault-Namespace": "test-namespace"},
+            json={"name": "test-role"},
         )
 
         # Verify the token was cached
