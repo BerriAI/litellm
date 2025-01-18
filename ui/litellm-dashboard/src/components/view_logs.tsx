@@ -304,56 +304,65 @@ export const SpendLogsTable: React.FC<SpendLogsTableProps> = ({ accessToken, tok
         </div>
         
         <div className="overflow-x-auto w-full">
-          <Table className="w-full table-fixed">
-            <TableHead>
-              <TableRow>
-                {columns.map((column) => (
-                  <TableHeaderCell 
-                    key={column.header}
-                    className={`${column.header === 'Request ID' ? 'w-32' : ''} whitespace-nowrap`}
-                  >
-                    {column.header}
-                  </TableHeaderCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {logs.map((log) => (
-                <React.Fragment key={log.request_id || log.startTime}>
-                  <TableRow 
-                    className="cursor-pointer hover:bg-gray-50"
-                    onClick={() => setExpandedRow(expandedRow === log.request_id ? null : log.request_id)}
-                  >
-                    {columns.map((column) => (
-                      <TableCell 
-                        key={column.header}
-                        className={column.header === 'Request ID' ? 'w-32 truncate' : ''}
-                      >
-                        {column.cell ? 
-                          column.cell({ 
-                            getValue: () => log[column.accessorKey as keyof LogEntry],
-                            row: { original: log }
-                          }) : 
-                          <span>{String(log[column.accessorKey as keyof LogEntry] ?? '')}</span>
-                        }
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                  {expandedRow === log.request_id && (
-                    <TableRow>
-                      <TableCell colSpan={columns.length} className="p-0">
-                        <RequestViewer data={{
-                          request: typeof log.messages === 'string' ? JSON.parse(log.messages) : log.messages,
-                          response: typeof log.response === 'string' ? JSON.parse(log.response) : log.response,
-                          metadata: log.metadata
-                        }} />
-                      </TableCell>
+          {logs.length > 0 ? (
+            <Table className="w-full table-fixed">
+              <TableHead>
+                <TableRow>
+                  {columns.map((column) => (
+                    <TableHeaderCell 
+                      key={column.header}
+                      className={`${column.header === 'Request ID' ? 'w-32' : ''} whitespace-nowrap`}
+                    >
+                      {column.header}
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {logs.map((log) => (
+                  <React.Fragment key={log.request_id || log.startTime}>
+                    <TableRow 
+                      className="cursor-pointer hover:bg-gray-50"
+                      onClick={() => setExpandedRow(expandedRow === log.request_id ? null : log.request_id)}
+                    >
+                      {columns.map((column) => (
+                        <TableCell 
+                          key={column.header}
+                          className={column.header === 'Request ID' ? 'w-32 truncate' : ''}
+                        >
+                          {column.cell ? 
+                            column.cell({ 
+                              getValue: () => log[column.accessorKey as keyof LogEntry],
+                              row: { original: log }
+                            }) : 
+                            <span>{String(log[column.accessorKey as keyof LogEntry] ?? '')}</span>
+                          }
+                        </TableCell>
+                      ))}
                     </TableRow>
-                  )}
-                </React.Fragment>
-              ))}
-            </TableBody>
-          </Table>
+                    {expandedRow === log.request_id && (
+                      <TableRow>
+                        <TableCell colSpan={columns.length} className="p-0">
+                          <RequestViewer data={{
+                            request: typeof log.messages === 'string' ? JSON.parse(log.messages) : log.messages,
+                            response: typeof log.response === 'string' ? JSON.parse(log.response) : log.response,
+                            metadata: log.metadata
+                          }} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </React.Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="p-8 text-center text-gray-500">
+              <p>No SpendLogs messages available.</p>
+              <p className="text-sm mt-2">
+                To enable this, set <code>`general_settings.store_prompts_in_spend_logs: true`</code> in your config.yaml
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
