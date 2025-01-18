@@ -155,6 +155,11 @@ export const columns: ColumnDef<LogEntry>[] = [
       );
     },
   },
+  {
+    header: "Country",
+    accessorKey: "requester_ip_address",
+    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
+  },
 ];
 
 const formatMessage = (message: any): string => {
