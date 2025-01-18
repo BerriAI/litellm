@@ -42,7 +42,7 @@ class AmazonNovaCanvasConfig:
     @classmethod
     def _is_nova_model(cls, model: Optional[str] = None) -> bool:
         """
-        Returns True if the model is a Nova model
+        Returns True if the model is a Nova Canvas model
 
         Nova models follow this pattern:
 
@@ -57,7 +57,7 @@ class AmazonNovaCanvasConfig:
             cls, text: str, optional_params: dict
     ) -> AmazonNovaCanvasTextToImageRequest:
         """
-        Transform the request body for Nova models
+        Transform the request body for Nova Canvas model
         """
         imageGenerationConfig = optional_params.pop("imageGenerationConfig")
         task_type = optional_params.pop("taskType")
@@ -76,7 +76,7 @@ class AmazonNovaCanvasConfig:
             width, height = _size.split("x")
             width, height = int(width), int(height)
         number_of_images = non_default_params.get("n", 1)
-        quality = "premium" if non_default_params.get("quality") == "premium" else "standard"
+        quality = "premium" if non_default_params.get("quality") == "hd" else "standard"
         return AmazonNovaCanvasImageGeneratorConfig(width=width, height=height, numberOfImages=number_of_images,
                                                     quality=quality)
 
