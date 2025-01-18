@@ -1,5 +1,8 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { getCountryFromIP } from "./ip_lookup";
 import moment from "moment";
+import React from "react";
+import { CountryCell } from "./country_cell";
 
 export type LogEntry = {
   request_id: string;
@@ -35,10 +38,10 @@ export const columns: ColumnDef<LogEntry>[] = [
             style: { cursor: "pointer" },
           }}
         >
-          {row.getIsExpanded() ? "👇" : "👉"}
+          {row.getIsExpanded() ? "▼" : "▶"}
         </button>
       ) : (
-        "🔵"
+        "●"
       );
     },
   },
@@ -139,6 +142,11 @@ export const columns: ColumnDef<LogEntry>[] = [
         </div>
       );
     },
+  },
+  {
+    header: "Country",
+    accessorKey: "requester_ip_address",
+    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
 ];
 

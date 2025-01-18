@@ -56,8 +56,9 @@ export default function SpendLogsTable({
   }
 
   return (
-    <div className="w-[90%] mx-auto px-4">
-      <div className="bg-white rounded-lg shadow w-full">
+    <div className="px-4 md:px-8 py-8 w-full">
+      <h1 className="text-xl font-semibold mb-4">Traces</h1>
+      <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="p-4 border-b flex justify-between items-center">
           <div className="flex space-x-4 items-center">
             <input
