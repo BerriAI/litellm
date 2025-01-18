@@ -174,7 +174,7 @@ def _team_key_generation_check(
         _team_key_generation = litellm.key_generation_settings["team_key_generation"]
     else:
         _team_key_generation = TeamUIKeyGenerationConfig(
-            allowed_team_member_roles=["admin", "member"],
+            allowed_team_member_roles=["admin", "user"],
         )
 
     _team_key_generation_team_member_check(

@@ -32,7 +32,14 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
 
-from ..common_utils import BedrockError, get_bedrock_tool_name
+from ..common_utils import (
+    AmazonBedrockGlobalConfig,
+    BedrockError,
+    get_bedrock_tool_name,
+)
+
+global_config = AmazonBedrockGlobalConfig()
+all_global_regions = global_config.get_all_regions()
 
 
 class AmazonConverseConfig:
@@ -612,13 +619,24 @@ class AmazonConverseConfig:
         Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
         """
+
         if model.startswith("bedrock/"):
-            model = model.split("/")[1]
+            model = model.split("/", 1)[1]
 
         if model.startswith("converse/"):
-            model = model.split("/")[1]
+            model = model.split("/", 1)[1]
 
         potential_region = model.split(".", 1)[0]
+
+        alt_potential_region = model.split("/", 1)[
+            0
+        ]  # in model cost map we store regional information like `/us-west-2/bedrock-model`
+
         if potential_region in self._supported_cross_region_inference_region():
             return model.split(".", 1)[1]
+        elif (
+            alt_potential_region in all_global_regions and len(model.split("/", 1)) > 1
+        ):
+            return model.split("/", 1)[1]
+
         return model

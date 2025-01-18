@@ -178,7 +178,10 @@ from openai import OpenAIError as OriginalError
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    type_to_response_format_param,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -1474,7 +1477,7 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token
+            identifier, revision=revision, auth_token=auth_token  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -2773,10 +2776,25 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
-    if "response_format" in non_default_params:
-        non_default_params["response_format"] = type_to_response_format_param(
-            response_format=non_default_params["response_format"]
+    provider_config: Optional[BaseConfig] = None
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
         )
+
+    if "response_format" in non_default_params:
+        if provider_config is not None:
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
+            )
+        else:
+            non_default_params["response_format"] = type_to_response_format_param(
+                response_format=non_default_params["response_format"]
+            )
 
     if "tools" in non_default_params and isinstance(
         non_default_params, list
@@ -2835,13 +2853,6 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
                 )
 
-    provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
     supported_params = get_supported_openai_params(
         model=model, custom_llm_provider=custom_llm_provider
     )
@@ -4962,36 +4973,6 @@ def _should_retry(status_code: int):
         return True
 
     return False
-
-
-def type_to_response_format_param(
-    response_format: Optional[Union[Type[BaseModel], dict]],
-) -> Optional[dict]:
-    """
-    Re-implementation of openai's 'type_to_response_format_param' function
-
-    Used for converting pydantic object to api schema.
-    """
-    if response_format is None:
-        return None
-
-    if isinstance(response_format, dict):
-        return response_format
-
-    # type checkers don't narrow the negation of a `TypeGuard` as it isn't
-    # a safe default behaviour but we know that at this point the `response_format`
-    # can only be a `type`
-    if not _parsing._completions.is_basemodel_type(response_format):
-        raise TypeError(f"Unsupported response_format type - {response_format}")
-
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "schema": _pydantic.to_strict_json_schema(response_format),
-            "name": response_format.__name__,
-            "strict": True,
-        },
-    }
 
 
 def _get_retry_after_from_exception_header(
