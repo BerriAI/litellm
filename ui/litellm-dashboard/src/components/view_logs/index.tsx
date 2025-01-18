@@ -14,6 +14,14 @@ interface SpendLogsTableProps {
   userID: string | null;
 }
 
+interface PaginatedResponse {
+  data: LogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 export default function SpendLogsTable({
   accessToken,
   token,
@@ -26,31 +34,42 @@ export default function SpendLogsTable({
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const [selectedColumn, setSelectedColumn] = useState("Key Name");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(50);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
         setShowColumnDropdown(false);
       }
     }
 
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const logs = useQuery({
-    queryKey: ["logs", "table"],
+  const logs = useQuery<PaginatedResponse>({
+    queryKey: ["logs", "table", currentPage, pageSize],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
         console.log(
           "got None values for one of accessToken, token, userRole, userID",
         );
-        return;
+        return {
+          data: [],
+          total: 0,
+          page: 1,
+          page_size: pageSize,
+          total_pages: 0,
+        };
       }
 
-      // Get logs for last 24 hours using ISO string and proper date formatting
       const endTime = moment().format("YYYY-MM-DD HH:mm:ss");
       const startTime = moment()
         .subtract(24, "hours")
@@ -63,6 +82,8 @@ export default function SpendLogsTable({
         userID,
         startTime,
         endTime,
+        currentPage,
+        pageSize,
       );
 
       return data;
@@ -76,62 +97,45 @@ export default function SpendLogsTable({
     return null;
   }
 
-  const filteredData = logs.data?.filter((log) => {
-    const matchesSearch =
-      !searchTerm ||
-      log.request_id.includes(searchTerm) ||
-      log.model.includes(searchTerm) ||
-      (log.user && log.user.includes(searchTerm));
-    const matchesKeyName =
-      !keyNameFilter ||
-      (log.metadata?.user_api_key_alias &&
-        log.metadata.user_api_key_alias
-          .toLowerCase()
-          .includes(keyNameFilter.toLowerCase()));
-    const matchesTeamName =
-      !teamNameFilter ||
-      (log.metadata?.user_api_key_team_alias &&
-        log.metadata.user_api_key_team_alias
-          .toLowerCase()
-          .includes(teamNameFilter.toLowerCase()));
-    return matchesSearch && matchesKeyName && matchesTeamName;
-  }) || [];
+  const filteredData =
+    logs.data?.data?.filter((log) => {
+      const matchesSearch =
+        !searchTerm ||
+        log.request_id.includes(searchTerm) ||
+        log.model.includes(searchTerm) ||
+        (log.user && log.user.includes(searchTerm));
+      const matchesKeyName =
+        !keyNameFilter ||
+        (log.metadata?.user_api_key_alias &&
+          log.metadata.user_api_key_alias
+            .toLowerCase()
+            .includes(keyNameFilter.toLowerCase()));
+      const matchesTeamName =
+        !teamNameFilter ||
+        (log.metadata?.user_api_key_team_alias &&
+          log.metadata.user_api_key_team_alias
+            .toLowerCase()
+            .includes(teamNameFilter.toLowerCase()));
+      return matchesSearch && matchesKeyName && matchesTeamName;
+    }) || [];
 
   return (
-    <div className="px-4 md:px-8 py-8 w-full">
+    <div className="w-full">
       <h1 className="text-xl font-semibold mb-4">Traces</h1>
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="p-4 border-b">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1 max-w-md">
-              <input
-                type="text"
-                placeholder="Search by Request ID"
-                className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-              <svg
-                className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+        <div className="border-b px-6 py-4">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+            <div className="flex items-center gap-3">
+              <div className="relative w-64">
+                <input
+                  type="text"
+                  placeholder="Search by Request ID"
+                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                 />
-              </svg>
-            </div>
-            <div className="relative" ref={dropdownRef}>
-              <button 
-                className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                onClick={() => setShowFilters(!showFilters)}
-              >
                 <svg
-                  className="w-4 h-4"
+                  className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -140,97 +144,191 @@ export default function SpendLogsTable({
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth={2}
-                    d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
                   />
                 </svg>
-                Filter
-              </button>
-
-              {showFilters && (
-                <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">Where</span>
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowColumnDropdown(!showColumnDropdown)}
-                        className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
-                      >
-                        {selectedColumn}
-                        <svg
-                          className="h-4 w-4 text-gray-500"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M19 9l-7 7-7-7"
-                          />
-                        </svg>
-                      </button>
-                      {showColumnDropdown && (
-                        <div className="absolute left-0 mt-1 w-[160px] bg-white border rounded-md shadow-lg z-50">
-                          {["Key Name", "Team Name"].map((option) => (
-                            <button
-                              key={option}
-                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
-                                selectedColumn === option ? 'bg-blue-50 text-blue-600' : ''
-                              }`}
-                              onClick={() => {
-                                setSelectedColumn(option);
-                                setShowColumnDropdown(false);
-                                if (option === "Key Name") {
-                                  setTeamNameFilter("");
-                                } else {
-                                  setKeyNameFilter("");
-                                }
-                              }}
-                            >
-                              {selectedColumn === option && (
-                                <svg className="h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                </svg>
-                              )}
-                              {option}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Enter value..."
-                      className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      value={keyNameFilter || teamNameFilter}
-                      onChange={(e) => {
-                        if (selectedColumn === "Key Name") {
-                          setKeyNameFilter(e.target.value);
-                        } else {
-                          setTeamNameFilter(e.target.value);
-                        }
-                      }}
+              </div>
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                  onClick={() => setShowFilters(!showFilters)}
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
                     />
-                    <button 
-                      className="p-1 hover:bg-gray-100 rounded-md"
-                      onClick={() => {
-                        setKeyNameFilter("");
-                        setTeamNameFilter("");
-                        setShowFilters(false);
-                      }}
-                    >
-                      <span className="text-gray-500">×</span>
-                    </button>
+                  </svg>
+                  Filter
+                </button>
+
+                {showFilters && (
+                  <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">Where</span>
+                      <div className="relative">
+                        <button
+                          onClick={() =>
+                            setShowColumnDropdown(!showColumnDropdown)
+                          }
+                          className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
+                        >
+                          {selectedColumn}
+                          <svg
+                            className="h-4 w-4 text-gray-500"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M19 9l-7 7-7-7"
+                            />
+                          </svg>
+                        </button>
+                        {showColumnDropdown && (
+                          <div className="absolute left-0 mt-1 w-[160px] bg-white border rounded-md shadow-lg z-50">
+                            {["Key Name", "Team Name"].map((option) => (
+                              <button
+                                key={option}
+                                className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
+                                  selectedColumn === option
+                                    ? "bg-blue-50 text-blue-600"
+                                    : ""
+                                }`}
+                                onClick={() => {
+                                  setSelectedColumn(option);
+                                  setShowColumnDropdown(false);
+                                  if (option === "Key Name") {
+                                    setTeamNameFilter("");
+                                  } else {
+                                    setKeyNameFilter("");
+                                  }
+                                }}
+                              >
+                                {selectedColumn === option && (
+                                  <svg
+                                    className="h-4 w-4 text-blue-600"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M5 13l4 4L19 7"
+                                    />
+                                  </svg>
+                                )}
+                                {option}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Enter value..."
+                        className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        value={keyNameFilter || teamNameFilter}
+                        onChange={(e) => {
+                          if (selectedColumn === "Key Name") {
+                            setKeyNameFilter(e.target.value);
+                          } else {
+                            setTeamNameFilter(e.target.value);
+                          }
+                        }}
+                      />
+                      <button
+                        className="p-1 hover:bg-gray-100 rounded-md"
+                        onClick={() => {
+                          setKeyNameFilter("");
+                          setTeamNameFilter("");
+                          setShowFilters(false);
+                        }}
+                      >
+                        <span className="text-gray-500">×</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+              <select className="px-3 py-2 border rounded-md bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                <option>24 hours</option>
+                <option>7 days</option>
+                <option>30 days</option>
+              </select>
             </div>
-            <select className="px-3 py-2 border rounded-md bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 flex items-center gap-2">
-              <option>24 hours</option>
-              <option>7 days</option>
-              <option>30 days</option>
-            </select>
+
+            <div className="flex items-center space-x-4">
+              <span className="text-sm text-gray-700">
+                Showing{" "}
+                {logs.isLoading
+                  ? "..."
+                  : logs.data
+                  ? (currentPage - 1) * pageSize + 1
+                  : 0}{" "}
+                -{" "}
+                {logs.isLoading
+                  ? "..."
+                  : logs.data
+                  ? Math.min(currentPage * pageSize, logs.data.total)
+                  : 0}{" "}
+                of{" "}
+                {logs.isLoading
+                  ? "..."
+                  : logs.data
+                  ? logs.data.total
+                  : 0}{" "}
+                results
+              </span>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-700">
+                  Page {logs.isLoading ? "..." : currentPage} of{" "}
+                  {logs.isLoading
+                    ? "..."
+                    : logs.data
+                    ? logs.data.total_pages
+                    : 1}
+                </span>
+                <button
+                  onClick={() =>
+                    setCurrentPage((p) => Math.max(1, p - 1))
+                  }
+                  disabled={logs.isLoading || currentPage === 1}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() =>
+                    setCurrentPage((p) =>
+                      Math.min(
+                        logs.data?.total_pages || 1,
+                        p + 1,
+                      ),
+                    )
+                  }
+                  disabled={
+                    logs.isLoading ||
+                    currentPage === (logs.data?.total_pages || 1)
+                  }
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <DataTable

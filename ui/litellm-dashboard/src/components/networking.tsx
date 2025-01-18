@@ -1513,6 +1513,7 @@ export const userSpendLogsCall = async (
     throw error;
   }
 };
+
 export const uiSpendLogsCall = async (
   accessToken: String,
   api_key?: string, 
@@ -1520,6 +1521,8 @@ export const uiSpendLogsCall = async (
   request_id?: string,
   start_date?: string,
   end_date?: string,
+  page?: number,
+  page_size?: number,
 ) => {
   try {
     // Construct base URL
@@ -1532,6 +1535,9 @@ export const uiSpendLogsCall = async (
     if (request_id) queryParams.append('request_id', request_id);
     if (start_date) queryParams.append('start_date', start_date);
     if (end_date) queryParams.append('end_date', end_date);
+    if (page) queryParams.append('page', page.toString());
+    if (page_size) queryParams.append('page_size', page_size.toString());
+
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
