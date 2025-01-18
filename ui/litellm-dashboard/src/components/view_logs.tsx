@@ -231,13 +231,14 @@ export const SpendLogsTable: React.FC<SpendLogsTableProps> = ({ accessToken, tok
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
-  if (!accessToken || !token || !userRole || !userID) {
-    console.log("got None values for one of accessToken, token, userRole, userID");
-    return
-  }
 
   useEffect(() => {
     const fetchLogs = async () => {
+      if (!accessToken || !token || !userRole || !userID) {
+        console.log("got None values for one of accessToken, token, userRole, userID");
+        return;
+      }
+
       try {
         setLoading(true);
         // Get logs for last 24 hours using ISO string and proper date formatting
@@ -271,6 +272,11 @@ export const SpendLogsTable: React.FC<SpendLogsTableProps> = ({ accessToken, tok
 
     fetchLogs();
   }, [accessToken, token, userRole, userID]);
+
+  if (!accessToken || !token || !userRole || !userID) {
+    console.log("got None values for one of accessToken, token, userRole, userID");
+    return null;
+  }
 
   return (
     <div className="w-[90%] mx-auto px-4">
