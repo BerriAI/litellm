@@ -21,10 +21,10 @@ import {
 } from '@tanstack/react-table';
 
 interface SpendLogsTableProps {
-  accessToken: string;
-  token: string;
-  userRole: string;
-  userID: string;
+  accessToken: string | null;
+  token: string | null;
+  userRole: string | null;
+  userID: string | null;
 }
 
 interface LogEntry {
@@ -231,6 +231,10 @@ export const SpendLogsTable: React.FC<SpendLogsTableProps> = ({ accessToken, tok
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+  if (!accessToken || !token || !userRole || !userID) {
+    console.log("got None values for one of accessToken, token, userRole, userID");
+    return
+  }
 
   useEffect(() => {
     const fetchLogs = async () => {

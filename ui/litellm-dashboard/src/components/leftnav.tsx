@@ -18,6 +18,7 @@ interface MenuItem {
   page: string;
   label: string;
   roles?: string[];
+  children?: MenuItem[];  // Add children property for submenus
 }
 
 const old_admin_roles = ["Admin", "Admin Viewer"];
@@ -36,10 +37,19 @@ const menuItems: MenuItem[] = [
   { key: "17", page: "organizations", label: "Organizations", roles: all_admin_roles },
   { key: "5", page: "users", label: "Internal Users", roles: all_admin_roles },
   { key: "8", page: "settings", label: "Logging & Alerts", roles: all_admin_roles },
-  { key: "9", page: "caching", label: "Caching", roles: all_admin_roles },
-  { key: "10", page: "budgets", label: "Budgets", roles: all_admin_roles },
-  { key: "11", page: "general-settings", label: "Router Settings", roles: all_admin_roles },
-  { key: "12", page: "pass-through-settings", label: "Pass-Through", roles: all_admin_roles },
+  { 
+    key: "extras", 
+    page: "extras",
+    label: "Extras", 
+    roles: all_admin_roles,
+    children: [
+      { key: "9", page: "caching", label: "Caching", roles: all_admin_roles },
+      { key: "10", page: "budgets", label: "Budgets", roles: all_admin_roles },
+      { key: "11", page: "general-settings", label: "Router Settings", roles: all_admin_roles },
+      { key: "12", page: "pass-through-settings", label: "Pass-Through", roles: all_admin_roles },
+      { key: "15", page: "logs", label: "Logs", roles: all_admin_roles },
+    ]
+  },
   { key: "13", page: "admin-panel", label: "Admin Settings", roles: all_admin_roles },
   { key: "14", page: "api_ref", label: "API Reference" }, // all roles
   { key: "16", page: "model-hub", label: "Model Hub" }, // all roles
@@ -68,17 +78,35 @@ const Sidebar: React.FC<SidebarProps> = ({
           style={{ height: "100%", borderRight: 0 }}
         >
           {filteredMenuItems.map(item => (
-            <Menu.Item 
-            key={item.key} 
-            onClick={() => {
-              const newSearchParams = new URLSearchParams(window.location.search);
-              newSearchParams.set('page', item.page);
-              window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-              setPage(item.page);
-            }}
-          >
-            <Text>{item.label}</Text>
-          </Menu.Item>
+            item.children ? (
+              <Menu.SubMenu key={item.key} title={<Text>{item.label}</Text>}>
+                {item.children.map(child => (
+                  <Menu.Item 
+                    key={child.key}
+                    onClick={() => {
+                      const newSearchParams = new URLSearchParams(window.location.search);
+                      newSearchParams.set('page', child.page);
+                      window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                      setPage(child.page);
+                    }}
+                  >
+                    <Text>{child.label}</Text>
+                  </Menu.Item>
+                ))}
+              </Menu.SubMenu>
+            ) : (
+              <Menu.Item 
+                key={item.key}
+                onClick={() => {
+                  const newSearchParams = new URLSearchParams(window.location.search);
+                  newSearchParams.set('page', item.page);
+                  window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                  setPage(item.page);
+                }}
+              >
+                <Text>{item.label}</Text>
+              </Menu.Item>
+            )
           ))}
         </Menu>
       </Sider>
