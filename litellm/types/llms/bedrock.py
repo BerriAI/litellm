@@ -331,7 +331,7 @@ class AmazonNovaCanvasImageGeneratorConfig(TypedDict, total=False):
 
     cfgScale: int
     seed: int
-    quality: Literal["standard"]
+    quality: Literal["standard", "premium"]
     width: int
     height: int
     numberOfImages: int
