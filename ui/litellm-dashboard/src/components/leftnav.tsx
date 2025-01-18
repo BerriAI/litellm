@@ -111,7 +111,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider theme="light" width={180}>
+      <Sider theme="light" width={220}>
         <Menu
           mode="inline"
           selectedKeys={[selectedMenuKey]}
