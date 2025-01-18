@@ -25,7 +25,7 @@ interface DataTableProps<TData, TValue> {
 }
 
 export function DataTable<TData, TValue>({
-  data,
+  data = [],
   columns,
   getRowCanExpand,
   renderSubComponent,
@@ -60,7 +60,7 @@ export function DataTable<TData, TValue>({
           ))}
         </TableHead>
         <TableBody>
-          {table.getRowModel().rows?.length ? (
+          {table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
                 <TableRow>
