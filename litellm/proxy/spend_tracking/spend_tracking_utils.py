@@ -252,20 +252,20 @@ def _get_messages_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
 ) -> str:
     if payload is None:
-        return ""
+        return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
         return json.dumps(payload.get("messages", {}))
-    return ""
+    return "{}"
 
 
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
 ) -> str:
     if payload is None:
-        return ""
+        return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
         return json.dumps(payload.get("response", {}))
-    return ""
+    return "{}"
 
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
