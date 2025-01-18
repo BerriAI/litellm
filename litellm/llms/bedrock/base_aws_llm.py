@@ -12,9 +12,11 @@ from litellm.caching.caching import DualCache
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
+    from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials
 else:
     Credentials = Any
+    AWSPreparedRequest = Any
 
 
 class Boto3CredentialsInfo(BaseModel):
@@ -471,3 +473,32 @@ class BaseAWSLLM:
             aws_region_name=aws_region_name,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         )
+
+    def get_request_headers(
+        self,
+        credentials: Credentials,
+        aws_region_name: str,
+        extra_headers: Optional[dict],
+        endpoint_url: str,
+        data: str,
+        headers: dict,
+    ) -> AWSPreparedRequest:
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+
+        request = AWSRequest(
+            method="POST", url=endpoint_url, data=data, headers=headers
+        )
+        sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
+        prepped = request.prepare()
+
+        return prepped
