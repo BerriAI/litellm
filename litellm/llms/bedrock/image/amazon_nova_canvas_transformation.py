@@ -48,7 +48,7 @@ class AmazonNovaCanvasConfig:
 
         """
         if model:
-            if "amazon.nova" in model:
+            if "amazon.nova-canvas" in model:
                 return True
         return False
 
