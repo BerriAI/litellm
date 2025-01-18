@@ -105,14 +105,6 @@ const Navbar: React.FC<NavbarProps> = ({
               >
                 Docs
               </a>
-              <a 
-                href="https://litellm-api.up.railway.app/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-gray-600 hover:text-gray-800"
-              >
-                API Reference
-              </a>
               <Dropdown menu={{ items }}>
                 <button className="flex items-center text-sm text-gray-600 hover:text-gray-800">
                   Admin
