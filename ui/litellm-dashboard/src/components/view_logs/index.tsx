@@ -38,6 +38,14 @@ export default function SpendLogsTable({
   const [pageSize] = useState(50);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // New state variables for Start and End Time
+  const [startTime, setStartTime] = useState<string>(
+    moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm")
+  );
+  const [endTime, setEndTime] = useState<string>(
+    moment().format("YYYY-MM-DDTHH:mm")
+  );
+
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -55,7 +63,7 @@ export default function SpendLogsTable({
   }, []);
 
   const logs = useQuery<PaginatedResponse>({
-    queryKey: ["logs", "table", currentPage, pageSize],
+    queryKey: ["logs", "table", currentPage, pageSize, startTime, endTime],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
         console.log(
@@ -70,24 +78,24 @@ export default function SpendLogsTable({
         };
       }
 
-      const endTime = moment().format("YYYY-MM-DD HH:mm:ss");
-      const startTime = moment()
-        .subtract(24, "hours")
-        .format("YYYY-MM-DD HH:mm:ss");
+      const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+      const formattedEndTime = moment(endTime).format("YYYY-MM-DD HH:mm:ss");
 
       const data = await uiSpendLogsCall(
         accessToken,
         token,
         userRole,
         userID,
-        startTime,
-        endTime,
+        formattedStartTime,
+        formattedEndTime,
         currentPage,
         pageSize,
       );
 
       return data;
     },
+    // Refetch when startTime or endTime changes
+    enabled: !!accessToken && !!token && !!userRole && !!userID,
   });
 
   if (!accessToken || !token || !userRole || !userID) {
@@ -125,7 +133,7 @@ export default function SpendLogsTable({
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="relative w-64">
                 <input
                   type="text"
@@ -263,11 +271,45 @@ export default function SpendLogsTable({
                   </div>
                 )}
               </div>
-              <select className="px-3 py-2 border rounded-md bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                <option>24 hours</option>
-                <option>7 days</option>
-                <option>30 days</option>
-              </select>
+
+              <div className="flex items-center gap-2">
+                <div>
+                  <label
+                    htmlFor="start-time"
+                    className="block text-xs font-medium text-gray-700"
+                  >
+                    Start Time
+                  </label>
+                  <input
+                    type="datetime-local"
+                    id="start-time"
+                    value={startTime}
+                    onChange={(e) => {
+                      setStartTime(e.target.value);
+                      setCurrentPage(1); // Reset to first page on filter change
+                    }}
+                    className="mt-1 block w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="end-time"
+                    className="block text-xs font-medium text-gray-700"
+                  >
+                    End Time
+                  </label>
+                  <input
+                    type="datetime-local"
+                    id="end-time"
+                    value={endTime}
+                    onChange={(e) => {
+                      setEndTime(e.target.value);
+                      setCurrentPage(1); // Reset to first page on filter change
+                    }}
+                    className="mt-1 block w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="flex items-center space-x-4">
@@ -370,7 +412,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
           </div>
         </div>
         <pre className="p-4 overflow-auto text-sm">
-          {JSON.stringify(formatData(row.original.request_id), null, 2)}
+          {JSON.stringify(formatData(row.original.messages), null, 2)}
         </pre>
       </div>
 
