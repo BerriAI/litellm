@@ -45,3 +45,16 @@ Once this flag is enabled, your `messages` and `responses` will be stored in the
 general_settings:
   store_prompts_in_spend_logs: true
 ```
+
+## DB Schema Change
+
+Added `messages` and `responses` to the `LiteLLM_Spend_Logs` table.
+
+**By default this is not logged.** If you want `messages` and `responses` to be logged, you need to opt in with this setting 
+
+```yaml
+general_settings:
+  store_prompts_in_spend_logs: true
+```
+
+
