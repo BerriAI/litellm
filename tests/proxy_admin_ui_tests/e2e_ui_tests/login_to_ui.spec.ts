@@ -31,18 +31,14 @@ test('admin login test', async ({ page }) => {
     'Usage',
     'Teams',
     'Internal User',
-    'Logging & Alerts',
-    'Caching',
-    'Budgets',
-    'Router Settings',
-    'Pass-through',
-    'Admin Settings',
+    'Settings',
+    'Experimental',
     'API Reference',
     'Model Hub'
   ];
 
   for (const tab of tabs) {
-    const tabElement = page.locator('p.text-tremor-default.text-tremor-content.dark\\:text-dark-tremor-content', { hasText: tab });
+    const tabElement = page.locator('span.ant-menu-title-content', { hasText: tab });
     await tabElement.click();
   }
 });
