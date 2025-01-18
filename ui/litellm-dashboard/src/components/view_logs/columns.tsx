@@ -1,6 +1,8 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { getCountryFromIP } from "./ip_lookup";
 import moment from "moment";
+import React from "react";
+import { CountryCell } from "./country_cell";
 
 export type LogEntry = {
   request_id: string;
@@ -144,11 +146,7 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Country",
     accessorKey: "requester_ip_address",
-    cell: (info: any) => {
-      const ipAddress = info.getValue();
-      if (!ipAddress) return <span>-</span>;
-      return <span>{getCountryFromIP(ipAddress)}</span>;
-    },
+    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
 ];
 
