@@ -16,7 +16,8 @@ import {
   DatabaseOutlined,
   FileTextOutlined,
   LineOutlined,
-  LineChartOutlined
+  LineChartOutlined,
+  ExperimentOutlined
 } from '@ant-design/icons';
 
 const { Sider } = Layout;
@@ -56,10 +57,10 @@ const menuItems: MenuItem[] = [
   { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
   { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
   { 
-    key: "extras", 
-    page: "extras",
-    label: "Extras", 
-    icon: <DatabaseOutlined />,
+    key: "experimental", 
+    page: "experimental",
+    label: "Experimental", 
+    icon: <ExperimentOutlined />,
     roles: all_admin_roles,
     children: [
       { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />, roles: all_admin_roles },
