@@ -1638,10 +1638,25 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default=None,
         description="Time till which to view key spend",
     ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Number of items per page", ge=1, le=100
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    View spend logs for UI
+    View spend logs for UI with pagination support
+
+    Returns:
+        {
+            "data": List[LiteLLM_SpendLogs],  # Paginated spend logs
+            "total": int,                      # Total number of records
+            "page": int,                       # Current page number
+            "page_size": int,                  # Number of items per page
+            "total_pages": int                 # Total number of pages
+        }
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1656,7 +1671,13 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         verbose_proxy_logger.debug(
             "Prompts and responses are not stored in spend logs, returning empty list"
         )
-        return []
+        return {
+            "data": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
     if start_date is None or end_date is None:
         raise ProxyException(
             message="Start date and end date are required",
@@ -1672,14 +1693,38 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
     end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
 
-    return await prisma_client.db.litellm_spendlogs.find_many(
+    # Calculate skip value for pagination
+    skip = (page - 1) * page_size
+
+    # Get total count of records
+    total_records = await prisma_client.db.litellm_spendlogs.count(
+        where={
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+    )
+
+    # Get paginated data
+    data = await prisma_client.db.litellm_spendlogs.find_many(
         where={
             "startTime": {"gte": start_date_iso, "lte": end_date_iso},
         },
         order={
             "startTime": "desc",
         },
+        skip=skip,
+        take=page_size,
     )
+
+    # Calculate total pages
+    total_pages = (total_records + page_size - 1) // page_size
+
+    return {
+        "data": data,
+        "total": total_records,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @router.get(
