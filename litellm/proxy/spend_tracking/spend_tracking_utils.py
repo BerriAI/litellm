@@ -1,7 +1,7 @@
 import json
 import secrets
 from datetime import datetime as dt
-from typing import Optional, Union, cast
+from typing import Optional, cast
 
 from pydantic import BaseModel
 
