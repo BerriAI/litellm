@@ -85,41 +85,43 @@ export default function SpendLogsTable({
     <div className="px-4 md:px-8 py-8 w-full">
       <h1 className="text-xl font-semibold mb-4">Traces</h1>
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="p-4 border-b flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-          <div className="flex flex-wrap md:space-x-4 space-y-2 md:space-y-0 items-center">
+        <div className="p-4 border-b flex flex-wrap gap-3 items-center">
+          <div className="flex items-center gap-2 flex-1">
+            <select className="px-4 py-2 border rounded-lg min-w-[120px]">
+              <option>where</option>
+            </select>
+            <select className="px-4 py-2 border rounded-lg min-w-[150px]">
+              <option>Key Name</option>
+              <option>Team Name</option>
+            </select>
+            <select className="px-4 py-2 border rounded-lg min-w-[120px]">
+              <option>equals</option>
+              <option>contains</option>
+            </select>
             <input
               type="text"
-              placeholder="Search by request ID, model, or user..."
-              className="px-4 py-2 border rounded-lg w-80"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="Filter by Key Name..."
-              className="px-4 py-2 border rounded-lg w-80"
+              placeholder="Value..."
+              className="px-4 py-2 border rounded-lg flex-1"
               value={keyNameFilter}
               onChange={(e) => setKeyNameFilter(e.target.value)}
             />
-            <input
-              type="text"
-              placeholder="Filter by Team Name..."
-              className="px-4 py-2 border rounded-lg w-80"
-              value={teamNameFilter}
-              onChange={(e) => setTeamNameFilter(e.target.value)}
-            />
-            <button className="px-4 py-2 border rounded-lg flex items-center gap-2">
-              <span>Filters</span>
-              <span className="text-xs bg-gray-100 px-2 py-1 rounded">0</span>
+            <button className="px-3 py-1 text-sm border rounded-lg hover:bg-gray-50">
+              ×
             </button>
+          </div>
+          <button className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">
+            + Add filter
+          </button>
+          <button className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">
+            Clear filters
+          </button>
+          <div className="flex-1 md:flex-none flex justify-end gap-2">
             <select className="px-4 py-2 border rounded-lg">
               <option>Last 24 hours</option>
               <option>Last 7 days</option>
               <option>Last 30 days</option>
             </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
+            <button className="px-3 py-1 text-sm border rounded-lg hover:bg-gray-50">
               Export
             </button>
           </div>
