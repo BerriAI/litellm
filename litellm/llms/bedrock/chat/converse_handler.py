@@ -132,6 +132,17 @@ class BedrockConverseLLM(BaseAWSLLM):
             headers=headers,
         )
 
+        ## LOGGING
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": dict(prepped.headers),
+            },
+        )
+
         completion_stream = await make_call(
             client=client,
             api_base=api_base,
