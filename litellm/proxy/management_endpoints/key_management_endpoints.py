@@ -1437,7 +1437,7 @@ async def delete_verification_tokens(
     for key in tokens:
         user_api_key_cache.delete_cache(key)
         # remove hash token from cache
-        hashed_token = hash_token(key)
+        hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
     return {"deleted_keys": deleted_tokens}, _keys_being_deleted
