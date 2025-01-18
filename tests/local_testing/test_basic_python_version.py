@@ -24,16 +24,14 @@ def test_using_litellm():
 
 
 def test_litellm_proxy_server():
-    # Install the litellm[proxy] package
-    subprocess.run(["pip", "install", "litellm[proxy]"])
+    # Install from local directory
+    subprocess.run(["pip", "install", "-e", "."], cwd=os.path.abspath("../.."))
 
-    # Import the proxy_server module
     try:
         import litellm.proxy.proxy_server
     except ImportError:
         pytest.fail("Failed to import litellm.proxy_server")
 
-    # Assertion to satisfy the test, you can add other checks as needed
     assert True
 
 
