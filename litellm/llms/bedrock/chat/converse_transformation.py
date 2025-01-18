@@ -10,6 +10,7 @@ from typing import List, Literal, Optional, Tuple, Union, overload
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -347,14 +348,9 @@ class AmazonConverseConfig:
             inference_params["topK"] = inference_params.pop("top_k")
         return InferenceConfig(**inference_params)
 
-    def _transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages)
+    def _transform_request_helper(
+        self, system_content_blocks: List[SystemContentBlock], optional_params: dict
+    ) -> CommonRequestObject:
         inference_params = copy.deepcopy(optional_params)
         additional_request_keys = []
         additional_request_params = {}
@@ -364,14 +360,6 @@ class AmazonConverseConfig:
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
         inference_params.pop("json_mode", None)  # used for handling json_schema
-        ## TRANSFORMATION ##
-
-        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
-        )
 
         # send all model-specific params in 'additional_request_params'
         for k, v in inference_params.items():
@@ -408,8 +396,7 @@ class AmazonConverseConfig:
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
 
-        _data: RequestObject = {
-            "messages": bedrock_messages,
+        data: CommonRequestObject = {
             "additionalModelRequestFields": additional_request_params,
             "system": system_content_blocks,
             "inferenceConfig": self._transform_inference_params(
@@ -422,13 +409,65 @@ class AmazonConverseConfig:
         request_guardrails_config = inference_params.pop("guardrailConfig", None)
         if request_guardrails_config is not None:
             guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
-            _data["guardrailConfig"] = guardrail_config
+            data["guardrailConfig"] = guardrail_config
 
         # Tool Config
         if bedrock_tool_config is not None:
-            _data["toolConfig"] = bedrock_tool_config
+            data["toolConfig"] = bedrock_tool_config
 
-        return _data
+        return data
+
+    async def _async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> RequestObject:
+        messages, system_content_blocks = self._transform_system_message(messages)
+        ## TRANSFORMATION ##
+        bedrock_messages: List[MessageBlock] = await asyncify(
+            _bedrock_converse_messages_pt
+        )(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+            user_continue_message=litellm_params.pop("user_continue_message", None),
+        )
+
+        _data: CommonRequestObject = self._transform_request_helper(
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+        )
+
+        data: RequestObject = {"messages": bedrock_messages, **_data}
+
+        return data
+
+    def _transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> RequestObject:
+        messages, system_content_blocks = self._transform_system_message(messages)
+        ## TRANSFORMATION ##
+        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+            user_continue_message=litellm_params.pop("user_continue_message", None),
+        )
+
+        _data: CommonRequestObject = self._transform_request_helper(
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+        )
+
+        data: RequestObject = {"messages": bedrock_messages, **_data}
+
+        return data
 
     def _transform_response(
         self,

@@ -2391,3 +2391,41 @@ def test_process_bedrock_converse_image_block():
     )
 
     assert block["document"] is not None
+
+
+@pytest.mark.asyncio
+async def test_bedrock_image_url_sync_client():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    import logging
+    from litellm import verbose_logger
+
+    verbose_logger.setLevel(level=logging.DEBUG)
+
+    litellm._turn_on_debug()
+    client = AsyncHTTPHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                    },
+                },
+            ],
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            await litellm.acompletion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()
