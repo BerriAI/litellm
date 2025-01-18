@@ -415,6 +415,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+    - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
+    - enforce_rbac: If true, enforce RBAC for all routes.
 
     See `auth_checks.py` for the specific routes
     """
@@ -445,6 +447,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
+    public_allowed_routes: List[str] = ["public_routes"]
+    enforce_rbac: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
