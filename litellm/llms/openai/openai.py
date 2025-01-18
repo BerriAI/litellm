@@ -358,6 +358,7 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
             else:
+
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
