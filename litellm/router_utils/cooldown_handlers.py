@@ -108,6 +108,12 @@ def _should_run_cooldown_logic(
     - deployment is in litellm_router_instance.provider_default_deployment_ids
     - exception_status is not one that should be immediately retried (e.g. 401)
     """
+    if (
+        deployment is None
+        or litellm_router_instance.get_model_group(id=deployment) is None
+    ):
+        return False
+
     if litellm_router_instance.disable_cooldowns:
         return False
 
