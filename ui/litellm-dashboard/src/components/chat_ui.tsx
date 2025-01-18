@@ -22,7 +22,9 @@ import {
   Button,
 } from "@tremor/react";
 
-import { message, Select } from "antd";
+import { message, Select, Upload } from "antd";
+import { UploadOutlined } from '@ant-design/icons';
+import type { UploadFile } from 'antd/es/upload/interface';
 import { modelAvailableCall } from "./networking";
 import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
@@ -94,6 +96,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     undefined
   );
   const [modelInfo, setModelInfo] = useState<any[]>([]);
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -139,7 +142,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
   
     fetchModelInfo();
-  }, [accessToken, userID, userRole]);
+  }, [accessToken, token, userID, userRole]);
   
 
   useEffect(() => {
@@ -177,7 +180,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleSendMessage = async () => {
-    if (inputMessage.trim() === "") return;
+    if (inputMessage.trim() === "" && fileList.length === 0) return;
 
     if (!token || !userRole || !userID) {
       return;
@@ -190,12 +193,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    // Create message content with files
+    let messageContent = inputMessage;
+    if (fileList.length > 0) {
+      const fileContents = await Promise.all(
+        fileList.map(async (file) => {
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target?.result);
+            reader.readAsText(file as any);
+          });
+        })
+      );
+      messageContent += "\n\nAttached files:\n" + fileContents.join('\n');
+    }
 
-    const newUserMessage = { role: "user", content: inputMessage };
-
+    const newUserMessage = { role: "user", content: messageContent };
     const updatedChatHistory = [...chatHistory, newUserMessage];
-
     setChatHistory(updatedChatHistory);
+    setFileList([]); // Clear files after sending
 
     try {
       if (selectedModel) {
@@ -217,6 +233,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     message.success("Chat history cleared.");
+  };
+
+  const handleFileUpload = {
+    beforeUpload: (file: UploadFile) => {
+      setFileList([...fileList, file]);
+      return false; // Prevent auto upload
+    },
+    onRemove: (file: UploadFile) => {
+      const index = fileList.indexOf(file);
+      const newFileList = fileList.slice();
+      newFileList.splice(index, 1);
+      setFileList(newFileList);
+    },
   };
 
   if (userRole && userRole === "Admin Viewer") {
@@ -375,6 +404,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   style={{ position: "absolute", bottom: 5, width: "95%" }}
                 >
                   <div className="flex" style={{ marginTop: "16px" }}>
+                    <Upload
+                      fileList={fileList}
+                      {...handleFileUpload}
+                      accept=".txt,.pdf"
+                    >
+                      <Button icon={UploadOutlined}>Attach</Button>
+                    </Upload>
                     <TextInput
                       type="text"
                       value={inputMessage}
