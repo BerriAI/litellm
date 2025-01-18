@@ -53,8 +53,6 @@ const menuItems: MenuItem[] = [
   { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
   { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
   { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
-  { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
-  { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
   { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
   { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
   { 
@@ -67,13 +65,23 @@ const menuItems: MenuItem[] = [
       { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />, roles: all_admin_roles },
       { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
       { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
-      { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
-      { key: "12", page: "pass-through-settings", label: "Pass-Through", icon: <ApiOutlined />, roles: all_admin_roles },
     ]
   },
+  {
+    key: "settings",
+    page: "settings",
+    label: "Settings",
+    icon: <SettingOutlined />,
+    roles: all_admin_roles,
+    children: [
+      { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
+      { key: "12", page: "pass-through-settings", label: "Pass-Through", icon: <ApiOutlined />, roles: all_admin_roles },
+      { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
+      { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
+    ]
+  }
 ];
 
-// The Sidebar component can now be simplified to:
 const Sidebar: React.FC<SidebarProps> = ({
   setPage,
   userRole,
@@ -108,10 +116,9 @@ const Sidebar: React.FC<SidebarProps> = ({
           mode="inline"
           selectedKeys={[selectedMenuKey]}
           style={{ 
-            height: "100%", 
             borderRight: 0,
             backgroundColor: 'transparent',
-            fontSize: '14px'
+            fontSize: '14px',
           }}
           items={filteredMenuItems.map(item => ({
             key: item.key,
