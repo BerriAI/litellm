@@ -12,5 +12,6 @@ model_list:
     model_info:
       health_check_model: anthropic/claude-3-5-sonnet-20240620
 
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
+general_settings:
+  store_prompts_in_spend_logs: true
+
