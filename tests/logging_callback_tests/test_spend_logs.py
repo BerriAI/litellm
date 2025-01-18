@@ -360,5 +360,5 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
 
     # Verify messages and response are not included when disabled
     payload_disabled: SpendLogsPayload = get_logging_payload(**input_args)
-    assert payload_disabled["messages"] is ""
-    assert payload_disabled["response"] is ""
+    assert payload_disabled["messages"] is "{}"
+    assert payload_disabled["response"] is "{}"
