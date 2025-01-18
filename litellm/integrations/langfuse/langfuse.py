@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import copy
+import json
 import os
 import traceback
 from collections.abc import MutableMapping, MutableSequence, MutableSet
@@ -457,7 +458,7 @@ class LangFuseLogger:
             supports_costs = langfuse_version >= Version("2.7.3")
             supports_completion_start_time = langfuse_version >= Version("2.7.3")
 
-            tags = metadata.pop("tags", []) if supports_tags else []
+            tags = self._get_langfuse_tags(metadata) if supports_tags else []
 
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
@@ -731,6 +732,14 @@ class LangFuseLogger:
         except Exception:
             verbose_logger.error(f"Langfuse Layer Error - {traceback.format_exc()}")
             return None, None
+
+    @staticmethod
+    def _get_langfuse_tags(metadata: dict) -> list[str]:
+        try:
+            return json.loads(metadata.pop("tags", "[]"))
+        except Exception as e:
+            verbose_logger.exception("error getting langfuse tags %s", str(e))
+            return []
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
         """
