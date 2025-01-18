@@ -163,7 +163,6 @@ def _should_cooldown_deployment(
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
         is_single_deployment_model_group = True
-
     if (
         litellm_router_instance.allowed_fails_policy is None
         and _is_allowed_fails_set_on_router(
@@ -191,6 +190,7 @@ def _should_cooldown_deployment(
             num_successes_this_minute,
             num_fails_this_minute,
         )
+
         exception_status_int = cast_exception_status_to_int(exception_status)
         if exception_status_int == 429 and not is_single_deployment_model_group:
             return True
@@ -205,7 +205,6 @@ def _should_cooldown_deployment(
             percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
             and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
         ):
-
             return True
 
         elif (
@@ -217,7 +216,7 @@ def _should_cooldown_deployment(
             return True
 
         return False
-    else:
+    elif not is_single_deployment_model_group:
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
             deployment=deployment,
