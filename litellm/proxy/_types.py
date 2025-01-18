@@ -1603,6 +1603,8 @@ class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
     requester_ip_address: Optional[str] = None
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
 
 
 class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
@@ -1853,6 +1855,8 @@ class SpendLogsPayload(TypedDict):
     end_user: Optional[str]
     requester_ip_address: Optional[str]
     custom_llm_provider: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
 
 
 class SpanAttributes(str, enum.Enum):
