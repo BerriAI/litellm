@@ -38,7 +38,6 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
 from litellm.types.services import ServiceTypes
-from litellm.types.utils import CallTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 
@@ -951,7 +950,7 @@ async def is_valid_fallback_model(
 
     Help catch invalid fallback models.
     """
-    resp = await route_request(
+    await route_request(
         data={
             "model": model,
         },
