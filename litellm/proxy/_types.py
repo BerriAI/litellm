@@ -2285,3 +2285,12 @@ class ProxyStateVariables(TypedDict):
 
 
 UI_TEAM_ID = "litellm-dashboard"
+
+
+class JWTAuthBuilderResult(TypedDict):
+    is_proxy_admin: bool
+    team_object: Optional[LiteLLM_TeamTable]
+    user_object: Optional[LiteLLM_UserTable]
+    end_user_object: Optional[LiteLLM_EndUserTable]
+    org_object: Optional[LiteLLM_OrganizationTable]
+    token: str

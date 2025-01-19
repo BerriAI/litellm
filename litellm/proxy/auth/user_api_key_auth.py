@@ -228,6 +228,49 @@ def update_valid_token_with_end_user_params(
     return valid_token
 
 
+async def get_global_proxy_spend(
+    litellm_proxy_admin_name: str,
+    user_api_key_cache: DualCache,
+    prisma_client: Optional[PrismaClient],
+    token: str,
+    proxy_logging_obj: ProxyLogging,
+) -> Optional[float]:
+    global_proxy_spend = None
+    if litellm.max_budget > 0:  # user set proxy max budget
+        # check cache
+        global_proxy_spend = await user_api_key_cache.async_get_cache(
+            key="{}:spend".format(litellm_proxy_admin_name)
+        )
+        if global_proxy_spend is None and prisma_client is not None:
+            # get from db
+            sql_query = (
+                """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
+            )
+
+            response = await prisma_client.db.query_raw(query=sql_query)
+
+            global_proxy_spend = response[0]["total_spend"]
+
+            await user_api_key_cache.async_set_cache(
+                key="{}:spend".format(litellm_proxy_admin_name),
+                value=global_proxy_spend,
+            )
+        if global_proxy_spend is not None:
+            user_info = CallInfo(
+                user_id=litellm_proxy_admin_name,
+                max_budget=litellm.max_budget,
+                spend=global_proxy_spend,
+                token=token,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="proxy_budget",
+                    user_info=user_info,
+                )
+            )
+    return global_proxy_spend
+
+
 def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
     is_admin = jwt_handler.is_admin(scopes=scopes)
     if is_admin:
@@ -243,12 +286,9 @@ async def _jwt_auth_user_api_key_auth_builder(
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span],
-    litellm_proxy_admin_name: str,
-    request_data: dict,
-    general_settings: dict,
-    llm_router: Optional[Router],
     proxy_logging_obj: ProxyLogging,
-):
+) -> JWTAuthBuilderResult:
+
     # check if valid token
     jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
@@ -275,9 +315,13 @@ async def _jwt_auth_user_api_key_auth_builder(
             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
         )
         if is_allowed:
-            return UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                parent_otel_span=parent_otel_span,
+            return JWTAuthBuilderResult(
+                is_proxy_admin=True,
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                org_object=None,
+                token=api_key,
             )
         else:
             allowed_routes: List[Any] = jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -320,8 +364,9 @@ async def _jwt_auth_user_api_key_auth_builder(
 
     # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
     org_id = jwt_handler.get_org_id(token=jwt_valid_token, default_value=None)
+    org_object: Optional[LiteLLM_OrganizationTable] = None
     if org_id is not None:
-        _ = await get_org_object(
+        org_object = await get_org_object(
             org_id=org_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -374,65 +419,14 @@ async def _jwt_auth_user_api_key_auth_builder(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    global_proxy_spend = None
-    if litellm.max_budget > 0:  # user set proxy max budget
-        # check cache
-        global_proxy_spend = await user_api_key_cache.async_get_cache(
-            key="{}:spend".format(litellm_proxy_admin_name)
-        )
-        if global_proxy_spend is None and prisma_client is not None:
-            # get from db
-            sql_query = (
-                """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-            )
-
-            response = await prisma_client.db.query_raw(query=sql_query)
-
-            global_proxy_spend = response[0]["total_spend"]
-
-            await user_api_key_cache.async_set_cache(
-                key="{}:spend".format(litellm_proxy_admin_name),
-                value=global_proxy_spend,
-            )
-        if global_proxy_spend is not None:
-            user_info = CallInfo(
-                user_id=litellm_proxy_admin_name,
-                max_budget=litellm.max_budget,
-                spend=global_proxy_spend,
-                token=jwt_valid_token["token"],
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="proxy_budget",
-                    user_info=user_info,
-                )
-            )
-
-    # run through common checks
-    _ = common_checks(
-        request_body=request_data,
-        team_object=team_object,
-        user_object=user_object,
-        end_user_object=end_user_object,
-        general_settings=general_settings,
-        global_proxy_spend=global_proxy_spend,
-        route=route,
-        llm_router=llm_router,
-    )
-
-    # return UserAPIKeyAuth object
-    return UserAPIKeyAuth(
-        api_key=None,
-        team_id=team_object.team_id if team_object is not None else None,
-        team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
-        team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
-        team_models=team_object.models if team_object is not None else [],
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id=user_id,
-        org_id=org_id,
-        parent_otel_span=parent_otel_span,
-        end_user_id=end_user_id,
-    )
+    return {
+        "is_proxy_admin": False,
+        "team_object": team_object,
+        "user_object": user_object,
+        "org_object": org_object,
+        "end_user_object": end_user_object,
+        "token": api_key,
+    }
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915
@@ -570,7 +564,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
-                return await _jwt_auth_user_api_key_auth_builder(
+                result = await _jwt_auth_user_api_key_auth_builder(
                     api_key=api_key,
                     jwt_handler=jwt_handler,
                     route=route,
@@ -578,10 +572,59 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                     parent_otel_span=parent_otel_span,
+                )
+                is_proxy_admin = result["is_proxy_admin"]
+                team_object = result["team_object"]
+                user_object = result["user_object"]
+                end_user_object = result["end_user_object"]
+                org_object = result["org_object"]
+                token = result["token"]
+
+                global_proxy_spend = await get_global_proxy_spend(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    request_data=request_data,
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
+                    token=token,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+                if is_proxy_admin:
+                    return UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.PROXY_ADMIN,
+                        parent_otel_span=parent_otel_span,
+                    )
+                # run through common checks
+                _ = common_checks(
+                    request_body=request_data,
+                    team_object=team_object,
+                    user_object=user_object,
+                    end_user_object=end_user_object,
                     general_settings=general_settings,
+                    global_proxy_spend=global_proxy_spend,
+                    route=route,
                     llm_router=llm_router,
+                )
+
+                # return UserAPIKeyAuth object
+                return UserAPIKeyAuth(
+                    api_key=None,
+                    team_id=(team_object.team_id if team_object is not None else None),
+                    team_tpm_limit=(
+                        team_object.tpm_limit if team_object is not None else None
+                    ),
+                    team_rpm_limit=(
+                        team_object.rpm_limit if team_object is not None else None
+                    ),
+                    team_models=team_object.models if team_object is not None else [],
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_id=user_object.user_id if user_object is not None else None,
+                    org_id=(
+                        org_object.organization_id if org_object is not None else None
+                    ),
+                    parent_otel_span=parent_otel_span,
+                    end_user_id=(
+                        end_user_object.user_id if end_user_object is not None else None
+                    ),
                 )
 
         #### ELSE ####

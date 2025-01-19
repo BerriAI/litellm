@@ -815,7 +815,7 @@ async def get_org_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
-):
+) -> Optional[LiteLLM_OrganizationTable]:
     """
     - Check if org id in proxy Org Table
     - if valid, return LiteLLM_OrganizationTable object
@@ -830,7 +830,7 @@ async def get_org_object(
     cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
-            return cached_org_obj
+            return LiteLLM_OrganizationTable(**cached_org_obj)
         elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
             return cached_org_obj
     # else, check db

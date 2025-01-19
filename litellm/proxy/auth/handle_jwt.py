@@ -202,6 +202,7 @@ class JWTHandler:
         return scopes
 
     async def get_public_key(self, kid: Optional[str]) -> dict:
+
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
