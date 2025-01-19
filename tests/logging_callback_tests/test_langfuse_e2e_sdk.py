@@ -96,7 +96,9 @@ def assert_langfuse_request_matches_expected(
         "public_key"
     ]
     if skip_metadata_check is True:
-        actual_request_body["batch"][1].pop("metadata", None)
+        actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body[
+            "batch"
+        ][1]["body"]["metadata"]
     # Assert the entire request body matches
     assert (
         actual_request_body == expected_request_body
