@@ -906,13 +906,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if fallback_models is not None:
                     for m in fallback_models:
                         await can_key_call_model(
-                            model=m.get("model") if isinstance(m, dict) else m,
+                            model=m["model"] if isinstance(m, dict) else m,
                             llm_model_list=llm_model_list,
                             valid_token=valid_token,
                             llm_router=llm_router,
                         )
                         await is_valid_fallback_model(
-                            model=m.get("model") if isinstance(m, dict) else m,
+                            model=m["model"] if isinstance(m, dict) else m,
                             llm_router=llm_router,
                             user_model=None,
                         )
