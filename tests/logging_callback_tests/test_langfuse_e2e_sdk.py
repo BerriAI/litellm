@@ -38,7 +38,6 @@ def assert_langfuse_request_matches_expected(
     actual_request_body: dict,
     expected_file_name: str,
     trace_id: Optional[str] = None,
-    skip_metadata_check: bool = False,
 ):
     """
     Helper function to compare actual Langfuse request body with expected JSON file.
@@ -95,10 +94,9 @@ def assert_langfuse_request_matches_expected(
     actual_request_body["metadata"]["public_key"] = expected_request_body["metadata"][
         "public_key"
     ]
-    if skip_metadata_check is True:
-        actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body[
-            "batch"
-        ][1]["body"]["metadata"]
+    actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body[
+        "batch"
+    ][1]["body"]["metadata"]
     # Assert the entire request body matches
     assert (
         actual_request_body == expected_request_body
@@ -132,7 +130,6 @@ class TestLangfuseLogging:
         mock_post,
         expected_file_name,
         trace_id: Optional[str] = None,
-        skip_metadata_check: bool = False,
     ):
         """Helper method to verify Langfuse API calls"""
         await asyncio.sleep(1)
@@ -151,7 +148,9 @@ class TestLangfuseLogging:
 
         assert url == "https://us.cloud.langfuse.com/api/public/ingestion"
         assert_langfuse_request_matches_expected(
-            actual_request_body, expected_file_name, trace_id, skip_metadata_check
+            actual_request_body,
+            expected_file_name,
+            trace_id,
         )
 
     @pytest.mark.asyncio
@@ -214,7 +213,6 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 mock_post=setup["mock_post"],
                 expected_file_name="embedding.json",
-                skip_metadata_check=True,
             )
 
     @pytest.mark.asyncio
