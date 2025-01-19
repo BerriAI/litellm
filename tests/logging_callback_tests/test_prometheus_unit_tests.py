@@ -255,10 +255,13 @@ def test_increment_remaining_budget_metrics(prometheus_logger):
     """
     Test the increment_remaining_budget_metrics method
 
-    team and api key budget metrics are set to the difference between max budget and spend
+    - team and api key remaining budget metrics are set to the difference between max budget and spend
+    - team and api key max budget metrics are set to their respective max budgets
     """
     prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
     prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_api_key_max_budget_metric = MagicMock()
 
     litellm_params = {
         "metadata": {
@@ -277,19 +280,31 @@ def test_increment_remaining_budget_metrics(prometheus_logger):
         litellm_params=litellm_params,
     )
 
+    # Test remaining budget metrics
     prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
         "team1", "team_alias1"
     )
     prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
-        50
+        50  # 100 - 50
     )
 
     prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once_with(
         "key1", "alias1"
     )
     prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.assert_called_once_with(
-        50
+        50  # 75 - 25
     )
+
+    # Test max budget metrics
+    prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
+        "team1", "team_alias1"
+    )
+    prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(100)
+
+    prometheus_logger.litellm_api_key_max_budget_metric.labels.assert_called_once_with(
+        "key1", "alias1"
+    )
+    prometheus_logger.litellm_api_key_max_budget_metric.labels().set.assert_called_once_with(75)
 
 
 def test_set_latency_metrics(prometheus_logger):

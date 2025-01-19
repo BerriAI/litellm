@@ -108,7 +108,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
                     "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
                     "user_api_key_user_id": "default_user_id",
                     "user_api_key_team_id": None,
-                    "user_api_key_end_user_id": "default_user_id",
+                    "user_api_key_end_user_id": ("test" if metadata_params else ""),
                 },
                 "api_base": "https://api.anthropic.com/v1/messages",
             },
