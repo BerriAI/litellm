@@ -111,7 +111,9 @@ We'll review all reports promptly. Note that we don't currently offer a bug boun
 
 ## Vulnerability Scanning
 
-
+- LiteLLM runs [`grype`](https://github.com/anchore/grype) security scans on all built Docker images.
+    - See [`grype litellm` check on ci/cd](https://github.com/BerriAI/litellm/blob/main/.circleci/config.yml#L1099). 
+    - Current Status: ✅ Passing. 0 High/Critical severity vulnerabilities found.
 
 ## Legal/Compliance FAQs
 
