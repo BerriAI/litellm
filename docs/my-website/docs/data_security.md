@@ -32,17 +32,24 @@ With Langfuse Cloud, we handle:
 - Audit Logs with retention policy
 - Control Allowed IP Addresses that can access your Cloud LiteLLM Instance
 
-For security inquiries, please contact us at support@berri.ai
+### Security Certifications
+
+| **Certification** | **Status**                                                                                      |
+|-------------------|-------------------------------------------------------------------------------------------------|
+| SOC 2 Type I      | Certified. Report available upon request on Enterprise plan.                                                           |
+| SOC 2 Type II     | In progress. Certificate available by April 15th, 2025                   |
+| ISO27001          | In progress. Certificate available by February 7th, 2025                                           |
+
 
 ### Self-hosted Instances LiteLLM
 
-- ** No data or telemetry is stored on LiteLLM Servers when you self host **
-- For installation and configuration, see: [Self-hosting guided](../docs/proxy/deploy.md)
-- **Telemetry** We run no telemetry when you self host LiteLLM
+- **No data or telemetry is stored on LiteLLM Servers when you self-host**
+- For installation and configuration, see: [Self-hosting guide](../docs/proxy/deploy.md)
+- **Telemetry**: We run no telemetry when you self-host LiteLLM
 
 For security inquiries, please contact us at support@berri.ai
 
-## Supported data regions for LiteLLM Cloud
+## Supported Data Regions for LiteLLM Cloud
 
 LiteLLM supports the following data regions:
 
@@ -51,7 +58,7 @@ LiteLLM supports the following data regions:
 
 All data, user accounts, and infrastructure are completely separated between these two regions
 
-## Collection of personal data
+## Collection of Personal Data
 
 ### For Self-hosted LiteLLM Users:
 - No personal data is collected or transmitted to LiteLLM servers when you self-host our software.
@@ -60,12 +67,13 @@ All data, user accounts, and infrastructure are completely separated between the
 ### For LiteLLM Cloud Users:
 - LiteLLM Cloud tracks LLM usage data - We do not access or store the message / response content of your API requests or responses. You can see the [fields tracked here](https://github.com/BerriAI/litellm/blob/main/schema.prisma#L174)
 
-**How to use and share the personal data**
+**How to Use and Share the Personal Data**
 - Only proxy admins can view their usage data, and they can only see the usage data of their organization.
 - Proxy admins have the ability to invite other users / admins to their server to view their own usage data
 - LiteLLM Cloud does not sell or share any usage data with any third parties.
 
-## Cookies information, security and privacy
+
+## Cookies Information, Security, and Privacy
 
 ### For Self-hosted LiteLLM Users:
 - Cookie data remains within your own infrastructure.
@@ -108,6 +116,7 @@ We'll review all reports promptly. Note that we don't currently offer a bug boun
 1. Invoicing
 2. AWS Marketplace
 3. Azure Marketplace
+
 
 ### Vendor Information
 
