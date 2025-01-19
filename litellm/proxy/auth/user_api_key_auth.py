@@ -304,6 +304,35 @@ async def _jwt_auth_user_api_key_auth_builder(
     # get scopes
     scopes = jwt_handler.get_scopes(token=jwt_valid_token)
 
+    # [OPTIONAL] allowed user email domains
+    valid_user_email: Optional[bool] = None
+    user_email: Optional[str] = None
+    if jwt_handler.is_enforced_email_domain():
+        """
+        if 'allowed_email_subdomains' is set,
+
+        - checks if token contains 'email' field
+        - checks if 'email' is from an allowed domain
+        """
+        user_email = jwt_handler.get_user_email(
+            token=jwt_valid_token, default_value=None
+        )
+        if user_email is None:
+            valid_user_email = False
+        else:
+            valid_user_email = jwt_handler.is_allowed_domain(user_email=user_email)
+
+    # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
+    user_object = None
+    user_id = jwt_handler.get_user_id(token=jwt_valid_token, default_value=user_email)
+
+    # get org id
+    org_id = jwt_handler.get_org_id(token=jwt_valid_token, default_value=None)
+    # get team id
+    team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
+    # get end user id
+    end_user_id = jwt_handler.get_end_user_id(token=jwt_valid_token, default_value=None)
+
     # check if admin
     is_admin = jwt_handler.is_admin(scopes=scopes)
     # if admin return
@@ -322,10 +351,10 @@ async def _jwt_auth_user_api_key_auth_builder(
                 end_user_object=None,
                 org_object=None,
                 token=api_key,
-                team_id=None,
-                user_id=None,
-                end_user_id=None,
-                org_id=None,
+                team_id=team_id,
+                user_id=user_id,
+                end_user_id=end_user_id,
+                org_id=org_id,
             )
         else:
             allowed_routes: List[Any] = jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -333,9 +362,6 @@ async def _jwt_auth_user_api_key_auth_builder(
             raise Exception(
                 f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}"
             )
-
-    # get team id
-    team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
 
     if team_id is None and jwt_handler.is_required_team_id() is True:
         raise Exception(
@@ -367,7 +393,7 @@ async def _jwt_auth_user_api_key_auth_builder(
         )
 
     # [OPTIONAL] track spend for an org id - `LiteLLM_OrganizationTable`
-    org_id = jwt_handler.get_org_id(token=jwt_valid_token, default_value=None)
+
     org_object: Optional[LiteLLM_OrganizationTable] = None
     if org_id is not None:
         org_object = await get_org_object(
@@ -377,27 +403,7 @@ async def _jwt_auth_user_api_key_auth_builder(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-    # [OPTIONAL] allowed user email domains
-    valid_user_email: Optional[bool] = None
-    user_email: Optional[str] = None
-    if jwt_handler.is_enforced_email_domain():
-        """
-        if 'allowed_email_subdomains' is set,
 
-        - checks if token contains 'email' field
-        - checks if 'email' is from an allowed domain
-        """
-        user_email = jwt_handler.get_user_email(
-            token=jwt_valid_token, default_value=None
-        )
-        if user_email is None:
-            valid_user_email = False
-        else:
-            valid_user_email = jwt_handler.is_allowed_domain(user_email=user_email)
-
-    # [OPTIONAL] track spend against an internal employee - `LiteLLM_UserTable`
-    user_object = None
-    user_id = jwt_handler.get_user_id(token=jwt_valid_token, default_value=user_email)
     if user_id is not None:
         # get the user object
         user_object = await get_user_object(
@@ -412,7 +418,7 @@ async def _jwt_auth_user_api_key_auth_builder(
         )
     # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
     end_user_object = None
-    end_user_id = jwt_handler.get_end_user_id(token=jwt_valid_token, default_value=None)
+
     if end_user_id is not None:
         # get the end-user object
         end_user_object = await get_end_user_object(
