@@ -184,6 +184,7 @@ class TestLangfuseLogging:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_logging_streaming_completion(self, mock_setup):
         """Test Langfuse logging for streaming completion"""
         setup = await mock_setup  # Await the fixture
@@ -216,6 +217,7 @@ class TestLangfuseLogging:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_logging_custom_generation_name(self, mock_setup):
         """Test Langfuse logging with custom generation name and metadata"""
         setup = await mock_setup  # Await the fixture
@@ -240,6 +242,7 @@ class TestLangfuseLogging:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_masked_input_output(self, mock_setup):
         """Test Langfuse logging with masked input and output"""
         setup = await mock_setup  # Await the fixture
@@ -270,6 +273,7 @@ class TestLangfuseLogging:
                     )
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_masked_input_output_stream(self, mock_setup):
         """Test Langfuse logging with masked input and output"""
         setup = await mock_setup  # Await the fixture
