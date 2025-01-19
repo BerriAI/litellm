@@ -1,5 +1,25 @@
 # Data Privacy and Security
 
+At LiteLLM, **safeguarding your data privacy and security** is our top priority. We recognize the critical importance of the data you share with us and handle it with the highest level of diligence.
+
+With Langfuse Cloud, we handle:
+
+- Deployment
+- Scaling
+- Upgrades and security patches
+- Ensuring high availability
+
+  <iframe
+    src="https://status.litellm.ai/badge?theme=light"
+    width="250"
+    height="30"
+    className="inline-block dark:hidden"
+    style={{
+      colorScheme: "light",
+      marginTop: "5px",
+    }}
+  ></iframe>
+
 ## Security Measures
 
 ### LiteLLM Cloud
