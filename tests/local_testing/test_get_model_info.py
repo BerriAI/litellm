@@ -339,3 +339,32 @@ def test_get_model_info_bedrock_models():
                     assert (
                         v[base_model_key] == base_model_value
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+
+
+def test_get_model_info_huggingface_models(monkeypatch):
+    from litellm import Router
+    from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
+                "litellm_params": {
+                    "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "api_base": "https://api-inference.huggingface.co/models/meta-llama/Llama-3.3-70B-Instruct",
+                    "api_key": os.environ["HUGGINGFACE_API_KEY"],
+                },
+            }
+        ]
+    )
+    info = litellm.get_model_info("huggingface/meta-llama/Meta-Llama-3-8B-Instruct")
+    print("info", info)
+    assert info is not None
+
+    ModelGroupInfo(
+        model_group="meta-llama/Meta-Llama-3-8B-Instruct",
+        providers=["huggingface"],
+        **info,
+    )
