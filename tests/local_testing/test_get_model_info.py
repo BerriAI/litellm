@@ -341,9 +341,11 @@ def test_get_model_info_bedrock_models():
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
 
 
-def test_get_model_info_huggingface_models():
+def test_get_model_info_huggingface_models(monkeypatch):
     from litellm import Router
     from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
 
     router = Router(
         model_list=[
