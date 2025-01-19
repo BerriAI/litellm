@@ -9,7 +9,6 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 
-import inspect
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -22,7 +21,6 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
-    CommonProxyErrors,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,

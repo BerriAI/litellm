@@ -50,7 +50,6 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.service_account_checks import service_account_checks
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import PrismaClient, ProxyLogging, _to_ns
-from litellm.router import Router
 from litellm.types.services import ServiceTypes
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
@@ -596,7 +595,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 end_user_id = result["end_user_id"]
                 end_user_object = result["end_user_object"]
                 org_id = result["org_id"]
-                org_object = result["org_object"]
                 token = result["token"]
 
                 global_proxy_spend = await get_global_proxy_spend(
