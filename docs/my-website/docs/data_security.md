@@ -2,7 +2,7 @@
 
 At LiteLLM, **safeguarding your data privacy and security** is our top priority. We recognize the critical importance of the data you share with us and handle it with the highest level of diligence.
 
-With Langfuse Cloud, we handle:
+With LiteLLM Cloud, we handle:
 
 - Deployment
 - Scaling
@@ -32,15 +32,6 @@ With Langfuse Cloud, we handle:
 - Audit Logs with retention policy
 - Control Allowed IP Addresses that can access your Cloud LiteLLM Instance
 
-### Security Certifications
-
-| **Certification** | **Status**                                                                                      |
-|-------------------|-------------------------------------------------------------------------------------------------|
-| SOC 2 Type I      | Certified. Report available upon request on Enterprise plan.                                                           |
-| SOC 2 Type II     | In progress. Certificate available by April 15th, 2025                   |
-| ISO27001          | In progress. Certificate available by February 7th, 2025                                           |
-
-
 ### Self-hosted Instances LiteLLM
 
 - **No data or telemetry is stored on LiteLLM Servers when you self-host**
@@ -48,6 +39,15 @@ With Langfuse Cloud, we handle:
 - **Telemetry**: We run no telemetry when you self-host LiteLLM
 
 For security inquiries, please contact us at support@berri.ai
+
+## **Security Certifications**
+
+| **Certification** | **Status**                                                                                      |
+|-------------------|-------------------------------------------------------------------------------------------------|
+| SOC 2 Type I      | Certified. Report available upon request on Enterprise plan.                                                           |
+| SOC 2 Type II     | In progress. Certificate available by April 15th, 2025                   |
+| ISO27001          | In progress. Certificate available by February 7th, 2025                                           |
+
 
 ## Supported Data Regions for LiteLLM Cloud
 
@@ -109,6 +109,10 @@ We value the security community's role in protecting our systems and users. To r
 
 We'll review all reports promptly. Note that we don't currently offer a bug bounty program.
 
+## Vulnerability Scanning
+
+
+
 ## Legal/Compliance FAQs
 
 ### Procurement Options
@@ -124,29 +128,30 @@ Legal Entity Name: Berrie AI Incorporated
 
 Company Phone Number: 7708783106 
 
-Number of employees in the company: 2
-
-Number of employees in security team: 2
-
 Point of contact email address for security incidents: krrish@berri.ai
 
 Point of contact email address for general security-related questions: krrish@berri.ai 
 
-Has the Vendor been audited / certified? Currently undergoing SOC-2 Certification from Drata 
+Has the Vendor been audited / certified? 
+- SOC 2 Type I. Certified. Report available upon request on Enterprise plan.
+- SOC 2 Type II. In progress. Certificate available by April 15th, 2025.
+- ISO27001. In progress. Certificate available by February 7th, 2025.
 
-Has an information security management system been implemented? Yes - [CodeQL](https://codeql.github.com/)
+Has an information security management system been implemented? 
+- Yes - [CodeQL](https://codeql.github.com/) and a comprehensive ISMS covering multiple security domains.
 
-Is logging of key events - auth, creation, update changes occurring? Yes - we have [audit logs](https://docs.litellm.ai/docs/proxy/multiple_admins#1-switch-on-audit-logs)
+Is logging of key events - auth, creation, update changes occurring? 
+- Yes - we have [audit logs](https://docs.litellm.ai/docs/proxy/multiple_admins#1-switch-on-audit-logs)
 
-Does the Vendor have an established Cybersecurity incident management program? No 
+Does the Vendor have an established Cybersecurity incident management program? 
+- Yes, Incident Response Policy available upon request.
 
-Not applicable - LiteLLM is self-hosted, this is the responsibility of the team hosting the proxy. We do provide [alerting](https://docs.litellm.ai/docs/proxy/alerting) and [monitoring](https://docs.litellm.ai/docs/proxy/prometheus) tools to help with this. 
 
 Does the vendor have a vulnerability disclosure policy in place? [Yes](https://github.com/BerriAI/litellm?tab=security-ov-file#security-vulnerability-reporting-guidelines)
 
-Does the vendor perform vulnerability scans? No 
+Does the vendor perform vulnerability scans? 
+- Yes, regular vulnerability scans are conducted as detailed in the [Vulnerability Scanning](#vulnerability-scanning) section.
 
 Signer Name: Krish Amit Dholakia
 
 Signer Email: krrish@berri.ai
-
