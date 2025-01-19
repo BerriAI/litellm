@@ -254,6 +254,36 @@ class TestLangfuseLogging:
                         setup["trace_id"],
                     )
 
+    @pytest.mark.asyncio
+    async def test_langfuse_masked_input_output_stream(self, mock_setup):
+        """Test Langfuse logging with masked input and output"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            import uuid
+
+            for mask_value in [False]:
+                litellm.turn_off_message_logging = mask_value
+
+                async for chunk in await litellm.acompletion(  # type: ignore
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "This is a test"}],
+                    mock_response="This is a test",
+                    stream=True,
+                ):
+                    pass
+                if mask_value is True:
+                    await self._verify_langfuse_call(
+                        setup["mock_post"],
+                        "streaming_completion_redacted.json",
+                        setup["trace_id"],
+                    )
+                else:
+                    await self._verify_langfuse_call(
+                        setup["mock_post"],
+                        "streaming_completion_non_redacted.json",
+                        setup["trace_id"],
+                    )
+
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=12, delay=2)
