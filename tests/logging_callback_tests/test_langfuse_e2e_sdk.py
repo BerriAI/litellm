@@ -86,7 +86,7 @@ def assert_langfuse_request_matches_expected(
                 expected_request_body["batch"][1]["body"]["traceId"] = trace_id
 
     # Replace SDK version with expected version
-    actual_request_body["batch"][0]["body"].pop("release")
+    actual_request_body["batch"][0]["body"].pop("release", None)
     actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"][
         "sdk_version"
     ]
