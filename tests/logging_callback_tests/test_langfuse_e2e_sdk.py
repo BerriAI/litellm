@@ -25,7 +25,7 @@ import time
 import pytest
 
 
-# Get the current directory of the file being run
+# Get the current directory of the file being-run
 pwd = os.path.dirname(os.path.realpath(__file__))
 print(pwd)
 
