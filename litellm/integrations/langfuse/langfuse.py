@@ -5,7 +5,7 @@ import json
 import os
 import traceback
 from collections.abc import MutableMapping, MutableSequence, MutableSet
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from packaging.version import Version
 from pydantic import BaseModel
@@ -734,7 +734,7 @@ class LangFuseLogger:
             return None, None
 
     @staticmethod
-    def _get_langfuse_tags(metadata: dict) -> list[str]:
+    def _get_langfuse_tags(metadata: dict) -> List[str]:
         try:
             return json.loads(metadata.pop("tags", "[]"))
         except Exception as e:
