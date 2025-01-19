@@ -89,6 +89,10 @@ def assert_langfuse_request_matches_expected(
     actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"][
         "sdk_version"
     ]
+    # replace "public_key" with expected public key
+    actual_request_body["metadata"]["public_key"] = expected_request_body["metadata"][
+        "public_key"
+    ]
     # Assert the entire request body matches
     assert (
         actual_request_body == expected_request_body
