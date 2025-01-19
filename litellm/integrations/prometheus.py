@@ -1334,6 +1334,11 @@ class PrometheusLogger(CustomLogger):
         """Helper function to set budget metrics for a list of teams"""
         for team in teams:
             if team.max_budget is not None:
+                self.litellm_team_max_budget_metric.labels(
+                    team.team_id,
+                    team.team_alias or "",
+                ).set(team.max_budget)
+                               
                 self.litellm_remaining_team_budget_metric.labels(
                     team.team_id,
                     team.team_alias or "",
