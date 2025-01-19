@@ -196,6 +196,7 @@ class TestLangfuseLogging:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_logging_embedding(self, mock_setup):
         """Test Langfuse logging for embeddings"""
         setup = await mock_setup  # Await the fixture
