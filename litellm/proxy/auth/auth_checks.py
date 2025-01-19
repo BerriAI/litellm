@@ -943,7 +943,7 @@ async def is_valid_fallback_model(
     model: str,
     llm_router: Optional[Router],
     user_model: Optional[str],
-):
+) -> Literal[True]:
     """
     Try to route the fallback model request.
 
@@ -951,16 +951,13 @@ async def is_valid_fallback_model(
 
     Help catch invalid fallback models.
     """
+    resp = await route_request(
+        data={
+            "model": model,
+        },
+        llm_router=llm_router,
+        user_model=model,
+        route_type="acompletion",  # route type shouldn't affect the fallback model check
+    )
 
-    try:
-        await route_request(
-            data={
-                "model": model,
-            },
-            llm_router=llm_router,
-            user_model=model,
-            route_type="acompletion",  # route type shouldn't affect the fallback model check
-        )
-        return True
-    except Exception:
-        return False
+    return True
