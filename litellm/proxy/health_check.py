@@ -62,10 +62,28 @@ def filter_deployments_by_id(
     return filtered_deployments
 
 
+async def run_with_timeout(task, timeout):
+    try:
+        return await asyncio.wait_for(task, timeout)
+    except asyncio.TimeoutError:
+        task.cancel()
+        # Only cancel child tasks of the current task
+        current_task = asyncio.current_task()
+        for t in asyncio.all_tasks():
+            if t != current_task:
+                t.cancel()
+        try:
+            await asyncio.wait_for(task, 0.1)  # Give 100ms for cleanup
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+        return {"error": "Timeout exceeded"}
+
+
 async def _perform_health_check(model_list: list, details: Optional[bool] = True):
     """
     Perform a health check for each model in the list.
     """
+
     tasks = []
     for model in model_list:
         litellm_params = model["litellm_params"]
@@ -75,15 +93,17 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
             model_info, litellm_params
         )
         timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
-        task = asyncio.wait_for(
+
+        task = run_with_timeout(
             litellm.ahealth_check(
-                litellm_params,
+                model["litellm_params"],
                 mode=mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
             ),
-            timeout=timeout,
+            timeout,
         )
+
         tasks.append(task)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
