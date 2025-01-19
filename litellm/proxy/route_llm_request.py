@@ -50,7 +50,6 @@ async def route_request(
 ):
     """
     Common helper to route the request
-
     """
 
     router_model_names = llm_router.model_names if llm_router is not None else []
