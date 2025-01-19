@@ -101,12 +101,14 @@ class JWTHandler:
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
         try:
+
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
                 user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
             else:
                 user_id = None
         except KeyError:
             user_id = default_value
+
         return user_id
 
     def is_required_team_id(self) -> bool:

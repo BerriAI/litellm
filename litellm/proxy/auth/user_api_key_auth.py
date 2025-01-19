@@ -322,6 +322,10 @@ async def _jwt_auth_user_api_key_auth_builder(
                 end_user_object=None,
                 org_object=None,
                 token=api_key,
+                team_id=None,
+                user_id=None,
+                end_user_id=None,
+                org_id=None,
             )
         else:
             allowed_routes: List[Any] = jwt_handler.litellm_jwtauth.admin_allowed_routes
@@ -421,9 +425,13 @@ async def _jwt_auth_user_api_key_auth_builder(
 
     return {
         "is_proxy_admin": False,
+        "team_id": team_id,
         "team_object": team_object,
+        "user_id": user_id,
         "user_object": user_object,
+        "org_id": org_id,
         "org_object": org_object,
+        "end_user_id": end_user_id,
         "end_user_object": end_user_object,
         "token": api_key,
     }
@@ -573,10 +581,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                     parent_otel_span=parent_otel_span,
                 )
+
                 is_proxy_admin = result["is_proxy_admin"]
+                team_id = result["team_id"]
                 team_object = result["team_object"]
+                user_id = result["user_id"]
                 user_object = result["user_object"]
+                end_user_id = result["end_user_id"]
                 end_user_object = result["end_user_object"]
+                org_id = result["org_id"]
                 org_object = result["org_object"]
                 token = result["token"]
 
@@ -608,7 +621,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # return UserAPIKeyAuth object
                 return UserAPIKeyAuth(
                     api_key=None,
-                    team_id=(team_object.team_id if team_object is not None else None),
+                    team_id=team_id,
                     team_tpm_limit=(
                         team_object.tpm_limit if team_object is not None else None
                     ),
@@ -617,14 +630,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     ),
                     team_models=team_object.models if team_object is not None else [],
                     user_role=LitellmUserRoles.INTERNAL_USER,
-                    user_id=user_object.user_id if user_object is not None else None,
-                    org_id=(
-                        org_object.organization_id if org_object is not None else None
-                    ),
+                    user_id=user_id,
+                    org_id=org_id,
                     parent_otel_span=parent_otel_span,
-                    end_user_id=(
-                        end_user_object.user_id if end_user_object is not None else None
-                    ),
+                    end_user_id=end_user_id,
                 )
 
         #### ELSE ####

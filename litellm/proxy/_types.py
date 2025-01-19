@@ -2294,3 +2294,7 @@ class JWTAuthBuilderResult(TypedDict):
     end_user_object: Optional[LiteLLM_EndUserTable]
     org_object: Optional[LiteLLM_OrganizationTable]
     token: str
+    team_id: Optional[str]
+    user_id: Optional[str]
+    end_user_id: Optional[str]
+    org_id: Optional[str]
