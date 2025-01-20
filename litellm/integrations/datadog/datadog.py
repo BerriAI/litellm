@@ -459,7 +459,7 @@ class DataDogLogger(CustomBatchLogger):
             "env": os.getenv("DD_ENV", "unknown"),
             "service": os.getenv("DD_SERVICE", "litellm"),
             "version": os.getenv("DD_VERSION", "unknown"),
-            "hostname": DataDogLogger._get_datadog_hostname(),
+            "HOSTNAME": DataDogLogger._get_datadog_hostname(),
             "pod_name": os.getenv("POD_NAME", "unknown"),
         }
 
