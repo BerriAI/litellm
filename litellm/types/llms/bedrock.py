@@ -322,7 +322,15 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     finish_reasons: List[str]
 
 
-class AmazonNovaCanvasImageGeneratorConfig(TypedDict, total=False):
+class AmazonNovaCanvasRequestBase(TypedDict, total=False):
+    """
+    Base class for Amazon Nova Canvas API requests
+    """
+
+    pass
+
+
+class AmazonNovaCanvasImageGenerationConfig(TypedDict, total=False):
     """
     Config for Amazon Nova Canvas Text to Image API
 
@@ -337,16 +345,142 @@ class AmazonNovaCanvasImageGeneratorConfig(TypedDict, total=False):
     numberOfImages: int
 
 
-class AmazonNovaCanvasTextToImageRequest(TypedDict, total=False):
+class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Text to Image API
+    """
+
+    text: str
+    negativeText: str
+    controlStrength: float
+    controlMode: Literal["CANNY_EDIT", "SEGMENTATION"]
+    conditionImage: str
+
+
+class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Text to Image API
 
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
     """
 
-    textToImageParams: Dict[str, str]
+    textToImageParams: AmazonNovaCanvasTextToImageParams
     taskType: Literal["TEXT_IMAGE"]
-    imageGenerationConfig: AmazonNovaCanvasImageGeneratorConfig
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Color Guided Generation API
+    """
+
+    colors: List[str]
+    referenceImage: str
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasColorGuidedRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+    """
+    Request for Amazon Nova Canvas Color Guided Generation API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["COLOR_GUIDED_GENERATION"]
+    colorGuidedGenerationParams: AmazonNovaCanvasColorGuidedGenerationParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasImageVariationParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Image Variation API
+    """
+
+    images: List[str]
+    similarityStrength: float
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasImageVariationRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+    """
+    Request for Amazon Nova Canvas Image Variation Request API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["IMAGE_VARIATION"]
+    imageVariationParams: AmazonNovaCanvasImageVariationParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Inpainting API
+    """
+
+    image: str
+    maskPrompt: str
+    maskImage: str
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasInpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+    """
+    Request for Amazon Nova Canvas Inpainting Request API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["INPAINTING"]
+    inpaintingParams: AmazonNovaCanvasInpaintingParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasOutpaintingParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Outpainting API
+    """
+
+    image: str
+    maskPrompt: str
+    maskImage: str
+    outPaintingMode: Literal["DEFAULT", "PRECISE"]
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasOutpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+    """
+    Request for Amazon Nova Canvas Outpainting Request API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["OUTPAINTING"]
+    outpaintingParams: AmazonNovaCanvasOutpaintingParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasBackgroundRemovalParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Background Removal API
+    """
+
+    image: str
+
+
+class AmazonNovaCanvasBackgroundRemovalRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
+    """
+    Request for Amazon Nova Canvas Background Removal Request API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["BACKGROUND_REMOVAL"]
+    backgroundRemovalParams: AmazonNovaCanvasBackgroundRemovalParams
 
 
 class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
@@ -355,6 +489,7 @@ class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
 
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
     """
+
     images: List[str]
 
 

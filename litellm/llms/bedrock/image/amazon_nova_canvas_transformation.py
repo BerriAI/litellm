@@ -4,7 +4,12 @@ from typing import List, Optional
 from openai.types.image import Image
 
 from litellm.types.llms.bedrock import (
-    AmazonNovaCanvasTextToImageRequest, AmazonNovaCanvasTextToImageResponse, AmazonNovaCanvasImageGeneratorConfig,
+    AmazonNovaCanvasTextToImageRequest, AmazonNovaCanvasTextToImageResponse,
+    AmazonNovaCanvasColorGuidedRequest, AmazonNovaCanvasImageVariationRequest,
+    AmazonNovaCanvasColorGuidedGenerationParams, AmazonNovaCanvasTextToImageParams,
+    AmazonNovaCanvasImageVariationParams, AmazonNovaCanvasInpaintingParams, AmazonNovaCanvasInpaintingRequest,
+    AmazonNovaCanvasOutpaintingRequest, AmazonNovaCanvasBackgroundRemovalRequest,
+    AmazonNovaCanvasBackgroundRemovalParams, AmazonNovaCanvasRequestBase, AmazonNovaCanvasOutpaintingParams,
 )
 from litellm.types.utils import ImageResponse
 
@@ -55,16 +60,50 @@ class AmazonNovaCanvasConfig:
     @classmethod
     def transform_request_body(
             cls, text: str, optional_params: dict
-    ) -> AmazonNovaCanvasTextToImageRequest:
+    ) -> AmazonNovaCanvasRequestBase:
         """
-        Transform the request body for Nova Canvas model
+        Transform the request body for Amazon Nova Canvas model
         """
-        imageGenerationConfig = optional_params.pop("imageGenerationConfig")
         task_type = optional_params.pop("taskType")
-        imageGenerationConfig = {**imageGenerationConfig, **optional_params}
-        data = AmazonNovaCanvasTextToImageRequest(textToImageParams={"text": text}, taskType=task_type,
-                                                  imageGenerationConfig=imageGenerationConfig)
-        return data
+        image_generation_config = optional_params.pop("imageGenerationConfig", {})
+        image_generation_config = {**image_generation_config, **optional_params}
+        if task_type == "TEXT_IMAGE":
+            text_to_image_params = image_generation_config.pop("textToImageParams", {})
+            text_to_image_params = {"text" :text, **text_to_image_params}
+            text_to_image_params = AmazonNovaCanvasTextToImageParams(**text_to_image_params)
+            return AmazonNovaCanvasTextToImageRequest(textToImageParams=text_to_image_params, taskType=task_type,
+                                                      imageGenerationConfig=image_generation_config)
+        if task_type == "COLOR_GUIDED_GENERATION":
+            color_guided_generation_params = image_generation_config.pop("colorGuidedGenerationParams", {})
+            color_guided_generation_params = {"text": text, **color_guided_generation_params}
+            color_guided_generation_params = AmazonNovaCanvasColorGuidedGenerationParams(**color_guided_generation_params)
+            return AmazonNovaCanvasColorGuidedRequest(taskType=task_type,
+                                                      colorGuidedGenerationParams=color_guided_generation_params,
+                                                      imageGenerationConfig=image_generation_config)
+        if task_type == "IMAGE_VARIATION":
+            image_variation_params = image_generation_config.pop("imageVariationParams", {})
+            image_variation_params = AmazonNovaCanvasImageVariationParams(**image_variation_params)
+            return AmazonNovaCanvasImageVariationRequest(taskType=task_type,
+                                                         imageVariationParams=image_variation_params,
+                                                         imageGenerationConfig=image_generation_config)
+        if task_type == "INPAINTING":
+            inpainting_params = image_generation_config.pop("inpaintingParams", {})
+            inpainting_params = AmazonNovaCanvasInpaintingParams(**inpainting_params)
+            return AmazonNovaCanvasInpaintingRequest(taskType=task_type,
+                                                     inpaintingParams=inpainting_params,
+                                                     imageGenerationConfig=image_generation_config)
+        if task_type == "OUTPAINTING":
+            outpainting_params = image_generation_config.pop("outpaintingParams", {})
+            outpainting_params = AmazonNovaCanvasOutpaintingParams(**outpainting_params)
+            return AmazonNovaCanvasOutpaintingRequest(taskType=task_type,
+                                                      outpaintingParams=outpainting_params,
+                                                      imageGenerationConfig=image_generation_config)
+        if task_type == "BACKGROUND_REMOVAL":
+            background_removal_params = image_generation_config.pop("backgroundRemovalParams", {})
+            background_removal_params = AmazonNovaCanvasBackgroundRemovalParams(**background_removal_params)
+            return AmazonNovaCanvasBackgroundRemovalRequest(taskType=task_type,
+                                                            backgroundRemovalParams=background_removal_params)
+        raise NotImplementedError(f"Task type {task_type} is not supported")
 
     @classmethod
     def map_openai_params(cls, non_default_params: dict, optional_params: dict) -> dict:
@@ -74,11 +113,15 @@ class AmazonNovaCanvasConfig:
         _size = non_default_params.get("size")
         if _size is not None:
             width, height = _size.split("x")
-            width, height = int(width), int(height)
-        number_of_images = non_default_params.get("n", 1)
-        quality = "premium" if non_default_params.get("quality") == "hd" else "standard"
-        return AmazonNovaCanvasImageGeneratorConfig(width=width, height=height, numberOfImages=number_of_images,
-                                                    quality=quality)
+            optional_params["width"], optional_params["height"] = int(width), int(height)
+        if non_default_params.get("n") is not None:
+            optional_params["numberOfImages"] = non_default_params.get("n")
+        if non_default_params.get("quality") is not None:
+            if non_default_params.get("quality") in ("hd", "premium"):
+                optional_params["quality"] = "premium"
+            if non_default_params.get("quality") == "standard":
+                optional_params["quality"] = "standard"
+        return optional_params
 
     @classmethod
     def transform_response_dict_to_openai_response(
