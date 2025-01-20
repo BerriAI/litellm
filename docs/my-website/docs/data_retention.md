@@ -31,6 +31,14 @@ For Customers
 - Data from a suspended account will not be accessible while the account is in suspension status.
 - After 14 days of suspension (adjust as needed), if no resolution is reached, the account is closed and data follows the standard “expired” data removal timeline stated above.
 
+5. Custom Retention Policies
+
+- Enterprise customers can configure custom data retention periods based on their specific compliance and business requirements.
+- Available customization options include:
+  - Adjusting the retention period for active data (0-365 days)
+- Custom retention policies must be configured through the LiteLLM Cloud dashboard or via API
+
+
 ### Protection of Records
 
 - LiteLLM Cloud takes measures to ensure that all records under its control are protected against loss, destruction, falsification, and unauthorized access or disclosure. These measures are aligned with relevant legislative, regulatory, contractual, and business obligations.
