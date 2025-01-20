@@ -9,7 +9,6 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 
-import inspect
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -22,7 +21,6 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
-    CommonProxyErrors,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -34,6 +32,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
 from litellm.types.services import ServiceTypes
@@ -52,33 +51,6 @@ last_db_access_time = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry = 5  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
-
-
-def _allowed_import_check() -> bool:
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
-
-    # Get the calling frame
-    caller_frame = inspect.stack()[2]
-    caller_function = caller_frame.function
-    caller_function_callable = caller_frame.frame.f_globals.get(caller_function)
-
-    allowed_function = "_user_api_key_auth_builder"
-    allowed_signature = inspect.signature(_user_api_key_auth_builder)
-    if caller_function_callable is None or not callable(caller_function_callable):
-        raise Exception(f"Caller function {caller_function} is not callable")
-    caller_signature = inspect.signature(caller_function_callable)
-
-    if caller_signature != allowed_signature:
-        raise TypeError(
-            f"The function '{caller_function}' does not match the required signature of 'user_api_key_auth'. {CommonProxyErrors.not_premium_user.value}"
-        )
-    # Check if the caller module is allowed
-    if caller_function != allowed_function:
-        raise ImportError(
-            f"This function can only be imported by '{allowed_function}'. {CommonProxyErrors.not_premium_user.value}"
-        )
-
-    return True
 
 
 def common_checks(  # noqa: PLR0915
@@ -105,7 +77,6 @@ def common_checks(  # noqa: PLR0915
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
-    _allowed_import_check()
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
         raise Exception(
@@ -843,7 +814,7 @@ async def get_org_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
-):
+) -> Optional[LiteLLM_OrganizationTable]:
     """
     - Check if org id in proxy Org Table
     - if valid, return LiteLLM_OrganizationTable object
@@ -858,7 +829,7 @@ async def get_org_object(
     cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
-            return cached_org_obj
+            return LiteLLM_OrganizationTable(**cached_org_obj)
         elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
             return cached_org_obj
     # else, check db
@@ -902,6 +873,7 @@ async def can_key_call_model(
     from collections import defaultdict
 
     access_groups: Dict[str, List[str]] = defaultdict(list)
+
     if llm_router:
         access_groups = llm_router.get_model_access_groups(model_name=model)
     if (
@@ -933,4 +905,29 @@ async def can_key_call_model(
     verbose_proxy_logger.debug(
         f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
     )
+    return True
+
+
+async def is_valid_fallback_model(
+    model: str,
+    llm_router: Optional[Router],
+    user_model: Optional[str],
+) -> Literal[True]:
+    """
+    Try to route the fallback model request.
+
+    Validate if it can't be routed.
+
+    Help catch invalid fallback models.
+    """
+    await route_request(
+        data={
+            "model": model,
+            "messages": [{"role": "user", "content": "Who was Alexander?"}],
+        },
+        llm_router=llm_router,
+        user_model=user_model,
+        route_type="acompletion",  # route type shouldn't affect the fallback model check
+    )
+
     return True

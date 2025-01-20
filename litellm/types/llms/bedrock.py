@@ -161,14 +161,19 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
     toolUse: ToolBlockDeltaEvent
 
 
-class RequestObject(TypedDict, total=False):
+class CommonRequestObject(
+    TypedDict, total=False
+):  # common request object across sync + async flows
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
     inferenceConfig: InferenceConfig
-    messages: Required[List[MessageBlock]]
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
+
+
+class RequestObject(CommonRequestObject, total=False):
+    messages: Required[List[MessageBlock]]
 
 
 class GenericStreamingChunk(TypedDict):

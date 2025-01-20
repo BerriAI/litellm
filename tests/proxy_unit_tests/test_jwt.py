@@ -1039,6 +1039,7 @@ async def test_end_user_jwt_auth(monkeypatch):
     import json
 
     monkeypatch.delenv("JWT_AUDIENCE", None)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
     jwt_handler = JWTHandler()
 
     litellm_jwtauth = LiteLLM_JWTAuth(

@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -415,6 +416,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+    - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
+    - enforce_rbac: If true, enforce RBAC for all routes.
 
     See `auth_checks.py` for the specific routes
     """
@@ -445,6 +448,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
+    public_allowed_routes: List[str] = ["public_routes"]
+    enforce_rbac: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -1603,6 +1608,8 @@ class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
     requester_ip_address: Optional[str] = None
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
 
 
 class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
@@ -1853,6 +1860,8 @@ class SpendLogsPayload(TypedDict):
     end_user: Optional[str]
     requester_ip_address: Optional[str]
     custom_llm_provider: Optional[str]
+    messages: Optional[Union[str, list, dict]]
+    response: Optional[Union[str, list, dict]]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -2277,3 +2286,28 @@ class ProxyStateVariables(TypedDict):
 
 
 UI_TEAM_ID = "litellm-dashboard"
+
+
+
+class JWTAuthBuilderResult(TypedDict):
+    is_proxy_admin: bool
+    team_object: Optional[LiteLLM_TeamTable]
+    user_object: Optional[LiteLLM_UserTable]
+    end_user_object: Optional[LiteLLM_EndUserTable]
+    org_object: Optional[LiteLLM_OrganizationTable]
+    token: str
+    team_id: Optional[str]
+    user_id: Optional[str]
+    end_user_id: Optional[str]
+    org_id: Optional[str]
+
+class ClientSideFallbackModel(TypedDict, total=False):
+    """
+    Dictionary passed when client configuring input
+    """
+
+    model: Required[str]
+    messages: List[AllMessageValues]
+
+
+ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
