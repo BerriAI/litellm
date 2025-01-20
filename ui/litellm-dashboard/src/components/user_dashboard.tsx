@@ -194,9 +194,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               accessToken,
               userID,
               userRole,
-              false,
-              null,
-              null
             );
             console.log(
               `received teams in user dashboard: ${Object.keys(

@@ -30,6 +30,7 @@ import { Modal } from "antd";
 
 import {
   userInfoCall,
+  userListCall,
   userUpdateUserCall,
   getPossibleUserRoles,
 } from "./networking";
@@ -93,6 +94,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     Record<string, Record<string, string>>
   >({});
   const defaultPageSize = 25;
+  const [searchUserId, setSearchUserId] = useState<string | null>(null);
+  const [searchUserEmail, setSearchUserEmail] = useState<string | null>(null);
 
   // check if window is not undefined
   if (typeof window !== "undefined") {
@@ -160,57 +163,45 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     // Close the modal
   };
 
+  const fetchData = async () => {
+    try {
+      // Fetch from API with search parameters
+      const userDataResponse = await userListCall(
+        accessToken,
+        currentPage,
+        defaultPageSize,
+        searchUserId,
+        searchUserEmail
+      );
+
+      // Store in session storage
+      sessionStorage.setItem(
+        `userList_${currentPage}`,
+        JSON.stringify(userDataResponse)
+      );
+
+      setUserListResponse(userDataResponse);
+      setUserData(userDataResponse.users || []);
+
+      // Fetch roles if not cached
+      const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+      if (cachedRoles) {
+        setPossibleUIRoles(JSON.parse(cachedRoles));
+      } else {
+        const availableUserRoles = await getPossibleUserRoles(accessToken);
+        sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+        setPossibleUIRoles(availableUserRoles);
+      }
+    } catch (error) {
+      console.error("There was an error fetching the model data", error);
+    }
+  };
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
     }
-    const fetchData = async () => {
-      try {
-        // Check session storage first
-        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
-        if (cachedUserData) {
-          const parsedData = JSON.parse(cachedUserData);
-          setUserListResponse(parsedData);
-          setUserData(parsedData.users || []);
-        } else {
-          // Fetch from API if not in cache
-          const userDataResponse = await userInfoCall(
-            accessToken,
-            null,
-            userRole,
-            true,
-            currentPage,
-            defaultPageSize
-          );
-
-          // Store in session storage
-          sessionStorage.setItem(
-            `userList_${currentPage}`,
-            JSON.stringify(userDataResponse)
-          );
-
-          setUserListResponse(userDataResponse);
-          setUserData(userDataResponse.users || []);
-        }
-
-        // Fetch roles if not cached
-        const cachedRoles = sessionStorage.getItem('possibleUserRoles');
-        if (cachedRoles) {
-          setPossibleUIRoles(JSON.parse(cachedRoles));
-        } else {
-          const availableUserRoles = await getPossibleUserRoles(accessToken);
-          sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
-          setPossibleUIRoles(availableUserRoles);
-        }
-      } catch (error) {
-        console.error("There was an error fetching the model data", error);
-      }
-    };
-
-    if (accessToken && token && userRole && userID) {
-      fetchData();
-    }
-
+    fetchData();
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {
@@ -257,9 +248,28 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     );
   }
 
+  const handleSearch = () => {
+    fetchData();
+  };
+
   return (
     <div style={{ width: "100%" }}>
       <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
+        <div className="flex mb-4 items-center">
+          <TextInput
+            placeholder="Search by User ID"
+            value={searchUserId || ""}
+            onChange={(e) => setSearchUserId(e.target.value)}
+            className="mr-2"
+          />
+          <TextInput
+            placeholder="Search by User Email"
+            value={searchUserEmail || ""}
+            onChange={(e) => setSearchUserEmail(e.target.value)}
+            className="mr-2"
+          />
+          <Button onClick={handleSearch} className="mr-2">Apply</Button>
+        </div>
         <CreateUser
           userID={userID}
           accessToken={accessToken}
