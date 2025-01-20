@@ -17,7 +17,12 @@ from cryptography.hazmat.primitives import serialization
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
-from litellm.proxy._types import JWKKeyValue, JWTKeyItem, LiteLLM_JWTAuth
+from litellm.proxy._types import (
+    JWKKeyValue,
+    JWTKeyItem,
+    LiteLLM_JWTAuth,
+    LitellmUserRoles,
+)
 from litellm.proxy.utils import PrismaClient
 
 
@@ -54,6 +59,34 @@ class JWTHandler:
         parts = token.split(".")
         return len(parts) == 3
 
+    def get_rbac_role(self, token: dict) -> Optional[LitellmUserRoles]:
+        """
+        Returns the RBAC role the token 'belongs' to.
+
+        RBAC roles allowed to make requests:
+        - PROXY_ADMIN: can make requests to all routes
+        - TEAM: can make requests to routes associated with a team
+        - INTERNAL_USER: can make requests to routes associated with a user
+
+        Resolves: https://github.com/BerriAI/litellm/issues/6793
+
+        Returns:
+        - PROXY_ADMIN: if token is admin
+        - TEAM: if token is associated with a team
+        - INTERNAL_USER: if token is associated with a user
+        - None: if token is not associated with a team or user
+        """
+        scopes = self.get_scopes(token=token)
+        is_admin = self.is_admin(scopes=scopes)
+        if is_admin:
+            return LitellmUserRoles.PROXY_ADMIN
+        elif self.get_team_id(token=token, default_value=None) is not None:
+            return LitellmUserRoles.TEAM
+        elif self.get_user_id(token=token, default_value=None) is not None:
+            return LitellmUserRoles.INTERNAL_USER
+
+        return None
+
     def is_admin(self, scopes: list) -> bool:
         if self.litellm_jwtauth.admin_jwt_scope in scopes:
             return True
@@ -68,12 +101,14 @@ class JWTHandler:
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
         try:
+
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
                 user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
             else:
                 user_id = None
         except KeyError:
             user_id = default_value
+
         return user_id
 
     def is_required_team_id(self) -> bool:
@@ -169,6 +204,7 @@ class JWTHandler:
         return scopes
 
     async def get_public_key(self, kid: Optional[str]) -> dict:
+
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
