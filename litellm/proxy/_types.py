@@ -2,11 +2,11 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Required, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues
