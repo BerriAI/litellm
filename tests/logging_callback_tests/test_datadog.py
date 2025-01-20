@@ -541,8 +541,8 @@ def test_get_datadog_tags():
     assert "env:" in base_tags
     assert "service:" in base_tags
     assert "version:" in base_tags
-    assert "pod_name:" in base_tags
-    assert "hostname:" in base_tags
+    assert "POD_NAME:" in base_tags
+    assert "HOSTNAME:" in base_tags
 
     # Test with custom env vars
     test_env = {
@@ -557,8 +557,8 @@ def test_get_datadog_tags():
         assert "env:production" in custom_tags
         assert "service:custom-service" in custom_tags
         assert "version:1.0.0" in custom_tags
-        assert "hostname:test-host" in custom_tags
-        assert "pod_name:pod-123" in custom_tags
+        assert "HOSTNAME:test-host" in custom_tags
+        assert "POD_NAME:pod-123" in custom_tags
 
     # Test with standard_logging_object containing request_tags
     standard_logging_obj = create_standard_logging_payload()
