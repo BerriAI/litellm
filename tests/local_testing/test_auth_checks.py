@@ -224,3 +224,33 @@ def test_common_checks_import():
         )
     except Exception as e:
         assert CommonProxyErrors.not_premium_user.value in str(e)
+
+
+@pytest.mark.asyncio
+async def test_is_valid_fallback_model():
+    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo"},
+            }
+        ]
+    )
+
+    try:
+        await is_valid_fallback_model(
+            model="gpt-3.5-turbo", llm_router=router, user_model=None
+        )
+    except Exception as e:
+        pytest.fail(f"Expected is_valid_fallback_model to work, got exception: {e}")
+
+    try:
+        await is_valid_fallback_model(
+            model="gpt-4o", llm_router=router, user_model=None
+        )
+        pytest.fail("Expected is_valid_fallback_model to fail")
+    except Exception as e:
+        assert "Invalid" in str(e)
