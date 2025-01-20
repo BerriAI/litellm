@@ -460,7 +460,7 @@ class DataDogLogger(CustomBatchLogger):
             "service": os.getenv("DD_SERVICE", "litellm"),
             "version": os.getenv("DD_VERSION", "unknown"),
             "HOSTNAME": DataDogLogger._get_datadog_hostname(),
-            "pod_name": os.getenv("POD_NAME", "unknown"),
+            "POD_NAME": os.getenv("POD_NAME", "unknown"),
         }
 
         tags = [f"{k}:{v}" for k, v in base_tags.items()]
