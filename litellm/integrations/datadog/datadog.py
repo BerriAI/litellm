@@ -466,10 +466,10 @@ class DataDogLogger(CustomBatchLogger):
         tags = [f"{k}:{v}" for k, v in base_tags.items()]
 
         if standard_logging_object:
-            request_tags = [
-                f"request_tag:{tag}"
-                for tag in standard_logging_object.get("request_tags", [])
-            ]
+            _request_tags: List[str] = (
+                standard_logging_object.get("request_tags", []) or []
+            )
+            request_tags = [f"request_tag:{tag}" for tag in _request_tags]
             tags.extend(request_tags)
 
         return ",".join(tags)
