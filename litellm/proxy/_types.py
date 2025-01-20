@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, Json, model_validator
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -2287,6 +2288,7 @@ class ProxyStateVariables(TypedDict):
 UI_TEAM_ID = "litellm-dashboard"
 
 
+
 class JWTAuthBuilderResult(TypedDict):
     is_proxy_admin: bool
     team_object: Optional[LiteLLM_TeamTable]
@@ -2298,3 +2300,14 @@ class JWTAuthBuilderResult(TypedDict):
     user_id: Optional[str]
     end_user_id: Optional[str]
     org_id: Optional[str]
+
+class ClientSideFallbackModel(TypedDict, total=False):
+    """
+    Dictionary passed when client configuring input
+    """
+
+    model: Required[str]
+    messages: List[AllMessageValues]
+
+
+ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]

@@ -32,6 +32,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
 from litellm.types.services import ServiceTypes
@@ -872,6 +873,7 @@ async def can_key_call_model(
     from collections import defaultdict
 
     access_groups: Dict[str, List[str]] = defaultdict(list)
+
     if llm_router:
         access_groups = llm_router.get_model_access_groups(model_name=model)
     if (
@@ -903,4 +905,29 @@ async def can_key_call_model(
     verbose_proxy_logger.debug(
         f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
     )
+    return True
+
+
+async def is_valid_fallback_model(
+    model: str,
+    llm_router: Optional[Router],
+    user_model: Optional[str],
+) -> Literal[True]:
+    """
+    Try to route the fallback model request.
+
+    Validate if it can't be routed.
+
+    Help catch invalid fallback models.
+    """
+    await route_request(
+        data={
+            "model": model,
+            "messages": [{"role": "user", "content": "Who was Alexander?"}],
+        },
+        llm_router=llm_router,
+        user_model=user_model,
+        route_type="acompletion",  # route type shouldn't affect the fallback model check
+    )
+
     return True
