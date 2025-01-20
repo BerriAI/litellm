@@ -953,9 +953,10 @@ async def is_valid_fallback_model(
     await route_request(
         data={
             "model": model,
+            "messages": [{"role": "user", "content": "Who was Alexander?"}],
         },
         llm_router=llm_router,
-        user_model=model,
+        user_model=user_model,
         route_type="acompletion",  # route type shouldn't affect the fallback model check
     )
 
