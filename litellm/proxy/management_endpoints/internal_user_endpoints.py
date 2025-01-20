@@ -686,6 +686,10 @@ async def get_users(
     page_size: int = fastapi.Query(
         default=25, ge=1, le=100, description="Number of items per page"
     ),
+    user_id: str = fastapi.Query(default=None, description="User ID to filter by"),
+    user_email: str = fastapi.Query(
+        default=None, description="User email to filter by"
+    ),
 ):
     """
     Get a paginated list of users, optionally filtered by role.
@@ -693,16 +697,20 @@ async def get_users(
     Used by the UI to populate the user lists.
 
     Parameters:
+        page: int
+            The page number to return
+        page_size: int
+            The number of items per page
         role: Optional[str]
             Filter users by role. Can be one of:
             - proxy_admin
             - proxy_admin_viewer
             - internal_user
             - internal_user_viewer
-        page: int
-            The page number to return
-        page_size: int
-            The number of items per page
+        user_id: str
+            Filter users by user id
+        user_email: str
+            Filter users by user email
 
     Currently - admin-only endpoint.
     """
@@ -719,9 +727,15 @@ async def get_users(
     take = page_size
 
     # Prepare the query conditions
-    where_clause = ""
+    where_conditions = []
     if role:
-        where_clause = f"""WHERE "user_role" = '{role}'"""
+        where_conditions.append(f""" "user_role" = '{role}' """)
+    if user_id:
+        where_conditions.append(f""" "user_id" = '{user_id}' """)
+    if user_email:
+        where_conditions.append(f""" "user_email" = '{user_email}' """)
+
+    where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
     # Single optimized SQL query that gets both users and total count
     sql_query = f"""
