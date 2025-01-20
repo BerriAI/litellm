@@ -1095,7 +1095,22 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "openai==1.54.0 "
-            # Run pytest and generate JUnit XML report
+      - run:
+          name: Install Grype
+          command: |
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+      - run:
+          name: Build and Scan Docker Images
+          command: |
+            # Build and scan Dockerfile.database
+            echo "Building and scanning Dockerfile.database..."
+            docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
+            grype litellm-database:latest --fail-on high
+
+            # Build and scan main Dockerfile
+            echo "Building and scanning main Dockerfile..."
+            docker build -t litellm:latest .
+            grype litellm:latest --fail-on high
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .

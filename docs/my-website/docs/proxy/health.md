@@ -245,6 +245,22 @@ general_settings:
   health_check_details: False
 ```
 
+## Health Check Timeout
+
+The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.
+
+This can be overridden in the config.yaml by setting `health_check_timeout` in the model_info section.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
+```
+
 ## `/health/readiness`
 
 Unprotected endpoint for checking if proxy is ready to accept requests
