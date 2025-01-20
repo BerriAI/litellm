@@ -622,32 +622,15 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
 export const userInfoCall = async (
   accessToken: String,
   userID: String | null,
-  userRole: String,
-  viewAll: Boolean = false,
-  page: number | null,
-  page_size: number | null
+  userRole: String
 ) => {
   try {
-    let url: string;
-    
-    if (viewAll) {
-      // Use /user/list endpoint when viewAll is true
-      url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
-      const queryParams = new URLSearchParams();
-      if (page != null) queryParams.append('page', page.toString());
-      if (page_size != null) queryParams.append('page_size', page_size.toString());
-      url += `?${queryParams.toString()}`;
-    } else {
-      // Use /user/info endpoint for individual user info
-      url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if (userRole === "Admin" || userRole === "Admin Viewer") {
-        // do nothing 
-      } else if (userID) {
-        url += `?user_id=${userID}`;
-      }
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
+    if (userRole !== "Admin" && userRole !== "Admin Viewer" && userID) {
+      url += `?user_id=${userID}`;
     }
 
-    console.log("Requesting user data from:", url);
+    console.log("Requesting user info from:", url);
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -663,10 +646,50 @@ export const userInfoCall = async (
     }
 
     const data = await response.json();
-    console.log("API Response:", data);
+    console.log("User Info API Response:", data);
     return data;
   } catch (error) {
-    console.error("Failed to fetch user data:", error);
+    console.error("Failed to fetch user info:", error);
+    throw error;
+  }
+};
+export const userListCall = async (
+  accessToken: String,
+  page: number | null,
+  page_size: number | null,
+  user_id: string | null,
+  user_email: string | null
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
+    const queryParams = new URLSearchParams();
+    if (page != null) queryParams.append('page', page.toString());
+    if (page_size != null) queryParams.append('page_size', page_size.toString());
+    if (user_id) queryParams.append('user_id', user_id);
+    if (user_email) queryParams.append('user_email', user_email);
+    url += `?${queryParams.toString()}`;
+    
+
+    console.log("Requesting user list from:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("User List API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user list:", error);
     throw error;
   }
 };
