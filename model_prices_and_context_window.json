@@ -6788,6 +6788,24 @@
         "supports_parallel_function_calling": true,
         "mode": "chat"
     },
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+        "input_cost_per_token": 0.00000088,
+        "output_cost_per_token": 0.00000088,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "mode": "chat"
+    },
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": {
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "mode": "chat"
+    },
     "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
         "input_cost_per_token": 0.0000006,
         "output_cost_per_token": 0.0000006,
