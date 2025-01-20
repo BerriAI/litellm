@@ -20,7 +20,7 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
-
+from respx import MockRouter
 import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -2742,3 +2742,81 @@ def test_router_prompt_management_factory():
     )
 
     print(response)
+
+
+def test_router_model_timeout(respx_mock: MockRouter):
+    from openai import OpenAI
+    from openai.types.chat.chat_completion import ChatCompletion, Choice
+    from openai.types.chat import ChatCompletionMessage
+    from datetime import datetime
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "num_retries": 0},
+            }
+        ]
+    )
+
+    # Configure the mock to delay response
+    async def delayed_response(request):
+        print("REACHES HERE!")
+        await asyncio.sleep(5)  # Delay for 5 seconds
+        return httpx.Response(200, json={})
+
+    # Mock the OpenAI API endpoint
+    obj = ChatCompletion(
+        id="foo",
+        model="gpt-4",
+        object="chat.completion",
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Hello world!",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=int(datetime.now().timestamp()),
+    )
+
+    def delayed_response(request):
+        time.sleep(5)  # Simple synchronous delay
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": "Hello!", "role": "assistant"},
+                        "finish_reason": "stop",
+                        "index": 0,
+                    }
+                ],
+                "model": "gpt-3.5-turbo",
+                "object": "chat.completion",
+            },
+        )
+
+    mock_request = respx_mock.post(url__regex=r".*/chat/completions.*").mock(
+        side_effect=delayed_response
+    )
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    # Start the mock router
+    with respx_mock:
+        with pytest.raises(openai.APITimeoutError):
+            response = router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world!"}],
+                response_format={"type": "json_object"},
+                client=openai_client,
+                timeout=2,  # Set timeout to 2 seconds
+            )
+            print(response)
+
+        # Verify the request was made
+        assert respx_mock.calls.last
