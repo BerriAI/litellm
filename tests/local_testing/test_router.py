@@ -2759,12 +2759,6 @@ def test_router_model_timeout(respx_mock: MockRouter):
         ]
     )
 
-    # Configure the mock to delay response
-    async def delayed_response(request):
-        print("REACHES HERE!")
-        await asyncio.sleep(5)  # Delay for 5 seconds
-        return httpx.Response(200, json={})
-
     # Mock the OpenAI API endpoint
     obj = ChatCompletion(
         id="foo",
@@ -2784,7 +2778,7 @@ def test_router_model_timeout(respx_mock: MockRouter):
     )
 
     def delayed_response(request):
-        time.sleep(5)  # Simple synchronous delay
+        time.sleep(10)  # Simple synchronous delay
         return httpx.Response(
             200,
             json={
@@ -2804,7 +2798,7 @@ def test_router_model_timeout(respx_mock: MockRouter):
         side_effect=delayed_response
     )
 
-    openai_client = OpenAI(api_key="fake-key")
+    openai_client = OpenAI(api_key="fake-key", timeout=2)
 
     # Start the mock router
     with respx_mock:
