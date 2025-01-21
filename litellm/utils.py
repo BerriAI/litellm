@@ -2595,6 +2595,8 @@ def get_clean_extra_headers(extra_headers: dict, custom_llm_provider: str) -> di
 
     Vertex AI raises an exception if `anthropic-beta` is passed in.
     """
+    if litellm.filter_invalid_headers is not True:  # allow user to opt out of filtering
+        return extra_headers
     clean_extra_headers = {}
     for k, v in extra_headers.items():
         if k in ANTHROPIC_API_ONLY_HEADERS and custom_llm_provider != "anthropic":
