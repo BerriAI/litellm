@@ -9,6 +9,7 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
 
+import asyncio
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -21,6 +22,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    CallInfo,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -931,3 +933,51 @@ async def is_valid_fallback_model(
     )
 
     return True
+
+
+async def _virtual_key_max_budget_check(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+):
+    """
+    Raises:
+        BudgetExceededError if the token is over it's max budget.
+        Triggers a budget alert if the token is over it's max budget.
+
+    """
+    if valid_token.spend is not None and valid_token.max_budget is not None:
+        ####################################
+        # collect information for alerting #
+        ####################################
+
+        user_email = None
+        # Check if the token has any user id information
+        if user_obj is not None:
+            user_email = user_obj.user_email
+
+        call_info = CallInfo(
+            token=valid_token.token,
+            spend=valid_token.spend,
+            max_budget=valid_token.max_budget,
+            user_id=valid_token.user_id,
+            team_id=valid_token.team_id,
+            user_email=user_email,
+            key_alias=valid_token.key_alias,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="token_budget",
+                user_info=call_info,
+            )
+        )
+
+        ####################################
+        # collect information for alerting #
+        ####################################
+
+        if valid_token.spend >= valid_token.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=valid_token.spend,
+                max_budget=valid_token.max_budget,
+            )

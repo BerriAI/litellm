@@ -24,6 +24,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _handle_failed_db_connection_for_get_key_object,
+    _virtual_key_max_budget_check,
     allowed_routes_check,
     can_key_call_model,
     common_checks,
@@ -1092,42 +1093,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 4. Token Spend is under budget
-            if valid_token.spend is not None and valid_token.max_budget is not None:
-
-                ####################################
-                # collect information for alerting #
-                ####################################
-
-                user_email = None
-                # Check if the token has any user id information
-                if user_obj is not None:
-                    user_email = user_obj.user_email
-
-                call_info = CallInfo(
-                    token=valid_token.token,
-                    spend=valid_token.spend,
-                    max_budget=valid_token.max_budget,
-                    user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    user_email=user_email,
-                    key_alias=valid_token.key_alias,
-                )
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="token_budget",
-                        user_info=call_info,
-                    )
-                )
-
-                ####################################
-                # collect information for alerting #
-                ####################################
-
-                if valid_token.spend >= valid_token.max_budget:
-                    raise litellm.BudgetExceededError(
-                        current_cost=valid_token.spend,
-                        max_budget=valid_token.max_budget,
-                    )
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+                user_obj=user_obj,
+            )
 
             if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
                 verbose_proxy_logger.debug(
