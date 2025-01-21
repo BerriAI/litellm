@@ -844,9 +844,6 @@ def completion(  # type: ignore # noqa: PLR0915
     )
     if headers is None:
         headers = {}
-
-    if extra_headers is not None:
-        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -1042,8 +1039,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
+            extra_headers=extra_headers,
             **non_default_params,
         )
+
+        extra_headers = optional_params.pop("extra_headers", None)
+        if extra_headers is not None:
+            headers.update(extra_headers)
 
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None

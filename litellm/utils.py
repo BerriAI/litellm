@@ -109,6 +109,7 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -2588,6 +2589,23 @@ def _remove_unsupported_params(
     return non_default_params
 
 
+def get_clean_extra_headers(extra_headers: dict, custom_llm_provider: str) -> dict:
+    """
+    For `anthropic-beta` headers, ensure provider is anthropic.
+
+    Vertex AI raises an exception if `anthropic-beta` is passed in.
+    """
+    clean_extra_headers = {}
+    for k, v in extra_headers.items():
+        if k in ANTHROPIC_API_ONLY_HEADERS and custom_llm_provider != "anthropic":
+            verbose_logger.debug(
+                f"Provider {custom_llm_provider} does not support {k} header. Dropping from request, to prevent errors."
+            )  # Switching between anthropic api and vertex ai anthropic might fail if anthropic-beta is passed in. Welcome feedback on this.
+        else:
+            clean_extra_headers[k] = v
+    return clean_extra_headers
+
+
 def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -2725,6 +2743,12 @@ def get_optional_params(  # noqa: PLR0915
             is False
         )
     }
+
+    ## Supports anthropic headers
+    if extra_headers is not None:
+        extra_headers = get_clean_extra_headers(
+            extra_headers=extra_headers, custom_llm_provider=custom_llm_provider
+        )
 
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
