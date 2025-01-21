@@ -193,6 +193,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   const fetchData = async () => {
     try {
+      if (!accessToken || !token || !userRole || !userID) {
+        return;
+      }
       const { user_id, user_email } = getFilterParams(filterType, searchTerm);
       const userDataResponse = await userListCall(
         accessToken,
