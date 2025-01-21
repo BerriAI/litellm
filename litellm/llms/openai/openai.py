@@ -1148,7 +1148,10 @@ class OpenAIChatCompletion(BaseLLM):
             ## embedding CALL
             headers: Optional[Dict] = None
             headers, sync_embedding_response = self.make_sync_openai_embedding_request(
-                openai_client=openai_client, data=data, timeout=timeout
+                openai_client=openai_client,
+                data=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
             )  # type: ignore
 
             ## LOGGING
