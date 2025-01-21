@@ -742,7 +742,7 @@ class LangFuseLogger:
     ) -> List[str]:
         if standard_logging_object is None:
             return []
-        return standard_logging_object.get("request_tags", [])
+        return standard_logging_object.get("request_tags", []) or []
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
         """
