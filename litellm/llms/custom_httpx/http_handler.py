@@ -11,10 +11,12 @@ from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
     from litellm import LlmProviders
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObject,
+    )
 else:
     LlmProviders = Any
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObject = Any
 
 try:
     from litellm._version import version
@@ -169,7 +171,7 @@ class AsyncHTTPHandler:
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
             if timeout is None:
@@ -499,6 +501,7 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         files: Optional[dict] = None,
         content: Any = None,
+        logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
             if timeout is not None:

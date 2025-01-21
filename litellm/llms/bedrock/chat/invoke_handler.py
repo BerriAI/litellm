@@ -891,6 +891,7 @@ class BedrockLLM(BaseAWSLLM):
                 headers=prepped.headers,  # type: ignore
                 data=data,
                 stream=stream,
+                logging_obj=logging_obj,
             )
 
             if response.status_code != 200:
@@ -918,7 +919,12 @@ class BedrockLLM(BaseAWSLLM):
             return streaming_response
 
         try:
-            response = self.client.post(url=proxy_endpoint_url, headers=prepped.headers, data=data)  # type: ignore
+            response = self.client.post(
+                url=proxy_endpoint_url,
+                headers=dict(prepped.headers),
+                data=data,
+                logging_obj=logging_obj,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
