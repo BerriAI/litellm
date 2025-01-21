@@ -13,12 +13,15 @@ import litellm
 
 
 @pytest.mark.asyncio
-async def test_litellm_overhead():
+@pytest.mark.parametrize(
+    "model", ["bedrock/mistral.mistral-7b-instruct-v0:2", "openai/gpt-4o"]
+)
+async def test_litellm_overhead(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
     response = await litellm.acompletion(
-        model="gpt-3.5-turbo",
+        model=model,
         messages=[{"role": "user", "content": "Hello, world!"}],
     )
     end_time = datetime.now()

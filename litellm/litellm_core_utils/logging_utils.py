@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -133,7 +134,7 @@ def track_llm_api_timing():
             finally:
                 end_time = datetime.now()
                 _set_duration_in_model_call_details(
-                    logging_obj=kwargs.get("logging_obj"),
+                    logging_obj=kwargs.get("logging_obj", None),
                     start_time=start_time,
                     end_time=end_time,
                 )
@@ -147,7 +148,7 @@ def track_llm_api_timing():
             finally:
                 end_time = datetime.now()
                 _set_duration_in_model_call_details(
-                    logging_obj=kwargs.get("logging_obj"),
+                    logging_obj=kwargs.get("logging_obj", None),
                     start_time=start_time,
                     end_time=end_time,
                 )
