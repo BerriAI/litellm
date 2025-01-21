@@ -509,6 +509,8 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
+    provider_specific_field: ProviderSpecificMessageField = {}
+
     def __init__(
         self,
         content=None,
@@ -516,12 +518,16 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        provider_specific_field: ProviderSpecificMessageField = {},
         **params,
     ):
+        if "reasoning_content" in params:
+            provider_specific_field["reasoning_content"] = params["reasoning_content"]
+            del params["reasoning_content"]
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
-
+        self.provider_specific_field = provider_specific_field
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
