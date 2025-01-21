@@ -3073,6 +3073,7 @@ class Router:
                 deployment_num_retries, int
             ):
                 num_retries = deployment_num_retries
+
             """
             Retry Logic
             """
@@ -3119,6 +3120,7 @@ class Router:
             )
 
             await asyncio.sleep(retry_after)
+
             for current_attempt in range(num_retries):
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop

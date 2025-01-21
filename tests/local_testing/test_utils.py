@@ -1480,3 +1480,17 @@ def test_get_potential_model_names():
         model="bedrock/ap-northeast-1/anthropic.claude-instant-v1",
         custom_llm_provider="bedrock",
     )
+
+
+@pytest.mark.parametrize("num_retries", [0, 1, 5])
+def test_get_num_retries(num_retries):
+    from litellm.utils import _get_wrapper_num_retries
+
+    assert _get_wrapper_num_retries(
+        kwargs={"num_retries": num_retries}, exception=Exception("test")
+    ) == (
+        num_retries,
+        {
+            "num_retries": num_retries,
+        },
+    )

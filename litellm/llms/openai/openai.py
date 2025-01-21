@@ -529,6 +529,7 @@ class OpenAIChatCompletion(BaseLLM):
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
+
                 if provider_config is not None:
                     data = provider_config.transform_request(
                         model=model,
@@ -733,6 +734,7 @@ class OpenAIChatCompletion(BaseLLM):
         for _ in range(
             2
         ):  # if call fails due to alternating messages, retry with reformatted message
+
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                     is_async=True,
