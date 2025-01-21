@@ -1,5 +1,6 @@
 import os
-from typing import Callable
+from typing import Callable, Union
+
 from litellm._logging import verbose_logger
 
 
@@ -15,20 +16,28 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     Returns:
         Callable that returns a temporary authentication token.
     """
-    from azure.identity import ClientSecretCredential, DefaultAzureCredential, get_bearer_token_provider
+    from azure.identity import (
+        ClientSecretCredential,
+        DefaultAzureCredential,
+        get_bearer_token_provider,
+    )
 
     try:
-        credential = ClientSecretCredential(
-            client_id=os.environ["AZURE_CLIENT_ID"],
-            client_secret=os.environ["AZURE_CLIENT_SECRET"],
-            tenant_id=os.environ["AZURE_TENANT_ID"],
+        credential: Union[ClientSecretCredential, DefaultAzureCredential] = (
+            ClientSecretCredential(
+                client_id=os.environ["AZURE_CLIENT_ID"],
+                client_secret=os.environ["AZURE_CLIENT_SECRET"],
+                tenant_id=os.environ["AZURE_TENANT_ID"],
+            )
         )
     except KeyError as e:
-        verbose_logger.exception("Missing environment variable required by Azure AD workflow. "
-                                 "DefaultAzureCredential will be used"
-                                 " {}".format(str(e)))
+        verbose_logger.exception(
+            "Missing environment variable required by Azure AD workflow. "
+            "DefaultAzureCredential will be used"
+            " {}".format(str(e))
+        )
         credential = DefaultAzureCredential()
-    except Exception as e:
+    except Exception:
         raise
 
     return get_bearer_token_provider(
