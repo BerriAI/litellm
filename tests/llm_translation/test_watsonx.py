@@ -13,6 +13,7 @@ from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 from unittest.mock import patch, MagicMock, AsyncMock, Mock
 import pytest
+from typing import Optional
 
 
 @pytest.fixture
@@ -21,6 +22,7 @@ def watsonx_chat_completion_call():
         model="watsonx/my-test-model",
         messages=None,
         api_key="test_api_key",
+        space_id: Optional[str] = None,
         headers=None,
         client=None,
         patch_token_call=True,
@@ -47,6 +49,7 @@ def watsonx_chat_completion_call():
                     api_key=api_key,
                     headers=headers or {},
                     client=client,
+                    space_id=space_id,
                 )
 
                 return mock_post, mock_get
@@ -58,6 +61,7 @@ def watsonx_chat_completion_call():
                     api_key=api_key,
                     headers=headers or {},
                     client=client,
+                    space_id=space_id,
                 )
                 return mock_post, None
 
@@ -118,3 +122,18 @@ def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
 
     assert mock_post.call_count == 1
     assert "deployment" not in mock_post.call_args.kwargs["url"]
+
+
+def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call):
+    my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
+    monkeypatch.setenv("WATSONX_SPACE_ID", my_fake_space_id)
+
+    mock_post, _ = watsonx_chat_completion_call(
+        model="watsonx/deployment/<xxxx.xxx.xxx.xxxx>",
+        messages=[{"content": "Hello, how are you?", "role": "user"}],
+    )
+
+    assert mock_post.call_count == 1
+    json_data = json.loads(mock_post.call_args.kwargs["data"])
+    assert my_fake_space_id == json_data["space_id"]
+    print(mock_post.call_args.kwargs)
