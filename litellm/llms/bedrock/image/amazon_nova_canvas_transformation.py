@@ -7,9 +7,9 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest, AmazonNovaCanvasTextToImageResponse,
     AmazonNovaCanvasColorGuidedRequest, AmazonNovaCanvasImageVariationRequest,
     AmazonNovaCanvasColorGuidedGenerationParams, AmazonNovaCanvasTextToImageParams,
-    AmazonNovaCanvasImageVariationParams, AmazonNovaCanvasInpaintingParams, AmazonNovaCanvasInpaintingRequest,
+    AmazonNovaCanvasImageVariationParams, AmazonNovaCanvasInPaintingParams, AmazonNovaCanvasInpaintingRequest,
     AmazonNovaCanvasOutpaintingRequest, AmazonNovaCanvasBackgroundRemovalRequest,
-    AmazonNovaCanvasBackgroundRemovalParams, AmazonNovaCanvasRequestBase, AmazonNovaCanvasOutpaintingParams,
+    AmazonNovaCanvasBackgroundRemovalParams, AmazonNovaCanvasRequestBase, AmazonNovaCanvasOutPaintingParams,
 )
 from litellm.types.utils import ImageResponse
 
@@ -87,16 +87,16 @@ class AmazonNovaCanvasConfig:
                                                          imageVariationParams=image_variation_params,
                                                          imageGenerationConfig=image_generation_config)
         if task_type == "INPAINTING":
-            inpainting_params = image_generation_config.pop("inpaintingParams", {})
-            inpainting_params = AmazonNovaCanvasInpaintingParams(**inpainting_params)
+            inpainting_params = image_generation_config.pop("inPaintingParams", {})
+            inpainting_params = AmazonNovaCanvasInPaintingParams(**inpainting_params)
             return AmazonNovaCanvasInpaintingRequest(taskType=task_type,
-                                                     inpaintingParams=inpainting_params,
+                                                     inPaintingParams=inpainting_params,
                                                      imageGenerationConfig=image_generation_config)
         if task_type == "OUTPAINTING":
-            outpainting_params = image_generation_config.pop("outpaintingParams", {})
-            outpainting_params = AmazonNovaCanvasOutpaintingParams(**outpainting_params)
+            outpainting_params = image_generation_config.pop("outPaintingParams", {})
+            outpainting_params = AmazonNovaCanvasOutPaintingParams(**outpainting_params)
             return AmazonNovaCanvasOutpaintingRequest(taskType=task_type,
-                                                      outpaintingParams=outpainting_params,
+                                                      outPaintingParams=outpainting_params,
                                                       imageGenerationConfig=image_generation_config)
         if task_type == "BACKGROUND_REMOVAL":
             background_removal_params = image_generation_config.pop("backgroundRemovalParams", {})

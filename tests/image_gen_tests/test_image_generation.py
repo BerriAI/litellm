@@ -6,6 +6,7 @@ import os
 import sys
 import traceback
 
+from tests.image_gen_tests.utils import get_test_image
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -130,7 +131,7 @@ class TestBedrockSd1(BaseImageGenTest):
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
-class TestBedrockNovaCanvas(BaseImageGenTest):
+class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {"model": "bedrock/amazon.nova-canvas-v1:0",
@@ -138,6 +139,59 @@ class TestBedrockNovaCanvas(BaseImageGenTest):
                 "size": "320x320",
                 "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
                 "taskType": "TEXT_IMAGE"}
+
+
+class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {"model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "COLOR_GUIDED_GENERATION",
+                "colorGuidedGenerationParams":{"colors":["#FFFFFF"]}}
+
+
+class TestBedrockNovaCanvasImageVariation(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {"model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "IMAGE_VARIATION",
+                "imageVariationParams":{"images":[get_test_image()]}}
+
+
+class TestBedrockNovaCanvasInpainting(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {"model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "INPAINTING",
+                "inPaintingParams":{"image":get_test_image(), "maskPrompt": "purple button"}}
+
+
+class TestBedrockNovaCanvasOutpainting(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {"model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "OUTPAINTING",
+                "outPaintingParams":{"image":get_test_image(), "text": "otters", "maskPrompt": "square boxes"}}
+
+
+class TestBedrockNovaCanvasBackgroundRemoval(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {"model": "bedrock/amazon.nova-canvas-v1:0",
+                "backgroundRemovalParams": {"image": get_test_image()},
+                "taskType": "BACKGROUND_REMOVAL"}
+
 
 class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:

@@ -420,7 +420,7 @@ class AmazonNovaCanvasImageVariationRequest(AmazonNovaCanvasRequestBase, TypedDi
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
-class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
+class AmazonNovaCanvasInPaintingParams(TypedDict, total=False):
     """
     Params for Amazon Nova Canvas Inpainting API
     """
@@ -440,11 +440,11 @@ class AmazonNovaCanvasInpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict, 
     """
 
     taskType: Literal["INPAINTING"]
-    inpaintingParams: AmazonNovaCanvasInpaintingParams
+    inPaintingParams: AmazonNovaCanvasInPaintingParams
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
-class AmazonNovaCanvasOutpaintingParams(TypedDict, total=False):
+class AmazonNovaCanvasOutPaintingParams(TypedDict, total=False):
     """
     Params for Amazon Nova Canvas Outpainting API
     """
@@ -465,7 +465,7 @@ class AmazonNovaCanvasOutpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict,
     """
 
     taskType: Literal["OUTPAINTING"]
-    outpaintingParams: AmazonNovaCanvasOutpaintingParams
+    outPaintingParams: AmazonNovaCanvasOutPaintingParams
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
 
 
