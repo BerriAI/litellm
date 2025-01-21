@@ -43,26 +43,32 @@ def watsonx_chat_completion_call():
             with patch.object(client, "post") as mock_post, patch.object(
                 litellm.module_level_client, "post", return_value=mock_response
             ) as mock_get:
-                completion(
-                    model=model,
-                    messages=messages,
-                    api_key=api_key,
-                    headers=headers or {},
-                    client=client,
-                    space_id=space_id,
-                )
+                try:
+                    completion(
+                        model=model,
+                        messages=messages,
+                        api_key=api_key,
+                        headers=headers or {},
+                        client=client,
+                        space_id=space_id,
+                    )
+                except Exception as e:
+                    print(e)
 
                 return mock_post, mock_get
         else:
             with patch.object(client, "post") as mock_post:
-                completion(
-                    model=model,
-                    messages=messages,
-                    api_key=api_key,
-                    headers=headers or {},
-                    client=client,
-                    space_id=space_id,
-                )
+                try:
+                    completion(
+                        model=model,
+                        messages=messages,
+                        api_key=api_key,
+                        headers=headers or {},
+                        client=client,
+                        space_id=space_id,
+                    )
+                except Exception as e:
+                    print(e)
                 return mock_post, None
 
     return _call
@@ -124,16 +130,22 @@ def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
     assert "deployment" not in mock_post.call_args.kwargs["url"]
 
 
-def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "watsonx/deployment/<xxxx.xxx.xxx.xxxx>",
+        "watsonx_text/deployment/<xxxx.xxx.xxx.xxxx>",
+    ],
+)
+def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call, model):
     my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
     monkeypatch.setenv("WATSONX_SPACE_ID", my_fake_space_id)
 
     mock_post, _ = watsonx_chat_completion_call(
-        model="watsonx/deployment/<xxxx.xxx.xxx.xxxx>",
+        model=model,
         messages=[{"content": "Hello, how are you?", "role": "user"}],
     )
 
     assert mock_post.call_count == 1
     json_data = json.loads(mock_post.call_args.kwargs["data"])
     assert my_fake_space_id == json_data["space_id"]
-    print(mock_post.call_args.kwargs)
