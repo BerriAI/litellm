@@ -42,7 +42,7 @@ class ResponseMetadata:
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "response_cost": logging_obj._response_cost_calculator(result=self.result),
             "additional_headers": process_response_headers(
-                self._get_value_from_hidden_params("additional_headers")
+                self._get_value_from_hidden_params("additional_headers") or {}
             ),
         }
         self._update_hidden_params(new_params)
@@ -59,7 +59,7 @@ class ResponseMetadata:
             for key, value in new_params.items():
                 setattr(self._hidden_params, key, value)
 
-    def _get_value_from_hidden_params(self, key: str) -> Any:
+    def _get_value_from_hidden_params(self, key: str) -> Optional[Any]:
         """Get value from hidden params - handles when self._hidden_params is a dict or HiddenParams object"""
         if isinstance(self._hidden_params, dict):
             return self._hidden_params.get(key, None)
