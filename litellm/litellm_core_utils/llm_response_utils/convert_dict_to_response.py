@@ -21,6 +21,7 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
     Message,
     ModelResponse,
+    ProviderSpecificMessageField,
     RerankResponse,
     StreamingChoices,
     TextChoices,
@@ -337,7 +338,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
     ] = None,  # used for supporting 'json_schema' on older models
 ):
     received_args = locals()
-
     additional_headers = get_response_headers(_response_headers)
 
     if hidden_params is None:
@@ -411,15 +411,18 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
+                    provider_specific_field = ProviderSpecificMessageField()
+                    message_keys = Message.model_fields.keys()
+                    for field in choice["message"].keys():
+                        if field not in message_keys:
+                            provider_specific_field[field] = choice["message"][field]
                     message = Message(
                         content=choice["message"].get("content", None),
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
-                        reasoning_content=choice["message"].get(
-                            "reasoning_content", None
-                        ),
+                        provider_specific_field=provider_specific_field,
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
