@@ -1479,3 +1479,19 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
 
     # Verify health check wasn't called
     mock_prisma.health_check.assert_not_called()
+
+
+@patch(
+    "litellm.proxy.proxy_server.get_openapi_schema",
+    return_value={
+        "paths": {
+            "/new/route": {"get": {"summary": "New"}},
+        }
+    },
+)
+def test_custom_openapi(mock_get_openapi_schema):
+    from litellm.proxy.proxy_server import custom_openapi
+    from litellm.proxy.proxy_server import app
+
+    openapi_schema = custom_openapi()
+    assert openapi_schema is not None
