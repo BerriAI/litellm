@@ -202,7 +202,6 @@ def test_router_stream_timeout(model):
     from litellm.router import Router, RetryPolicy, AllowedFailsPolicy
 
     litellm.set_verbose = True
-    # os.environ['LITELLM_LOG'] = 'DEBUG' # setting this doesn't seem to give me debug logs, which is another strange thing. I need to use the set_verbose=True to see debug logs.
 
     model_list = [
         {
@@ -275,3 +274,72 @@ def test_router_stream_timeout(model):
         t += 1
         if t > 10:
             break
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        True,
+        False,
+    ],
+)
+def test_unit_test_streaming_timeout(stream):
+    import os
+    from dotenv import load_dotenv
+    import litellm
+    from litellm.router import Router, RetryPolicy, AllowedFailsPolicy
+
+    litellm.set_verbose = True
+
+    model_list = [
+        {
+            "model_name": "llama3",
+            "litellm_params": {
+                "model": "watsonx/meta-llama/llama-3-1-8b-instruct",
+                "api_base": os.getenv("WATSONX_URL_US_SOUTH"),
+                "api_key": os.getenv("WATSONX_API_KEY"),
+                "project_id": os.getenv("WATSONX_PROJECT_ID_US_SOUTH"),
+                "timeout": 0.01,
+                "stream_timeout": 0.0000001,
+            },
+        },
+        {
+            "model_name": "bedrock-anthropic",
+            "litellm_params": {
+                "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                "timeout": 0.01,
+                "stream_timeout": 0.0000001,
+            },
+        },
+        {
+            "model_name": "llama3-fallback",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+        },
+    ]
+
+    router = Router(model_list=model_list)
+
+    stream_timeout = 0.0000001
+    normal_timeout = 0.01
+
+    args = {
+        "kwargs": {"stream": stream},
+        "data": {"timeout": normal_timeout, "stream_timeout": stream_timeout},
+    }
+
+    assert router._get_stream_timeout(**args) == stream_timeout
+
+    assert router._get_non_stream_timeout(**args) == normal_timeout
+
+    stream_timeout_val = router._get_timeout(
+        kwargs={"stream": stream},
+        data={"timeout": normal_timeout, "stream_timeout": stream_timeout},
+    )
+
+    if stream:
+        assert stream_timeout_val == stream_timeout
+    else:
+        assert stream_timeout_val == normal_timeout
