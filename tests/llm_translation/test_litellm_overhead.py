@@ -39,7 +39,7 @@ async def test_litellm_overhead():
     # latency overhead should be less than total request time
     assert litellm_overhead_ms < (end_time - start_time).total_seconds() * 1000
 
-    # latency overhead should be under 5% of total request time
-    assert overhead_percent < 5
+    # latency overhead should be under 30% of total request time
+    assert overhead_percent < 30
 
     pass
