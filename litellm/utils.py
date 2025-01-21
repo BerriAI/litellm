@@ -57,6 +57,7 @@ import litellm._service_logger  # for storing API inputs, outputs, and metadata
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
+from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.integrations.custom_logger import CustomLogger
@@ -177,7 +178,10 @@ from openai import OpenAIError as OriginalError
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    type_to_response_format_param,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -628,6 +632,28 @@ async def _client_async_logging_helper(
         )
 
 
+def _get_wrapper_num_retries(
+    kwargs: Dict[str, Any], exception: Exception
+) -> Tuple[Optional[int], Dict[str, Any]]:
+    """
+    Get the number of retries from the kwargs and the retry policy.
+    Used for the wrapper functions.
+    """
+    num_retries = kwargs.get("num_retries", None)
+    if num_retries is None:
+        num_retries = litellm.num_retries
+    if kwargs.get("retry_policy", None):
+        retry_policy_num_retries = get_num_retries_from_retry_policy(
+            exception=exception,
+            retry_policy=kwargs.get("retry_policy"),
+        )
+        kwargs["retry_policy"] = reset_retry_policy()
+        if retry_policy_num_retries is not None:
+            num_retries = retry_policy_num_retries
+
+    return num_retries, kwargs
+
+
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
@@ -741,19 +767,6 @@ def client(original_function):  # noqa: PLR0915
 
         except Exception as e:
             raise e
-
-    def _get_num_retries(
-        kwargs: Dict[str, Any], exception: Exception
-    ) -> Tuple[Optional[int], Dict[str, Any]]:
-        num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
-        if kwargs.get("retry_policy", None):
-            num_retries = get_num_retries_from_retry_policy(
-                exception=exception,
-                retry_policy=kwargs.get("retry_policy"),
-            )
-            kwargs["retry_policy"] = reset_retry_policy()
-
-        return num_retries, kwargs
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -1211,7 +1224,7 @@ def client(original_function):  # noqa: PLR0915
                     raise e
 
             call_type = original_function.__name__
-            num_retries, kwargs = _get_num_retries(kwargs=kwargs, exception=e)
+            num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict = kwargs.get(
                     "context_window_fallback_dict", {}
@@ -1488,7 +1501,7 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token
+            identifier, revision=revision, auth_token=auth_token  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -1746,9 +1759,15 @@ def supports_response_schema(
     Does not raise error. Defaults to 'False'. Outputs logging.error.
     """
     ## GET LLM PROVIDER ##
-    model, custom_llm_provider, _, _ = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    try:
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking response schema support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return False
 
     # providers that globally support response schema
     PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA = [
@@ -2781,10 +2800,25 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"Function calling is not supported by {custom_llm_provider}.",
                 )
 
-    if "response_format" in non_default_params:
-        non_default_params["response_format"] = type_to_response_format_param(
-            response_format=non_default_params["response_format"]
+    provider_config: Optional[BaseConfig] = None
+    if custom_llm_provider is not None and custom_llm_provider in [
+        provider.value for provider in LlmProviders
+    ]:
+        provider_config = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(custom_llm_provider)
         )
+
+    if "response_format" in non_default_params:
+        if provider_config is not None:
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
+            )
+        else:
+            non_default_params["response_format"] = type_to_response_format_param(
+                response_format=non_default_params["response_format"]
+            )
 
     if "tools" in non_default_params and isinstance(
         non_default_params, list
@@ -2843,13 +2877,6 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
                 )
 
-    provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
     supported_params = get_supported_openai_params(
         model=model, custom_llm_provider=custom_llm_provider
     )
@@ -4028,7 +4055,7 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
-@lru_cache(maxsize=16)
+@lru_cache_wrapper(maxsize=16)
 def _cached_get_model_info_helper(
     model: str, custom_llm_provider: Optional[str]
 ) -> ModelInfoBase:
@@ -4972,36 +4999,6 @@ def _should_retry(status_code: int):
     return False
 
 
-def type_to_response_format_param(
-    response_format: Optional[Union[Type[BaseModel], dict]],
-) -> Optional[dict]:
-    """
-    Re-implementation of openai's 'type_to_response_format_param' function
-
-    Used for converting pydantic object to api schema.
-    """
-    if response_format is None:
-        return None
-
-    if isinstance(response_format, dict):
-        return response_format
-
-    # type checkers don't narrow the negation of a `TypeGuard` as it isn't
-    # a safe default behaviour but we know that at this point the `response_format`
-    # can only be a `type`
-    if not _parsing._completions.is_basemodel_type(response_format):
-        raise TypeError(f"Unsupported response_format type - {response_format}")
-
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "schema": _pydantic.to_strict_json_schema(response_format),
-            "name": response_format.__name__,
-            "strict": True,
-        },
-    }
-
-
 def _get_retry_after_from_exception_header(
     response_headers: Optional[httpx.Headers] = None,
 ):
@@ -5256,134 +5253,6 @@ def read_config_args(config_path) -> dict:
 
 
 ########## experimental completion variants ############################
-
-
-def completion_with_fallbacks(**kwargs):
-    nested_kwargs = kwargs.pop("kwargs", {})
-    response = None
-    rate_limited_models = set()
-    model_expiration_times = {}
-    start_time = time.time()
-    original_model = kwargs["model"]
-    fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
-    if "fallbacks" in nested_kwargs:
-        del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
-    litellm_call_id = str(uuid.uuid4())
-
-    # max time to process a request with fallbacks: default 45s
-    while response is None and time.time() - start_time < 45:
-        for model in fallbacks:
-            # loop thru all models
-            try:
-                # check if it's dict or new model string
-                if isinstance(
-                    model, dict
-                ):  # completion(model="gpt-4", fallbacks=[{"api_key": "", "api_base": ""}, {"api_key": "", "api_base": ""}])
-                    kwargs["api_key"] = model.get("api_key", None)
-                    kwargs["api_base"] = model.get("api_base", None)
-                    model = model.get("model", original_model)
-                elif (
-                    model in rate_limited_models
-                ):  # check if model is currently cooling down
-                    if (
-                        model_expiration_times.get(model)
-                        and time.time() >= model_expiration_times[model]
-                    ):
-                        rate_limited_models.remove(
-                            model
-                        )  # check if it's been 60s of cool down and remove model
-                    else:
-                        continue  # skip model
-
-                # delete model from kwargs if it exists
-                if kwargs.get("model"):
-                    del kwargs["model"]
-
-                print_verbose(f"trying to make completion call with model: {model}")
-                kwargs["litellm_call_id"] = litellm_call_id
-                kwargs = {
-                    **kwargs,
-                    **nested_kwargs,
-                }  # combine the openai + litellm params at the same level
-                response = litellm.completion(**kwargs, model=model)
-                print_verbose(f"response: {response}")
-                if response is not None:
-                    return response
-
-            except Exception as e:
-                print_verbose(e)
-                rate_limited_models.add(model)
-                model_expiration_times[model] = (
-                    time.time() + 60
-                )  # cool down this selected model
-                pass
-    return response
-
-
-async def async_completion_with_fallbacks(**kwargs):
-    nested_kwargs = kwargs.pop("kwargs", {})
-    response = None
-    rate_limited_models = set()
-    model_expiration_times = {}
-    start_time = time.time()
-    original_model = kwargs["model"]
-    fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
-    if "fallbacks" in nested_kwargs:
-        del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
-    if "acompletion" in kwargs:
-        del kwargs[
-            "acompletion"
-        ]  # remove acompletion so it doesn't lead to keyword errors
-    litellm_call_id = str(uuid.uuid4())
-
-    # max time to process a request with fallbacks: default 45s
-    while response is None and time.time() - start_time < 45:
-        for model in fallbacks:
-            # loop thru all models
-            try:
-                # check if it's dict or new model string
-                if isinstance(
-                    model, dict
-                ):  # completion(model="gpt-4", fallbacks=[{"api_key": "", "api_base": ""}, {"api_key": "", "api_base": ""}])
-                    kwargs["api_key"] = model.get("api_key", None)
-                    kwargs["api_base"] = model.get("api_base", None)
-                    model = model.get("model", original_model)
-                elif (
-                    model in rate_limited_models
-                ):  # check if model is currently cooling down
-                    if (
-                        model_expiration_times.get(model)
-                        and time.time() >= model_expiration_times[model]
-                    ):
-                        rate_limited_models.remove(
-                            model
-                        )  # check if it's been 60s of cool down and remove model
-                    else:
-                        continue  # skip model
-
-                # delete model from kwargs if it exists
-                if kwargs.get("model"):
-                    del kwargs["model"]
-
-                print_verbose(f"trying to make completion call with model: {model}")
-                kwargs["litellm_call_id"] = litellm_call_id
-                kwargs = {
-                    **kwargs,
-                    **nested_kwargs,
-                }  # combine the openai + litellm params at the same level
-                response = await litellm.acompletion(**kwargs, model=model)
-                print_verbose(f"response: {response}")
-                if response is not None:
-                    return response
-
-            except Exception as e:
-                print_verbose(f"error: {e}")
-                rate_limited_models.add(model)
-                model_expiration_times[model] = (
-                    time.time() + 60
-                )  # cool down this selected model
-                pass
-    return response
 
 
 def process_system_message(system_message, max_tokens, model):

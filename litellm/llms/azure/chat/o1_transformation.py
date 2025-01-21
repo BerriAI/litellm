@@ -48,8 +48,4 @@ class AzureOpenAIO1Config(OpenAIO1Config):
         return True
 
     def is_o1_model(self, model: str) -> bool:
-        o1_models = ["o1-mini", "o1-preview"]
-        for m in o1_models:
-            if m in model:
-                return True
-        return False
+        return "o1" in model

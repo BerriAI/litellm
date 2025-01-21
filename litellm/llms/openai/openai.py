@@ -1,4 +1,5 @@
 import hashlib
+import time
 import types
 from typing import (
     Any,
@@ -358,6 +359,7 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
             else:
+
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
@@ -389,12 +391,14 @@ class OpenAIChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        start_time = time.time()
         try:
             raw_response = (
                 await openai_aclient.chat.completions.with_raw_response.create(
                     **data, timeout=timeout
                 )
             )
+            end_time = time.time()
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)
@@ -402,6 +406,11 @@ class OpenAIChatCompletion(BaseLLM):
                 headers = {}
             response = raw_response.parse()
             return headers, response
+        except openai.APITimeoutError as e:
+            end_time = time.time()
+            time_delta = round(end_time - start_time, 2)
+            e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
+            raise e
         except Exception as e:
             raise e
 
@@ -520,6 +529,7 @@ class OpenAIChatCompletion(BaseLLM):
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
+
                 if provider_config is not None:
                     data = provider_config.transform_request(
                         model=model,
@@ -724,6 +734,7 @@ class OpenAIChatCompletion(BaseLLM):
         for _ in range(
             2
         ):  # if call fails due to alternating messages, retry with reformatted message
+
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                     is_async=True,
@@ -791,9 +802,10 @@ class OpenAIChatCompletion(BaseLLM):
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
                     error_headers = getattr(exception_response, "headers", None)
+                message = getattr(e, "message", str(e))
 
                 raise OpenAIError(
-                    status_code=status_code, message=str(e), headers=error_headers
+                    status_code=status_code, message=message, headers=error_headers
                 )
 
     def streaming(

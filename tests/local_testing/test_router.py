@@ -20,7 +20,7 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
-
+from respx import MockRouter
 import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -2190,6 +2190,8 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
 
 
 def test_router_cooldown_api_connection_error():
+    from litellm.router_utils.cooldown_handlers import _is_cooldown_required
+
     try:
         _ = litellm.completion(
             model="vertex_ai/gemini-1.5-pro",
@@ -2197,8 +2199,11 @@ def test_router_cooldown_api_connection_error():
         )
     except litellm.APIConnectionError as e:
         assert (
-            Router()._is_cooldown_required(
-                model_id="", exception_status=e.code, exception_str=str(e)
+            _is_cooldown_required(
+                litellm_router_instance=Router(),
+                model_id="",
+                exception_status=e.code,
+                exception_str=str(e),
             )
             is False
         )

@@ -4,12 +4,24 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Type,
+    Union,
+)
 
 import httpx
+from pydantic import BaseModel
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
+from ..base_utils import type_to_response_format_param
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -70,6 +82,11 @@ class BaseConfig(ABC):
             )
             and v is not None
         }
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Optional[Union[Type[BaseModel], dict]]
+    ) -> Optional[dict]:
+        return type_to_response_format_param(response_format=response_format)
 
     def should_fake_stream(
         self,

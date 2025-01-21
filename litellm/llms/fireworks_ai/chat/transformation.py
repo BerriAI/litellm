@@ -143,10 +143,8 @@ class FireworksAIConfig(OpenAIGPTConfig):
         """
         disable_add_transform_inline_image_block = cast(
             Optional[bool],
-            litellm_params.get(
-                "disable_add_transform_inline_image_block",
-                litellm.disable_add_transform_inline_image_block,
-            ),
+            litellm_params.get("disable_add_transform_inline_image_block")
+            or litellm.disable_add_transform_inline_image_block,
         )
         for message in messages:
             if message["role"] == "user":

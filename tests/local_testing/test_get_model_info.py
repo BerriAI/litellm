@@ -307,3 +307,64 @@ def test_get_model_info_custom_model_router():
     info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
     print("info", info)
     assert info is not None
+
+
+def test_get_model_info_bedrock_models():
+    """
+    Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    """
+    from litellm import AmazonConverseConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for k, v in litellm.model_cost.items():
+        if v["litellm_provider"] == "bedrock":
+            k = k.replace("*/", "")
+            potential_commitments = [
+                "1-month-commitment",
+                "3-month-commitment",
+                "6-month-commitment",
+            ]
+            if any(commitment in k for commitment in potential_commitments):
+                for commitment in potential_commitments:
+                    k = k.replace(f"{commitment}/", "")
+            base_model = AmazonConverseConfig()._get_base_model(k)
+            base_model_info = litellm.model_cost[base_model]
+            for base_model_key, base_model_value in base_model_info.items():
+                if base_model_key.startswith("supports_"):
+                    assert (
+                        base_model_key in v
+                    ), f"{base_model_key} is not in model cost map for {k}"
+                    assert (
+                        v[base_model_key] == base_model_value
+                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+
+
+def test_get_model_info_huggingface_models(monkeypatch):
+    from litellm import Router
+    from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
+                "litellm_params": {
+                    "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "api_base": "https://api-inference.huggingface.co/models/meta-llama/Llama-3.3-70B-Instruct",
+                    "api_key": os.environ["HUGGINGFACE_API_KEY"],
+                },
+            }
+        ]
+    )
+    info = litellm.get_model_info("huggingface/meta-llama/Meta-Llama-3-8B-Instruct")
+    print("info", info)
+    assert info is not None
+
+    ModelGroupInfo(
+        model_group="meta-llama/Meta-Llama-3-8B-Instruct",
+        providers=["huggingface"],
+        **info,
+    )

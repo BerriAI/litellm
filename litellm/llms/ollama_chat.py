@@ -154,6 +154,8 @@ class OllamaChatConfig(OpenAIGPTConfig):
                 optional_params["stop"] = value
             if param == "response_format" and value["type"] == "json_object":
                 optional_params["format"] = "json"
+            if param == "response_format" and value["type"] == "json_schema":
+                optional_params["format"] = value["json_schema"]["schema"]
             ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 # ollama actually supports json output

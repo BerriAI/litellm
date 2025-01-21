@@ -58,6 +58,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.optional_params = kwargs
 
         super().__init__(**kwargs)
+        BaseAWSLLM.__init__(self)
 
     def convert_to_bedrock_format(
         self,

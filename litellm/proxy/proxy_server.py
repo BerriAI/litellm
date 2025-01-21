@@ -189,7 +189,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    delete_verification_token,
+    delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
 )
@@ -747,6 +747,8 @@ def get_custom_headers(
         "x-litellm-response-cost": str(response_cost),
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
+        "x-litellm-key-spend": str(user_api_key_dict.spend),
         "x-litellm-fastest_response_batch_completion": (
             str(fastest_response_batch_completion)
             if fastest_response_batch_completion is not None
@@ -3231,7 +3233,11 @@ class ProxyStartupEvent:
             )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
-            await prisma_client.health_check()
+            if (
+                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
+                is not True
+            ):
+                await prisma_client.health_check()
         return prisma_client
 
     @classmethod
@@ -3245,7 +3251,7 @@ class ProxyStartupEvent:
         if get_secret_bool("USE_DDTRACE", False) is True:
             import ddtrace
 
-            ddtrace.patch_all(logging=True)
+            ddtrace.patch_all(logging=True, openai=False)
 
 
 #### API ENDPOINTS ####

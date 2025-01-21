@@ -8,6 +8,7 @@ import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
@@ -93,6 +94,13 @@ class AnthropicConfig(BaseConfig):
             "response_format",
             "user",
         ]
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Union[Any, Dict, None]
+    ) -> Optional[dict]:
+        return type_to_response_format_param(
+            response_format, ref_template="/$defs/{model}"
+        )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
 
     def get_cache_control_headers(self) -> dict:
         return {
@@ -257,13 +265,17 @@ class AnthropicConfig(BaseConfig):
     ) -> Optional[List[str]]:
         new_stop: Optional[List[str]] = None
         if isinstance(stop, str):
-            if stop.isspace() and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+            if (
+                stop.isspace() and litellm.drop_params is True
+            ):  # anthropic doesn't allow whitespace characters as stop-sequences
                 return new_stop
             new_stop = [stop]
         elif isinstance(stop, list):
             new_v = []
             for v in stop:
-                if v.isspace() and litellm.drop_params is True:  # anthropic doesn't allow whitespace characters as stop-sequences
+                if (
+                    v.isspace() and litellm.drop_params is True
+                ):  # anthropic doesn't allow whitespace characters as stop-sequences
                     continue
                 new_v.append(v)
             if len(new_v) > 0:
@@ -664,7 +676,7 @@ class AnthropicConfig(BaseConfig):
         cache_read_input_tokens: int = 0
 
         model_response.created = int(time.time())
-        model_response.model = model
+        model_response.model = completion_response["model"]
         if "cache_creation_input_tokens" in _usage:
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
             prompt_tokens += cache_creation_input_tokens
@@ -755,7 +767,7 @@ class AnthropicConfig(BaseConfig):
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
-            is_vertex_request=False,
+            is_vertex_request=optional_params.get("is_vertex_request", False),
         )
 
         headers = {**headers, **anthropic_headers}

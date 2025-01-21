@@ -1387,7 +1387,7 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     [
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
         # ["bedrock/cohere.command-r-plus-v1:0", None],
-        # ["anthropic.claude-3-sonnet-20240229-v1:0", None],
+        ["anthropic.claude-3-sonnet-20240229-v1:0", None],
         # ["anthropic.claude-instant-v1", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],

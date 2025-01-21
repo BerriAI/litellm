@@ -1070,11 +1070,25 @@ response = completion(
 )
 ```
 
-### STS based Auth
+### STS (Role-based Auth)
 
-- Set `aws_role_name` and `aws_session_name` in completion() / embedding() function
+- Set `aws_role_name` and `aws_session_name`
+
+
+| LiteLLM Parameter | Boto3 Parameter | Description | Boto3 Documentation |
+|------------------|-----------------|-------------|-------------------|
+| `aws_access_key_id` | `aws_access_key_id` | AWS access key associated with an IAM user or role | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_secret_access_key` | `aws_secret_access_key` | AWS secret key associated with the access key | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_role_name` | `RoleArn` | The Amazon Resource Name (ARN) of the role to assume | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+| `aws_session_name` | `RoleSessionName` | An identifier for the assumed role session | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+
+
 
 Make the bedrock completion call
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import completion
 
@@ -1105,6 +1119,25 @@ response = completion(
             aws_session_name="my-test-session",
         )
 ```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      aws_role_name: arn:aws:iam::888602223428:role/iam_local_role # AWS RoleArn
+      aws_session_name: "bedrock-session" # AWS RoleSessionName
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID # [OPTIONAL - not required if using role]
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY # [OPTIONAL - not required if using role]
+```
+
+
+</TabItem>
+
+</Tabs>
 
 
 ### Passing an external BedrockRuntime.Client as a parameter - Completion()

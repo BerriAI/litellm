@@ -65,6 +65,7 @@ def mock_user_api_key_dict():
         api_key="test-key",
         user_id="test-user",
         team_id="test-team",
+        end_user_id="test-user",
     )
 
 
