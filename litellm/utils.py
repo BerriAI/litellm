@@ -2602,7 +2602,7 @@ def get_clean_extra_headers(extra_headers: dict, custom_llm_provider: str) -> di
         if k in ANTHROPIC_API_ONLY_HEADERS and custom_llm_provider != "anthropic":
             verbose_logger.debug(
                 f"Provider {custom_llm_provider} does not support {k} header. Dropping from request, to prevent errors."
-            )  # Switching between anthropic api and vertex ai anthropic might fail if anthropic-beta is passed in. Welcome feedback on this.
+            )  # Switching between anthropic api and vertex ai anthropic fails when anthropic-beta is passed in. Welcome feedback on this.
         else:
             clean_extra_headers[k] = v
     return clean_extra_headers
