@@ -159,6 +159,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             start_ns=int(start_time.timestamp() * 1e9),
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
+            tags=[
+                self._get_datadog_tags(standard_logging_object=standard_logging_payload)
+            ],
         )
 
     def _get_response_messages(self, response_obj: Any) -> List[Any]:
