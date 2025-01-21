@@ -297,51 +297,66 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       </div>
 
       {showFilters && (
-        <div className="absolute mt-2 w-[300px] bg-white rounded-lg shadow-lg border p-4 z-50">
-          <div className="flex flex-col space-y-4">
-            <Select value={filterType} onValueChange={(value) => setFilterType(value as 'user_id' | 'user_email')}>
-              <SelectItem value="">Select Filter Type</SelectItem>
-              <SelectItem value="user_id">User ID</SelectItem>
-              <SelectItem value="user_email">User Email</SelectItem>
-            </Select>
+        <div className="mb-4 bg-white rounded-lg shadow-sm border border-gray-200 p-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setFilterType('');
+                setFilterValue('');
+                setSearchTerm('');
+                setShowFilters(false);
+              }}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              ×
+            </button>
             
-            {filterType && (
-              <>
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-600">{filterType === 'user_id' ? 'User ID' : 'User Email'} equals</span>
-                  <TextInput
-                    placeholder={`Enter ${filterType === 'user_id' ? 'User ID' : 'User Email'}`}
-                    value={filterValue}
-                    onChange={(e) => setFilterValue(e.target.value)}
-                  />
-                </div>
-                <div className="flex justify-end space-x-2">
-                  <Button 
-                    onClick={() => {
-                      setSearchTerm(filterValue);
-                      setShowFilters(false);
-                      setCurrentPage(1);
-                      fetchData();
-                    }}
-                  >
-                    Apply
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setFilterType('');
-                      setFilterValue('');
-                      setSearchTerm('');
-                      setShowFilters(false);
-                      setCurrentPage(1);
-                      fetchData();
-                    }}
-                  >
-                    Reset
-                  </Button>
-                </div>
-              </>
-            )}
+            <span className="text-gray-600 text-sm">where</span>
+            
+            <div className="relative inline-block">
+              <Select 
+                value={filterType}
+                onValueChange={(value) => setFilterType(value as 'user_id' | 'user_email')}
+                className="bg-gray-50 border-0 text-sm min-w-[120px]"
+              >
+                <SelectItem value="user_id">user_id</SelectItem>
+                <SelectItem value="user_email">user_email</SelectItem>
+              </Select>
+            </div>
+            
+            <span className="text-gray-600 text-sm">equals</span>
+            
+            <TextInput
+              placeholder="Enter value..."
+              value={filterValue}
+              onChange={(e) => setFilterValue(e.target.value)}
+              className="flex-1 text-sm border-gray-200"
+            />
+            
+            <Button
+              onClick={() => {
+                setSearchTerm(filterValue);
+                setCurrentPage(1);
+                fetchData();
+              }}
+              className="text-white px-3 py-1 text-sm rounded-md"
+            >
+              Apply
+            </Button>
+            
+            <button
+              onClick={() => {
+                setFilterType('');
+                setFilterValue('');
+                setSearchTerm('');
+                setShowFilters(false);
+                setCurrentPage(1);
+                fetchData();
+              }}
+              className="text-sm text-gray-900 hover:text-gray-700"
+            >
+              Clear filters
+            </button>
           </div>
         </div>
       )}
@@ -467,3 +482,4 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 };
 
 export default ViewUserDashboard;
+
