@@ -1,7 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import copy
-import json
 import os
 import traceback
 from collections.abc import MutableMapping, MutableSequence, MutableSet
