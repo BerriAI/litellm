@@ -239,110 +239,102 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   };
 
   return (
-    <div className="w-full">
-      <h1 className="text-xl font-semibold mb-4">Users</h1>
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="border-b px-6 py-4">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative" ref={dropdownRef}>
-                <button
-                  className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                  onClick={() => setShowFilters(!showFilters)}
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
-                    />
-                  </svg>
-                  Filters
-                </button>
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+          >
+            <svg
+              className="-ml-0.5 mr-2 h-4 w-4"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+              />
+            </svg>
+            Filters
+          </button>
+          <CreateUser
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
+            possibleUIRoles={possibleUIRoles}
+          />
+        </div>
 
-                {showFilters && (
-                  <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
-                    <div className="flex flex-col space-y-4">
-                      <TextInput
-                        placeholder="Search by User ID or Email"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                      />
-                      <div className="flex space-x-2">
-                        <TextInput
-                          placeholder="Filter by Key Name"
-                          value={keyNameFilter}
-                          onChange={(e) => setKeyNameFilter(e.target.value)}
-                        />
-                        <TextInput
-                          placeholder="Filter by Team Name"
-                          value={teamNameFilter}
-                          onChange={(e) => setTeamNameFilter(e.target.value)}
-                        />
-                      </div>
-                      <div className="flex justify-end space-x-2">
-                        <Button onClick={handleSearch}>Apply</Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setSearchTerm("");
-                            setKeyNameFilter("");
-                            setTeamNameFilter("");
-                            setShowFilters(false);
-                          }}
-                        >
-                          Reset
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-              <CreateUser
-                userID={userID}
-                accessToken={accessToken}
-                teams={teams}
-                possibleUIRoles={possibleUIRoles}
+        <div className="flex items-center space-x-4 text-sm text-gray-600">
+          <span>
+            Showing {((currentPage - 1) * defaultPageSize) + 1} - {Math.min(currentPage * defaultPageSize, userListResponse?.total || 0)} of {userListResponse?.total || 0} results
+          </span>
+          <div className="flex items-center space-x-2">
+            <span>Page {currentPage} of {userListResponse?.total_pages || 1}</span>
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(userListResponse?.total_pages || 1, p + 1))}
+              disabled={currentPage === (userListResponse?.total_pages || 1)}
+              className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {showFilters && (
+        <div className="absolute mt-2 w-[300px] bg-white rounded-lg shadow-lg border p-4 z-50">
+          <div className="flex flex-col space-y-4">
+            <TextInput
+              placeholder="Search by User ID or Email"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <div className="flex flex-col space-y-2">
+              <TextInput
+                placeholder="Filter by Key Name"
+                value={keyNameFilter}
+                onChange={(e) => setKeyNameFilter(e.target.value)}
+              />
+              <TextInput
+                placeholder="Filter by Team Name"
+                value={teamNameFilter}
+                onChange={(e) => setTeamNameFilter(e.target.value)}
               />
             </div>
-
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">
-                Showing {((currentPage - 1) * defaultPageSize) + 1} -{" "}
-                {Math.min(currentPage * defaultPageSize, userListResponse?.total || 0)} of{" "}
-                {userListResponse?.total || 0} results
-              </span>
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-gray-700">
-                  Page {currentPage} of {userListResponse?.total_pages || 1}
-                </span>
-                <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setCurrentPage((p) => Math.min(userListResponse?.total_pages || 1, p + 1))}
-                  disabled={currentPage === (userListResponse?.total_pages || 1)}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
+            <div className="flex justify-end space-x-2">
+              <Button onClick={handleSearch}>Apply</Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setSearchTerm("");
+                  setKeyNameFilter("");
+                  setTeamNameFilter("");
+                  setShowFilters(false);
+                }}
+              >
+                Reset
+              </Button>
             </div>
           </div>
         </div>
+      )}
 
-        <Card className="w-full mx-auto">
-          <Table className="mt-5">
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="overflow-x-auto">
+          <Table>
             <TableHead>
               <TableRow>
                 <TableHeaderCell>User ID</TableHeaderCell>
@@ -357,7 +349,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             <TableBody>
               {userData.map((user: any) => (
                 <TableRow key={user.user_id}>
-                  <TableCell>{user.user_id || "-"}</TableCell>
+                  <TableCell className="max-w-[200px] truncate">
+                    {user.user_id || "-"}
+                  </TableCell>
                   <TableCell>{user.user_email || "-"}</TableCell>
                   <TableCell>
                     {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
@@ -369,93 +363,91 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     {user.max_budget !== null ? user.max_budget : "Unlimited"}
                   </TableCell>
                   <TableCell>
-                    <Grid numItems={2}>
-                      {user.key_count > 0 ? (
-                        <Badge size={"xs"} color={"indigo"}>
-                          {user.key_count} Keys
-                        </Badge>
-                      ) : (
-                        <Badge size={"xs"} color={"gray"}>
-                          No Keys
-                        </Badge>
-                      )}
-                    </Grid>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${user.key_count > 0 ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {user.key_count > 0 ? `${user.key_count} Keys` : "No Keys"}
+                    </span>
                   </TableCell>
                   <TableCell>
-                    <Icon
-                      icon={PencilAltIcon}
-                      onClick={() => {
-                        setSelectedUser(user);
-                        setEditModalVisible(true);
-                      }}
-                      className="cursor-pointer mr-2"
-                    />
-                    <Icon
-                      icon={TrashIcon}
-                      onClick={() => handleDelete(user.user_id)}
-                      className="cursor-pointer"
-                    />
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => {
+                          setSelectedUser(user);
+                          setEditModalVisible(true);
+                        }}
+                        className="text-gray-600 hover:text-gray-900"
+                      >
+                        <PencilAltIcon className="h-5 w-5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(user.user_id)}
+                        className="text-gray-600 hover:text-gray-900"
+                      >
+                        <TrashIcon className="h-5 w-5" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
-          <EditUserModal
-            visible={editModalVisible}
-            possibleUIRoles={possibleUIRoles}
-            onCancel={handleEditCancel}
-            user={selectedUser}
-            onSubmit={handleEditSubmit}
-          />
-          {isDeleteModalOpen && (
-            <div className="fixed z-10 inset-0 overflow-y-auto">
-              <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                <div
-                  className="fixed inset-0 transition-opacity"
-                  aria-hidden="true"
-                >
-                  <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-                </div>
+        </div>
+      </div>
 
-                {/* Modal Panel */}
-                <span
-                  className="hidden sm:inline-block sm:align-middle sm:h-screen"
-                  aria-hidden="true"
-                >
-                  &#8203;
-                </span>
+      <EditUserModal
+        visible={editModalVisible}
+        possibleUIRoles={possibleUIRoles}
+        onCancel={handleEditCancel}
+        user={selectedUser}
+        onSubmit={handleEditSubmit}
+      />
+      
+      {isDeleteModalOpen && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 transition-opacity"
+              aria-hidden="true"
+            >
+              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+            </div>
 
-                {/* Confirmation Modal Content */}
-                <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                  <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                    <div className="sm:flex sm:items-start">
-                      <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                        <h3 className="text-lg leading-6 font-medium text-gray-900">
-                          Delete User
-                        </h3>
-                        <div className="mt-2">
-                          <p className="text-sm text-gray-500">
-                            Are you sure you want to delete this user?
-                          </p>
-                          <p className="text-sm font-medium text-gray-900 mt-2">
-                            User ID: {userToDelete}
-                          </p>
-                        </div>
-                      </div>
+            {/* Modal Panel */}
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
+
+            {/* Confirmation Modal Content */}
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="sm:flex sm:items-start">
+                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">
+                      Delete User
+                    </h3>
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-500">
+                        Are you sure you want to delete this user?
+                      </p>
+                      <p className="text-sm font-medium text-gray-900 mt-2">
+                        User ID: {userToDelete}
+                      </p>
                     </div>
-                  </div>
-                  <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                    <Button onClick={confirmDelete} color="red" className="ml-2">
-                      Delete
-                    </Button>
-                    <Button onClick={cancelDelete}>Cancel</Button>
                   </div>
                 </div>
               </div>
+              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <Button onClick={confirmDelete} color="red" className="ml-2">
+                  Delete
+                </Button>
+                <Button onClick={cancelDelete}>Cancel</Button>
+              </div>
             </div>
-          )}
-        </Card>
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
