@@ -18,6 +18,7 @@ import litellm
     [
         "bedrock/mistral.mistral-7b-instruct-v0:2",
         "openai/gpt-4o",
+        "openai/self_hosted",
         "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
     ],
 )
@@ -25,10 +26,17 @@ async def test_litellm_overhead(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
-    response = await litellm.acompletion(
-        model=model,
-        messages=[{"role": "user", "content": "Hello, world!"}],
-    )
+    if model == "openai/self_hosted":
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        )
+    else:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
     end_time = datetime.now()
     total_time_ms = (end_time - start_time).total_seconds() * 1000
     print(response)
@@ -60,17 +68,26 @@ async def test_litellm_overhead(model):
         "bedrock/mistral.mistral-7b-instruct-v0:2",
         "openai/gpt-4o",
         "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        "openai/self_hosted",
     ],
 )
 async def test_litellm_overhead_stream(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
-    response = await litellm.acompletion(
-        model=model,
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        stream=True,
-    )
+    if model == "openai/self_hosted":
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+            stream=True,
+        )
+    else:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            stream=True,
+        )
 
     async for chunk in response:
         print()
