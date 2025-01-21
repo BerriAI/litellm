@@ -737,7 +737,11 @@ class LangFuseLogger:
     def _get_langfuse_tags(
         standard_logging_object: StandardLoggingPayload,
     ) -> List[str]:
-        return standard_logging_object.get("request", {})
+        return (
+            standard_logging_object.get("request", {})
+            .get("metadata", {})
+            .get("tags", [])
+        )
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
         """
