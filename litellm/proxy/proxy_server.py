@@ -274,6 +274,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
@@ -6510,6 +6511,47 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
+def _get_proxy_model_info(model: dict) -> dict:
+    # provided model_info in config.yaml
+    model_info = model.get("model_info", {})
+
+    # read litellm model_prices_and_context_window.json to get the following:
+    # input_cost_per_token, output_cost_per_token, max_tokens
+    litellm_model_info = get_litellm_model_info(model=model)
+
+    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
+    if litellm_model_info == {}:
+        # use litellm_param model_name to get model_info
+        litellm_params = model.get("litellm_params", {})
+        litellm_model = litellm_params.get("model", None)
+        try:
+            litellm_model_info = litellm.get_model_info(model=litellm_model)
+        except Exception:
+            litellm_model_info = {}
+    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
+    if litellm_model_info == {}:
+        # use litellm_param model_name to get model_info
+        litellm_params = model.get("litellm_params", {})
+        litellm_model = litellm_params.get("model", None)
+        split_model = litellm_model.split("/")
+        if len(split_model) > 0:
+            litellm_model = split_model[-1]
+        try:
+            litellm_model_info = litellm.get_model_info(
+                model=litellm_model, custom_llm_provider=split_model[0]
+            )
+        except Exception:
+            litellm_model_info = {}
+    for k, v in litellm_model_info.items():
+        if k not in model_info:
+            model_info[k] = v
+    model["model_info"] = model_info
+    # don't return the llm credentials
+    model = remove_sensitive_info_from_deployment(deployment_dict=model)
+
+    return model
+
+
 @router.get(
     "/model/info",
     tags=["model management"],
@@ -6598,16 +6640,15 @@ async def model_info_v1(  # noqa: PLR0915
         deployment_info = llm_router.get_deployment(model_id=litellm_model_id)
         if deployment_info is None:
             raise HTTPException(
-                status_code=404,
+                status_code=400,
                 detail={
                     "error": f"Model id = {litellm_model_id} not found on litellm proxy"
                 },
             )
-        _deployment_info_dict = deployment_info.model_dump()
-        _deployment_info_dict = remove_sensitive_info_from_deployment(
-            deployment_dict=_deployment_info_dict
+        _deployment_info_dict = _get_proxy_model_info(
+            model=deployment_info.model_dump(exclude_none=True)
         )
-        return {"data": _deployment_info_dict}
+        return {"data": [_deployment_info_dict]}
 
     all_models: List[dict] = []
     model_access_groups: Dict[str, List[str]] = defaultdict(list)
@@ -6647,42 +6688,7 @@ async def model_info_v1(  # noqa: PLR0915
             all_models = []
 
     for model in all_models:
-        # provided model_info in config.yaml
-        model_info = model.get("model_info", {})
-
-        # read litellm model_prices_and_context_window.json to get the following:
-        # input_cost_per_token, output_cost_per_token, max_tokens
-        litellm_model_info = get_litellm_model_info(model=model)
-
-        # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-        if litellm_model_info == {}:
-            # use litellm_param model_name to get model_info
-            litellm_params = model.get("litellm_params", {})
-            litellm_model = litellm_params.get("model", None)
-            try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except Exception:
-                litellm_model_info = {}
-        # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-        if litellm_model_info == {}:
-            # use litellm_param model_name to get model_info
-            litellm_params = model.get("litellm_params", {})
-            litellm_model = litellm_params.get("model", None)
-            split_model = litellm_model.split("/")
-            if len(split_model) > 0:
-                litellm_model = split_model[-1]
-            try:
-                litellm_model_info = litellm.get_model_info(
-                    model=litellm_model, custom_llm_provider=split_model[0]
-                )
-            except Exception:
-                litellm_model_info = {}
-        for k, v in litellm_model_info.items():
-            if k not in model_info:
-                model_info[k] = v
-        model["model_info"] = model_info
-        # don't return the llm credentials
-        model = remove_sensitive_info_from_deployment(deployment_dict=model)
+        model = _get_proxy_model_info(model=model)
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
