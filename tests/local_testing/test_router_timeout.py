@@ -186,3 +186,76 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
             pass
 
         assert mock_client.call_count == expected_call_count
+
+
+def test_router_stream_timeout():
+    import os
+    from dotenv import load_dotenv
+    import litellm
+    from litellm.router import Router, RetryPolicy, AllowedFailsPolicy
+
+    load_dotenv()
+
+    litellm.set_verbose = True
+    # os.environ['LITELLM_LOG'] = 'DEBUG' # setting this doesn't seem to give me debug logs, which is another strange thing. I need to use the set_verbose=True to see debug logs.
+
+    model_list = [
+        {
+            "model_name": "llama3",
+            "litellm_params": {
+                "model": "watsonx/meta-llama/llama-3-1-8b-instruct",
+                "api_base": os.getenv("WATSONX_URL_US_SOUTH"),
+                "api_key": os.getenv("WATSONX_API_KEY"),
+                "project_id": os.getenv("WATSONX_PROJECT_ID_US_SOUTH"),
+                "timeout": 0.01,
+                "stream_timeout": 0.0000001,
+            },
+        },
+        {
+            "model_name": "llama3-fallback",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+        },
+    ]
+
+    # Initialize router with retry and timeout settings
+    router = Router(
+        model_list=model_list,
+        fallbacks=[{"llama3": ["llama3-fallback"]}],
+        routing_strategy="latency-based-routing",  # 👈 set routing strategy
+        retry_policy=RetryPolicy(
+            TimeoutErrorRetries=1,  # Number of retries for timeout errors
+            RateLimitErrorRetries=3,
+            BadRequestErrorRetries=2,
+        ),
+        allowed_fails_policy=AllowedFailsPolicy(
+            TimeoutErrorAllowedFails=2,  # Number of timeouts allowed before cooldown
+            RateLimitErrorAllowedFails=2,
+        ),
+        cooldown_time=120,  # Cooldown time in seconds,
+        set_verbose=True,
+        routing_strategy_args={"lowest_latency_buffer": 0.5},
+    )
+
+    print("this fall back does NOT work:")
+    response = router.completion(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "write a 100 word story about a cat"},
+        ],
+        temperature=0.6,
+        max_tokens=500,
+        stream=True,
+    )
+
+    t = 0
+    for chunk in response:
+        assert "llama" not in chunk.model
+        chunk_text = chunk.choices[0].delta.content or ""
+        print(chunk_text)
+        t += 1
+        if t > 10:
+            break
