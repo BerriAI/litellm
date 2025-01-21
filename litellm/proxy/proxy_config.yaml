@@ -3,14 +3,10 @@ model_list:
     litellm_params:
       model:  openai/*
       api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      health_check_model: openai/gpt-4o-mini
-  - model_name: anthropic/*
+  - model_name: text-embedding-ada-002
     litellm_params:
-      model: anthropic/*
-      api_key: os.environ/ANTHROPIC_API_KEY
-    model_info:
-      health_check_model: anthropic/claude-3-5-sonnet-20240620
+      model: openai/text-embedding-ada-002
+      api_key: os.environ/OPENAI_API_KEY
   - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
