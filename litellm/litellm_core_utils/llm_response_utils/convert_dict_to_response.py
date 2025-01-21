@@ -417,6 +417,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
+                        reasoning_content=choice["message"].get(
+                            "reasoning_content", None
+                        ),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

@@ -438,6 +438,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    reasoning_content: Optional[str] = None
 
     def __init__(
         self,
@@ -446,6 +447,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        reasoning_content: Optional[str] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -466,6 +468,7 @@ class Message(OpenAIObject):
                 if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
+            "reasoning_content": reasoning_content,
         }
 
         if audio is not None:
