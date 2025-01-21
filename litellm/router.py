@@ -177,6 +177,7 @@ class Router:
             int
         ] = None,  # max fallbacks to try before exiting the call. Defaults to 5.
         timeout: Optional[float] = None,
+        stream_timeout: Optional[float] = None,
         default_litellm_params: Optional[
             dict
         ] = None,  # default params for Router.chat.completion.create
@@ -402,6 +403,7 @@ class Router:
             self.max_fallbacks = litellm.ROUTER_MAX_FALLBACKS
 
         self.timeout = timeout or litellm.request_timeout
+        self.stream_timeout = stream_timeout
 
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
@@ -1045,8 +1047,23 @@ class Router:
 
         return model_client
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
-        """Helper to get timeout from kwargs or deployment params"""
+    def _get_stream_timeout(
+        self, kwargs: dict, data: dict
+    ) -> Optional[Union[float, int]]:
+        """Helper to get stream timeout from kwargs or deployment params"""
+        return (
+            kwargs.get("stream_timeout", None)  # the params dynamically set by user
+            or data.get(
+                "stream_timeout", None
+            )  # timeout set on litellm_params for this deployment
+            or self.stream_timeout  # timeout set on router
+            or self.default_litellm_params.get("stream_timeout", None)
+        )
+
+    def _get_non_stream_timeout(
+        self, kwargs: dict, data: dict
+    ) -> Optional[Union[float, int]]:
+        """Helper to get non-stream timeout from kwargs or deployment params"""
         timeout = (
             kwargs.get("timeout", None)  # the params dynamically set by user
             or kwargs.get("request_timeout", None)  # the params dynamically set by user
@@ -1059,7 +1076,17 @@ class Router:
             or self.timeout  # timeout set on router
             or self.default_litellm_params.get("timeout", None)
         )
+        return timeout
 
+    def _get_timeout(self, kwargs: dict, data: dict) -> Optional[Union[float, int]]:
+        """Helper to get timeout from kwargs or deployment params"""
+        timeout: Optional[Union[float, int]] = None
+        if kwargs.get("stream", False):
+            timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
+        if timeout is None:
+            timeout = self._get_non_stream_timeout(
+                kwargs=kwargs, data=data
+            )  # default to this if no stream specific timeout set
         return timeout
 
     async def abatch_completion(
@@ -3073,6 +3100,7 @@ class Router:
                 deployment_num_retries, int
             ):
                 num_retries = deployment_num_retries
+
             """
             Retry Logic
             """
@@ -3119,6 +3147,7 @@ class Router:
             )
 
             await asyncio.sleep(retry_after)
+
             for current_attempt in range(num_retries):
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop

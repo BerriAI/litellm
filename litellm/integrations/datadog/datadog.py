@@ -274,7 +274,9 @@ class DataDogLogger(CustomBatchLogger):
 
         dd_payload = DatadogPayload(
             ddsource=self._get_datadog_source(),
-            ddtags=self._get_datadog_tags(),
+            ddtags=self._get_datadog_tags(
+                standard_logging_object=standard_logging_object
+            ),
             hostname=self._get_datadog_hostname(),
             message=json_payload,
             service=self._get_datadog_service(),
@@ -444,8 +446,33 @@ class DataDogLogger(CustomBatchLogger):
         return dd_payload
 
     @staticmethod
-    def _get_datadog_tags():
-        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')},HOSTNAME:{DataDogLogger._get_datadog_hostname()},POD_NAME:{os.getenv('POD_NAME', 'unknown')}"
+    def _get_datadog_tags(
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> str:
+        """
+        Get the datadog tags for the request
+
+        DD tags need to be as follows:
+            - tags: ["user_handle:dog@gmail.com", "app_version:1.0.0"]
+        """
+        base_tags = {
+            "env": os.getenv("DD_ENV", "unknown"),
+            "service": os.getenv("DD_SERVICE", "litellm"),
+            "version": os.getenv("DD_VERSION", "unknown"),
+            "HOSTNAME": DataDogLogger._get_datadog_hostname(),
+            "POD_NAME": os.getenv("POD_NAME", "unknown"),
+        }
+
+        tags = [f"{k}:{v}" for k, v in base_tags.items()]
+
+        if standard_logging_object:
+            _request_tags: List[str] = (
+                standard_logging_object.get("request_tags", []) or []
+            )
+            request_tags = [f"request_tag:{tag}" for tag in _request_tags]
+            tags.extend(request_tags)
+
+        return ",".join(tags)
 
     @staticmethod
     def _get_datadog_source():

@@ -73,11 +73,14 @@ def make_sync_call(
     logging_obj,
     streaming_decoder: Optional[CustomStreamingDecoder] = None,
     fake_stream: bool = False,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     if client is None:
         client = litellm.module_level_client  # Create a new client if none provided
 
-    response = client.post(api_base, headers=headers, data=data, stream=not fake_stream)
+    response = client.post(
+        api_base, headers=headers, data=data, stream=not fake_stream, timeout=timeout
+    )
 
     if response.status_code != 200:
         raise OpenAILikeError(status_code=response.status_code, message=response.read())
@@ -352,6 +355,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     logging_obj=logging_obj,
                     streaming_decoder=streaming_decoder,
                     fake_stream=fake_stream,
+                    timeout=timeout,
                 )
                 # completion_stream.__iter__()
                 return CustomStreamWrapper(
