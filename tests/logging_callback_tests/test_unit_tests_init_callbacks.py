@@ -295,11 +295,21 @@ def test_dynamic_logging_global_callback():
 
 
 def test_get_combined_callback_list():
-    from litellm.litellm_core_utils.litellm_logging import get_combined_callback_list
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    assert "langfuse" in get_combined_callback_list(
+    _logging = LiteLLMLoggingObj(
+        model="claude-3-opus-20240229",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="123",
+        function_id="456",
+    )
+
+    assert "langfuse" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )
-    assert "lago" in get_combined_callback_list(
+    assert "lago" in _logging.get_combined_callback_list(
         dynamic_success_callbacks=["langfuse"], global_callbacks=["lago"]
     )

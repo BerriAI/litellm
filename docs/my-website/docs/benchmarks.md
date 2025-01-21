@@ -5,25 +5,39 @@ import Image from '@theme/IdealImage';
 
 Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.
 
-## 1 Instance LiteLLM Proxy
+Use this config for testing:
 
+**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `aiohttp_openai/` provider for load testing.
+
+```yaml
+model_list:
+  - model_name: "fake-openai-endpoint"
+    litellm_params:
+      model: aiohttp_openai/any
+      api_base: https://your-fake-openai-endpoint.com/chat/completions
+      api_key: "test"
+```
+
+### 1 Instance LiteLLM Proxy
+
+In these tests the median latency of directly calling the fake-openai-endpoint is 60ms.
 
 | Metric | Litellm Proxy (1 Instance) |
 |--------|------------------------|
-| Median Latency (ms) | 110 |
-| RPS | 68.2 |
+| RPS | 475 |
+| Median Latency (ms) | 100 |
+| Latency overhead added by LiteLLM Proxy | 40ms |
 
-<Image img={require('../img/1_instance_proxy.png')} />
+<!-- <Image img={require('../img/1_instance_proxy.png')} /> -->
 
-## **Horizontal Scaling - 10K RPS**
+<!-- ## **Horizontal Scaling - 10K RPS**
 
-<Image img={require('../img/instances_vs_rps.png')} />
+<Image img={require('../img/instances_vs_rps.png')} /> -->
 
 #### Key Findings
-- Single instance: 68.2 RPS @ 100ms latency
-- 10 instances: 4.3% efficiency loss (653 RPS vs expected 682 RPS), latency stable at `100ms`
-- For 10,000 RPS: Need ~154 instances @ 95.7% efficiency, `100ms latency`
-
+- Single instance: 475 RPS @ 100ms latency
+- 2 LiteLLM instances: 950 RPS @ 100ms latency
+- 4 LiteLLM instances: 1900 RPS @ 100ms latency
 
 ### 2 Instances
 
@@ -32,20 +46,16 @@ Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpo
 | Metric | Litellm Proxy (2 Instances) |
 |--------|------------------------|
 | Median Latency (ms) | 100 |
-| RPS | 142 |
+| RPS | 950 |
 
 
-<Image img={require('../img/2_instance_proxy.png')} />
+## Machine Spec used for testing
 
+Each machine deploying LiteLLM had the following specs:
 
-### 10 Instances
+- 2 CPU
+- 4GB RAM
 
-| Metric | Litellm Proxy (10 Instances) |
-|--------|------------------------|
-| Median Latency (ms) | 110 |
-| RPS | 653 |
-
-<Image img={require('../img/10_instance_proxy.png')} />
 
 
 ## Logging Callbacks

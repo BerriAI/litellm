@@ -2379,3 +2379,53 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         transformed_request[
             "inputImage"
         ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+
+
+def test_process_bedrock_converse_image_block():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _process_bedrock_converse_image_block,
+    )
+
+    block = _process_bedrock_converse_image_block(
+        image_url="data:text/plain;base64,base64file"
+    )
+
+    assert block["document"] is not None
+
+
+@pytest.mark.asyncio
+async def test_bedrock_image_url_sync_client():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    import logging
+    from litellm import verbose_logger
+
+    verbose_logger.setLevel(level=logging.DEBUG)
+
+    litellm._turn_on_debug()
+    client = AsyncHTTPHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                    },
+                },
+            ],
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            await litellm.acompletion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()

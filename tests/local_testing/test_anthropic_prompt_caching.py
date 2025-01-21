@@ -24,6 +24,7 @@ import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from test_amazing_vertex_completion import load_vertex_ai_credentials
 
 # litellm.num_retries =3
 litellm.cache = None
@@ -202,6 +203,28 @@ def anthropic_messages():
             ],
         },
     ]
+
+
+def test_anthropic_vertex_ai_prompt_caching(anthropic_messages):
+    litellm._turn_on_debug()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    load_vertex_ai_credentials()
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            response = completion(
+                model="vertex_ai/claude-3-5-sonnet-v2@20241022 ",
+                messages=anthropic_messages,
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["headers"])
+        assert "anthropic-beta" not in mock_post.call_args.kwargs["headers"]
 
 
 @pytest.mark.asyncio()

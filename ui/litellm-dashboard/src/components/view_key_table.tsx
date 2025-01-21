@@ -131,6 +131,57 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
 
+  // Function to check if user is admin of a team
+  const isUserTeamAdmin = (team: any) => {
+    if (!team.members_with_roles) return false;
+    return team.members_with_roles.some(
+      (member: any) => member.role === "admin" && member.user_id === userID
+    );
+  };
+
+  // Combine all keys that user should have access to
+  const all_keys_to_display = React.useMemo(() => {
+    let allKeys: any[] = [];
+
+    // If no teams, return personal keys
+    if (!teams || teams.length === 0) {
+      return data;
+    }
+
+    teams.forEach(team => {
+      // For default team or when user is not admin, use personal keys (data)
+      if (team.team_id === "default-team" || !isUserTeamAdmin(team)) {
+        if (selectedTeam && selectedTeam.team_id === team.team_id && data) {
+          allKeys = [...allKeys, ...data.filter(key => key.team_id === team.team_id)];
+        }
+      }
+      // For teams where user is admin, use team keys
+      else if (isUserTeamAdmin(team)) {
+        if (selectedTeam && selectedTeam.team_id === team.team_id) {
+          allKeys = [...allKeys, ...(team.keys || [])];
+        }
+      }
+    });
+
+    // If no team is selected, show all accessible keys
+    if (!selectedTeam && data) {
+      const personalKeys = data.filter(key => !key.team_id || key.team_id === "default-team");
+      const adminTeamKeys = teams
+        .filter(team => isUserTeamAdmin(team))
+        .flatMap(team => team.keys || []);
+      allKeys = [...personalKeys, ...adminTeamKeys];
+    }
+
+    // Filter out litellm-dashboard keys
+    allKeys = allKeys.filter(key => key.team_id !== "litellm-dashboard");
+
+    // Remove duplicates based on token
+    const uniqueKeys = Array.from(
+      new Map(allKeys.map(key => [key.token, key])).values()
+    );
+
+    return uniqueKeys;
+  }, [data, teams, selectedTeam, userID]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
@@ -443,7 +494,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 className="mt-8"
                 label="RPM Limit (requests per minute)" 
                 name="rpm_limit" 
-                help={`rpm_limit cannot exceed team max tpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
+                help={`rpm_limit cannot exceed team max rpm_limit: ${keyTeam?.rpm_limit !== null && keyTeam?.rpm_limit !== undefined ? keyTeam?.rpm_limit : 'unlimited'}`}
                 rules={[
                   {
                       validator: async (_, value) => {
@@ -858,7 +909,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           </TableRow>
         </TableHead>
         <TableBody>
-          {data.map((item) => {
+          {all_keys_to_display && all_keys_to_display.map((item) => {
             console.log(item);
             // skip item if item.team_id == "litellm-dashboard"
             if (item.team_id === "litellm-dashboard") {

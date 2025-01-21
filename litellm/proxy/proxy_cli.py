@@ -68,7 +68,7 @@ def is_port_in_use(port):
 @click.option(
     "--num_workers",
     default=1,
-    help="Number of gunicorn workers to spin up",
+    help="Number of uvicorn / gunicorn workers to spin up. By default, 1 uvicorn is used.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -653,7 +653,7 @@ def run_server(  # noqa: PLR0915
         from litellm.proxy.proxy_server import app  # noqa
 
         uvicorn_args = {
-            "app": app,
+            "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
         }
@@ -671,7 +671,11 @@ def run_server(  # noqa: PLR0915
                 )
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path
-            uvicorn.run(**uvicorn_args)
+            uvicorn.run(
+                **uvicorn_args,
+                loop="uvloop",
+                workers=num_workers,
+            )
         elif run_gunicorn is True:
             # Gunicorn Application Class
             class StandaloneApplication(gunicorn.app.base.BaseApplication):

@@ -1107,6 +1107,29 @@ def test_proxy_config_state_post_init_callback_call():
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
 
 
+def test_proxy_config_state_get_config_state_error():
+    """
+    Ensures that get_config_state does not raise an error when the config is not a valid dictionary
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    import threading
+
+    test_config = {
+        "callback_list": [
+            {
+                "lock": threading.RLock(),  # This will cause the deep copy to fail
+                "name": "test_callback",
+            }
+        ],
+        "model_list": ["gpt-4", "claude-3"],
+    }
+
+    pc = ProxyConfig()
+    pc.config = test_config
+    config = pc.get_config_state()
+    assert config == {}
+
+
 @pytest.mark.parametrize(
     "associated_budget_table, expected_user_api_key_auth_key, expected_user_api_key_auth_value",
     [
@@ -1327,3 +1350,132 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         # Verify the result structure
         assert isinstance(result, UserInfoResponse)
         assert len(result.keys) == 2
+
+
+def test_custom_openid_response():
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+    from litellm.proxy.management_endpoints.ui_sso import JWTHandler
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.caching import DualCache
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client={},
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="department",
+        ),
+    )
+    response = {
+        "sub": "3f196e06-7484-451e-be5a-ea6c6bb86c5b",
+        "email_verified": True,
+        "name": "Krish Dholakia",
+        "preferred_username": "krrishd",
+        "given_name": "Krish",
+        "department": ["/test-group"],
+        "family_name": "Dholakia",
+        "email": "krrishdholakia@gmail.com",
+    }
+
+    resp = generic_response_convertor(
+        response=response,
+        jwt_handler=jwt_handler,
+    )
+    assert resp.team_ids == ["/test-group"]
+
+
+def test_update_key_request_validation():
+    """
+    Ensures that the UpdateKeyRequest model validates the temp_budget_increase and temp_budget_expiry fields together
+    """
+    from litellm.proxy._types import UpdateKeyRequest
+
+    with pytest.raises(Exception):
+        UpdateKeyRequest(
+            key="test_key",
+            temp_budget_increase=100,
+        )
+
+    with pytest.raises(Exception):
+        UpdateKeyRequest(
+            key="test_key",
+            temp_budget_expiry="2024-01-20T00:00:00Z",
+        )
+
+    UpdateKeyRequest(
+        key="test_key",
+        temp_budget_increase=100,
+        temp_budget_expiry="2024-01-20T00:00:00Z",
+    )
+
+
+def test_get_temp_budget_increase():
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+    from litellm.proxy._types import UserAPIKeyAuth
+    from datetime import datetime, timedelta
+
+    expiry = datetime.now() + timedelta(days=1)
+    expiry_in_isoformat = expiry.isoformat()
+
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": expiry_in_isoformat,
+        },
+    )
+    assert _get_temp_budget_increase(valid_token) == 100
+
+
+def test_update_key_budget_with_temp_budget_increase():
+    from litellm.proxy.auth.user_api_key_auth import (
+        _update_key_budget_with_temp_budget_increase,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from datetime import datetime, timedelta
+
+    expiry = datetime.now() + timedelta(days=1)
+    expiry_in_isoformat = expiry.isoformat()
+
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": expiry_in_isoformat,
+        },
+    )
+    assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
+
+
+from unittest.mock import MagicMock, AsyncMock
+
+
+@pytest.mark.asyncio
+async def test_health_check_not_called_when_disabled(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Mock environment variable
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "true")
+
+    # Create mock prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.connect = AsyncMock()
+    mock_prisma.health_check = AsyncMock()
+    mock_prisma.check_view_exists = AsyncMock()
+    mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    # Mock PrismaClient constructor
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.PrismaClient", lambda **kwargs: mock_prisma
+    )
+
+    # Call the setup function
+    await ProxyStartupEvent._setup_prisma_client(
+        database_url="mock_url",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    # Verify health check wasn't called
+    mock_prisma.health_check.assert_not_called()

@@ -189,7 +189,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    delete_verification_token,
+    delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
 )
@@ -204,6 +204,9 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import update_team
+from litellm.proxy.management_endpoints.ui_sso import (
+    get_disabled_non_admin_personal_key_creation,
+)
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -744,6 +747,8 @@ def get_custom_headers(
         "x-litellm-response-cost": str(response_cost),
         "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
+        "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
+        "x-litellm-key-spend": str(user_api_key_dict.spend),
         "x-litellm-fastest_response_batch_completion": (
             str(fastest_response_batch_completion)
             if fastest_response_batch_completion is not None
@@ -1650,7 +1655,15 @@ class ProxyConfig:
 
         Do this, to avoid mutating the config state outside of allowed methods
         """
-        return copy.deepcopy(self.config)
+        try:
+            return copy.deepcopy(self.config)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "ProxyConfig:get_config_state(): Error returning copy of config state. self.config={}\nError: {}".format(
+                    self.config, e
+                )
+            )
+            return {}
 
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
@@ -2562,7 +2575,6 @@ class ProxyConfig:
         for response in responses:
             if response is not None:
                 param_name = getattr(response, "param_name", None)
-                verbose_proxy_logger.info(f"loading {param_name} settings from db")
                 if param_name == "litellm_settings":
                     verbose_proxy_logger.info(
                         f"litellm_settings: {response.param_value}"
@@ -3221,7 +3233,11 @@ class ProxyStartupEvent:
             )  # set the spend logs row count in proxy state. Don't block execution
 
             # run a health check to ensure the DB is ready
-            await prisma_client.health_check()
+            if (
+                get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False)
+                is not True
+            ):
+                await prisma_client.health_check()
         return prisma_client
 
     @classmethod
@@ -3235,7 +3251,7 @@ class ProxyStartupEvent:
         if get_secret_bool("USE_DDTRACE", False) is True:
             import ddtrace
 
-            ddtrace.patch_all(logging=True)
+            ddtrace.patch_all(logging=True, openai=False)
 
 
 #### API ENDPOINTS ####
@@ -4387,6 +4403,7 @@ from litellm import _arealtime
 
 
 @app.websocket("/v1/realtime")
+@app.websocket("/realtime")
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str,
@@ -5606,6 +5623,7 @@ async def token_counter(request: TokenCountRequest):
     _tokenizer_used = litellm.utils._select_tokenizer(
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
+
     tokenizer_used = str(_tokenizer_used["type"])
     total_tokens = token_counter(
         model=model_to_use,
@@ -7294,6 +7312,9 @@ async def login(request: Request):  # noqa: PLR0915
         _user_row = await prisma_client.db.litellm_usertable.find_first(
             where={"user_email": {"equals": username}}
         )
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
     """
     To login to Admin UI, we support the following 
     - Login with UI_USERNAME and UI_PASSWORD
@@ -7365,6 +7386,7 @@ async def login(request: Request):  # noqa: PLR0915
                 "auth_header_name": general_settings.get(
                     "litellm_key_header_name", "Authorization"
                 ),
+                "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
             },
             master_key,
             algorithm="HS256",
@@ -7432,6 +7454,7 @@ async def login(request: Request):  # noqa: PLR0915
                     "auth_header_name": general_settings.get(
                         "litellm_key_header_name", "Authorization"
                     ),
+                    "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
                 },
                 master_key,
                 algorithm="HS256",
@@ -7546,6 +7569,10 @@ async def onboarding(invite_link: str):
         litellm_dashboard_ui += "/ui/onboarding"
     import jwt
 
+    disabled_non_admin_personal_key_creation = (
+        get_disabled_non_admin_personal_key_creation()
+    )
+
     jwt_token = jwt.encode(  # type: ignore
         {
             "user_id": user_obj.user_id,
@@ -7557,6 +7584,7 @@ async def onboarding(invite_link: str):
             "auth_header_name": general_settings.get(
                 "litellm_key_header_name", "Authorization"
             ),
+            "disabled_non_admin_personal_key_creation": disabled_non_admin_personal_key_creation,
         },
         master_key,
         algorithm="HS256",

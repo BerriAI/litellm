@@ -200,3 +200,11 @@ def test_azure_global_standard_get_llm_provider():
         api_key="fake-api-key",
     )
     assert custom_llm_provider == "azure_ai"
+
+
+def test_nova_bedrock_converse():
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="amazon.nova-micro-v1:0",
+    )
+    assert custom_llm_provider == "bedrock"
+    assert model == "amazon.nova-micro-v1:0"

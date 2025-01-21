@@ -1514,6 +1514,60 @@ export const userSpendLogsCall = async (
   }
 };
 
+export const uiSpendLogsCall = async (
+  accessToken: String,
+  api_key?: string, 
+  user_id?: string,
+  request_id?: string,
+  start_date?: string,
+  end_date?: string,
+  page?: number,
+  page_size?: number,
+) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/spend/logs/ui` : `/spend/logs/ui`;
+
+    // Add query parameters if they exist
+    const queryParams = new URLSearchParams();
+    if (api_key) queryParams.append('api_key', api_key);
+    if (user_id) queryParams.append('user_id', user_id);
+    if (request_id) queryParams.append('request_id', request_id);
+    if (start_date) queryParams.append('start_date', start_date);
+    if (end_date) queryParams.append('end_date', end_date);
+    if (page) queryParams.append('page', page.toString());
+    if (page_size) queryParams.append('page_size', page_size.toString());
+
+    // Append query parameters to URL if any exist
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Spend Logs UI Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch spend logs:", error);
+    throw error;
+  }
+};
+
+
 export const adminSpendLogsCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl
@@ -2266,6 +2320,47 @@ export const teamMemberAddCall = async (
     throw error;
   }
 };
+
+export const teamMemberUpdateCall = async (
+  accessToken: string,
+  teamId: string,
+  formValues: Member // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/member_update`
+      : `/team/member_update`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        team_id: teamId,
+        role: formValues.role,  
+        user_id: formValues.user_id,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
 
 export const organizationMemberAddCall = async (
   accessToken: string,

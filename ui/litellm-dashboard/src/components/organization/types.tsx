@@ -8,7 +8,7 @@ export interface EditModalProps {
     onSubmit: (entity: Organization) => void;
 }
 
-interface OrganizationMember {
+export interface OrganizationMember {
     user_id: string;
     user_role: string;
 }

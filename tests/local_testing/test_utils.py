@@ -500,6 +500,37 @@ def test_get_supported_openai_params() -> None:
     assert get_supported_openai_params("nonexistent") is None
 
 
+def test_get_chat_completion_prompt():
+    """
+    Unit test to ensure get_chat_completion_prompt updates messages in logging object.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm_logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    updated_message = "hello world"
+
+    litellm_logging_obj.get_chat_completion_prompt(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": updated_message}],
+        non_default_params={},
+        prompt_id="1234",
+        prompt_variables=None,
+    )
+
+    assert litellm_logging_obj.messages == [
+        {"role": "user", "content": updated_message}
+    ]
+
+
 def test_redact_msgs_from_logs():
     """
     Tests that turn_off_message_logging does not modify the response_obj
@@ -1331,8 +1362,11 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
+    litellm._turn_on_debug()
+
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
+    monkeypatch.setattr(litellm, "provider_list", ["fireworks_ai"])
 
     mock_response_data = {
         "models": [
@@ -1400,6 +1434,7 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
         litellm.module_level_client, "get", return_value=mock_response
     ) as mock_post:
         valid_models = get_valid_models(check_provider_endpoint=True)
+        mock_post.assert_called_once()
         assert (
             "fireworks_ai/accounts/fireworks/models/llama-3.1-8b-instruct"
             in valid_models
@@ -1426,3 +1461,22 @@ def test_supports_vision_gemini():
     from litellm.utils import supports_vision
 
     assert supports_vision("gemini-1.5-pro") is True
+
+
+def test_pick_cheapest_chat_model_from_llm_provider():
+    from litellm.litellm_core_utils.llm_request_utils import (
+        pick_cheapest_chat_models_from_llm_provider,
+    )
+
+    assert len(pick_cheapest_chat_models_from_llm_provider("openai", n=3)) == 3
+
+    assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
+
+
+def test_get_potential_model_names():
+    from litellm.utils import _get_potential_model_names
+
+    assert _get_potential_model_names(
+        model="bedrock/ap-northeast-1/anthropic.claude-instant-v1",
+        custom_llm_provider="bedrock",
+    )

@@ -1,3 +1,20 @@
+---
+title: v1.55.10
+slug: v1.55.10
+date: 2024-12-24T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: CEO, LiteLLM
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://media.licdn.com/dms/image/v2/C5103AQHYMXJfHTf4Ng/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1517455593871?e=1741824000&v=beta&t=udmat6jS-s3EQZp1DTykf7NZmf-3sefD_I9B1aMjE5Y
+  - name: Ishaan Jaffer
+    title: CTO, LiteLLM
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGiM7ZrUwqu_Q/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1675971026692?e=1741824000&v=beta&t=eQnRdXPJo4eiINWTZARoYTfqh064pgZ-E21pQTSy8jc
+tags: [batches, guardrails, team management, custom auth]
+hide_table_of_contents: false
+---
+
 import Image from '@theme/IdealImage';
 
 # v1.55.10

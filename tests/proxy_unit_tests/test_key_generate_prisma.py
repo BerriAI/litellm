@@ -3099,7 +3099,6 @@ async def test_team_access_groups(prisma_client):
     generated_key = key.key
     bearer_token = "Bearer " + generated_key
 
-    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
     for model in ["gpt-4o", "gemini-pro-vision"]:
@@ -3109,6 +3108,8 @@ async def test_team_access_groups(prisma_client):
             # return string as bytes
             return return_string.encode()
 
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
         request.body = return_body
 
         # use generated key to auth in
@@ -3124,6 +3125,8 @@ async def test_team_access_groups(prisma_client):
             # return string as bytes
             return return_string.encode()
 
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
         request.body = return_body_2
 
         # use generated key to auth in
@@ -3756,3 +3759,47 @@ def test_should_track_cost_callback():
         team_id=None,
         end_user_id="1234",
     )
+
+
+@pytest.mark.asyncio
+async def test_get_paginated_teams(prisma_client):
+    """
+    Test the get_paginated_teams function:
+    1. Test pagination returns valid results
+    2. Test total count matches across pages
+    3. Test page size is respected
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import get_paginated_teams
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    try:
+        # Get first page with page_size=2
+        teams_page_1, total_count_1 = await get_paginated_teams(
+            prisma_client=prisma_client, page_size=2, page=1
+        )
+
+        print("teams_page_1=", teams_page_1)
+        print("total_count_1=", total_count_1)
+
+        # Get second page
+        teams_page_2, total_count_2 = await get_paginated_teams(
+            prisma_client=prisma_client, page_size=2, page=2
+        )
+
+        print("teams_page_2=", teams_page_2)
+        print("total_count_2=", total_count_2)
+
+        # Verify results
+        assert isinstance(teams_page_1, list)  # Should return a list
+        assert isinstance(total_count_1, int)  # Should return an integer count
+        assert (
+            total_count_1 == total_count_2
+        )  # Total count should be consistent across pages
+        assert len(teams_page_1) <= 2  # Should respect page_size limit
+
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        pytest.fail(f"Test failed with exception: {e}")
