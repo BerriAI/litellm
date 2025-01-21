@@ -70,6 +70,18 @@ async def chat_completion(session, key: str, model: str):
     return response
 
 
+async def update_key_budget(session, key: str, max_budget: float):
+    """Helper function to update a key's max budget"""
+    url = "http://0.0.0.0:4000/key/update"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "key": key,
+        "max_budget": max_budget,
+    }
+    async with session.post(url, headers=headers, json=data) as response:
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_low_budget():
     """
@@ -147,3 +159,48 @@ async def test_chat_completion_high_budget():
         assert (
             calls_made > 0
         ), "Should make at least one successful call before budget exceeded"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_budget_update():
+    """
+    Test that requests continue working after updating a key's budget:
+    1. Create key with low budget
+    2. Make calls until budget exceeded
+    3. Update key with higher budget
+    4. Verify calls work again
+    """
+    async with aiohttp.ClientSession() as session:
+        # Create key with very low budget
+        key_gen = await generate_key(session=session, max_budget=0.0000000005)
+        key = key_gen["key"]
+
+        # Make calls until budget exceeded
+        calls_made = await make_calls_until_budget_exceeded(
+            session=session,
+            key=key,
+            call_function=chat_completion,
+            model="fake-openai-endpoint",
+        )
+
+        assert (
+            calls_made > 0
+        ), "Should make at least one successful call before budget exceeded"
+
+        # Update key with higher budget
+        await update_key_budget(session, key, max_budget=0.001)
+
+        # Verify calls work again
+        for _ in range(3):
+            try:
+                response = await chat_completion(
+                    session=session, key=key, model="fake-openai-endpoint"
+                )
+                print("response: ", response)
+                assert (
+                    response is not None
+                ), "Should get valid response after budget update"
+            except Exception as e:
+                pytest.fail(
+                    f"Request should succeed after budget update but got error: {e}"
+                )
