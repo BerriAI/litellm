@@ -1,10 +1,15 @@
 import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
-from litellm.types.utils import EmbeddingResponse, ModelResponse, TranscriptionResponse
+from litellm.types.utils import (
+    EmbeddingResponse,
+    HiddenParams,
+    ModelResponse,
+    TranscriptionResponse,
+)
 
 
 class ResponseMetadata:
@@ -14,7 +19,9 @@ class ResponseMetadata:
 
     def __init__(self, result: Any):
         self.result = result
-        self._hidden_params = getattr(result, "_hidden_params", {}) or {}
+        self._hidden_params: Union[HiddenParams, dict] = (
+            getattr(result, "_hidden_params", {}) or {}
+        )
 
     @property
     def supports_response_time(self) -> bool:
@@ -29,19 +36,28 @@ class ResponseMetadata:
         self, logging_obj: LiteLLMLoggingObject, model: Optional[str], kwargs: dict
     ) -> None:
         """Set hidden parameters on the response"""
-        self._hidden_params.update(
-            {
-                "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
-                "model_id": kwargs.get("model_info", {}).get("id", None),
-                "api_base": get_api_base(model=model or "", optional_params=kwargs),
-                "response_cost": logging_obj._response_cost_calculator(
-                    result=self.result
-                ),
-                "additional_headers": process_response_headers(
-                    self._hidden_params.get("additional_headers", {})
-                ),
-            }
-        )
+        new_params = {
+            "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
+            "model_id": kwargs.get("model_info", {}).get("id", None),
+            "api_base": get_api_base(model=model or "", optional_params=kwargs),
+            "response_cost": logging_obj._response_cost_calculator(result=self.result),
+            "additional_headers": process_response_headers(
+                getattr(self._hidden_params, "additional_headers", {})
+            ),
+        }
+        self._update_hidden_params(new_params)
+
+    def _update_hidden_params(self, new_params: dict) -> None:
+        """
+        Update hidden params - handles when self._hidden_params is a dict or HiddenParams object
+        """
+        # Handle both dict and HiddenParams cases
+        if isinstance(self._hidden_params, dict):
+            self._hidden_params.update(new_params)
+        elif isinstance(self._hidden_params, HiddenParams):
+            # For HiddenParams object, set attributes individually
+            for key, value in new_params.items():
+                setattr(self._hidden_params, key, value)
 
     def set_timing_metrics(
         self,
@@ -60,7 +76,7 @@ class ResponseMetadata:
         llm_api_duration_ms = logging_obj.model_call_details.get("llm_api_duration_ms")
         if llm_api_duration_ms is not None:
             overhead_ms = round(total_response_time_ms - llm_api_duration_ms, 4)
-            self._hidden_params.update(
+            self._update_hidden_params(
                 {
                     "litellm_overhead_time_ms": overhead_ms,
                     "_response_ms": total_response_time_ms,
