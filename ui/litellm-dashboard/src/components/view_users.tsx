@@ -184,22 +184,22 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setEditModalVisible(false);
   };
 
+  const getFilterParams = (filterType: string, searchValue: string) => {
+    return {
+      user_id: filterType === 'user_id' ? searchValue : null,
+      user_email: filterType === 'user_email' ? searchValue : null
+    };
+  };
+
   const fetchData = async () => {
     try {
-      // Fetch from API with search parameters
+      const { user_id, user_email } = getFilterParams(filterType, searchTerm);
       const userDataResponse = await userListCall(
         accessToken,
         currentPage,
         defaultPageSize,
-        searchTerm,
-        keyNameFilter,
-        teamNameFilter
-      );
-
-      // Store in session storage
-      sessionStorage.setItem(
-        `userList_${currentPage}`,
-        JSON.stringify(userDataResponse)
+        user_id,
+        user_email
       );
 
       setUserListResponse(userDataResponse);
@@ -225,7 +225,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       return;
     }
     fetchData();
-  }, [accessToken, token, userRole, userID, currentPage, searchTerm, keyNameFilter, teamNameFilter]);
+  }, [accessToken, token, userRole, userID, currentPage, searchTerm, keyNameFilter, teamNameFilter, filterType]);
 
   if (!userData) {
     return <div>Loading...</div>;
@@ -297,54 +297,46 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       </div>
 
       {showFilters && (
-        <div className="mb-4 bg-white rounded-lg shadow-sm border border-gray-200 p-2">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setFilterType('');
-                setFilterValue('');
-                setSearchTerm('');
-                setShowFilters(false);
-              }}
-              className="text-gray-400 hover:text-gray-600"
+        <div className="mb-6 bg-white rounded-lg shadow-sm p-4">
+          <div className="flex items-center space-x-4">
+            <div className="text-sm text-gray-500">Where</div>
+            
+            <Select 
+              value={filterType}
+              onValueChange={(value) => setFilterType(value as 'user_id' | 'user_email')}
+              className="min-w-[200px]"
             >
-              ×
-            </button>
+              <SelectItem value="">Select filter type...</SelectItem>
+              <SelectItem value="user_id">User ID</SelectItem>
+              <SelectItem value="user_email">User Email</SelectItem>
+            </Select>
             
-            <span className="text-gray-600 text-sm">where</span>
-            
-            <div className="relative inline-block">
-              <Select 
-                value={filterType}
-                onValueChange={(value) => setFilterType(value as 'user_id' | 'user_email')}
-                className="bg-gray-50 border-0 text-sm min-w-[120px]"
-              >
-                <SelectItem value="user_id">user_id</SelectItem>
-                <SelectItem value="user_email">user_email</SelectItem>
-              </Select>
-            </div>
-            
-            <span className="text-gray-600 text-sm">equals</span>
+            <div className="text-sm text-gray-500">Equals</div>
             
             <TextInput
               placeholder="Enter value..."
               value={filterValue}
               onChange={(e) => setFilterValue(e.target.value)}
-              className="flex-1 text-sm border-gray-200"
+              className="flex-1 max-w-md"
             />
-            
+
             <Button
               onClick={() => {
-                setSearchTerm(filterValue);
-                setCurrentPage(1);
-                fetchData();
+                if (filterType && filterValue) {
+                  setSearchTerm(filterValue);
+                  setCurrentPage(1);
+                  fetchData();
+                }
               }}
-              className="text-white px-3 py-1 text-sm rounded-md"
+              size="sm"
+              variant="primary"
+              disabled={!filterType || !filterValue}
+              className="bg-indigo-500 hover:bg-indigo-600"
             >
-              Apply
+              Apply Filter
             </Button>
             
-            <button
+            <Button
               onClick={() => {
                 setFilterType('');
                 setFilterValue('');
@@ -353,10 +345,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 setCurrentPage(1);
                 fetchData();
               }}
-              className="text-sm text-gray-900 hover:text-gray-700"
+              size="sm"
+              variant="secondary"
+              color="gray"
+              className="border border-gray-300"
             >
-              Clear filters
-            </button>
+              Clear
+            </Button>
           </div>
         </div>
       )}

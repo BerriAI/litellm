@@ -654,7 +654,7 @@ export const userInfoCall = async (
   }
 };
 export const userListCall = async (
-  accessToken: String,
+  accessToken: string,
   page: number | null,
   page_size: number | null,
   user_id: string | null,
