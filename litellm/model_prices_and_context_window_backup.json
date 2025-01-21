@@ -5462,9 +5462,8 @@
         "supports_prompt_caching": true
     },
     "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0": {
-      "max_tokens": 77,
-      "max_input_tokens": 77,
-      "output_cost_per_image": 0.08,
+      "max_input_tokens": 2600,
+      "output_cost_per_image": 0.06,
       "litellm_provider": "bedrock",
       "mode": "image_generation"
     },
