@@ -59,7 +59,7 @@ class ResponseMetadata:
         # Calculate LiteLLM overhead
         llm_api_duration_ms = logging_obj.model_call_details.get("llm_api_duration_ms")
         if llm_api_duration_ms is not None:
-            overhead_ms = total_response_time_ms - llm_api_duration_ms
+            overhead_ms = round(total_response_time_ms - llm_api_duration_ms, 4)
             self._hidden_params.update(
                 {
                     "litellm_overhead_time_ms": overhead_ms,
