@@ -52,4 +52,5 @@ services:
 volumes:
   prometheus_data:
     driver: local
+  postgres_data:
 # ...rest of your docker-compose config if any
