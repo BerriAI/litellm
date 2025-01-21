@@ -2429,3 +2429,33 @@ async def test_bedrock_image_url_sync_client():
         except Exception as e:
             print(e)
         mock_post.assert_called_once()
+
+
+def test_bedrock_error_handling_streaming():
+    from litellm.llms.bedrock.chat.invoke_handler import (
+        AWSEventStreamDecoder,
+        BedrockError,
+    )
+    from unittest.mock import patch, Mock
+
+    event = Mock()
+    event.to_response_dict = Mock(
+        return_value={
+            "status_code": 400,
+            "headers": {
+                ":exception-type": "serviceUnavailableException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            "body": b'{"message":"Bedrock is unable to process your request."}',
+        }
+    )
+
+    decoder = AWSEventStreamDecoder(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+    )
+    with pytest.raises(Exception) as e:
+        decoder._parse_message_from_event(event)
+    assert isinstance(e.value, BedrockError)
+    assert "Bedrock is unable to process your request." in e.value.message
+    assert e.value.status_code == 400
