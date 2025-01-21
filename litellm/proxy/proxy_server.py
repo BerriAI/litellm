@@ -6646,10 +6646,7 @@ async def model_info_v1(  # noqa: PLR0915
                 },
             )
         _deployment_info_dict = _get_proxy_model_info(
-            model=cast(
-                dict,
-                DeploymentTypedDict(**deployment_info.model_dump(exclude_none=True)),
-            )
+            model=deployment_info.model_dump(exclude_none=True)
         )
         return {"data": [_deployment_info_dict]}
 
