@@ -3239,12 +3239,18 @@ def get_standard_logging_object_payload(
             ),
         )
 
+        emit_standard_logging_payload(payload)
         return payload
     except Exception as e:
         verbose_logger.exception(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
+
+
+def emit_standard_logging_payload(payload: StandardLoggingPayload):
+    if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
+        verbose_logger.info(payload)
 
 
 def get_standard_logging_metadata(
