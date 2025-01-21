@@ -554,10 +554,8 @@ const UsagePage: React.FC<UsagePageProps> = ({
               </Col>
               <Col numColSpan={2}>
               <Card className="mb-2">
-                <Title>✨ Spend by Provider</Title>
-                {
-                  premiumUser ? (
-                    <>
+                <Title>Spend by Provider</Title>
+                <>
                     <Grid numItems={2}>
                   <Col numColSpan={1}>
                     <DonutChart
@@ -592,17 +590,6 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   </Col>
                 </Grid>
                     </>
-                  ) : (
-                    <div>
-                    <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to use this feature</p>
-                    <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                    </div>
-                  )
-                }
                 
               </Card>
             </Col>
@@ -643,9 +630,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
                 </Card>
 
-                {
-                  premiumUser ? ( 
-                    <>
+                <>
                     {globalActivityPerModel.map((globalActivity, index) => (
                 <Card key={index}>
                   <Title>{globalActivity.model}</Title>
@@ -677,69 +662,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                   </Grid>
                 </Card>
               ))}
-                    </>
-                  ) : 
-                  <>
-                  {globalActivityPerModel && globalActivityPerModel.length > 0 &&
-                    globalActivityPerModel.slice(0, 1).map((globalActivity, index) => (
-                      <Card key={index}>
-                        <Title>✨ Activity by Model</Title>
-                        <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see analytics for all models</p>
-                        <Button variant="primary" className="mb-2">
-                          <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                            Get Free Trial
-                          </a>
-                        </Button>
-                        <Card>
-                        <Title>{globalActivity.model}</Title>
-                        <Grid numItems={2}>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
-                            </Subtitle>
-                            <AreaChart
-                              className="h-40"
-                              data={globalActivity.daily_data}
-                              index="date"
-                              colors={['cyan']}
-                              categories={['api_requests']}
-                              valueFormatter={valueFormatterNumbers}
-                              onValueChange={(v) => console.log(v)}
-                            />
-                          </Col>
-                          <Col>
-                            <Subtitle
-                              style={{
-                                fontSize: "15px",
-                                fontWeight: "normal",
-                                color: "#535452",
-                              }}
-                            >
-                              Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
-                            </Subtitle>
-                            <BarChart
-                              className="h-40"
-                              data={globalActivity.daily_data}
-                              index="date"
-                              colors={['cyan']}
-                              valueFormatter={valueFormatterNumbers}
-                              categories={['total_tokens']}
-                              onValueChange={(v) => console.log(v)}
-                            />
-                          </Col>
-                          
-                        </Grid>
-                        </Card>
-                      </Card>
-                    ))}
-                </>
-                }              
+                    </>             
               </Grid>
             </TabPanel>
             </TabPanels>
