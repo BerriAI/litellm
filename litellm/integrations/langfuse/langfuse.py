@@ -734,12 +734,10 @@ class LangFuseLogger:
             return None, None
 
     @staticmethod
-    def _get_langfuse_tags(metadata: dict) -> List[str]:
-        try:
-            return json.loads(metadata.pop("tags", "[]"))
-        except Exception as e:
-            verbose_logger.exception("error getting langfuse tags %s", str(e))
-            return []
+    def _get_langfuse_tags(
+        standard_logging_object: StandardLoggingPayload,
+    ) -> List[str]:
+        return standard_logging_object.get("request", {})
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
         """
