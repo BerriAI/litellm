@@ -1,3 +1,4 @@
+import functools
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -10,10 +11,14 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm import ModelResponse as _ModelResponse
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObject,
+    )
 
     LiteLLMModelResponse = _ModelResponse
 else:
     LiteLLMModelResponse = Any
+    LiteLLMLoggingObject = Any
 
 
 import litellm
@@ -91,3 +96,32 @@ def _assemble_complete_response_from_streaming_chunks(
     else:
         streaming_chunks.append(result)
     return complete_streaming_response
+
+
+def track_llm_api_timing():
+    """
+    Decorator to track LLM API call timing
+
+    The logging_obj is expected to be passed as an argument to the decorated function
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            start_time = datetime.now()
+            try:
+                result = await func(*args, **kwargs)
+                return result
+            finally:
+                end_time = datetime.now()
+                llm_api_duration_ms = (end_time - start_time).total_seconds() * 1000
+                # Get logging_obj from the kwargs
+                logging_obj = kwargs.get("logging_obj")
+                if logging_obj and hasattr(logging_obj, "model_call_details"):
+                    logging_obj.model_call_details["llm_api_duration_ms"] = (
+                        llm_api_duration_ms
+                    )
+
+        return async_wrapper
+
+    return decorator
