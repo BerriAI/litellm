@@ -98,6 +98,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [keyNameFilter, setKeyNameFilter] = useState("");
   const [teamNameFilter, setTeamNameFilter] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [filterType, setFilterType] = useState<'user_id' | 'user_email' | ''>('');
+  const [filterValue, setFilterValue] = useState('');
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -297,37 +299,49 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       {showFilters && (
         <div className="absolute mt-2 w-[300px] bg-white rounded-lg shadow-lg border p-4 z-50">
           <div className="flex flex-col space-y-4">
-            <TextInput
-              placeholder="Search by User ID or Email"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-            <div className="flex flex-col space-y-2">
-              <TextInput
-                placeholder="Filter by Key Name"
-                value={keyNameFilter}
-                onChange={(e) => setKeyNameFilter(e.target.value)}
-              />
-              <TextInput
-                placeholder="Filter by Team Name"
-                value={teamNameFilter}
-                onChange={(e) => setTeamNameFilter(e.target.value)}
-              />
-            </div>
-            <div className="flex justify-end space-x-2">
-              <Button onClick={handleSearch}>Apply</Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setSearchTerm("");
-                  setKeyNameFilter("");
-                  setTeamNameFilter("");
-                  setShowFilters(false);
-                }}
-              >
-                Reset
-              </Button>
-            </div>
+            <Select value={filterType} onValueChange={(value) => setFilterType(value as 'user_id' | 'user_email')}>
+              <SelectItem value="">Select Filter Type</SelectItem>
+              <SelectItem value="user_id">User ID</SelectItem>
+              <SelectItem value="user_email">User Email</SelectItem>
+            </Select>
+            
+            {filterType && (
+              <>
+                <div className="flex items-center space-x-2">
+                  <span className="text-gray-600">{filterType === 'user_id' ? 'User ID' : 'User Email'} equals</span>
+                  <TextInput
+                    placeholder={`Enter ${filterType === 'user_id' ? 'User ID' : 'User Email'}`}
+                    value={filterValue}
+                    onChange={(e) => setFilterValue(e.target.value)}
+                  />
+                </div>
+                <div className="flex justify-end space-x-2">
+                  <Button 
+                    onClick={() => {
+                      setSearchTerm(filterValue);
+                      setShowFilters(false);
+                      setCurrentPage(1);
+                      fetchData();
+                    }}
+                  >
+                    Apply
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setFilterType('');
+                      setFilterValue('');
+                      setSearchTerm('');
+                      setShowFilters(false);
+                      setCurrentPage(1);
+                      fetchData();
+                    }}
+                  >
+                    Reset
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
