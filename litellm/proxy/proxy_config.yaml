@@ -19,3 +19,6 @@ model_list:
 
 general_settings:
   store_prompts_in_spend_logs: true
+
+litellm_settings:
+  callbacks: ["datadog_llm_observability"]
