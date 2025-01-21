@@ -188,13 +188,18 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
         assert mock_client.call_count == expected_call_count
 
 
-def test_router_stream_timeout():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "llama3",
+        "bedrock-anthropic",
+    ],
+)
+def test_router_stream_timeout(model):
     import os
     from dotenv import load_dotenv
     import litellm
     from litellm.router import Router, RetryPolicy, AllowedFailsPolicy
-
-    load_dotenv()
 
     litellm.set_verbose = True
     # os.environ['LITELLM_LOG'] = 'DEBUG' # setting this doesn't seem to give me debug logs, which is another strange thing. I need to use the set_verbose=True to see debug logs.
@@ -212,6 +217,14 @@ def test_router_stream_timeout():
             },
         },
         {
+            "model_name": "bedrock-anthropic",
+            "litellm_params": {
+                "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                "timeout": 0.01,
+                "stream_timeout": 0.0000001,
+            },
+        },
+        {
             "model_name": "llama3-fallback",
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
@@ -223,7 +236,10 @@ def test_router_stream_timeout():
     # Initialize router with retry and timeout settings
     router = Router(
         model_list=model_list,
-        fallbacks=[{"llama3": ["llama3-fallback"]}],
+        fallbacks=[
+            {"llama3": ["llama3-fallback"]},
+            {"bedrock-anthropic": ["llama3-fallback"]},
+        ],
         routing_strategy="latency-based-routing",  # 👈 set routing strategy
         retry_policy=RetryPolicy(
             TimeoutErrorRetries=1,  # Number of retries for timeout errors
@@ -241,7 +257,7 @@ def test_router_stream_timeout():
 
     print("this fall back does NOT work:")
     response = router.completion(
-        model="llama3",
+        model=model,
         messages=[
             {"role": "system", "content": "You are a helpful assistant"},
             {"role": "user", "content": "write a 100 word story about a cat"},
