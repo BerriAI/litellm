@@ -894,7 +894,7 @@ class BedrockLLM(BaseAWSLLM):
 
             if response.status_code != 200:
                 raise BedrockError(
-                    status_code=response.status_code, message=response.read()
+                    status_code=response.status_code, message=str(response.read())
                 )
 
             decoder = AWSEventStreamDecoder(model=model)
@@ -1247,7 +1247,23 @@ class AWSEventStreamDecoder:
         parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
 
         if response_dict["status_code"] != 200:
-            raise ValueError(f"Bad response code, expected 200: {response_dict}")
+            decoded_body = response_dict["body"].decode()
+            if isinstance(decoded_body, dict):
+                error_message = decoded_body.get("message")
+            elif isinstance(decoded_body, str):
+                error_message = decoded_body
+            else:
+                error_message = ""
+            exception_status = response_dict["headers"].get(":exception-type")
+            error_message = exception_status + " " + error_message
+            raise BedrockError(
+                status_code=response_dict["status_code"],
+                message=(
+                    json.dumps(error_message)
+                    if isinstance(error_message, dict)
+                    else error_message
+                ),
+            )
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
