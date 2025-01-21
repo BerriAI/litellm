@@ -14,7 +14,12 @@ import litellm
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model", ["bedrock/mistral.mistral-7b-instruct-v0:2", "openai/gpt-4o"]
+    "model",
+    [
+        "bedrock/mistral.mistral-7b-instruct-v0:2",
+        "openai/gpt-4o",
+        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+    ],
 )
 async def test_litellm_overhead(model):
 
