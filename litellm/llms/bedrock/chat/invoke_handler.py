@@ -956,7 +956,7 @@ class BedrockLLM(BaseAWSLLM):
         data: str,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
-        logging_obj,
+        logging_obj: Logging,
         stream,
         optional_params: dict,
         litellm_params=None,
