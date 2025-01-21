@@ -274,6 +274,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
@@ -6510,7 +6511,8 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
-def _get_proxy_model_info(model: dict) -> dict:
+def _get_proxy_model_info(model: Union[DeploymentTypedDict, dict]) -> dict:
+    model = cast(dict, model)
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
 
@@ -6645,7 +6647,7 @@ async def model_info_v1(  # noqa: PLR0915
                 },
             )
         _deployment_info_dict = _get_proxy_model_info(
-            model=deployment_info.model_dump()
+            model=DeploymentTypedDict(**deployment_info.model_dump(exclude_none=True))
         )
         return {"data": [_deployment_info_dict]}
 
