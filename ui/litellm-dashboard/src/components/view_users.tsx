@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, Fragment } from "react";
 import {
   Card,
   Title,
@@ -23,18 +23,20 @@ import {
   DialogPanel,
   Icon,
   TextInput,
+  Button,
 } from "@tremor/react";
 
-import { message } from "antd";
-import { Modal } from "antd";
+import { message, Modal } from "antd";
 
 import {
   userInfoCall,
   userListCall,
   userUpdateUserCall,
   getPossibleUserRoles,
+  userDeleteCall,
 } from "./networking";
-import { Badge, BadgeDelta, Button } from "@tremor/react";
+
+import { Badge, BadgeDelta } from "@tremor/react";
 import RequestAccess from "./request_model_access";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
@@ -44,8 +46,6 @@ import {
   InformationCircleIcon,
   TrashIcon,
 } from "@heroicons/react/outline";
-
-import { userDeleteCall } from "./networking";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -67,8 +67,8 @@ interface UserListResponse {
 
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
+if (isLocal !== true) {
+  console.log = function () {};
 }
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
@@ -82,7 +82,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 }) => {
   const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
   const [userData, setUserData] = useState<null | any[]>(null);
-  const [endUsers, setEndUsers] = useState<null | any[]>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [openDialogId, setOpenDialogId] = React.useState<null | number>(null);
   const [selectedItem, setSelectedItem] = useState<null | any>(null);
@@ -94,16 +93,36 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     Record<string, Record<string, string>>
   >({});
   const defaultPageSize = 25;
-  const [searchUserId, setSearchUserId] = useState<string | null>(null);
-  const [searchUserEmail, setSearchUserEmail] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [keyNameFilter, setKeyNameFilter] = useState("");
+  const [teamNameFilter, setTeamNameFilter] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // check if window is not undefined
-  if (typeof window !== "undefined") {
-    window.addEventListener("beforeunload", function () {
-      // Clear session storage
-      sessionStorage.clear();
-    });
-  }
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        setShowFilters(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Clear session storage on unload
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.addEventListener("beforeunload", function () {
+        sessionStorage.clear();
+      });
+    }
+  }, []);
 
   const handleDelete = (userId: string) => {
     setUserToDelete(userId);
@@ -134,7 +153,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setUserToDelete(null);
   };
 
-  const handleEditCancel = async () => {
+  const handleEditCancel = () => {
     setSelectedUser(null);
     setEditModalVisible(false);
   };
@@ -151,6 +170,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       message.success(`User ${editedUser.user_id} updated successfully`);
     } catch (error) {
       console.error("There was an error updating the user", error);
+      message.error("Failed to update user");
     }
     if (userData) {
       const updatedUserData = userData.map((user) =>
@@ -160,7 +180,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
     setSelectedUser(null);
     setEditModalVisible(false);
-    // Close the modal
   };
 
   const fetchData = async () => {
@@ -170,8 +189,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         accessToken,
         currentPage,
         defaultPageSize,
-        searchUserId,
-        searchUserEmail
+        searchTerm,
+        keyNameFilter,
+        teamNameFilter
       );
 
       // Store in session storage
@@ -194,6 +214,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       }
     } catch (error) {
       console.error("There was an error fetching the model data", error);
+      message.error("Failed to fetch user data");
     }
   };
 
@@ -202,7 +223,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       return;
     }
     fetchData();
-  }, [accessToken, token, userRole, userID, currentPage]);
+  }, [accessToken, token, userRole, userID, currentPage, searchTerm, keyNameFilter, teamNameFilter]);
 
   if (!userData) {
     return <div>Loading...</div>;
@@ -212,145 +233,173 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     return <div>Loading...</div>;
   }
 
-  function renderPagination() {
-    if (!userData) return null;
-
-    const totalPages = userListResponse?.total_pages || 0;
-
-    const handlePageChange = (newPage: number) => {
-      setUserData([]); // Clear current users
-      setCurrentPage(newPage);
-    };
-  
-
-    return (
-      <div className="flex justify-between items-center">
-        <div>
-          Showing Page {currentPage } of {totalPages}
-        </div>
-        <div className="flex">
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
-            disabled={currentPage === 1}
-            onClick={() => handlePageChange(currentPage - 1)}
-          >
-            &larr; Prev
-          </button>
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
-            disabled={currentPage === totalPages}
-            onClick={() => handlePageChange(currentPage + 1)}
-          >
-            Next &rarr;
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const handleSearch = () => {
+    setCurrentPage(1);
     fetchData();
   };
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
-        <div className="flex mb-4 items-center">
-          <TextInput
-            placeholder="Search by User ID"
-            value={searchUserId || ""}
-            onChange={(e) => setSearchUserId(e.target.value)}
-            className="mr-2"
-          />
-          <TextInput
-            placeholder="Search by User Email"
-            value={searchUserEmail || ""}
-            onChange={(e) => setSearchUserEmail(e.target.value)}
-            className="mr-2"
-          />
-          <Button onClick={handleSearch} className="mr-2">Apply</Button>
+    <div className="w-full">
+      <h1 className="text-xl font-semibold mb-4">Users</h1>
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="border-b px-6 py-4">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                  onClick={() => setShowFilters(!showFilters)}
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                    />
+                  </svg>
+                  Filters
+                </button>
+
+                {showFilters && (
+                  <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
+                    <div className="flex flex-col space-y-4">
+                      <TextInput
+                        placeholder="Search by User ID or Email"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                      />
+                      <div className="flex space-x-2">
+                        <TextInput
+                          placeholder="Filter by Key Name"
+                          value={keyNameFilter}
+                          onChange={(e) => setKeyNameFilter(e.target.value)}
+                        />
+                        <TextInput
+                          placeholder="Filter by Team Name"
+                          value={teamNameFilter}
+                          onChange={(e) => setTeamNameFilter(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex justify-end space-x-2">
+                        <Button onClick={handleSearch}>Apply</Button>
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setSearchTerm("");
+                            setKeyNameFilter("");
+                            setTeamNameFilter("");
+                            setShowFilters(false);
+                          }}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <CreateUser
+                userID={userID}
+                accessToken={accessToken}
+                teams={teams}
+                possibleUIRoles={possibleUIRoles}
+              />
+            </div>
+
+            <div className="flex items-center space-x-4">
+              <span className="text-sm text-gray-700">
+                Showing {((currentPage - 1) * defaultPageSize) + 1} -{" "}
+                {Math.min(currentPage * defaultPageSize, userListResponse?.total || 0)} of{" "}
+                {userListResponse?.total || 0} results
+              </span>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-700">
+                  Page {currentPage} of {userListResponse?.total_pages || 1}
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(userListResponse?.total_pages || 1, p + 1))}
+                  disabled={currentPage === (userListResponse?.total_pages || 1)}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        <CreateUser
-          userID={userID}
-          accessToken={accessToken}
-          teams={teams}
-          possibleUIRoles={possibleUIRoles}
-        />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
-          <div className="mb-4 mt-1"></div>
-          <TabGroup>
-            <TabPanels>
-              <TabPanel>
-                <Table className="mt-5">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>API Keys</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {userData.map((user: any) => (
-                      <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id || "-"}</TableCell>
-                        <TableCell>{user.user_email || "-"}</TableCell>
-                        <TableCell>
-                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.spend ? user.spend?.toFixed(2) : "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
-                        </TableCell>
-                        <TableCell>
-                          <Grid numItems={2}>
-                            {user.key_count > 0 ? (
-                              <Badge size={"xs"} color={"indigo"}>
-                                {user.key_count} Keys
-                              </Badge>
-                            ) : (
-                              <Badge size={"xs"} color={"gray"}>
-                                No Keys
-                              </Badge>
-                            )}
-                            {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                          </Grid>
-                        </TableCell>
-                        <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            onClick={() => {
-                              setSelectedUser(user);
-                              setEditModalVisible(true);
-                            }}
-                          >
-                            View Keys
-                          </Icon>
-                          <Icon
-                            icon={TrashIcon}
-                            onClick={() => handleDelete(user.user_id)}
-                          >
-                            Delete
-                          </Icon>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TabPanel>
-              <TabPanel>
-                <div className="flex items-center">
-                  <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center"></div>
-                </div>
-              </TabPanel>
-            </TabPanels>
-          </TabGroup>
+
+        <Card className="w-full mx-auto">
+          <Table className="mt-5">
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell>User ID</TableHeaderCell>
+                <TableHeaderCell>User Email</TableHeaderCell>
+                <TableHeaderCell>Role</TableHeaderCell>
+                <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
+                <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+                <TableHeaderCell>API Keys</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {userData.map((user: any) => (
+                <TableRow key={user.user_id}>
+                  <TableCell>{user.user_id || "-"}</TableCell>
+                  <TableCell>{user.user_email || "-"}</TableCell>
+                  <TableCell>
+                    {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
+                  </TableCell>
+                  <TableCell>
+                    {user.spend ? user.spend?.toFixed(2) : "-"}
+                  </TableCell>
+                  <TableCell>
+                    {user.max_budget !== null ? user.max_budget : "Unlimited"}
+                  </TableCell>
+                  <TableCell>
+                    <Grid numItems={2}>
+                      {user.key_count > 0 ? (
+                        <Badge size={"xs"} color={"indigo"}>
+                          {user.key_count} Keys
+                        </Badge>
+                      ) : (
+                        <Badge size={"xs"} color={"gray"}>
+                          No Keys
+                        </Badge>
+                      )}
+                    </Grid>
+                  </TableCell>
+                  <TableCell>
+                    <Icon
+                      icon={PencilAltIcon}
+                      onClick={() => {
+                        setSelectedUser(user);
+                        setEditModalVisible(true);
+                      }}
+                      className="cursor-pointer mr-2"
+                    />
+                    <Icon
+                      icon={TrashIcon}
+                      onClick={() => handleDelete(user.user_id)}
+                      className="cursor-pointer"
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
           <EditUserModal
             visible={editModalVisible}
             possibleUIRoles={possibleUIRoles}
@@ -359,55 +408,54 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             onSubmit={handleEditSubmit}
           />
           {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div
-              className="fixed inset-0 transition-opacity"
-              aria-hidden="true"
-            >
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
+            <div className="fixed z-10 inset-0 overflow-y-auto">
+              <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                <div
+                  className="fixed inset-0 transition-opacity"
+                  aria-hidden="true"
+                >
+                  <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+                </div>
 
-            {/* Modal Panel */}
-            <span
-              className="hidden sm:inline-block sm:align-middle sm:h-screen"
-              aria-hidden="true"
-            >
-              &#8203;
-            </span>
+                {/* Modal Panel */}
+                <span
+                  className="hidden sm:inline-block sm:align-middle sm:h-screen"
+                  aria-hidden="true"
+                >
+                  &#8203;
+                </span>
 
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">
-                      Delete User
-                    </h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">
-                        Are you sure you want to delete this user?
-                      </p>
-                      <p className="text-sm font-medium text-gray-900 mt-2">
-                        User ID: {userToDelete}
-                      </p>
+                {/* Confirmation Modal Content */}
+                <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                  <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div className="sm:flex sm:items-start">
+                      <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 className="text-lg leading-6 font-medium text-gray-900">
+                          Delete User
+                        </h3>
+                        <div className="mt-2">
+                          <p className="text-sm text-gray-500">
+                            Are you sure you want to delete this user?
+                          </p>
+                          <p className="text-sm font-medium text-gray-900 mt-2">
+                            User ID: {userToDelete}
+                          </p>
+                        </div>
+                      </div>
                     </div>
+                  </div>
+                  <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <Button onClick={confirmDelete} color="red" className="ml-2">
+                      Delete
+                    </Button>
+                    <Button onClick={cancelDelete}>Cancel</Button>
                   </div>
                 </div>
               </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
         </Card>
-        {renderPagination()}
-      </Grid>
+      </div>
     </div>
   );
 };
