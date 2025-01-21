@@ -241,7 +241,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   };
 
   return (
-    <div className="p-4">
+    <div className="p-4 w-full mx-auto px-8">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-2">
           <button
@@ -361,7 +361,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           <Table>
             <TableHead>
               <TableRow>
-                <TableHeaderCell>User ID</TableHeaderCell>
+                <TableHeaderCell className="min-w-[300px]">User ID</TableHeaderCell>
                 <TableHeaderCell>User Email</TableHeaderCell>
                 <TableHeaderCell>Role</TableHeaderCell>
                 <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
@@ -373,7 +373,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             <TableBody>
               {userData.map((user: any) => (
                 <TableRow key={user.user_id}>
-                  <TableCell className="max-w-[200px] truncate">
+                  <TableCell className="min-w-[300px] text-sm">
                     {user.user_id || "-"}
                   </TableCell>
                   <TableCell>{user.user_email || "-"}</TableCell>
