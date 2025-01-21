@@ -458,11 +458,14 @@ class LangFuseLogger:
             supports_costs = langfuse_version >= Version("2.7.3")
             supports_completion_start_time = langfuse_version >= Version("2.7.3")
 
-            tags = self._get_langfuse_tags(metadata) if supports_tags else []
-
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
                 kwargs.get("standard_logging_object", None),
+            )
+            tags = (
+                self._get_langfuse_tags(standard_logging_object=standard_logging_object)
+                if supports_tags
+                else []
             )
 
             if standard_logging_object is None:
@@ -735,8 +738,10 @@ class LangFuseLogger:
 
     @staticmethod
     def _get_langfuse_tags(
-        standard_logging_object: StandardLoggingPayload,
+        standard_logging_object: Optional[StandardLoggingPayload],
     ) -> List[str]:
+        if standard_logging_object is None:
+            return []
         return standard_logging_object.get("request_tags", [])
 
     def add_default_langfuse_tags(self, tags, kwargs, metadata):
