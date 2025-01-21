@@ -1,3 +1,4 @@
+import asyncio
 import functools
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
@@ -100,10 +101,21 @@ def _assemble_complete_response_from_streaming_chunks(
 
 def track_llm_api_timing():
     """
-    Decorator to track LLM API call timing
-
-    The logging_obj is expected to be passed as an argument to the decorated function
+    Decorator to track LLM API call timing for both sync and async functions.
+    The logging_obj is expected to be passed as an argument to the decorated function.
     """
+
+    def _set_duration_in_model_call_details(logging_obj, duration_ms):
+        """Helper to set duration in model_call_details, with error handling"""
+        try:
+            if logging_obj and hasattr(logging_obj, "model_call_details"):
+                logging_obj.model_call_details["llm_api_duration_ms"] = duration_ms
+            else:
+                verbose_logger.warning(
+                    "logging_obj not found or missing model_call_details attribute - unable to track API timing"
+                )
+        except Exception as e:
+            verbose_logger.warning(f"Error setting llm_api_duration_ms: {str(e)}")
 
     def decorator(func):
         @functools.wraps(func)
@@ -115,13 +127,26 @@ def track_llm_api_timing():
             finally:
                 end_time = datetime.now()
                 llm_api_duration_ms = (end_time - start_time).total_seconds() * 1000
-                # Get logging_obj from the kwargs
-                logging_obj = kwargs.get("logging_obj")
-                if logging_obj and hasattr(logging_obj, "model_call_details"):
-                    logging_obj.model_call_details["llm_api_duration_ms"] = (
-                        llm_api_duration_ms
-                    )
+                _set_duration_in_model_call_details(
+                    kwargs.get("logging_obj"), llm_api_duration_ms
+                )
 
-        return async_wrapper
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            start_time = datetime.now()
+            try:
+                result = func(*args, **kwargs)
+                return result
+            finally:
+                end_time = datetime.now()
+                llm_api_duration_ms = (end_time - start_time).total_seconds() * 1000
+                _set_duration_in_model_call_details(
+                    kwargs.get("logging_obj"), llm_api_duration_ms
+                )
+
+        # Check if the function is async or sync
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
 
     return decorator
