@@ -28,6 +28,7 @@ from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     construct_tool_use_system_prompt,
@@ -164,6 +165,7 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
+@track_llm_api_timing()
 async def make_call(
     client: Optional[AsyncHTTPHandler],
     api_base: str,
@@ -171,7 +173,7 @@ async def make_call(
     data: str,
     model: str,
     messages: list,
-    logging_obj,
+    logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
 ):
@@ -186,6 +188,7 @@ async def make_call(
             headers=headers,
             data=data,
             stream=not fake_stream,
+            logging_obj=logging_obj,
         )
 
         if response.status_code != 200:
@@ -939,6 +942,7 @@ class BedrockLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
+    @track_llm_api_timing()
     async def async_completion(
         self,
         model: str,
