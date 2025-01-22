@@ -615,11 +615,16 @@ async def _client_async_logging_helper(
         print_verbose(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
-        # check if user does not want this to be logged
-        asyncio.create_task(
-            logging_obj.async_success_handler(result, start_time, end_time)
+        # Run async_success_handler in background thread
+        executor.submit(
+            logging_obj.async_success_handler,
+            result,
+            start_time,
+            end_time,
         )
-        logging_obj.handle_sync_success_callbacks_for_async_calls(
+        # Run sync callbacks in background thread
+        executor.submit(
+            logging_obj.handle_sync_success_callbacks_for_async_calls,
             result=result,
             start_time=start_time,
             end_time=end_time,
