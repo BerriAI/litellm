@@ -2074,6 +2074,7 @@ def get_litellm_params(
     prompt_id: Optional[str] = None,
     prompt_variables: Optional[dict] = None,
     async_call: Optional[bool] = None,
+    ssl_verify: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -2112,6 +2113,7 @@ def get_litellm_params(
         "prompt_id": prompt_id,
         "prompt_variables": prompt_variables,
         "async_call": async_call,
+        "ssl_verify": ssl_verify,
     }
     return litellm_params
 

@@ -440,13 +440,17 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         concurrent_limit=1000,
         client: Optional[httpx.Client] = None,
+        ssl_verify: Optional[Union[bool, str]] = None,
     ):
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+        if ssl_verify is None:
+            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
@@ -506,7 +510,15 @@ class HTTPHandler:
         try:
             if timeout is not None:
                 req = self.client.build_request(
-                    "POST", url, data=data, json=json, params=params, headers=headers, timeout=timeout, files=files, content=content  # type: ignore
+                    "POST",
+                    url,
+                    data=data,  # type: ignore
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    files=files,
+                    content=content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
@@ -684,6 +696,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
                 pass
 
     _cache_key_name = "httpx_client" + _params_key_name
+
     _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
     if _cached_client:
         return _cached_client
