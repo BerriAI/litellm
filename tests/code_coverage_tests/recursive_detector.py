@@ -84,4 +84,6 @@ recursive_functions, ignored_recursive_functions = (
 print("ALL RECURSIVE FUNCTIONS: ", recursive_functions)
 print("IGNORED RECURSIVE FUNCTIONS: ", ignored_recursive_functions)
 if len(recursive_functions) > 0:
-    raise Exception(f"Recursive functions found in {file}: {functions}")
+    raise Exception(
+        f"🚨 Recursive functions found in {file}: {functions}. THIS IS REALLY BAD, it has caused CPU Usage spikes in the past. Only keep this if it's ABSOLUTELY necessary."
+    )
