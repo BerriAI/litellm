@@ -11,6 +11,12 @@ else:
 
 
 class LoggingTaskManager:
+    """
+    Manages logging tasks for async and sync LLM calls
+
+    On init, we create a ThreadPoolExecutor with a single worker. This worker is used to run all logging tasks.
+    """
+
     def __init__(self):
         """
         Initialize TaskManager with a ThreadPoolExecutor with a single worker

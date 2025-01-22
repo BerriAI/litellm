@@ -65,7 +65,11 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
+from litellm.utils import (
+    _get_base_model_from_metadata,
+    logging_task_manager,
+    print_verbose,
+)
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize_ai import ArizeLogger
@@ -2136,11 +2140,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
-        executor.submit(
-            self.success_handler,
-            result,
-            start_time,
-            end_time,
+        logging_task_manager.submit_logging_tasks_for_sync_llm_call(
+            logging_obj=self,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
