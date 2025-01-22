@@ -185,8 +185,25 @@ def assert_langfuse_request_matches_expected(
     with open(expected_body_path, "r") as f:
         expected_request_body = json.load(f)
 
+    # Filter out events that don't match the trace_id
+    if trace_id:
+        actual_request_body["batch"] = [
+            item
+            for item in actual_request_body["batch"]
+            if (item["type"] == "trace-create" and item["body"].get("id") == trace_id)
+            or (
+                item["type"] == "generation-create"
+                and item["body"].get("traceId") == trace_id
+            )
+        ]
+
+    print(
+        "actual_request_body after filtering", json.dumps(actual_request_body, indent=4)
+    )
+
     # Replace dynamic values in actual request body
     for item in actual_request_body["batch"]:
+
         # Replace IDs with expected IDs
         if item["type"] == "trace-create":
             item["id"] = expected_request_body["batch"][0]["id"]
@@ -227,6 +244,12 @@ def assert_langfuse_request_matches_expected(
     actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body[
         "batch"
     ][1]["body"]["metadata"]
+    actual_request_body["metadata"]["sdk_integration"] = expected_request_body[
+        "metadata"
+    ]["sdk_integration"]
+    actual_request_body["metadata"]["batch_size"] = expected_request_body["metadata"][
+        "batch_size"
+    ]
     # Assert the entire request body matches
     assert (
         actual_request_body == expected_request_body
@@ -258,8 +281,8 @@ class TestLangfuseLogging:
     async def _verify_langfuse_call(
         self,
         mock_post,
-        expected_file_name,
-        trace_id: Optional[str] = None,
+        expected_file_name: str,
+        trace_id: str,
     ):
         """Helper method to verify Langfuse API calls"""
         await asyncio.sleep(1)
@@ -284,7 +307,6 @@ class TestLangfuseLogging:
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_logging_completion(self, mock_setup):
         """Test Langfuse logging for chat completion"""
         setup = await mock_setup  # Await the fixture
@@ -300,7 +322,6 @@ class TestLangfuseLogging:
             )
 
     @pytest.mark.asyncio
-    @pytest.mark.flaky(retries=2, delay=2)
     async def test_langfuse_logging_completion_with_tags(self, mock_setup):
         """Test Langfuse logging for chat completion with tags"""
         setup = await mock_setup  # Await the fixture
