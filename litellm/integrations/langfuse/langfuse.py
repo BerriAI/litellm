@@ -360,73 +360,6 @@ class LangFuseLogger:
             )
         )
 
-    def is_base_type(self, value: Any) -> bool:
-        # Check if the value is of a base type
-        base_types = (int, float, str, bool, list, dict, tuple)
-        return isinstance(value, base_types)
-
-    def _prepare_metadata(self, metadata: Optional[dict]) -> Any:
-        try:
-            if metadata is None:
-                return None
-
-            #  Filter out function types from the metadata
-            sanitized_metadata = {k: v for k, v in metadata.items() if not callable(v)}
-
-            return copy.deepcopy(sanitized_metadata)
-        except Exception as e:
-            verbose_logger.debug(f"Langfuse Layer Error - {e}, metadata: {metadata}")
-
-        new_metadata: Dict[str, Any] = {}
-
-        # if metadata is not a MutableMapping, return an empty dict since we can't call items() on it
-        if not isinstance(metadata, MutableMapping):
-            verbose_logger.debug(
-                "Langfuse Layer Logging - metadata is not a MutableMapping, returning empty dict"
-            )
-            return new_metadata
-
-        for key, value in metadata.items():
-            try:
-                if isinstance(value, MutableMapping):
-                    new_metadata[key] = self._prepare_metadata(cast(dict, value))
-                elif isinstance(value, MutableSequence):
-                    # For lists or other mutable sequences
-                    new_metadata[key] = list(
-                        (
-                            self._prepare_metadata(cast(dict, v))
-                            if isinstance(v, MutableMapping)
-                            else copy.deepcopy(v)
-                        )
-                        for v in value
-                    )
-                elif isinstance(value, MutableSet):
-                    # For sets specifically, create a new set by passing an iterable
-                    new_metadata[key] = set(
-                        (
-                            self._prepare_metadata(cast(dict, v))
-                            if isinstance(v, MutableMapping)
-                            else copy.deepcopy(v)
-                        )
-                        for v in value
-                    )
-                elif isinstance(value, BaseModel):
-                    new_metadata[key] = value.model_dump()
-                elif self.is_base_type(value):
-                    new_metadata[key] = value
-                else:
-                    verbose_logger.debug(
-                        f"Langfuse Layer Error - Unsupported metadata type: {type(value)} for key: {key}"
-                    )
-                    continue
-
-            except (TypeError, copy.Error):
-                verbose_logger.debug(
-                    f"Langfuse Layer Error - Couldn't copy metadata key: {key}, type of key: {type(key)}, type of value: {type(value)} - {traceback.format_exc()}"
-                )
-
-        return new_metadata
-
     def _log_langfuse_v2(  # noqa: PLR0915
         self,
         user_id,
@@ -448,7 +381,7 @@ class LangFuseLogger:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
-            metadata = self._prepare_metadata(metadata)
+            metadata = metadata or {}
 
             langfuse_version = Version(langfuse.version.__version__)
 
