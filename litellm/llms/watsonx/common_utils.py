@@ -275,3 +275,17 @@ class IBMWatsonXMixin:
         return WatsonXCredentials(
             api_key=api_key, api_base=api_base, token=cast(Optional[str], token)
         )
+
+    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
+        payload: dict = {}
+        if model.startswith("deployment/"):
+            if api_params["space_id"] is None:
+                raise WatsonXAIError(
+                    status_code=401,
+                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
+                )
+            payload["space_id"] = api_params["space_id"]
+            return payload
+        payload["model_id"] = model
+        payload["project_id"] = api_params["project_id"]
+        return payload
