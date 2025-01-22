@@ -1507,6 +1507,7 @@ class StandardLoggingHiddenParams(TypedDict):
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
+    litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
 
 

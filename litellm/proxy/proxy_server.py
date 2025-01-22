@@ -562,20 +562,71 @@ app = FastAPI(
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
-def custom_openapi():
+from fastapi.routing import APIWebSocketRoute
+
+
+def get_openapi_schema():
     if app.openapi_schema:
         return app.openapi_schema
+
     openapi_schema = get_openapi(
         title=app.title,
         version=app.version,
         description=app.description,
         routes=app.routes,
     )
+
+    # Find all WebSocket routes
+    websocket_routes = [
+        route for route in app.routes if isinstance(route, APIWebSocketRoute)
+    ]
+
+    # Add each WebSocket route to the schema
+    for route in websocket_routes:
+        # Get the base path without query parameters
+        base_path = route.path.split("{")[0].rstrip("?")
+
+        # Extract parameters from the route
+        parameters = []
+        if hasattr(route, "dependant"):
+            for param in route.dependant.query_params:
+                parameters.append(
+                    {
+                        "name": param.name,
+                        "in": "query",
+                        "required": param.required,
+                        "schema": {
+                            "type": "string"
+                        },  # You can make this more specific if needed
+                    }
+                )
+
+        openapi_schema["paths"][base_path] = {
+            "get": {
+                "summary": f"WebSocket: {route.name or base_path}",
+                "description": "WebSocket connection endpoint",
+                "operationId": f"websocket_{route.name or base_path.replace('/', '_')}",
+                "parameters": parameters,
+                "responses": {"101": {"description": "WebSocket Protocol Switched"}},
+                "tags": ["WebSocket"],
+            }
+        }
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi_schema()
+
     # Filter routes to include only specific ones
     openai_routes = LiteLLMRoutes.openai_routes.value
     paths_to_include: dict = {}
     for route in openai_routes:
-        paths_to_include[route] = openapi_schema["paths"][route]
+        if route in openapi_schema["paths"]:
+            paths_to_include[route] = openapi_schema["paths"][route]
     openapi_schema["paths"] = paths_to_include
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -733,11 +784,13 @@ def get_custom_headers(
     version: Optional[str] = None,
     model_region: Optional[str] = None,
     response_cost: Optional[Union[float, str]] = None,
+    hidden_params: Optional[dict] = None,
     fastest_response_batch_completion: Optional[bool] = None,
     request_data: Optional[dict] = {},
     **kwargs,
 ) -> dict:
     exclude_values = {"", None}
+    hidden_params = hidden_params or {}
     headers = {
         "x-litellm-call-id": call_id,
         "x-litellm-model-id": model_id,
@@ -750,6 +803,10 @@ def get_custom_headers(
         "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
         "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
         "x-litellm-key-spend": str(user_api_key_dict.spend),
+        "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
+        "x-litellm-overhead-duration-ms": str(
+            hidden_params.get("litellm_overhead_time_ms", None)
+        ),
         "x-litellm-fastest_response_batch_completion": (
             str(fastest_response_batch_completion)
             if fastest_response_batch_completion is not None
@@ -3491,6 +3548,7 @@ async def chat_completion(  # noqa: PLR0915
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=data,
+                hidden_params=hidden_params,
                 **additional_headers,
             )
             selected_data_generator = select_data_generator(
@@ -3526,6 +3584,7 @@ async def chat_completion(  # noqa: PLR0915
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=data,
+                hidden_params=hidden_params,
                 **additional_headers,
             )
         )
@@ -3719,6 +3778,7 @@ async def completion(  # noqa: PLR0915
                 api_base=api_base,
                 version=version,
                 response_cost=response_cost,
+                hidden_params=hidden_params,
                 request_data=data,
             )
             selected_data_generator = select_data_generator(
@@ -3747,6 +3807,7 @@ async def completion(  # noqa: PLR0915
                 version=version,
                 response_cost=response_cost,
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
         await check_response_size_is_safe(response=response)
@@ -3977,6 +4038,7 @@ async def embeddings(  # noqa: PLR0915
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 call_id=litellm_call_id,
                 request_data=data,
+                hidden_params=hidden_params,
                 **additional_headers,
             )
         )
@@ -4103,6 +4165,7 @@ async def image_generation(
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 call_id=litellm_call_id,
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -4223,6 +4286,7 @@ async def audio_speech(
             fastest_response_batch_completion=None,
             call_id=litellm_call_id,
             request_data=data,
+            hidden_params=hidden_params,
         )
 
         select_data_generator(
@@ -4362,6 +4426,7 @@ async def audio_transcriptions(
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 call_id=litellm_call_id,
                 request_data=data,
+                hidden_params=hidden_params,
                 **additional_headers,
             )
         )
@@ -4510,6 +4575,7 @@ async def get_assistants(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -4607,6 +4673,7 @@ async def create_assistant(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -4703,6 +4770,7 @@ async def delete_assistant(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -4799,6 +4867,7 @@ async def create_threads(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -4894,6 +4963,7 @@ async def get_thread(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -4992,6 +5062,7 @@ async def add_messages(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -5086,6 +5157,7 @@ async def get_messages(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -5194,6 +5266,7 @@ async def run_thread(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -5316,6 +5389,7 @@ async def moderations(
                 version=version,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 
@@ -5488,6 +5562,7 @@ async def anthropic_response(  # noqa: PLR0915
                 version=version,
                 response_cost=response_cost,
                 request_data=data,
+                hidden_params=hidden_params,
             )
         )
 

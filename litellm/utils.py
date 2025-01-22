@@ -93,6 +93,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    ResponseMetadata,
+)
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -109,6 +112,7 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -929,6 +933,15 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    # RETURN RESULT
+                    update_response_metadata(
+                        result=result,
+                        logging_obj=logging_obj,
+                        model=model,
+                        kwargs=kwargs,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] is True:
                 return result
@@ -966,25 +979,14 @@ def client(original_function):  # noqa: PLR0915
                 end_time,
             )
             # RETURN RESULT
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model or "",
-                    optional_params=getattr(logging_obj, "optional_params", {}),
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if result is not None:
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1116,39 +1118,17 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    update_response_metadata(
+                        result=result,
+                        logging_obj=logging_obj,
+                        model=model,
+                        kwargs=kwargs,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                     return result
             elif call_type == CallTypes.arealtime.value:
                 return result
-
-            # ADD HIDDEN PARAMS - additional call metadata
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["litellm_call_id"] = getattr(
-                    logging_obj, "litellm_call_id", None
-                )
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model or "",
-                    optional_params=kwargs,
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
-                or isinstance(result, TranscriptionResponse)
-            ):
-                setattr(
-                    result,
-                    "_response_ms",
-                    (end_time - start_time).total_seconds() * 1000,
-                )  # return response latency in ms like openai
-
             ### POST-CALL RULES ###
             post_call_processing(
                 original_response=result, model=model, optional_params=kwargs
@@ -1189,6 +1169,15 @@ def client(original_function):  # noqa: PLR0915
                     start_time=start_time,
                     end_time=end_time,
                 )
+
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
 
             return result
         except Exception as e:
@@ -1291,6 +1280,31 @@ def _is_async_request(
     ):
         return True
     return False
+
+
+def update_response_metadata(
+    result: Any,
+    logging_obj: LiteLLMLoggingObject,
+    model: Optional[str],
+    kwargs: dict,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    """
+    Updates response metadata, adds the following:
+        - response._hidden_params
+        - response._hidden_params["litellm_overhead_time_ms"]
+        - response.response_time_ms
+    """
+    if result is None:
+        return
+
+    metadata = ResponseMetadata(result)
+    metadata.set_hidden_params(logging_obj=logging_obj, model=model, kwargs=kwargs)
+    metadata.set_timing_metrics(
+        start_time=start_time, end_time=end_time, logging_obj=logging_obj
+    )
+    metadata.apply()
 
 
 def _select_tokenizer(
@@ -2588,6 +2602,25 @@ def _remove_unsupported_params(
     return non_default_params
 
 
+def get_clean_extra_headers(extra_headers: dict, custom_llm_provider: str) -> dict:
+    """
+    For `anthropic-beta` headers, ensure provider is anthropic.
+
+    Vertex AI raises an exception if `anthropic-beta` is passed in.
+    """
+    if litellm.filter_invalid_headers is not True:  # allow user to opt out of filtering
+        return extra_headers
+    clean_extra_headers = {}
+    for k, v in extra_headers.items():
+        if k in ANTHROPIC_API_ONLY_HEADERS and custom_llm_provider != "anthropic":
+            verbose_logger.debug(
+                f"Provider {custom_llm_provider} does not support {k} header. Dropping from request, to prevent errors."
+            )  # Switching between anthropic api and vertex ai anthropic fails when anthropic-beta is passed in. Welcome feedback on this.
+        else:
+            clean_extra_headers[k] = v
+    return clean_extra_headers
+
+
 def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -2725,6 +2758,12 @@ def get_optional_params(  # noqa: PLR0915
             is False
         )
     }
+
+    ## Supports anthropic headers
+    if extra_headers is not None:
+        extra_headers = get_clean_extra_headers(
+            extra_headers=extra_headers, custom_llm_provider=custom_llm_provider
+        )
 
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
@@ -3495,6 +3534,12 @@ def get_optional_params(  # noqa: PLR0915
         for k in passed_params.keys():
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
+    if extra_headers is not None:
+        optional_params.setdefault("extra_headers", {})
+        optional_params["extra_headers"] = {
+            **optional_params["extra_headers"],
+            **extra_headers,
+        }
     print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
 

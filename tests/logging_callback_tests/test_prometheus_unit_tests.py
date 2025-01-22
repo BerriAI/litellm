@@ -299,12 +299,16 @@ def test_increment_remaining_budget_metrics(prometheus_logger):
     prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
         "team1", "team_alias1"
     )
-    prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(100)
+    prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(
+        100
+    )
 
     prometheus_logger.litellm_api_key_max_budget_metric.labels.assert_called_once_with(
         "key1", "alias1"
     )
-    prometheus_logger.litellm_api_key_max_budget_metric.labels().set.assert_called_once_with(75)
+    prometheus_logger.litellm_api_key_max_budget_metric.labels().set.assert_called_once_with(
+        75
+    )
 
 
 def test_set_latency_metrics(prometheus_logger):
@@ -640,6 +644,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.litellm_deployment_total_requests = MagicMock()
     prometheus_logger.litellm_deployment_latency_per_output_token = MagicMock()
     prometheus_logger.set_deployment_healthy = MagicMock()
+    prometheus_logger.litellm_overhead_latency_metric = MagicMock()
 
     standard_logging_payload = create_standard_logging_payload()
 
@@ -647,6 +652,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         "x_ratelimit_remaining_requests": 123,
         "x_ratelimit_remaining_tokens": 4321,
     }
+    standard_logging_payload["hidden_params"]["litellm_overhead_time_ms"] = 100
 
     # Create test data
     request_kwargs = {
@@ -754,6 +760,15 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
     )
+    prometheus_logger.litellm_overhead_latency_metric.labels.assert_called_once_with(
+        "openai-gpt",  # model_group / requested model from create_standard_logging_payload()
+        "openai",  # llm provider
+        "https://api.openai.com",  # api base
+        "gpt-3.5-turbo",  # actual model used - litellm model name
+        standard_logging_payload["metadata"]["user_api_key_hash"],
+        standard_logging_payload["metadata"]["user_api_key_alias"],
+    )
+
     # Calculate expected latency per token (1 second / 10 tokens = 0.1 seconds per token)
     expected_latency_per_token = 0.1
     prometheus_logger.litellm_deployment_latency_per_output_token.labels().observe.assert_called_once_with(
