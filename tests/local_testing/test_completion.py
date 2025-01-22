@@ -4537,3 +4537,16 @@ def test_humanloop_completion(monkeypatch):
         prompt_variables={"person": "John"},
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
+
+
+def test_deepseek_reasoning_content_completion():
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="deepseek/deepseek-reasoner",
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+    )
+
+    assert (
+        resp.choices[0].message.provider_specific_fields["reasoning_content"]
+        is not None
+    )
