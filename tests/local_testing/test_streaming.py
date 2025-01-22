@@ -4077,7 +4077,7 @@ def test_deepseek_reasoning_content_completion():
     for chunk in resp:
         print(f"chunk: {chunk}")
         if chunk.choices[0].delta.content is not None:
-            if "reasoning_content" in chunk.choices[0].delta.provider_specific_field:
+            if "reasoning_content" in chunk.choices[0].delta.provider_specific_fields:
                 reasoning_content_exists = True
                 break
     assert reasoning_content_exists
