@@ -1011,7 +1011,9 @@ class PrometheusLogger(CustomLogger):
                     litellm_model_name,
                     standard_logging_payload["metadata"]["user_api_key_hash"],
                     standard_logging_payload["metadata"]["user_api_key_alias"],
-                ).observe(litellm_overhead_time_ms)
+                ).observe(
+                    litellm_overhead_time_ms / 1000
+                )  # set as seconds
 
             if remaining_requests:
                 """
