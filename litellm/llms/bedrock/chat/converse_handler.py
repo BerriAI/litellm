@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -26,7 +27,7 @@ def make_sync_call(
     data: str,
     model: str,
     messages: list,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObject,
     json_mode: Optional[bool] = False,
     fake_stream: bool = False,
 ):
@@ -38,6 +39,7 @@ def make_sync_call(
         headers=headers,
         data=data,
         stream=not fake_stream,
+        logging_obj=logging_obj,
     )
 
     if response.status_code != 200:
@@ -171,7 +173,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         print_verbose: Callable,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         stream,
         optional_params: dict,
         litellm_params: dict,
@@ -223,7 +225,9 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(url=api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(
+                url=api_base, headers=headers, data=data, logging_obj=logging_obj
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -254,7 +258,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         acompletion: bool,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -458,7 +462,12 @@ class BedrockConverseLLM(BaseAWSLLM):
         ### COMPLETION
 
         try:
-            response = client.post(url=proxy_endpoint_url, headers=prepped.headers, data=data)  # type: ignore
+            response = client.post(
+                url=proxy_endpoint_url,
+                headers=prepped.headers,
+                data=data,
+                logging_obj=logging_obj,
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
