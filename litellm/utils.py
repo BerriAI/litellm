@@ -61,6 +61,7 @@ from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils._task_manager import LoggingTaskManager
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
@@ -229,10 +230,8 @@ from .types.router import LiteLLM_Params
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
-MAX_THREADS = 100
 
-# Create a ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=1)
+logging_task_manager = LoggingTaskManager()
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -602,35 +601,6 @@ def function_setup(  # noqa: PLR0915
         raise e
 
 
-async def _client_async_logging_helper(
-    logging_obj: LiteLLMLoggingObject,
-    result,
-    start_time,
-    end_time,
-    is_completion_with_fallbacks: bool,
-):
-    if (
-        is_completion_with_fallbacks is False
-    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
-        print_verbose(
-            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-        )
-        # Run async_success_handler in background thread
-        executor.submit(
-            logging_obj.async_success_handler,
-            result,
-            start_time,
-            end_time,
-        )
-        # Run sync callbacks in background thread
-        executor.submit(
-            logging_obj.handle_sync_success_callbacks_for_async_calls,
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-
 def _get_wrapper_num_retries(
     kwargs: Dict[str, Any], exception: Exception
 ) -> Tuple[Optional[int], Dict[str, Any]]:
@@ -977,11 +947,11 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
+            logging_task_manager.submit_logging_tasks_for_sync_llm_call(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
             )
             # RETURN RESULT
             update_response_metadata(
@@ -1148,19 +1118,12 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
-            logging_obj.handle_sync_success_callbacks_for_async_calls(
+            logging_task_manager.submit_logging_tasks_for_async_llm_call(
+                logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,
                 end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
             )
             # REBUILD EMBEDDING CACHING
             if (
