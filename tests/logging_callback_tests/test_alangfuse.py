@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
