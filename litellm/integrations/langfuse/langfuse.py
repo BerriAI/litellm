@@ -3,11 +3,9 @@
 import copy
 import os
 import traceback
-from collections.abc import MutableMapping, MutableSequence, MutableSet
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from packaging.version import Version
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -361,7 +359,7 @@ class LangFuseLogger:
             )
         )
 
-    def _log_langfuse_v2(
+    def _log_langfuse_v2(  # noqa: PLR0915
         self,
         user_id,
         metadata,
