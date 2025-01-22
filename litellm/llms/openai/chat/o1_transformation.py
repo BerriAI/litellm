@@ -57,6 +57,9 @@ class OpenAIO1Config(OpenAIGPTConfig):
         """
 
         all_openai_params = super().get_supported_openai_params(model=model)
+        o1_only_params = [
+            "reasoning_effort"
+        ]
         non_supported_params = [
             "logprobs",
             "top_p",
@@ -90,8 +93,9 @@ class OpenAIO1Config(OpenAIGPTConfig):
         if not _supports_response_schema:
             non_supported_params.append("response_format")
 
+        all_params = o1_only_params + all_openai_params
         return [
-            param for param in all_openai_params if param not in non_supported_params
+            param for param in all_params if param not in non_supported_params
         ]
 
     def map_openai_params(
