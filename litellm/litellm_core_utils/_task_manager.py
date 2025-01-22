@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -39,6 +39,7 @@ class LoggingTaskManager:
             result: The result from the LLM API call
             start_time: Unix timestamp of when the call started
             end_time: Unix timestamp of when the call ended
+            cache_hit: Whether the call was a cache hit
             is_completion_with_fallbacks: Whether this is a completion with fallbacks call
         """
         if not is_completion_with_fallbacks:  # Avoid double logging for fallback calls
@@ -72,6 +73,7 @@ class LoggingTaskManager:
             result: The result from the LLM API call
             start_time: Unix timestamp of when the call started
             end_time: Unix timestamp of when the call ended
+            cache_hit: Whether the call was a cache hit
         """
         self.executor.submit(
             logging_obj.success_handler,

@@ -7,7 +7,7 @@ import httpx
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.utils import StandardPassThroughResponseObject
-from litellm.utils import executor as thread_pool_executor
+from litellm.utils import logging_task_manager
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -83,16 +83,8 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
-        thread_pool_executor.submit(
-            logging_obj.success_handler,
-            standard_logging_response_object,  # Positional argument 1
-            start_time,  # Positional argument 2
-            end_time,  # Positional argument 3
-            cache_hit,  # Positional argument 4
-            **kwargs,  # Unpacked keyword arguments
-        )
-
-        await logging_obj.async_success_handler(
+        logging_task_manager.submit_logging_tasks_for_async_llm_call(
+            logging_obj=logging_obj,
             result=(
                 json.dumps(result)
                 if isinstance(result, dict)
@@ -100,7 +92,6 @@ class PassThroughEndpointLogging:
             ),
             start_time=start_time,
             end_time=end_time,
-            cache_hit=False,
             **kwargs,
         )
 
