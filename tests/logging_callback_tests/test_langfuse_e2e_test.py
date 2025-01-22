@@ -245,3 +245,48 @@ class TestLangfuseLogging:
                 "completion_with_langfuse_metadata.json",
                 setup["trace_id"],
             )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_with_non_serializable_metadata(self, mock_setup):
+        """Test Langfuse logging with metadata that requires preparation (Pydantic models, sets, etc)"""
+        from pydantic import BaseModel
+        from typing import Set
+        import datetime
+
+        class UserPreferences(BaseModel):
+            favorite_colors: Set[str]
+            last_login: datetime.datetime
+            settings: dict
+
+        setup = await mock_setup
+
+        test_metadata = {
+            "user_prefs": UserPreferences(
+                favorite_colors={"red", "blue"},
+                last_login=datetime.datetime.now(),
+                settings={"theme": "dark", "notifications": True},
+            ),
+            "nested_set": {
+                "inner_set": {1, 2, 3},
+                "inner_pydantic": UserPreferences(
+                    favorite_colors={"green", "yellow"},
+                    last_login=datetime.datetime.now(),
+                    settings={"theme": "light"},
+                ),
+            },
+            "trace_id": setup["trace_id"],
+        }
+
+        with patch("httpx.Client.post", setup["mock_post"]):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata=test_metadata,
+            )
+
+            await self._verify_langfuse_call(
+                setup["mock_post"],
+                "completion_with_complex_metadata.json",
+                setup["trace_id"],
+            )
