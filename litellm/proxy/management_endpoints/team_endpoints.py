@@ -461,7 +461,7 @@ async def update_team(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    updated_kv = data.json(exclude_none=True)
+    updated_kv = data.json(exclude_unset=True)
 
     # Check budget_duration and budget_reset_at
     if data.budget_duration is not None:
