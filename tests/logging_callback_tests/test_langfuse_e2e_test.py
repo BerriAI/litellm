@@ -216,3 +216,32 @@ class TestLangfuseLogging:
                 "completion_with_tags_stream.json",
                 setup["trace_id"],
             )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_completion_with_langfuse_metadata(self, mock_setup):
+        """Test Langfuse logging for chat completion with metadata for langfuse"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata={
+                    "trace_id": setup["trace_id"],
+                    "tags": ["test_tag", "test_tag_2"],
+                    "generation_name": "test_generation_name",
+                    "parent_observation_id": "test_parent_observation_id",
+                    "version": "test_version",
+                    "trace_user_id": "test_user_id",
+                    "session_id": "test_session_id",
+                    "trace_name": "test_trace_name",
+                    "trace_metadata": {"test_key": "test_value"},
+                    "trace_version": "test_trace_version",
+                    "trace_release": "test_trace_release",
+                },
+            )
+            await self._verify_langfuse_call(
+                setup["mock_post"],
+                "completion_with_langfuse_metadata.json",
+                setup["trace_id"],
+            )
