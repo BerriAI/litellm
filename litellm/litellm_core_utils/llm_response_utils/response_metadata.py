@@ -92,7 +92,8 @@ class ResponseMetadata:
 
     def apply(self) -> None:
         """Apply metadata to the response object"""
-        self.result._hidden_params = self._hidden_params
+        if hasattr(self.result, "_hidden_params"):
+            self.result._hidden_params = self._hidden_params
 
 
 def update_response_metadata(
