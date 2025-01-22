@@ -4672,7 +4672,7 @@ def image_variation(
     **kwargs,
 ) -> ImageResponse:
     # get non-default params
-
+    client = kwargs.get("client", None)
     # get logging object
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
 
@@ -4746,6 +4746,7 @@ def image_variation(
             logging_obj=litellm_logging_obj,
             optional_params={},
             litellm_params=litellm_params,
+            client=client,
         )
 
     # return the response
