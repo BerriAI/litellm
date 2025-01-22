@@ -432,7 +432,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 """
 
 
-class ProviderSpecificMessageField(TypedDict, total=False):
+class ProviderSpecificMessageFields(TypedDict, total=False):
     reasoning_content: Optional[str]
 
 
@@ -442,7 +442,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
-    provider_specific_field: ProviderSpecificMessageField = {}
+    provider_specific_fields: ProviderSpecificMessageFields = {}
 
     def __init__(
         self,
@@ -451,7 +451,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        provider_specific_field: ProviderSpecificMessageField = {},
+        provider_specific_fields: ProviderSpecificMessageFields = {},
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -472,7 +472,7 @@ class Message(OpenAIObject):
                 if tool_calls is not None and len(tool_calls) > 0
                 else None
             ),
-            "provider_specific_field": provider_specific_field,
+            "provider_specific_fields": provider_specific_fields,
         }
 
         if audio is not None:
@@ -509,7 +509,7 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
-    provider_specific_field: ProviderSpecificMessageField = {}
+    provider_specific_fields: ProviderSpecificMessageFields = {}
 
     def __init__(
         self,
@@ -518,16 +518,16 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        provider_specific_field: ProviderSpecificMessageField = {},
+        provider_specific_fields: ProviderSpecificMessageFields = {},
         **params,
     ):
         if "reasoning_content" in params:
-            provider_specific_field["reasoning_content"] = params["reasoning_content"]
+            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
             del params["reasoning_content"]
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
-        self.provider_specific_field = provider_specific_field
+        self.provider_specific_fields = provider_specific_fields
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None

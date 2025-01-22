@@ -4547,5 +4547,6 @@ def test_deepseek_reasoning_content_completion():
     )
 
     assert (
-        resp.choices[0].message.provider_specific_field["reasoning_content"] is not None
+        resp.choices[0].message.provider_specific_fields["reasoning_content"]
+        is not None
     )

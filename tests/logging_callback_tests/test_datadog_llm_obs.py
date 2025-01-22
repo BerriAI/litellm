@@ -136,6 +136,7 @@ async def test_create_llm_obs_payload():
             "role": "assistant",
             "tool_calls": None,
             "function_call": None,
+            "provider_specific_fields": {},
         }
     ]
     assert payload["metrics"]["input_tokens"] == 20
