@@ -57,6 +57,7 @@ from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+from litellm.router_utils.add_retry_headers import add_retry_headers_to_response
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
     replace_model_in_jsonl,
@@ -3090,7 +3091,9 @@ class Router:
             )
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await self.make_call(original_function, *args, **kwargs)
-
+            response = add_retry_headers_to_response(
+                response=response, attempted_retries=0, max_retries=num_retries
+            )
             return response
         except Exception as e:
             current_attempt = None
@@ -3156,6 +3159,12 @@ class Router:
                         response
                     ):  # async errors are often returned as coroutines
                         response = await response
+
+                    response = add_retry_headers_to_response(
+                        response=response,
+                        attempted_retries=current_attempt + 1,
+                        max_retries=num_retries,
+                    )
                     return response
 
                 except Exception as e:
