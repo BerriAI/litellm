@@ -1961,9 +1961,9 @@
         "mode": "embedding"
     },
     "deepseek/deepseek-chat": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
+        "max_tokens": 8192,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 0.00000014,
         "input_cost_per_token_cache_hit": 0.000000014,
         "cache_read_input_token_cost": 0.000000014,
@@ -2029,13 +2029,13 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
-    "deepseek/deepseek-coder": {
-        "max_tokens": 4096,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 4096,
-        "input_cost_per_token": 0.00000014,
-        "input_cost_per_token_cache_hit": 0.000000014,
-        "output_cost_per_token": 0.00000028,
+    "deepseek/deepseek-reasoner": {
+        "max_tokens": 8192,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000055,
+        "input_cost_per_token_cache_hit": 0.00000014,
+        "output_cost_per_token": 0.00000219,
         "litellm_provider": "deepseek",
         "mode": "chat",
         "supports_function_calling": true, 
