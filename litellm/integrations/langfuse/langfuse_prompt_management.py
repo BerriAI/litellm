@@ -107,6 +107,9 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_host=None,
         flush_interval=1,
     ):
+        import langfuse
+
+        self.langfuse_sdk_version = langfuse.version.__version__
         self.Langfuse = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,
