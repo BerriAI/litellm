@@ -17,9 +17,8 @@ def add_retry_headers_to_response(
     if response is None or not isinstance(response, BaseModel):
         return response
 
-    num_retries = max_retries - attempted_retries
     retry_headers = {
-        "x-litellm-num-retries": num_retries,
+        "x-litellm-attempted-retries": attempted_retries,
         "x-litellm-max-retries": max_retries,
     }
 
