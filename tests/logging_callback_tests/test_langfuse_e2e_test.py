@@ -196,3 +196,23 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 setup["mock_post"], "completion_with_tags.json", setup["trace_id"]
             )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_completion_with_tags_stream(self, mock_setup):
+        """Test Langfuse logging for chat completion with tags"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata={
+                    "trace_id": setup["trace_id"],
+                    "tags": ["test_tag_stream", "test_tag_2_stream"],
+                },
+            )
+            await self._verify_langfuse_call(
+                setup["mock_post"],
+                "completion_with_tags_stream.json",
+                setup["trace_id"],
+            )
