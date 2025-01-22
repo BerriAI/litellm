@@ -1001,9 +1001,9 @@ class PrometheusLogger(CustomLogger):
                     "x_ratelimit_remaining_tokens", None
                 )
 
-            if litellm_overhead_time_ms := standard_logging_payload["hidden_params"][
-                "litellm_overhead_time_ms"
-            ]:
+            if litellm_overhead_time_ms := standard_logging_payload[
+                "hidden_params"
+            ].get("litellm_overhead_time_ms"):
                 self.litellm_overhead_latency_metric.labels(
                     model_group,
                     llm_provider,
