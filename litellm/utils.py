@@ -232,7 +232,7 @@ from .types.router import LiteLLM_Params
 MAX_THREADS = 100
 
 # Create a ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
+executor = ThreadPoolExecutor(max_workers=1)
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
