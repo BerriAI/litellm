@@ -3099,6 +3099,7 @@ class Router:
             current_attempt = None
             original_exception = e
             deployment_num_retries = getattr(e, "num_retries", None)
+
             if deployment_num_retries is not None and isinstance(
                 deployment_num_retries, int
             ):
@@ -3223,6 +3224,12 @@ class Router:
         mock_testing_rate_limit_error: Optional[bool] = kwargs.pop(
             "mock_testing_rate_limit_error", None
         )
+
+        available_models = self.get_model_list(model_name=model_group)
+        num_retries: Optional[int] = None
+        if available_models is not None and len(available_models) == 1:
+            num_retries = available_models[0]["litellm_params"].get("num_retries", None)
+
         if (
             mock_testing_rate_limit_error is not None
             and mock_testing_rate_limit_error is True
@@ -3234,6 +3241,7 @@ class Router:
                 model=model_group,
                 llm_provider="",
                 message=f"This is a mock exception for model={model_group}, to trigger a rate limit error.",
+                num_retries=num_retries,
             )
 
     def should_retry_this_error(

@@ -633,6 +633,7 @@ def _get_wrapper_num_retries(
     Get the number of retries from the kwargs and the retry policy.
     Used for the wrapper functions.
     """
+
     num_retries = kwargs.get("num_retries", None)
     if num_retries is None:
         num_retries = litellm.num_retries
@@ -1207,9 +1208,11 @@ def client(original_function):  # noqa: PLR0915
                 _is_litellm_router_call = "model_group" in kwargs.get(
                     "metadata", {}
                 )  # check if call from litellm.router/proxy
+
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+
                     try:
                         litellm.num_retries = (
                             None  # set retries to None to prevent infinite loops
@@ -1230,6 +1233,7 @@ def client(original_function):  # noqa: PLR0915
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                 ):
+
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]  # type: ignore
                     else:

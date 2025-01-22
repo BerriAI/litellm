@@ -145,3 +145,5 @@ async def test_chat_completion_with_retries():
             return_headers=True,
         )
         print(f"headers: {headers}")
+        assert headers["x-litellm-attempted-retries"] == "1"
+        assert headers["x-litellm-max-retries"] == "50"
