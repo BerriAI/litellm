@@ -28,6 +28,7 @@ from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     construct_tool_use_system_prompt,
@@ -1003,6 +1004,7 @@ class BedrockLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
+    @track_llm_api_timing()  # for streaming, we need to instrument the function calling the wrapper
     async def async_streaming(
         self,
         model: str,
