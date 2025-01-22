@@ -77,7 +77,7 @@ class AimGuardrail(CustomGuardrail):
 
     async def call_aim_guardrail(self, data: dict, hook: str):
         user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
-        headers = {"Authorization": f"Bearer {self.api_key}", "litellm-hook": hook} | (
+        headers = {"Authorization": f"Bearer {self.api_key}", "x-aim-litellm-hook": hook} | (
             {"x-aim-user-email": user_email} if user_email else {}
         )
         response = await self.async_handler.post(
