@@ -7,11 +7,11 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 from typing import List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import IBMWatsonXMixin, WatsonXAIError
+from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):

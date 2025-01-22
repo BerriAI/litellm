@@ -14,7 +14,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import IBMWatsonXMixin, WatsonXAIError, _get_api_params
+from ..common_utils import IBMWatsonXMixin, _get_api_params
 
 
 class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
