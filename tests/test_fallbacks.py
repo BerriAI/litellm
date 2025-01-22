@@ -4,6 +4,7 @@ import pytest
 import asyncio
 import aiohttp
 from large_text import text
+import time
 
 
 async def generate_key(
@@ -60,7 +61,10 @@ async def chat_completion(
         print()
 
         if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
+            if return_headers:
+                return None, response.headers
+            else:
+                raise Exception(f"Request did not return a 200 status code: {status}")
 
         if return_headers:
             return await response.json(), response.headers
@@ -147,3 +151,34 @@ async def test_chat_completion_with_retries():
         print(f"headers: {headers}")
         assert headers["x-litellm-attempted-retries"] == "1"
         assert headers["x-litellm-max-retries"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_timeout():
+    """
+    make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "fake-openai-endpoint-5"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        start_time = time.time()
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            num_retries=0,
+            mock_timeout=True,
+            return_headers=True,
+        )
+        end_time = time.time()
+        print(f"headers: {headers}")
+        assert (
+            headers["x-litellm-timeout"] == "1.0"
+        )  # assert model-specific timeout used
+        assert (end_time - start_time) - float(
+            headers["x-litellm-timeout"]
+        ) < 1  # expect <1s diff between client request time and proxy 'said' timeout
