@@ -3521,6 +3521,12 @@ def get_optional_params(  # noqa: PLR0915
         for k in passed_params.keys():
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
+    if extra_headers is not None:
+        optional_params.setdefault("extra_headers", {})
+        optional_params["extra_headers"] = {
+            **optional_params["extra_headers"],
+            **extra_headers,
+        }
     print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
 
