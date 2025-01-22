@@ -143,7 +143,7 @@ class TestLangfuseLogging:
         trace_id: str,
     ):
         """Helper method to verify Langfuse API calls"""
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
 
         # Verify the call
         assert mock_post.call_count >= 1
