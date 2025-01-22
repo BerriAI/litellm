@@ -46,9 +46,7 @@ class OpenAIO1Config(OpenAIGPTConfig):
 
         if model is None:
             return True
-        supported_stream_models = ["o1-mini", "o1-preview"]
-        for supported_model in supported_stream_models:
-            if supported_model in model:
+        if self.is_model_o1_reasoning_model(model):
                 return False
         return True
 
