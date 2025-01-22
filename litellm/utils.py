@@ -649,6 +649,21 @@ def _get_wrapper_num_retries(
     return num_retries, kwargs
 
 
+def _get_wrapper_timeout(
+    kwargs: Dict[str, Any], exception: Exception
+) -> Optional[Union[float, int, httpx.Timeout]]:
+    """
+    Get the timeout from the kwargs
+    Used for the wrapper functions.
+    """
+
+    timeout = cast(
+        Optional[Union[float, int, httpx.Timeout]], kwargs.get("timeout", None)
+    )
+
+    return timeout
+
+
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
@@ -1243,6 +1258,9 @@ def client(original_function):  # noqa: PLR0915
             setattr(
                 e, "num_retries", num_retries
             )  ## IMPORTANT: returns the deployment's num_retries to the router
+
+            timeout = _get_wrapper_timeout(kwargs=kwargs, exception=e)
+            setattr(e, "timeout", timeout)
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
