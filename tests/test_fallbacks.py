@@ -37,7 +37,14 @@ async def generate_key(
         return await response.json()
 
 
-async def chat_completion(session, key: str, model: str, messages: list, **kwargs):
+async def chat_completion(
+    session,
+    key: str,
+    model: str,
+    messages: list,
+    return_headers: bool = False,
+    **kwargs,
+):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -54,7 +61,11 @@ async def chat_completion(session, key: str, model: str, messages: list, **kwarg
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
-        return await response.json()
+
+        if return_headers:
+            return await response.json(), response.headers
+        else:
+            return await response.json()
 
 
 @pytest.mark.asyncio
@@ -111,3 +122,26 @@ async def test_chat_completion_client_fallbacks(has_access):
         except Exception as e:
             if has_access:
                 pytest.fail("Expected this to work: {}".format(str(e)))
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_retries():
+    """
+    make chat completion call with prompt > context window. expect it to work with fallback
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "fake-openai-endpoint-4"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            num_retries=2,
+            mock_testing_rate_limit_error=True,
+            return_headers=True,
+        )
+        print(f"headers: {headers}")

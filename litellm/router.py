@@ -3092,7 +3092,7 @@ class Router:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await self.make_call(original_function, *args, **kwargs)
             response = add_retry_headers_to_response(
-                response=response, attempted_retries=0, max_retries=num_retries
+                response=response, attempted_retries=0, max_retries=None
             )
             return response
         except Exception as e:

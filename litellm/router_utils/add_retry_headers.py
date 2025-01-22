@@ -8,7 +8,7 @@ from litellm.types.utils import HiddenParams
 def add_retry_headers_to_response(
     response: Any,
     attempted_retries: int,
-    max_retries: int,
+    max_retries: Optional[int] = None,
 ) -> Any:
     """
     Add retry headers to the request
@@ -19,8 +19,9 @@ def add_retry_headers_to_response(
 
     retry_headers = {
         "x-litellm-attempted-retries": attempted_retries,
-        "x-litellm-max-retries": max_retries,
     }
+    if max_retries is not None:
+        retry_headers["x-litellm-max-retries"] = max_retries
 
     hidden_params: Optional[Union[dict, HiddenParams]] = getattr(
         response, "_hidden_params", {}
