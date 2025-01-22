@@ -432,17 +432,13 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 """
 
 
-class ProviderSpecificMessageFields(TypedDict, total=False):
-    reasoning_content: Optional[str]
-
-
 class Message(OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
-    provider_specific_fields: ProviderSpecificMessageFields = {}
+    provider_specific_fields: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -451,7 +447,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        provider_specific_fields: ProviderSpecificMessageFields = {},
+        provider_specific_fields: Dict[str, Any] = {},
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -509,7 +505,7 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
-    provider_specific_fields: ProviderSpecificMessageFields = {}
+    provider_specific_fields: Dict[str, Any] = {}
 
     def __init__(
         self,
