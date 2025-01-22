@@ -822,14 +822,13 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
-            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
