@@ -28,7 +28,7 @@ def assert_langfuse_request_matches_expected(
     trace_id: Optional[str] = None,
 ):
     """
-    Helper function to compare actual Langfuse request body with expected JSON file.
+    Helper function to compare actual Langfuse request body with expected JSON files
 
     Args:
         actual_request_body (dict): The actual request body received from the API call
