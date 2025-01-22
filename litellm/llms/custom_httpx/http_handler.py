@@ -6,12 +6,17 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 
 import litellm
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
     from litellm import LlmProviders
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObject,
+    )
 else:
     LlmProviders = Any
+    LiteLLMLoggingObject = Any
 
 try:
     from litellm._version import version
@@ -156,6 +161,7 @@ class AsyncHTTPHandler:
         )
         return response
 
+    @track_llm_api_timing()
     async def post(
         self,
         url: str,
@@ -165,6 +171,7 @@ class AsyncHTTPHandler:
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         stream: bool = False,
+        logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
             if timeout is None:
@@ -494,6 +501,7 @@ class HTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         files: Optional[dict] = None,
         content: Any = None,
+        logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
             if timeout is not None:

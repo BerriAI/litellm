@@ -93,6 +93,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    ResponseMetadata,
+)
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -929,6 +932,15 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    # RETURN RESULT
+                    update_response_metadata(
+                        result=result,
+                        logging_obj=logging_obj,
+                        model=model,
+                        kwargs=kwargs,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] is True:
                 return result
@@ -966,25 +978,14 @@ def client(original_function):  # noqa: PLR0915
                 end_time,
             )
             # RETURN RESULT
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model or "",
-                    optional_params=getattr(logging_obj, "optional_params", {}),
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if result is not None:
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1116,39 +1117,17 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    update_response_metadata(
+                        result=result,
+                        logging_obj=logging_obj,
+                        model=model,
+                        kwargs=kwargs,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                     return result
             elif call_type == CallTypes.arealtime.value:
                 return result
-
-            # ADD HIDDEN PARAMS - additional call metadata
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["litellm_call_id"] = getattr(
-                    logging_obj, "litellm_call_id", None
-                )
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model or "",
-                    optional_params=kwargs,
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
-                or isinstance(result, TranscriptionResponse)
-            ):
-                setattr(
-                    result,
-                    "_response_ms",
-                    (end_time - start_time).total_seconds() * 1000,
-                )  # return response latency in ms like openai
-
             ### POST-CALL RULES ###
             post_call_processing(
                 original_response=result, model=model, optional_params=kwargs
@@ -1189,6 +1168,15 @@ def client(original_function):  # noqa: PLR0915
                     start_time=start_time,
                     end_time=end_time,
                 )
+
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
 
             return result
         except Exception as e:
@@ -1291,6 +1279,31 @@ def _is_async_request(
     ):
         return True
     return False
+
+
+def update_response_metadata(
+    result: Any,
+    logging_obj: LiteLLMLoggingObject,
+    model: Optional[str],
+    kwargs: dict,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    """
+    Updates response metadata, adds the following:
+        - response._hidden_params
+        - response._hidden_params["litellm_overhead_time_ms"]
+        - response.response_time_ms
+    """
+    if result is None:
+        return
+
+    metadata = ResponseMetadata(result)
+    metadata.set_hidden_params(logging_obj=logging_obj, model=model, kwargs=kwargs)
+    metadata.set_timing_metrics(
+        start_time=start_time, end_time=end_time, logging_obj=logging_obj
+    )
+    metadata.apply()
 
 
 def _select_tokenizer(
