@@ -71,8 +71,9 @@ class LangFuseLogger:
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
             "httpx_client": self.langfuse_client,
         }
+        self.langfuse_sdk_version: str = langfuse.version.__version__
 
-        if Version(langfuse.version.__version__) >= Version("2.6.0"):
+        if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
 
         self.Langfuse = Langfuse(**parameters)
@@ -360,7 +361,7 @@ class LangFuseLogger:
             )
         )
 
-    def _log_langfuse_v2(  # noqa: PLR0915
+    def _log_langfuse_v2(
         self,
         user_id,
         metadata,
@@ -382,21 +383,13 @@ class LangFuseLogger:
 
         try:
             metadata = metadata or {}
-
-            langfuse_version = Version(langfuse.version.__version__)
-
-            supports_tags = langfuse_version >= Version("2.6.3")
-            supports_prompt = langfuse_version >= Version("2.7.3")
-            supports_costs = langfuse_version >= Version("2.7.3")
-            supports_completion_start_time = langfuse_version >= Version("2.7.3")
-
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
                 kwargs.get("standard_logging_object", None),
             )
             tags = (
                 self._get_langfuse_tags(standard_logging_object=standard_logging_object)
-                if supports_tags
+                if self._supports_tags()
                 else []
             )
 
@@ -557,7 +550,7 @@ class LangFuseLogger:
             if aws_region_name:
                 clean_metadata["aws_region_name"] = aws_region_name
 
-            if supports_tags:
+            if self._supports_tags():
                 if "cache_hit" in kwargs:
                     if kwargs["cache_hit"] is None:
                         kwargs["cache_hit"] = False
@@ -603,7 +596,7 @@ class LangFuseLogger:
                     usage = {
                         "prompt_tokens": _usage_obj.prompt_tokens,
                         "completion_tokens": _usage_obj.completion_tokens,
-                        "total_cost": cost if supports_costs else None,
+                        "total_cost": cost if self._supports_costs() else None,
                     }
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
@@ -646,7 +639,7 @@ class LangFuseLogger:
             if parent_observation_id is not None:
                 generation_params["parent_observation_id"] = parent_observation_id
 
-            if supports_prompt:
+            if self._supports_prompt():
                 generation_params = _add_prompt_to_generation_params(
                     generation_params=generation_params,
                     clean_metadata=clean_metadata,
@@ -656,7 +649,7 @@ class LangFuseLogger:
             if output is not None and isinstance(output, str) and level == "ERROR":
                 generation_params["status_message"] = output
 
-            if supports_completion_start_time:
+            if self._supports_completion_start_time():
                 generation_params["completion_start_time"] = kwargs.get(
                     "completion_start_time", None
                 )
@@ -702,6 +695,22 @@ class LangFuseLogger:
                     _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")
         return tags
+
+    def _supports_tags(self):
+        """Check if current langfuse version supports tags"""
+        return Version(self.langfuse_sdk_version) >= Version("2.6.3")
+
+    def _supports_prompt(self):
+        """Check if current langfuse version supports prompt"""
+        return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    def _supports_costs(self):
+        """Check if current langfuse version supports costs"""
+        return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    def _supports_completion_start_time(self):
+        """Check if current langfuse version supports completion start time"""
+        return Version(self.langfuse_sdk_version) >= Version("2.7.3")
 
 
 def _add_prompt_to_generation_params(
