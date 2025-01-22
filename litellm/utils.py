@@ -344,14 +344,31 @@ def _add_custom_logger_callback_to_specific_event(
         if logging_event == "success":
             litellm.success_callback.append(callback_class)
             litellm._async_success_callback.append(callback_class)
+            if callback in litellm.success_callback:
+                litellm.success_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+            if callback in litellm._async_success_callback:
+                litellm._async_success_callback.remove(
+                    callback
+                )  # remove the string from the callback list
         elif logging_event == "failure":
             litellm.failure_callback.append(callback_class)
             litellm._async_failure_callback.append(callback_class)
+            if callback in litellm.failure_callback:
+                litellm.failure_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+            if callback in litellm._async_failure_callback:
+                litellm._async_failure_callback.remove(
+                    callback
+                )  # remove the string from the callback list
 
 
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+
     ### NOTICES ###
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks

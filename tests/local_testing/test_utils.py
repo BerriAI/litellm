@@ -1506,3 +1506,17 @@ def test_add_custom_logger_callback_to_specific_event(monkeypatch):
 
     assert len(litellm.success_callback) == 1
     assert len(litellm.failure_callback) == 0
+
+
+def test_add_custom_logger_callback_to_specific_event_e2e():
+
+    litellm.success_callback = ["humanloop"]
+
+    litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing langfuse",
+    )
+
+    assert len(litellm.success_callback) == 1
+    assert len(litellm.failure_callback) == 0
