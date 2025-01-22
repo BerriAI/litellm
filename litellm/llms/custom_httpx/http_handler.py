@@ -93,11 +93,15 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]] = None,
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
+        ssl_verify: Optional[Union[bool, str]] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.client = self.create_client(
-            timeout=timeout, concurrent_limit=concurrent_limit, event_hooks=event_hooks
+            timeout=timeout,
+            concurrent_limit=concurrent_limit,
+            event_hooks=event_hooks,
+            ssl_verify=ssl_verify,
         )
         self.client_alias = client_alias
 
@@ -106,11 +110,13 @@ class AsyncHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]],
         concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
+        ssl_verify: Optional[Union[bool, str]] = None,
     ) -> httpx.AsyncClient:
 
         # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
         # /path/to/certificate.pem
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        if ssl_verify is None:
+            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
@@ -672,6 +678,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0)
         )
+
     litellm.in_memory_llm_clients_cache.set_cache(
         key=_cache_key_name,
         value=_new_client,
