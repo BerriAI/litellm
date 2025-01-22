@@ -2998,6 +2998,7 @@ class StandardLoggingPayloadSetup:
             api_base=None,
             response_cost=None,
             additional_headers=None,
+            litellm_overhead_time_ms=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3094,6 +3095,7 @@ def get_standard_logging_object_payload(
                         cache_key=None,
                         api_base=None,
                         response_cost=None,
+                        litellm_overhead_time_ms=None,
                     )
                 )
 
