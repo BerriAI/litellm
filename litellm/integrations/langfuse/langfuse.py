@@ -377,8 +377,6 @@ class LangFuseLogger:
         print_verbose,
         litellm_call_id,
     ) -> tuple:
-        import langfuse
-
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
