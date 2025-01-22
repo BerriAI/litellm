@@ -1494,3 +1494,26 @@ def test_get_num_retries(num_retries):
             "num_retries": num_retries,
         },
     )
+
+
+@pytest.mark.parametrize("filter_invalid_headers", [True, False])
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected_result",
+    [("anthropic", {"anthropic-beta": "123"}), ("bedrock", {}), ("vertex_ai", {})],
+)
+def test_get_clean_extra_headers(
+    filter_invalid_headers, custom_llm_provider, expected_result, monkeypatch
+):
+    from litellm.utils import get_clean_extra_headers
+
+    monkeypatch.setattr(litellm, "filter_invalid_headers", filter_invalid_headers)
+
+    if filter_invalid_headers:
+        assert (
+            get_clean_extra_headers({"anthropic-beta": "123"}, custom_llm_provider)
+            == expected_result
+        )
+    else:
+        assert get_clean_extra_headers(
+            {"anthropic-beta": "123"}, custom_llm_provider
+        ) == {"anthropic-beta": "123"}
