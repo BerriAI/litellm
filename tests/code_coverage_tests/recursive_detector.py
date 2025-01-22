@@ -8,7 +8,6 @@ IGNORE_FUNCTIONS = [
     "text_completion",
     "_check_for_os_environ_vars",
     "clean_message",
-    "_prepare_metadata",
     "unpack_defs",
     "convert_to_nullable",
     "add_object_type",
