@@ -1494,3 +1494,15 @@ def test_get_num_retries(num_retries):
             "num_retries": num_retries,
         },
     )
+
+
+def test_add_custom_logger_callback_to_specific_event(monkeypatch):
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    _add_custom_logger_callback_to_specific_event("langfuse", "success")
+
+    assert len(litellm.success_callback) == 1
+    assert len(litellm.failure_callback) == 0
