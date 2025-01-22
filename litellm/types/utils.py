@@ -434,6 +434,7 @@ ChatCompletionMessage(content='This is a test', role='assistant', function_call=
 
 class Message(OpenAIObject):
     content: Optional[str]
+    reasoning_content: Optional[str] = None
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
@@ -445,6 +446,7 @@ class Message(OpenAIObject):
     def __init__(
         self,
         content: Optional[str] = None,
+        reasoning_content: Optional[str] = None,
         role: Literal["assistant"] = "assistant",
         function_call=None,
         tool_calls: Optional[list] = None,
@@ -474,6 +476,9 @@ class Message(OpenAIObject):
 
         if audio is not None:
             init_values["audio"] = audio
+
+        if reasoning_content is not None:
+            init_values["reasoning_content"] = reasoning_content
 
         super(Message, self).__init__(
             **init_values,  # type: ignore

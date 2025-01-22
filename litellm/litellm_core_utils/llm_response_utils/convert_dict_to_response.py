@@ -417,6 +417,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                             provider_specific_fields[field] = choice["message"][field]
                     message = Message(
                         content=choice["message"].get("content", None),
+                        reasoning_content=choice["message"].get("reasoning_content", None),
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
