@@ -74,14 +74,15 @@ class LoggingTaskManager:
                 )
             )
 
-            # Schedule any synchronous callbacks in the executor
-            self.executor.submit(
-                logging_obj.handle_sync_success_callbacks_for_async_calls,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                **kwargs,
-            )
+            if logging_obj._should_run_sync_callbacks_for_async_calls():
+                # Schedule any synchronous callbacks in the executor
+                self.executor.submit(
+                    self.submit_logging_tasks_for_sync_llm_call,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    **kwargs,
+                )
 
     def submit_logging_tasks_for_sync_llm_call(
         self,
