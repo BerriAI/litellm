@@ -3228,7 +3228,9 @@ class Router:
         available_models = self.get_model_list(model_name=model_group)
         num_retries: Optional[int] = None
         if available_models is not None and len(available_models) == 1:
-            num_retries = available_models[0]["litellm_params"].get("num_retries", None)
+            num_retries = cast(
+                Optional[int], available_models[0]["litellm_params"].get("num_retries")
+            )
 
         if (
             mock_testing_rate_limit_error is not None
