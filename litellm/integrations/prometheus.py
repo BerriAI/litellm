@@ -595,6 +595,13 @@ class PrometheusLogger(CustomLogger):
         _api_key_max_budget = litellm_params.get("metadata", {}).get(
             "user_api_key_max_budget", None
         )
+        await self._set_api_key_budget_metrics_after_api_request(
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            response_cost=response_cost,
+            key_max_budget=_api_key_max_budget,
+            key_spend=_api_key_spend,
+        )
 
         await self._set_team_budget_metrics_after_api_request(
             user_api_team=user_api_team,
@@ -602,14 +609,6 @@ class PrometheusLogger(CustomLogger):
             team_spend=_team_spend,
             team_max_budget=_team_max_budget,
             response_cost=response_cost,
-        )
-
-        await self._set_api_key_budget_metrics_after_api_request(
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
-            response_cost=response_cost,
-            key_max_budget=_api_key_max_budget,
-            key_spend=_api_key_spend,
         )
 
     def _increment_top_level_request_and_spend_metrics(
@@ -1389,22 +1388,23 @@ class PrometheusLogger(CustomLogger):
             - looks up team info from db if not available in metadata
         - Set team budget metrics
         """
-        team_object = await self._assemble_team_object(
-            team_id=user_api_team or "",
-            team_alias=user_api_team_alias or "",
-            spend=team_spend,
-            max_budget=team_max_budget,
-            response_cost=response_cost,
-        )
+        if user_api_team:
+            team_object = await self._assemble_team_object(
+                team_id=user_api_team,
+                team_alias=user_api_team_alias or "",
+                spend=team_spend,
+                max_budget=team_max_budget,
+                response_cost=response_cost,
+            )
 
-        self._set_team_budget_metrics(team_object)
+            self._set_team_budget_metrics(team_object)
 
     async def _assemble_team_object(
         self,
         team_id: str,
         team_alias: str,
-        spend: float,
-        max_budget: float,
+        spend: Optional[float],
+        max_budget: Optional[float],
         response_cost: float,
     ) -> LiteLLM_TeamTable:
         """
@@ -1420,7 +1420,7 @@ class PrometheusLogger(CustomLogger):
         team_object = LiteLLM_TeamTable(
             team_id=team_id,
             team_alias=team_alias,
-            spend=spend + response_cost,
+            spend=spend or 0 + response_cost,
             max_budget=max_budget,
         )
 

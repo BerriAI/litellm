@@ -393,3 +393,136 @@ async def test_team_budget_metrics():
         assert (
             abs(team_info_remaining_budget - first_budget["remaining"]) <= 0.00000
         ), f"Spend mismatch: Prometheus={team_info_remaining_budget}, Team Info={first_budget['remaining']}"
+
+
+async def create_test_key_with_budget(
+    session: aiohttp.ClientSession, budget_data: Dict[str, Any]
+) -> str:
+    """Generate a new key with budget constraints and return it"""
+    url = "http://0.0.0.0:4000/key/generate"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+    print("budget_data", budget_data)
+
+    async with session.post(url, headers=headers, json=budget_data) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to generate key. Status: {response.status}"
+        key_info = await response.json()
+        return key_info["key"]
+
+
+async def get_key_info(session: aiohttp.ClientSession, key: str) -> Dict[str, Any]:
+    """Fetch key info and return the response"""
+    url = "http://0.0.0.0:4000/key/info"
+    headers = {
+        "Authorization": f"Bearer {key}",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to get key info. Status: {response.status}"
+        return await response.json()
+
+
+def extract_key_budget_metrics(metrics_text: str, key_id: str) -> Dict[str, float]:
+    """Extract budget-related metrics for a specific key"""
+    import re
+
+    metrics = {}
+
+    # Get remaining budget
+    remaining_pattern = f'litellm_remaining_api_key_budget_metric{{api_key_alias="[^"]*",hashed_api_key="{key_id}"}} ([0-9.]+)'
+    remaining_match = re.search(remaining_pattern, metrics_text)
+    metrics["remaining"] = float(remaining_match.group(1)) if remaining_match else None
+
+    # Get total budget
+    total_pattern = f'litellm_api_key_max_budget_metric{{api_key_alias="[^"]*",hashed_api_key="{key_id}"}} ([0-9.]+)'
+    total_match = re.search(total_pattern, metrics_text)
+    metrics["total"] = float(total_match.group(1)) if total_match else None
+
+    # Get remaining hours
+    hours_pattern = f'litellm_api_key_budget_remaining_hours_metric{{api_key_alias="[^"]*",hashed_api_key="{key_id}"}} ([0-9.]+)'
+    hours_match = re.search(hours_pattern, metrics_text)
+    metrics["remaining_hours"] = float(hours_match.group(1)) if hours_match else None
+
+    return metrics
+
+
+@pytest.mark.asyncio
+async def test_key_budget_metrics():
+    """
+    Test key budget tracking metrics:
+    1. Create a key with max_budget
+    2. Make chat completion requests using OpenAI SDK with the key
+    3. Verify budget decreases over time
+    4. Verify request costs are being tracked correctly
+    5. Verify prometheus metrics match /key/info spend data
+    """
+    async with aiohttp.ClientSession() as session:
+        # Setup test key with unique alias
+        unique_alias = f"budget_test_key_{uuid.uuid4()}"
+        key_data = {
+            "key_alias": unique_alias,
+            "max_budget": 10,
+            "budget_duration": "7d",
+        }
+        key = await create_test_key_with_budget(session, key_data)
+
+        # Extract key_id from the key info
+        key_info = await get_key_info(session, key)
+        print("key_info", key_info)
+        key_id = key_info["key"]
+        print("key_id", key_id)
+
+        # Initialize OpenAI client with the key
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=key)
+
+        # Make initial request and check budget
+        await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        )
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get metrics after request
+        metrics_after_first = await get_prometheus_metrics(session)
+        print("metrics_after_first request", metrics_after_first)
+        first_budget = extract_key_budget_metrics(metrics_after_first, key_id)
+
+        print(f"Budget after 1 request: {first_budget}")
+        assert (
+            first_budget["remaining"] < 10.0
+        ), "remaining budget should be less than 10.0 after first request"
+        assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
+        print("first_budget['remaining_hours']", first_budget["remaining_hours"])
+        # Verify remaining hours matches 7 days (with small delta for processing time)
+        assert (
+            abs(first_budget["remaining_hours"] - (7 * 24)) <= 0.1
+        ), "Budget remaining hours should be approximately 7 days (168 hours)"
+
+        # Get key info and verify spend matches prometheus metrics
+        key_info = await get_key_info(session, key)
+        print("key_info", key_info)
+        _key_info_data = key_info["info"]
+
+        # Calculate spend from prometheus (total - remaining)
+        key_info_spend = float(_key_info_data["spend"])
+        key_info_max_budget = float(_key_info_data["max_budget"])
+        key_info_remaining_budget = key_info_max_budget - key_info_spend
+        print("\n\n\n###### Final budget metrics ######\n\n\n")
+        print("key_info_remaining_budget", key_info_remaining_budget)
+        print("prometheus_remaining_budget", first_budget["remaining"])
+        print(
+            "diff between key_info_remaining_budget and prometheus_remaining_budget",
+            key_info_remaining_budget - first_budget["remaining"],
+        )
+
+        # Verify spends match within a small delta (floating point comparison)
+        assert (
+            abs(key_info_remaining_budget - first_budget["remaining"]) <= 0.00000
+        ), f"Spend mismatch: Prometheus={key_info_remaining_budget}, Key Info={first_budget['remaining']}"
