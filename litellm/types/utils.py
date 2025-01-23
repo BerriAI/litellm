@@ -1879,3 +1879,8 @@ class HttpHandlerRequestFields(TypedDict, total=False):
     params: dict  # query params
     files: dict  # file uploads
     content: Any  # raw content
+
+
+class ProviderSpecificHeader(TypedDict):
+    custom_llm_provider: str
+    extra_headers: dict
