@@ -14,6 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import List, Optional, Tuple, Union, cast
 
 import fastapi
@@ -1199,16 +1200,9 @@ async def team_info(
                 ),
             )
 
-        team_info: Optional[Union[LiteLLM_TeamTable, dict]] = (
-            await prisma_client.get_data(
-                team_id=team_id, table_name="team", query_type="find_unique"
-            )
+        team_info: Optional[LiteLLM_TeamTable] = await _get_team_info_from_db(
+            team_id=team_id, prisma_client=prisma_client
         )
-        if team_info is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": f"Team not found, passed team id: {team_id}."},
-            )
 
         ## GET ALL KEYS ##
         keys = await prisma_client.get_data(
@@ -1226,7 +1220,7 @@ async def team_info(
             spend = 0
             for k in keys:
                 spend += getattr(k, "spend", 0)
-            team_info = {"spend": spend}
+            team_info = LiteLLM_TeamTable(spend=spend)
 
         ## REMOVE HASHED TOKEN INFO before returning ##
         for key in keys:
@@ -1242,16 +1236,9 @@ async def team_info(
             prisma_client, [team_id], user_id=None
         )
 
-        if isinstance(team_info, dict):
-            _team_info = LiteLLM_TeamTable(**team_info)
-        elif isinstance(team_info, BaseModel):
-            _team_info = LiteLLM_TeamTable(**team_info.model_dump())
-        else:
-            _team_info = LiteLLM_TeamTable()
-
         response_object = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=_team_info,
+            team_info=team_info,
             keys=keys,
             team_memberships=returned_tm,
         )
@@ -1278,6 +1265,37 @@ async def team_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+async def _get_team_info_from_db(
+    team_id: str, prisma_client: PrismaClient
+) -> Optional[LiteLLM_TeamTable]:
+    """
+    Get team info from db
+    """
+    team_info: Optional[Union[LiteLLM_TeamTable, dict]] = await prisma_client.get_data(
+        team_id=team_id, table_name="team", query_type="find_unique"
+    )
+    if team_info is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"message": f"Team not found, passed team id: {team_id}."},
+        )
+
+    if isinstance(team_info, dict):
+        return LiteLLM_TeamTable(**team_info)
+    else:
+        return team_info
+
+
+@lru_cache(maxsize=16)
+async def _get_team_info_from_db_lru_cached(
+    team_id: str, prisma_client: PrismaClient
+) -> Optional[LiteLLM_TeamTable]:
+    """
+    Get team info from db and cache the result
+    """
+    return await _get_team_info_from_db(team_id=team_id, prisma_client=prisma_client)
 
 
 @router.post(
