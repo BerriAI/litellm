@@ -1515,7 +1515,7 @@ class PrometheusLogger(CustomLogger):
         user_api_key_alias: Optional[str],
         response_cost: float,
         key_max_budget: float,
-        key_spend: float,
+        key_spend: Optional[float],
     ):
         if user_api_key:
             user_api_key_dict = await self._assemble_key_object(
@@ -1532,7 +1532,7 @@ class PrometheusLogger(CustomLogger):
         user_api_key: str,
         user_api_key_alias: str,
         key_max_budget: float,
-        key_spend: float,
+        key_spend: Optional[float],
         response_cost: float,
     ) -> UserAPIKeyAuth:
         """
@@ -1545,7 +1545,7 @@ class PrometheusLogger(CustomLogger):
             token=user_api_key,
             key_alias=user_api_key_alias,
             max_budget=key_max_budget,
-            spend=key_spend + response_cost,
+            spend=key_spend or 0 + response_cost,
         )
         try:
             if user_api_key_dict.token:
