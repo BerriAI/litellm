@@ -92,6 +92,7 @@ class PassThroughEndpointLogging:
             ),
             start_time=start_time,
             end_time=end_time,
+            is_completion_with_fallbacks=False,
             **kwargs,
         )
 

@@ -42,6 +42,7 @@ class LoggingTaskManager:
         start_time: datetime,
         end_time: datetime,
         is_completion_with_fallbacks: bool = False,
+        **kwargs,
     ) -> None:
         """
         - Schedule the async_success_handler(...) to run on the dedicated async loop.
@@ -53,12 +54,14 @@ class LoggingTaskManager:
             start_time: Unix timestamp of when the call started
             end_time: Unix timestamp of when the call ended
             cache_hit: Whether the call was a cache hit
-            is_completion_with_fallbacks: Whether this is a completion with fallbacks call
+            is_completion_with_fallbacks: Whether this is a completion with fallbacks call. If it is true, we will not run the async_success_handler.
 
         """
         if not is_completion_with_fallbacks:
             # Schedule the async callback in the dedicated event-loop thread
-            coro = logging_obj.async_success_handler(result, start_time, end_time)
+            coro = logging_obj.async_success_handler(
+                result, start_time, end_time, **kwargs
+            )
             asyncio.run_coroutine_threadsafe(coro, self._loop)
 
             # Schedule any synchronous callbacks in the executor
@@ -67,6 +70,7 @@ class LoggingTaskManager:
                 result=result,
                 start_time=start_time,
                 end_time=end_time,
+                **kwargs,
             )
 
     def submit_logging_tasks_for_sync_llm_call(
