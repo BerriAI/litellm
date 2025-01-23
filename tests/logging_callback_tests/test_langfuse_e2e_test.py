@@ -6,6 +6,7 @@ import os
 import sys
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
+import threading
 
 logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath("../.."))
@@ -214,5 +215,139 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 setup["mock_post"],
                 "completion_with_tags_stream.json",
+                setup["trace_id"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_completion_with_langfuse_metadata(self, mock_setup):
+        """Test Langfuse logging for chat completion with metadata for langfuse"""
+        setup = await mock_setup  # Await the fixture
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata={
+                    "trace_id": setup["trace_id"],
+                    "tags": ["test_tag", "test_tag_2"],
+                    "generation_name": "test_generation_name",
+                    "parent_observation_id": "test_parent_observation_id",
+                    "version": "test_version",
+                    "trace_user_id": "test_user_id",
+                    "session_id": "test_session_id",
+                    "trace_name": "test_trace_name",
+                    "trace_metadata": {"test_key": "test_value"},
+                    "trace_version": "test_trace_version",
+                    "trace_release": "test_trace_release",
+                },
+            )
+            await self._verify_langfuse_call(
+                setup["mock_post"],
+                "completion_with_langfuse_metadata.json",
+                setup["trace_id"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_langfuse_logging_with_non_serializable_metadata(self, mock_setup):
+        """Test Langfuse logging with metadata that requires preparation (Pydantic models, sets, etc)"""
+        from pydantic import BaseModel
+        from typing import Set
+        import datetime
+
+        class UserPreferences(BaseModel):
+            favorite_colors: Set[str]
+            last_login: datetime.datetime
+            settings: dict
+
+        setup = await mock_setup
+
+        test_metadata = {
+            "user_prefs": UserPreferences(
+                favorite_colors={"red", "blue"},
+                last_login=datetime.datetime.now(),
+                settings={"theme": "dark", "notifications": True},
+            ),
+            "nested_set": {
+                "inner_set": {1, 2, 3},
+                "inner_pydantic": UserPreferences(
+                    favorite_colors={"green", "yellow"},
+                    last_login=datetime.datetime.now(),
+                    settings={"theme": "light"},
+                ),
+            },
+            "trace_id": setup["trace_id"],
+        }
+
+        with patch("httpx.Client.post", setup["mock_post"]):
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata=test_metadata,
+            )
+
+            await self._verify_langfuse_call(
+                setup["mock_post"],
+                "completion_with_complex_metadata.json",
+                setup["trace_id"],
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "test_metadata, response_json_file",
+        [
+            ({"a": 1, "b": 2, "c": 3}, "simple_metadata.json"),
+            (
+                {"a": {"nested_a": 1}, "b": {"nested_b": 2}},
+                "nested_metadata.json",
+            ),
+            ({"a": [1, 2, 3], "b": {4, 5, 6}}, "simple_metadata2.json"),
+            (
+                {"a": (1, 2), "b": frozenset([3, 4]), "c": {"d": [5, 6]}},
+                "simple_metadata3.json",
+            ),
+            ({"lock": threading.Lock()}, "metadata_with_lock.json"),
+            ({"func": lambda x: x + 1}, "metadata_with_function.json"),
+            (
+                {
+                    "int": 42,
+                    "str": "hello",
+                    "list": [1, 2, 3],
+                    "set": {4, 5},
+                    "dict": {"nested": "value"},
+                    "non_copyable": threading.Lock(),
+                    "function": print,
+                },
+                "complex_metadata.json",
+            ),
+            (
+                {"list": ["list", "not", "a", "dict"]},
+                "complex_metadata_2.json",
+            ),
+            ({}, "empty_metadata.json"),
+        ],
+    )
+    async def test_langfuse_logging_with_various_metadata_types(
+        self, mock_setup, test_metadata, response_json_file
+    ):
+        """Test Langfuse logging with various metadata types including non-serializable objects"""
+        import threading
+
+        setup = await mock_setup
+
+        if test_metadata is not None:
+            test_metadata["trace_id"] = setup["trace_id"]
+
+        with patch("httpx.Client.post", setup["mock_post"]):
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata=test_metadata,
+            )
+
+            await self._verify_langfuse_call(
+                setup["mock_post"],
+                response_json_file,
                 setup["trace_id"],
             )
