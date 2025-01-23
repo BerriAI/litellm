@@ -1431,7 +1431,9 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.exception(f"Error getting team info: {str(e)}")
+            verbose_logger.exception(
+                f"[Non-Blocking] Prometheus: Error getting team info: {str(e)}"
+            )
             return team_object
 
         if team_info:
@@ -1515,6 +1517,27 @@ class PrometheusLogger(CustomLogger):
         key_max_budget: float,
         key_spend: float,
     ):
+        if user_api_key:
+            user_api_key_dict = await self._assemble_key_object(
+                user_api_key=user_api_key,
+                user_api_key_alias=user_api_key_alias or "",
+                key_max_budget=key_max_budget,
+                key_spend=key_spend,
+                response_cost=response_cost,
+            )
+            self._set_key_budget_metrics(user_api_key_dict)
+
+    async def _assemble_key_object(
+        self,
+        user_api_key: str,
+        user_api_key_alias: str,
+        key_max_budget: float,
+        key_spend: float,
+        response_cost: float,
+    ) -> UserAPIKeyAuth:
+        """
+        Assemble a UserAPIKeyAuth object
+        """
         from litellm.proxy.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -1534,9 +1557,11 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.exception(f"Error getting key info: {str(e)}")
-            return
-        self._set_key_budget_metrics(user_api_key_dict)
+            verbose_logger.exception(
+                f"[Non-Blocking] Prometheus: Error getting key info: {str(e)}"
+            )
+
+        return user_api_key_dict
 
     def _get_remaining_hours_for_budget_reset(self, budget_reset_at: datetime) -> float:
         """
