@@ -297,7 +297,7 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
-    if random.randint(1, 20) == 1:
+    if random.randint(1, 15) == 1:
         print("Running random cleanup of Azure files and models...")
         cleanup_azure_files()
         cleanup_azure_ft_models()
