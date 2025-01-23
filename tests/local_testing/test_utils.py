@@ -1508,7 +1508,10 @@ def test_add_custom_logger_callback_to_specific_event(monkeypatch):
     assert len(litellm.failure_callback) == 0
 
 
-def test_add_custom_logger_callback_to_specific_event_e2e():
+def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
 
     litellm.success_callback = ["humanloop"]
 
