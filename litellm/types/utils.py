@@ -1658,6 +1658,7 @@ all_litellm_params = [
     "api_key",
     "api_version",
     "prompt_id",
+    "provider_specific_header",
     "prompt_variables",
     "api_base",
     "force_timeout",
