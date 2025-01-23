@@ -134,6 +134,8 @@ async def test_router_with_caching():
         response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
         response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
 
+        await asyncio.sleep(3)
+
         assert sl.mock_testing_async_success_hook > 0
         assert sl.mock_testing_sync_failure_hook == 0
         assert sl.mock_testing_async_failure_hook == 0
