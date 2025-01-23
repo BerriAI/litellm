@@ -151,7 +151,7 @@ class PrometheusLogger(CustomLogger):
 
             # Max Budget for Team
             self.litellm_team_max_budget_metric = Gauge(
-                "litellm_team_max_budget_metric", 
+                "litellm_team_max_budget_metric",
                 "Maximum budget set for team",
                 labelnames=["team_id", "team_alias"],
             )
@@ -209,6 +209,20 @@ class PrometheusLogger(CustomLogger):
                     "hashed_api_key",
                     "api_key_alias",
                 ],
+            )
+
+            self.litellm_overhead_latency_metric = Histogram(
+                "litellm_overhead_latency_metric",
+                "Latency overhead (milliseconds) added by LiteLLM processing",
+                labelnames=[
+                    "model_group",
+                    "api_provider",
+                    "api_base",
+                    "litellm_model_name",
+                    "hashed_api_key",
+                    "api_key_alias",
+                ],
+                buckets=LATENCY_BUCKETS,
             )
             # llm api provider budget metrics
             self.litellm_provider_remaining_budget_metric = Gauge(
@@ -325,7 +339,6 @@ class PrometheusLogger(CustomLogger):
                     label_name="litellm_requests_metric"
                 ),
             )
-
             self._initialize_prometheus_startup_metrics()
 
         except Exception as e:
@@ -987,6 +1000,20 @@ class PrometheusLogger(CustomLogger):
                 remaining_tokens = additional_headers.get(
                     "x_ratelimit_remaining_tokens", None
                 )
+
+            if litellm_overhead_time_ms := standard_logging_payload[
+                "hidden_params"
+            ].get("litellm_overhead_time_ms"):
+                self.litellm_overhead_latency_metric.labels(
+                    model_group,
+                    llm_provider,
+                    api_base,
+                    litellm_model_name,
+                    standard_logging_payload["metadata"]["user_api_key_hash"],
+                    standard_logging_payload["metadata"]["user_api_key_alias"],
+                ).observe(
+                    litellm_overhead_time_ms / 1000
+                )  # set as seconds
 
             if remaining_requests:
                 """
