@@ -352,6 +352,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: Optional[float]
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
+    num_retries: Optional[int]
     ## MOCK RESPONSES ##
     mock_response: Optional[Union[str, ModelResponse, Exception]]
 
