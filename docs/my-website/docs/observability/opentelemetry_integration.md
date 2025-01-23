@@ -16,6 +16,12 @@ Install the OpenTelemetry SDK:
 pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 ```
 
+Install the `proxy` extra that is required for the OpenTelemetry integration:
+
+```
+pip install litellm[proxy]
+```
+
 Set the environment variables (different providers may require different variables):
 
 
