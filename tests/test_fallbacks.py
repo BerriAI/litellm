@@ -144,7 +144,6 @@ async def test_chat_completion_with_retries():
             key="sk-1234",
             model=model,
             messages=messages,
-            num_retries=2,
             mock_testing_rate_limit_error=True,
             return_headers=True,
         )

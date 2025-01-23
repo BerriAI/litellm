@@ -3227,6 +3227,7 @@ class Router:
 
         available_models = self.get_model_list(model_name=model_group)
         num_retries: Optional[int] = None
+
         if available_models is not None and len(available_models) == 1:
             num_retries = cast(
                 Optional[int], available_models[0]["litellm_params"].get("num_retries")
@@ -4795,6 +4796,37 @@ class Router:
             model_names.append(m["model_name"])
         return model_names
 
+    def get_model_list_from_model_alias(
+        self, model_name: Optional[str] = None
+    ) -> List[DeploymentTypedDict]:
+        """
+        Helper function to get model list from model alias.
+
+        Used by `.get_model_list` to get model list from model alias.
+        """
+        returned_models: List[DeploymentTypedDict] = []
+        for model_alias, model_value in self.model_group_alias.items():
+            if model_name is not None and model_alias != model_name:
+                continue
+            if isinstance(model_value, str):
+                _router_model_name: str = model_value
+            elif isinstance(model_value, dict):
+                _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
+                if _model_value["hidden"] is True:
+                    continue
+                else:
+                    _router_model_name = _model_value["model"]
+            else:
+                continue
+
+            returned_models.extend(
+                self._get_all_deployments(
+                    model_name=_router_model_name, model_alias=model_alias
+                )
+            )
+
+        return returned_models
+
     def get_model_list(
         self, model_name: Optional[str] = None
     ) -> Optional[List[DeploymentTypedDict]]:
@@ -4808,24 +4840,9 @@ class Router:
                 returned_models.extend(self._get_all_deployments(model_name=model_name))
 
             if hasattr(self, "model_group_alias"):
-                for model_alias, model_value in self.model_group_alias.items():
-
-                    if isinstance(model_value, str):
-                        _router_model_name: str = model_value
-                    elif isinstance(model_value, dict):
-                        _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                        if _model_value["hidden"] is True:
-                            continue
-                        else:
-                            _router_model_name = _model_value["model"]
-                    else:
-                        continue
-
-                    returned_models.extend(
-                        self._get_all_deployments(
-                            model_name=_router_model_name, model_alias=model_alias
-                        )
-                    )
+                returned_models.extend(
+                    self.get_model_list_from_model_alias(model_name=model_name)
+                )
 
             if len(returned_models) == 0:  # check if wildcard route
                 potential_wildcard_models = self.pattern_router.route(model_name)
