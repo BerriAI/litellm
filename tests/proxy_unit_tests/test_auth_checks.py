@@ -19,7 +19,11 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import LiteLLM_EndUserTable, LiteLLM_BudgetTable
+from litellm.proxy._types import (
+    LiteLLM_EndUserTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_UserTable,
+)
 from litellm.proxy.utils import PrismaClient
 
 
@@ -229,3 +233,75 @@ async def test_is_valid_fallback_model():
         pytest.fail("Expected is_valid_fallback_model to fail")
     except Exception as e:
         assert "Invalid" in str(e)
+
+
+@pytest.mark.parametrize(
+    "token_spend, max_budget, expect_budget_error",
+    [
+        (5.0, 10.0, False),  # Under budget
+        (10.0, 10.0, True),  # At budget limit
+        (15.0, 10.0, True),  # Over budget
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_check(
+    token_spend, max_budget, expect_budget_error
+):
+    """
+    Test if virtual key budget checks work as expected:
+    1. Triggers budget alert for all cases
+    2. Raises BudgetExceededError when spend >= max_budget
+    """
+    from litellm.proxy.auth.auth_checks import _virtual_key_max_budget_check
+    from litellm.proxy.utils import ProxyLogging
+
+    # Setup test data
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=token_spend,
+        max_budget=max_budget,
+        user_id="test-user",
+        key_alias="test-key",
+    )
+
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        user_email="test@email.com",
+        max_budget=None,
+    )
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=None,
+    )
+
+    # Track if budget alert was called
+    alert_called = False
+
+    async def mock_budget_alert(*args, **kwargs):
+        nonlocal alert_called
+        alert_called = True
+
+    proxy_logging_obj.budget_alerts = mock_budget_alert
+
+    try:
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+            user_obj=user_obj,
+        )
+        if expect_budget_error:
+            pytest.fail(
+                f"Expected BudgetExceededError for spend={token_spend}, max_budget={max_budget}"
+            )
+    except litellm.BudgetExceededError as e:
+        if not expect_budget_error:
+            pytest.fail(
+                f"Unexpected BudgetExceededError for spend={token_spend}, max_budget={max_budget}"
+            )
+        assert e.current_cost == token_spend
+        assert e.max_budget == max_budget
+
+    await asyncio.sleep(1)
+
+    # Verify budget alert was triggered
+    assert alert_called, "Budget alert should be triggered"
