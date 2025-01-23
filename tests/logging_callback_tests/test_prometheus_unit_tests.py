@@ -251,7 +251,8 @@ def test_increment_token_metrics(prometheus_logger):
     )
 
 
-def test_increment_remaining_budget_metrics(prometheus_logger):
+@pytest.mark.asyncio
+async def test_increment_remaining_budget_metrics(prometheus_logger):
     """
     Test the increment_remaining_budget_metrics method
 
@@ -272,12 +273,13 @@ def test_increment_remaining_budget_metrics(prometheus_logger):
         }
     }
 
-    prometheus_logger._increment_remaining_budget_metrics(
+    await prometheus_logger._increment_remaining_budget_metrics(
         user_api_team="team1",
         user_api_team_alias="team_alias1",
         user_api_key="key1",
         user_api_key_alias="alias1",
         litellm_params=litellm_params,
+        response_cost=10,
     )
 
     # Test remaining budget metrics
@@ -285,14 +287,14 @@ def test_increment_remaining_budget_metrics(prometheus_logger):
         "team1", "team_alias1"
     )
     prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
-        50  # 100 - 50
+        40  # 100 - (50 + 10)
     )
 
     prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once_with(
         "key1", "alias1"
     )
     prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.assert_called_once_with(
-        50  # 75 - 25
+        40  # 75 - (25 + 10)
     )
 
     # Test max budget metrics

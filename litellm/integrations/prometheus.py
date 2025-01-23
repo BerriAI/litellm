@@ -1417,13 +1417,13 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
+        _total_team_spend = (spend or 0) + response_cost
         team_object = LiteLLM_TeamTable(
             team_id=team_id,
             team_alias=team_alias,
-            spend=spend or 0 + response_cost,
+            spend=_total_team_spend,
             max_budget=max_budget,
         )
-
         try:
             team_info = await get_team_object(
                 team_id=team_id,
@@ -1541,11 +1541,12 @@ class PrometheusLogger(CustomLogger):
         from litellm.proxy.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
+        _total_key_spend = (key_spend or 0) + response_cost
         user_api_key_dict = UserAPIKeyAuth(
             token=user_api_key,
             key_alias=user_api_key_alias,
             max_budget=key_max_budget,
-            spend=key_spend or 0 + response_cost,
+            spend=_total_key_spend,
         )
         try:
             if user_api_key_dict.token:
