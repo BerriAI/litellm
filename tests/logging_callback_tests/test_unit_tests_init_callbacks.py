@@ -193,8 +193,8 @@ async def use_callback_in_llm_call(
         elif used_in == "success_callback":
             print(f"litellm.success_callback: {litellm.success_callback}")
             print(f"litellm._async_success_callback: {litellm._async_success_callback}")
-            assert isinstance(litellm.success_callback[0], expected_class)
-            assert len(litellm.success_callback) == 1  # [LagoLogger]
+            assert isinstance(litellm.success_callback[1], expected_class)
+            assert len(litellm.success_callback) == 2  # ["lago", LagoLogger]
             assert isinstance(litellm._async_success_callback[0], expected_class)
             assert len(litellm._async_success_callback) == 1
 
