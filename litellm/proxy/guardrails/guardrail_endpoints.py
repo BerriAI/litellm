@@ -76,14 +76,6 @@ async def list_guardrails():
     """
     from litellm.proxy.proxy_server import premium_user, proxy_config
 
-    if not premium_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": CommonProxyErrors.not_premium_user.value,
-            },
-        )
-
     config = proxy_config.config
 
     _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
