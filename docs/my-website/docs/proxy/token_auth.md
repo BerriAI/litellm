@@ -114,7 +114,7 @@ general_settings:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-## Tracking End-Users / Internal Users / Team / Org
+## Advanced - Spend Tracking (End-Users / Internal Users / Team / Org)
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
@@ -154,33 +154,6 @@ scope: ["litellm-proxy-admin",...]
 **Can be a space-separated string**
 ```
 scope: "litellm-proxy-admin ..."
-```
-
-## Enforce Role-Based Access Control (RBAC)
-
-Reject a JWT token if it's valid but doesn't have the required scopes / fields.
-
-Only tokens which with valid Admin (`admin_jwt_scope`), User (`user_id_jwt_field`), Team (`team_id_jwt_field`) are allowed.
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  enable_jwt_auth: True
-  litellm_jwtauth:
-    admin_jwt_scope: "litellm_proxy_endpoints_access"
-    admin_allowed_routes:
-      - openai_routes
-      - info_routes
-    public_key_ttl: 600
-    enforce_rbac: true # 👈 Enforce RBAC
-```
-
-Expected Scope in JWT: 
-
-```
-{
-  "scope": "litellm_proxy_endpoints_access"
-}
 ```
 
 ## Advanced - Allowed Routes 

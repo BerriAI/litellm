@@ -10,6 +10,7 @@ Run checks for:
 """
 
 import asyncio
+import inspect
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -23,6 +24,7 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CallInfo,
+    CommonProxyErrors,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -55,6 +57,33 @@ db_cache_expiry = 5  # refresh every 5s
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
+def _allowed_import_check() -> bool:
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    # Get the calling frame
+    caller_frame = inspect.stack()[2]
+    caller_function = caller_frame.function
+    caller_function_callable = caller_frame.frame.f_globals.get(caller_function)
+
+    allowed_function = "_user_api_key_auth_builder"
+    allowed_signature = inspect.signature(_user_api_key_auth_builder)
+    if caller_function_callable is None or not callable(caller_function_callable):
+        raise Exception(f"Caller function {caller_function} is not callable")
+    caller_signature = inspect.signature(caller_function_callable)
+
+    if caller_signature != allowed_signature:
+        raise TypeError(
+            f"The function '{caller_function}' does not match the required signature of 'user_api_key_auth'. {CommonProxyErrors.not_premium_user.value}"
+        )
+    # Check if the caller module is allowed
+    if caller_function != allowed_function:
+        raise ImportError(
+            f"This function can only be imported by '{allowed_function}'. {CommonProxyErrors.not_premium_user.value}"
+        )
+
+    return True
+
+
 def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -79,6 +108,7 @@ def common_checks(  # noqa: PLR0915
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
+    _allowed_import_check()
     _model = request_body.get("model", None)
     if team_object is not None and team_object.blocked is True:
         raise Exception(
@@ -816,7 +846,7 @@ async def get_org_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
-) -> Optional[LiteLLM_OrganizationTable]:
+):
     """
     - Check if org id in proxy Org Table
     - if valid, return LiteLLM_OrganizationTable object
@@ -831,7 +861,7 @@ async def get_org_object(
     cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
-            return LiteLLM_OrganizationTable(**cached_org_obj)
+            return cached_org_obj
         elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
             return cached_org_obj
     # else, check db
