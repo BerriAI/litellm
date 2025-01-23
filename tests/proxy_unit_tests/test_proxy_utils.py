@@ -1495,3 +1495,68 @@ def test_custom_openapi(mock_get_openapi_schema):
 
     openapi_schema = custom_openapi()
     assert openapi_schema is not None
+
+
+def test_provider_specific_header():
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_provider_specific_headers_to_request,
+    )
+
+    data = {
+        "model": "gemini-1.5-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Tell me a joke"}],
+            }
+        ],
+        "stream": True,
+        "proxy_server_request": {
+            "url": "http://0.0.0.0:4000/v1/chat/completions",
+            "method": "POST",
+            "headers": {
+                "content-type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-31",
+                "user-agent": "PostmanRuntime/7.32.3",
+                "accept": "*/*",
+                "postman-token": "81cccd87-c91d-4b2f-b252-c0fe0ca82529",
+                "host": "0.0.0.0:4000",
+                "accept-encoding": "gzip, deflate, br",
+                "connection": "keep-alive",
+                "content-length": "240",
+            },
+            "body": {
+                "model": "gemini-1.5-flash",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Tell me a joke"}],
+                    }
+                ],
+                "stream": True,
+            },
+        },
+    }
+
+    headers = {
+        "content-type": "application/json",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+        "user-agent": "PostmanRuntime/7.32.3",
+        "accept": "*/*",
+        "postman-token": "81cccd87-c91d-4b2f-b252-c0fe0ca82529",
+        "host": "0.0.0.0:4000",
+        "accept-encoding": "gzip, deflate, br",
+        "connection": "keep-alive",
+        "content-length": "240",
+    }
+
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers=headers,
+    )
+    assert data["provider_specific_header"] == {
+        "custom_llm_provider": "anthropic",
+        "extra_headers": {
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        },
+    }
