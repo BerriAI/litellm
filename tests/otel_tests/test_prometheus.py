@@ -8,6 +8,9 @@ import asyncio
 import uuid
 import os
 import sys
+from openai import AsyncOpenAI
+import time
+from typing import Dict, Any
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -235,3 +238,148 @@ async def test_proxy_fallback_metrics():
             'litellm_deployment_failed_fallbacks_total{api_key_alias="None",exception_class="RateLimitError",exception_status="429",fallback_model="unknown-model",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
             in metrics
         )
+
+
+async def create_test_team(
+    session: aiohttp.ClientSession, team_data: Dict[str, Any]
+) -> str:
+    """Create a new team and return the team_id"""
+    url = "http://0.0.0.0:4000/team/new"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+
+    async with session.post(url, headers=headers, json=team_data) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to create team. Status: {response.status}"
+        team_info = await response.json()
+        return team_info["team_id"]
+
+
+async def get_prometheus_metrics(session: aiohttp.ClientSession) -> str:
+    """Fetch current prometheus metrics"""
+    async with session.get("http://0.0.0.0:4000/metrics") as response:
+        assert response.status == 200
+        return await response.text()
+
+
+def extract_budget_metrics(metrics_text: str, team_id: str) -> Dict[str, float]:
+    """Extract budget-related metrics for a specific team"""
+    import re
+
+    metrics = {}
+
+    # Get remaining budget
+    remaining_pattern = f'litellm_remaining_team_budget_metric{{team="{team_id}",team_alias="[^"]*"}} ([0-9.]+)'
+    remaining_match = re.search(remaining_pattern, metrics_text)
+    metrics["remaining"] = float(remaining_match.group(1)) if remaining_match else None
+
+    # Get total budget
+    total_pattern = f'litellm_team_max_budget_metric{{team="{team_id}",team_alias="[^"]*"}} ([0-9.]+)'
+    total_match = re.search(total_pattern, metrics_text)
+    metrics["total"] = float(total_match.group(1)) if total_match else None
+
+    return metrics
+
+
+async def create_test_key(session: aiohttp.ClientSession, team_id: str) -> str:
+    """Generate a new key for the team and return it"""
+    url = "http://0.0.0.0:4000/key/generate"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+    data = {
+        "team_id": team_id,
+    }
+
+    async with session.post(url, headers=headers, json=data) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to generate key. Status: {response.status}"
+        key_info = await response.json()
+        return key_info["key"]
+
+
+async def get_team_info(session: aiohttp.ClientSession, team_id: str) -> Dict[str, Any]:
+    """Fetch team info and return the response"""
+    url = f"http://0.0.0.0:4000/team/info?team_id={team_id}"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to get team info. Status: {response.status}"
+        return await response.json()
+
+
+@pytest.mark.asyncio
+async def test_team_budget_metrics():
+    """
+    Test team budget tracking metrics:
+    1. Create a team with max_budget
+    2. Generate a key for the team
+    3. Make chat completion requests using OpenAI SDK with team's key
+    4. Verify budget decreases over time
+    5. Verify request costs are being tracked correctly
+    6. Verify prometheus metrics match /team/info spend data
+    """
+    async with aiohttp.ClientSession() as session:
+        # Setup test team
+        team_data = {
+            "team_alias": "budget_test_team",
+            "max_budget": 10,
+            "budget_duration": "7d",
+        }
+        team_id = await create_test_team(session, team_data)
+        print("team_id", team_id)
+        # Generate key for the team
+        team_key = await create_test_key(session, team_id)
+
+        # Initialize OpenAI client with team's key
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=team_key)
+
+        # Make initial request and check budget
+        await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        )
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get metrics after request
+        metrics_after_first = await get_prometheus_metrics(session)
+        print("metrics_after_first", metrics_after_first)
+        first_budget = extract_budget_metrics(metrics_after_first, team_id)
+
+        print(f"Budget after 1 request: {first_budget}")
+        assert (
+            first_budget["remaining"] < 10.0
+        ), "remaining budget should be less than 10.0 after first request"
+        assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
+
+        # Get team info and verify spend matches prometheus metrics
+        team_info = await get_team_info(session, team_id)
+        print("team_info", team_info)
+        _team_info_data = team_info["team_info"]
+
+        # Calculate spend from prometheus (total - remaining)
+        team_info_spend = float(_team_info_data["spend"])
+        team_info_max_budget = float(_team_info_data["max_budget"])
+        team_info_remaining_budget = team_info_max_budget - team_info_spend
+        print("\n\n\n###### Final budget metrics ######\n\n\n")
+        print("team_info_remaining_budget", team_info_remaining_budget)
+        print("prometheus_remaining_budget", first_budget["remaining"])
+        print(
+            "diff between team_info_remaining_budget and prometheus_remaining_budget",
+            team_info_remaining_budget - first_budget["remaining"],
+        )
+
+        # Verify spends match within a small delta (floating point comparison)
+        assert (
+            abs(team_info_remaining_budget - first_budget["remaining"]) <= 0.00000
+        ), f"Spend mismatch: Prometheus={team_info_remaining_budget}, Team Info={first_budget['remaining']}"
