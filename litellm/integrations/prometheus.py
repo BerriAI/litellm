@@ -161,14 +161,26 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_api_key_budget_metric = Gauge(
                 "litellm_remaining_api_key_budget_metric",
                 "Remaining budget for api key",
-                labelnames=["hashed_api_key", "api_key_alias"],
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_remaining_api_key_budget_metric"
+                ),
             )
 
             # Max Budget for API Key
             self.litellm_api_key_max_budget_metric = Gauge(
                 "litellm_api_key_max_budget_metric",
                 "Maximum budget set for api key",
-                labelnames=["hashed_api_key", "api_key_alias"],
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_api_key_max_budget_metric"
+                ),
+            )
+
+            self.litellm_api_key_budget_remaining_hours_metric = Gauge(
+                "litellm_api_key_budget_remaining_hours_metric",
+                "Remaining hours for api key budget to be reset",
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_api_key_budget_remaining_hours_metric"
+                ),
             )
 
             ########################################
@@ -583,9 +595,6 @@ class PrometheusLogger(CustomLogger):
         _api_key_max_budget = litellm_params.get("metadata", {}).get(
             "user_api_key_max_budget", None
         )
-        _remaining_api_key_budget = self._safe_get_remaining_budget(
-            max_budget=_api_key_max_budget, spend=_api_key_spend
-        )
 
         await self._set_team_budget_metrics_after_api_request(
             user_api_team=user_api_team,
@@ -595,15 +604,13 @@ class PrometheusLogger(CustomLogger):
             response_cost=response_cost,
         )
 
-        self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key, user_api_key_alias
-        ).set(_remaining_api_key_budget)
-
-        # Max Budget Metrics for API Key
-        if _api_key_max_budget is not None:
-            self.litellm_api_key_max_budget_metric.labels(
-                user_api_key, user_api_key_alias
-            ).set(_api_key_max_budget)
+        await self._set_api_key_budget_metrics_after_api_request(
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            response_cost=response_cost,
+            key_max_budget=_api_key_max_budget,
+            key_spend=_api_key_spend,
+        )
 
     def _increment_top_level_request_and_spend_metrics(
         self,
@@ -1443,17 +1450,17 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        if team.max_budget is not None:
-            self.litellm_remaining_team_budget_metric.labels(
-                team.team_id,
-                team.team_alias or "",
-            ).set(
-                self._safe_get_remaining_budget(
-                    max_budget=team.max_budget,
-                    spend=team.spend,
-                )
+        self.litellm_remaining_team_budget_metric.labels(
+            team.team_id,
+            team.team_alias or "",
+        ).set(
+            self._safe_get_remaining_budget(
+                max_budget=team.max_budget,
+                spend=team.spend,
             )
+        )
 
+        if team.max_budget is not None:
             self.litellm_team_max_budget_metric.labels(
                 team.team_id,
                 team.team_alias or "",
@@ -1468,6 +1475,68 @@ class PrometheusLogger(CustomLogger):
                     budget_reset_at=team.budget_reset_at
                 )
             )
+
+    def _set_key_budget_metrics(self, user_api_key_dict: UserAPIKeyAuth):
+        """
+        Set virtual key budget metrics
+
+        - Remaining Budget
+        - Max Budget
+        - Budget Reset At
+        """
+        self.litellm_remaining_api_key_budget_metric.labels(
+            user_api_key_dict.token, user_api_key_dict.key_alias
+        ).set(
+            self._safe_get_remaining_budget(
+                max_budget=user_api_key_dict.max_budget,
+                spend=user_api_key_dict.spend,
+            )
+        )
+
+        if user_api_key_dict.max_budget is not None:
+            self.litellm_api_key_max_budget_metric.labels(
+                user_api_key_dict.token, user_api_key_dict.key_alias
+            ).set(user_api_key_dict.max_budget)
+
+        if user_api_key_dict.budget_reset_at is not None:
+            self.litellm_api_key_budget_remaining_hours_metric.labels(
+                user_api_key_dict.token, user_api_key_dict.key_alias
+            ).set(
+                self._get_remaining_hours_for_budget_reset(
+                    budget_reset_at=user_api_key_dict.budget_reset_at
+                )
+            )
+
+    async def _set_api_key_budget_metrics_after_api_request(
+        self,
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        response_cost: float,
+        key_max_budget: float,
+        key_spend: float,
+    ):
+        from litellm.proxy.auth.auth_checks import get_key_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        user_api_key_dict = UserAPIKeyAuth(
+            token=user_api_key,
+            key_alias=user_api_key_alias,
+            max_budget=key_max_budget,
+            spend=key_spend + response_cost,
+        )
+        try:
+            if user_api_key_dict.token:
+                key_object = await get_key_object(
+                    hashed_token=user_api_key_dict.token,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                if key_object:
+                    user_api_key_dict.budget_reset_at = key_object.budget_reset_at
+        except Exception as e:
+            verbose_logger.exception(f"Error getting key info: {str(e)}")
+            return
+        self._set_key_budget_metrics(user_api_key_dict)
 
     def _get_remaining_hours_for_budget_reset(self, budget_reset_at: datetime) -> float:
         """
