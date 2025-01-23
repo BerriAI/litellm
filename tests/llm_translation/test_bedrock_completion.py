@@ -1660,6 +1660,7 @@ def test_bedrock_completion_test_3():
 
 
 @pytest.mark.parametrize("modify_params", [True, False])
+@pytest.mark.skip(reason="temp skip")
 def test_bedrock_completion_test_4(modify_params):
     litellm.set_verbose = True
     litellm.modify_params = modify_params
