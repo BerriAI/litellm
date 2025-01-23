@@ -74,6 +74,12 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       stream_timeout: 0.001
       rpm: 1000
+  - model_name: fake-openai-endpoint-4
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      num_retries: 50
   - model_name: fake-openai-endpoint-3
     litellm_params:
       model: openai/my-fake-model-2
@@ -112,6 +118,12 @@ model_list:
   - model_name: gpt-instruct # [PROD TEST] - tests if `/health` automatically infers this to be a text completion model
     litellm_params:
       model: text-completion-openai/gpt-3.5-turbo-instruct
+  - model_name: fake-openai-endpoint-5
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      timeout: 1
 litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
   drop_params: True
