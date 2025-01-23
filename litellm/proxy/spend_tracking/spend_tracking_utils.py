@@ -87,11 +87,16 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             "user_api_key_end_user_id"
         )
         api_key = standard_logging_payload["metadata"].get("user_api_key_hash") or ""
-        request_tags = json.dumps(standard_logging_payload["request_tags"])
+
     else:
         end_user_id = None
         api_key = ""
-        request_tags = "[]"
+
+    request_tags = (
+        json.dumps(metadata.get("tags", []))
+        if isinstance(metadata.get("tags", []), list)
+        else "[]"
+    )
     if (
         _is_master_key(api_key=api_key, _master_key=master_key)
         and general_settings.get("disable_adding_master_key_hash_to_db") is True
