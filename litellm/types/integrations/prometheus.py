@@ -83,7 +83,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
-    "litellm_team_budget_reset_at_metric",
+    "litellm_team_budget_remaining_days_metric",
 ]
 
 
@@ -199,7 +199,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
-    litellm_team_budget_reset_at_metric = [
+    litellm_team_budget_remaining_days_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]

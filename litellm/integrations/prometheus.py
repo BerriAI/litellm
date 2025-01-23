@@ -154,11 +154,11 @@ class PrometheusLogger(CustomLogger):
             )
 
             # Team Budget Reset At
-            self.litellm_team_budget_reset_at_metric = Gauge(
-                "litellm_team_budget_reset_at_metric",
-                "Time when the team budget will be reset",
+            self.litellm_team_budget_remaining_days_metric = Gauge(
+                "litellm_team_budget_remaining_days_metric",
+                "Remaining days for team budget to be reset",
                 labelnames=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_team_budget_reset_at_metric"
+                    label_name="litellm_team_budget_remaining_days_metric"
                 ),
             )
 
@@ -470,7 +470,7 @@ class PrometheusLogger(CustomLogger):
         )
 
         # remaining budget metrics
-        self._increment_remaining_budget_metrics(
+        await self._increment_remaining_budget_metrics(
             user_api_team=user_api_team,
             user_api_team_alias=user_api_team_alias,
             user_api_key=user_api_key,
@@ -565,7 +565,7 @@ class PrometheusLogger(CustomLogger):
             standard_logging_payload["completion_tokens"]
         )
 
-    def _increment_remaining_budget_metrics(
+    async def _increment_remaining_budget_metrics(
         self,
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
@@ -579,9 +579,6 @@ class PrometheusLogger(CustomLogger):
         _team_max_budget = litellm_params.get("metadata", {}).get(
             "user_api_key_team_max_budget", None
         )
-        _remaining_team_budget = self._safe_get_remaining_budget(
-            max_budget=_team_max_budget, spend=_team_spend
-        )
 
         _api_key_spend = litellm_params.get("metadata", {}).get(
             "user_api_key_spend", None
@@ -592,16 +589,13 @@ class PrometheusLogger(CustomLogger):
         _remaining_api_key_budget = self._safe_get_remaining_budget(
             max_budget=_api_key_max_budget, spend=_api_key_spend
         )
-        # Remaining Budget Metrics
-        self.litellm_remaining_team_budget_metric.labels(
-            user_api_team, user_api_team_alias
-        ).set(_remaining_team_budget)
 
-        # Max Budget Metrics
-        if _team_max_budget is not None:
-            self.litellm_team_max_budget_metric.labels(
-                user_api_team, user_api_team_alias
-            ).set(_team_max_budget)
+        await self._set_team_budget_metrics_after_api_request(
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            team_spend=_team_spend,
+            team_max_budget=_team_max_budget,
+        )
 
         self.litellm_remaining_api_key_budget_metric.labels(
             user_api_key, user_api_key_alias
@@ -1356,39 +1350,113 @@ class PrometheusLogger(CustomLogger):
             total_pages = (total_count + page_size - 1) // page_size
 
             # Set metrics for first page of teams
-            await self._set_team_budget_metrics(teams)
+            await self._set_team_list_budget_metrics(teams)
 
             # Get and set metrics for remaining pages
             for page in range(2, total_pages + 1):
                 teams, _ = await get_paginated_teams(
                     prisma_client=prisma_client, page_size=page_size, page=page
                 )
-                await self._set_team_budget_metrics(teams)
+                await self._set_team_list_budget_metrics(teams)
 
         except Exception as e:
             verbose_logger.exception(
                 f"Error initializing team budget metrics: {str(e)}"
             )
 
-    async def _set_team_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
+    async def _set_team_list_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""
         for team in teams:
-            if team.max_budget is not None:
-                self.litellm_remaining_team_budget_metric.labels(
-                    team.team_id,
-                    team.team_alias or "",
-                ).set(
-                    self._safe_get_remaining_budget(
-                        max_budget=team.max_budget,
-                        spend=team.spend,
-                    )
-                )
+            self._set_team_budget_metrics(team)
 
-            if team.budget_reset_at is not None:
-                self.litellm_team_budget_reset_at_metric.labels(
-                    team.team_id,
-                    team.team_alias or "",
-                ).set(team.budget_reset_at.timestamp())
+    async def _set_team_budget_metrics_after_api_request(
+        self,
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        team_spend: float,
+        team_max_budget: float,
+    ):
+        """
+        Set team budget metrics after an LLM API request
+
+        - Assemble a LiteLLM_TeamTable object
+            - looks up team info from db if not available in metadata
+        - Set team budget metrics
+        """
+        team_object = await self._assemble_team_object(
+            team_id=user_api_team or "",
+            team_alias=user_api_team_alias or "",
+            spend=team_spend,
+            max_budget=team_max_budget,
+        )
+
+        self._set_team_budget_metrics(team_object)
+
+    async def _assemble_team_object(
+        self, team_id: str, team_alias: str, spend: float, max_budget: float
+    ) -> LiteLLM_TeamTable:
+        """
+        Assemble a LiteLLM_TeamTable object
+
+        for fields not available in metadata, we fetch from db
+        Fields not available in metadata:
+        - `budget_reset_at`
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _get_team_info_from_db_lru_cached,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        team_object = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias=team_alias,
+            spend=spend,
+            max_budget=max_budget,
+        )
+
+        team_info = await _get_team_info_from_db_lru_cached(
+            team_id=team_id, prisma_client=prisma_client
+        )
+        if team_info:
+            team_object.budget_reset_at = team_info.budget_reset_at
+
+        return team_object
+
+    def _set_team_budget_metrics(
+        self,
+        team: LiteLLM_TeamTable,
+    ):
+        """
+        Set team budget metrics for a single team
+
+        - Remaining Budget
+        - Max Budget
+        - Budget Reset At
+        """
+        if team.max_budget is not None:
+            self.litellm_remaining_team_budget_metric.labels(
+                team.team_id,
+                team.team_alias or "",
+            ).set(
+                self._safe_get_remaining_budget(
+                    max_budget=team.max_budget,
+                    spend=team.spend,
+                )
+            )
+
+            self.litellm_team_max_budget_metric.labels(
+                team.team_id,
+                team.team_alias or "",
+            ).set(team.max_budget)
+
+        if team.budget_reset_at is not None:
+            remaining_days = (
+                team.budget_reset_at - datetime.now(team.budget_reset_at.tzinfo)
+            ).days
+            self.litellm_team_budget_remaining_days_metric.labels(
+                team.team_id,
+                team.team_alias or "",
+            ).set(remaining_days)
 
 
 def prometheus_label_factory(
