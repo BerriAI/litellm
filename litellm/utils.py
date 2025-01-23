@@ -449,7 +449,10 @@ def function_setup(  # noqa: PLR0915
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks:
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
                     _add_custom_logger_callback_to_specific_event(callback, "success")
 
             # Pop the async items from success_callback in reverse order to avoid index issues
