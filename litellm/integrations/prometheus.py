@@ -1464,9 +1464,8 @@ class PrometheusLogger(CustomLogger):
                 team.team_id,
                 team.team_alias or "",
             ).set(
-                self._safe_get_remaining_budget(
-                    max_budget=team.max_budget,
-                    spend=team.spend,
+                self._get_remaining_hours_for_budget_reset(
+                    budget_reset_at=team.budget_reset_at
                 )
             )
 

@@ -281,6 +281,11 @@ def extract_budget_metrics(metrics_text: str, team_id: str) -> Dict[str, float]:
     total_match = re.search(total_pattern, metrics_text)
     metrics["total"] = float(total_match.group(1)) if total_match else None
 
+    # Get remaining hours
+    hours_pattern = f'litellm_team_budget_remaining_hours_metric{{team="{team_id}",team_alias="[^"]*"}} ([0-9.]+)'
+    hours_match = re.search(hours_pattern, metrics_text)
+    metrics["remaining_hours"] = float(hours_match.group(1)) if hours_match else None
+
     return metrics
 
 
@@ -361,6 +366,11 @@ async def test_team_budget_metrics():
             first_budget["remaining"] < 10.0
         ), "remaining budget should be less than 10.0 after first request"
         assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
+        print("first_budget['remaining_hours']", first_budget["remaining_hours"])
+        # Verify remaining hours matches 7 days (with small delta for processing time)
+        assert (
+            abs(first_budget["remaining_hours"] - (7 * 24)) <= 0.1
+        ), "Budget remaining hours should be approximately 7 days (168 hours)"
 
         # Get team info and verify spend matches prometheus metrics
         team_info = await get_team_info(session, team_id)
