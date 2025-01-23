@@ -8,8 +8,8 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
-
 import asyncio
+import re
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -92,7 +92,6 @@ async def common_checks(
     # 2. If team can call model
     _team_model_access_check(
         team_object=team_object,
-        valid_token=valid_token,
         model=_model,
         llm_router=llm_router,
     )
@@ -1040,9 +1039,8 @@ async def _team_max_budget_check(
 
 
 def _team_model_access_check(
-    model: str,
+    model: Optional[str],
     team_object: Optional[LiteLLM_TeamTable],
-    valid_token: Optional[UserAPIKeyAuth],
     llm_router: Optional[Router],
 ):
     """
@@ -1075,7 +1073,31 @@ def _team_model_access_check(
             pass
         elif model and "*" in model:
             pass
+        elif any(
+            is_model_allowed_by_pattern(model=model, allowed_model_pattern=team_model)
+            for team_model in team_object.models
+        ):
+            pass
         else:
             raise Exception(
                 f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}"
             )
+
+
+def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
+    """
+    Check if a model matches an allowed pattern.
+    Handles exact matches and wildcard patterns.
+
+    Args:
+        model (str): The model to check (e.g., "bedrock/anthropic.claude-3-5-sonnet-20240620")
+        allowed_model_pattern (str): The allowed pattern (e.g., "bedrock/*", "*", "openai/*")
+
+    Returns:
+        bool: True if model matches the pattern, False otherwise
+    """
+    if "*" in allowed_model_pattern:
+        pattern = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        return bool(re.match(pattern, model))
+
+    return False

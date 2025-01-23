@@ -23,8 +23,15 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
     LiteLLM_UserTable,
+    LiteLLM_TeamTable,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.proxy.auth.auth_checks import (
+    _team_model_access_check,
+    _virtual_key_soft_budget_check,
+)
+from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import CallInfo
 
 
 @pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
@@ -305,3 +312,120 @@ async def test_virtual_key_max_budget_check(
 
     # Verify budget alert was triggered
     assert alert_called, "Budget alert should be triggered"
+
+
+@pytest.mark.parametrize(
+    "model, team_models, expect_to_work",
+    [
+        ("gpt-4", ["gpt-4"], True),  # exact match
+        ("gpt-4", ["all-proxy-models"], True),  # all-proxy-models access
+        ("gpt-4", ["*"], True),  # wildcard access
+        ("gpt-4", ["openai/*"], True),  # openai wildcard access
+        (
+            "bedrock/anthropic.claude-3-5-sonnet-20240620",
+            ["bedrock/*"],
+            True,
+        ),  # wildcard access
+        (
+            "bedrockz/anthropic.claude-3-5-sonnet-20240620",
+            ["bedrock/*"],
+            False,
+        ),  # non-match wildcard access
+        ("bedrock/very_new_model", ["bedrock/*"], True),  # bedrock wildcard access
+        (
+            "bedrock/claude-3-5-sonnet-20240620",
+            ["bedrock/claude-*"],
+            True,
+        ),  # match on pattern
+        (
+            "bedrock/claude-3-6-sonnet-20240620",
+            ["bedrock/claude-3-5-*"],
+            False,
+        ),  # don't match on pattern
+        ("openai/gpt-4o", ["openai/*"], True),  # openai wildcard access
+        ("gpt-4", ["gpt-3.5-turbo"], False),  # model not in allowed list
+        ("claude-3", [], True),  # empty model list (allows all)
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_model_access_check(model, team_models, expect_to_work):
+    """
+    Test cases for _team_model_access_check:
+    1. Exact model match
+    2. all-proxy-models access
+    3. Wildcard (*) access
+    4. OpenAI wildcard access
+    5. Model not in allowed list
+    6. Empty model list
+    7. None model list
+    """
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=team_models,
+    )
+
+    try:
+        _team_model_access_check(
+            model=model,
+            team_object=team_object,
+            llm_router=None,
+        )
+        if not expect_to_work:
+            pytest.fail(
+                f"Expected model access check to fail for model={model}, team_models={team_models}"
+            )
+    except Exception as e:
+        if expect_to_work:
+            pytest.fail(
+                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {str(e)}"
+            )
+
+
+@pytest.mark.parametrize(
+    "spend, soft_budget, expect_alert",
+    [
+        (100, 50, True),  # Over soft budget
+        (50, 50, True),  # At soft budget
+        (25, 50, False),  # Under soft budget
+        (100, None, False),  # No soft budget set
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
+    """
+    Test cases for _virtual_key_soft_budget_check:
+    1. Spend over soft budget
+    2. Spend at soft budget
+    3. Spend under soft budget
+    4. No soft budget set
+    """
+    alert_triggered = False
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered
+            alert_triggered = True
+            assert type == "soft_budget"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=spend,
+        soft_budget=soft_budget,
+        user_id="test-user",
+        team_id="test-team",
+        key_alias="test-key",
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    await asyncio.sleep(0.1)  # Allow time for the alert task to complete
+
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
