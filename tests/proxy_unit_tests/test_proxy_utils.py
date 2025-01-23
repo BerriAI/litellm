@@ -1495,3 +1495,29 @@ def test_custom_openapi(mock_get_openapi_schema):
 
     openapi_schema = custom_openapi()
     assert openapi_schema is not None
+
+
+import pytest
+from unittest.mock import MagicMock, AsyncMock
+import asyncio
+from datetime import timedelta
+from litellm.proxy.utils import ProxyUpdateSpend
+
+
+@pytest.mark.asyncio
+async def test_end_user_transactions_reset():
+    # Setup
+    mock_client = MagicMock()
+    mock_client.end_user_list_transactons = {"1": 10.0}  # Bad log
+    mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=0, prisma_client=mock_client, proxy_logging_obj=MagicMock()
+        )
+
+    # Verify cleanup happened
+    assert (
+        mock_client.end_user_list_transactons == {}
+    ), "Transactions list should be empty after error"
