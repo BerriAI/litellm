@@ -139,7 +139,27 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_team_budget_metric = Gauge(
                 "litellm_remaining_team_budget_metric",
                 "Remaining budget for team",
-                labelnames=["team_id", "team_alias"],
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_remaining_team_budget_metric"
+                ),
+            )
+
+            # Max Budget for Team
+            self.litellm_team_max_budget_metric = Gauge(
+                "litellm_team_max_budget_metric",
+                "Maximum budget set for team",
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_team_max_budget_metric"
+                ),
+            )
+
+            # Team Budget Reset At
+            self.litellm_team_budget_reset_at_metric = Gauge(
+                "litellm_team_budget_reset_at_metric",
+                "Time when the team budget will be reset",
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_team_budget_reset_at_metric"
+                ),
             )
 
             # Remaining Budget for API Key
@@ -147,13 +167,6 @@ class PrometheusLogger(CustomLogger):
                 "litellm_remaining_api_key_budget_metric",
                 "Remaining budget for api key",
                 labelnames=["hashed_api_key", "api_key_alias"],
-            )
-
-            # Max Budget for Team
-            self.litellm_team_max_budget_metric = Gauge(
-                "litellm_team_max_budget_metric",
-                "Maximum budget set for team",
-                labelnames=["team_id", "team_alias"],
             )
 
             # Max Budget for API Key
@@ -1370,6 +1383,12 @@ class PrometheusLogger(CustomLogger):
                         spend=team.spend,
                     )
                 )
+
+            if team.budget_reset_at is not None:
+                self.litellm_team_budget_reset_at_metric.labels(
+                    team.team_id,
+                    team.team_alias or "",
+                ).set(team.budget_reset_at.timestamp())
 
 
 def prometheus_label_factory(
