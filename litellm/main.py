@@ -1050,7 +1050,6 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
-            extra_headers=extra_headers,
             **non_default_params,
         )
 
