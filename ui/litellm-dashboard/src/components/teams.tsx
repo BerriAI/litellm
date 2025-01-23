@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
-import TeamMemberModal, { TeamMember } from "@/components/team/edit_membership";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -66,11 +65,11 @@ interface EditTeamModalProps {
 import {
   teamCreateCall,
   teamMemberAddCall,
-  teamMemberUpdateCall,
   Member,
   modelAvailableCall,
   teamListCall
 } from "./networking";
+
 
 const Team: React.FC<TeamProps> = ({
   teams,
@@ -113,12 +112,11 @@ const Team: React.FC<TeamProps> = ({
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
-  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [userModels, setUserModels] = useState([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
-  const [selectedEditMember, setSelectedEditMember] = useState<null | TeamMember>(null);
 
+  // store team info as {"team_id": team_info_object}
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
 
   const EditTeamModal: React.FC<EditTeamModalProps> = ({
@@ -259,19 +257,16 @@ const Team: React.FC<TeamProps> = ({
 
   const handleMemberOk = () => {
     setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
     memberForm.resetFields();
   };
 
   const handleCancel = () => {
     setIsTeamModalVisible(false);
-
     form.resetFields();
   };
 
   const handleMemberCancel = () => {
     setIsAddMemberModalVisible(false);
-    setIsEditMemberModalVisible(false);
     memberForm.resetFields();
   };
 
@@ -417,7 +412,7 @@ const Team: React.FC<TeamProps> = ({
     return false;
   }
 
-  const _common_member_update_call = async (formValues: Record<string, any>, callType: "add" | "edit") => {
+  const handleMemberCreate = async (formValues: Record<string, any>) => {
     try {
       if (accessToken != null && teams != null) {
         message.info("Adding Member");
@@ -426,27 +421,13 @@ const Team: React.FC<TeamProps> = ({
           user_email: formValues.user_email,
           user_id: formValues.user_id,
         };
-        let response: any;
-        if (callType == "add") {
-          response = await teamMemberAddCall(
-            accessToken,
-            selectedTeam["team_id"],
-            user_role
-          );
-          message.success("Member added");
-        } else {
-          response = await teamMemberUpdateCall(
-            accessToken,
-            selectedTeam["team_id"],
-            {
-              "role": formValues.role,
-              "user_id": formValues.id,
-              "user_email": formValues.email
-            }
-          );
-          message.success("Member updated");
-        }
-        
+        const response: any = await teamMemberAddCall(
+          accessToken,
+          selectedTeam["team_id"],
+          user_role
+        );
+        message.success("Member added");
+        console.log(`response for team create call: ${response["data"]}`);
         // Checking if the team exists in the list and updating or adding accordingly
         const foundIndex = teams.findIndex((team) => {
           console.log(
@@ -468,15 +449,7 @@ const Team: React.FC<TeamProps> = ({
     } catch (error) {
       console.error("Error creating the team:", error);
     }
-  }
-
-  const handleMemberCreate = async (formValues: Record<string, any>) => {
-    _common_member_update_call(formValues, "add");
   };
-
-  const handleMemberUpdate = async (formValues: Record<string, any>) => {
-    _common_member_update_call(formValues, "edit");
-  }
   return (
     <div className="w-full mx-4">
       <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
@@ -858,29 +831,6 @@ const Team: React.FC<TeamProps> = ({
                                 : null}
                           </TableCell>
                           <TableCell>{member["role"]}</TableCell>
-                          <TableCell>
-                          {userRole == "Admin" ? (
-                            <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => {
-                                setIsEditMemberModalVisible(true);
-                                setSelectedEditMember({
-                                  "id": member["user_id"],
-                                  "email": member["user_email"],
-                                  "role": member["role"]
-                                })
-                              }}
-                            />
-                            <Icon
-                              onClick={() => {}}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                            </>
-                          ) : null}
-                        </TableCell>
                         </TableRow>
                       )
                     )
@@ -888,13 +838,6 @@ const Team: React.FC<TeamProps> = ({
               </TableBody>
             </Table>
           </Card>
-          <TeamMemberModal
-            visible={isEditMemberModalVisible}
-            onCancel={handleMemberCancel}
-            onSubmit={handleMemberUpdate}
-            initialData={selectedEditMember}
-            mode="edit"
-          />
           {selectedTeam && (
             <EditTeamModal
               visible={editModalVisible}

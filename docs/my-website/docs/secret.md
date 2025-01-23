@@ -73,20 +73,6 @@ general_settings:
     access_mode: "write_only" # Literal["read_only", "write_only", "read_and_write"]
 ```
 </TabItem>
-<TabItem value="read_and_write" label="Read + Write Keys with AWS Secret Manager">
-
-```yaml
-general_settings:
-  master_key: os.environ/litellm_master_key 
-  key_management_system: "aws_secret_manager" # 👈 KEY CHANGE
-  key_management_settings: 
-    store_virtual_keys: true # OPTIONAL. Defaults to False, when True will store virtual keys in secret manager
-    prefix_for_stored_virtual_keys: "litellm/" # OPTIONAL. If set, this prefix will be used for stored virtual keys in the secret manager
-    access_mode: "read_and_write" # Literal["read_only", "write_only", "read_and_write"]
-    hosted_keys: ["litellm_master_key"] # OPTIONAL. Specify which env keys you stored on AWS
-```
-
-</TabItem>
 </Tabs>
 
 3. Run proxy
@@ -200,6 +186,34 @@ LiteLLM stores secret under the `prefix_for_stored_virtual_keys` path (default: 
 
 
 ## Azure Key Vault
+<!-- 
+### Quick Start
+
+```python 
+### Instantiate Azure Key Vault Client ###
+from azure.keyvault.secrets import SecretClient
+from azure.identity import ClientSecretCredential
+
+# Set your Azure Key Vault URI
+KVUri = os.getenv("AZURE_KEY_VAULT_URI")
+
+# Set your Azure AD application/client ID, client secret, and tenant ID - create an application with permission to call your key vault
+client_id = os.getenv("AZURE_CLIENT_ID") 
+client_secret = os.getenv("AZURE_CLIENT_SECRET")
+tenant_id = os.getenv("AZURE_TENANT_ID") 
+
+# Initialize the ClientSecretCredential
+credential = ClientSecretCredential(client_id=client_id, client_secret=client_secret, tenant_id=tenant_id)
+
+# Create the SecretClient using the credential
+client = SecretClient(vault_url=KVUri, credential=credential)
+
+### Connect to LiteLLM ###
+import litellm
+litellm.secret_manager = client
+
+litellm.get_secret("your-test-key")
+``` -->
 
 #### Usage with LiteLLM Proxy Server
 

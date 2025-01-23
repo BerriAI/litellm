@@ -358,7 +358,7 @@ poetry install -E extra_proxy -E proxy
 Step 3: Test your change:
 
 ```
-cd tests # pwd: Documents/litellm/litellm/tests
+cd litellm/tests # pwd: Documents/litellm/litellm/tests
 poetry run flake8
 poetry run pytest .
 ```
