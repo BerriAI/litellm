@@ -29,9 +29,7 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     return False
 
 
-def get_logging_payload(
-    kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
-) -> SpendLogsPayload:
+def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
 
     from litellm.proxy.proxy_server import general_settings, master_key
 
@@ -58,9 +56,17 @@ def get_logging_payload(
         usage = dict(usage)
     id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
     api_key = metadata.get("user_api_key", "")
-    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-        "standard_logging_object", None
+    standard_logging_payload = cast(
+        Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
+
+    if standard_logging_payload is not None:
+        end_user_id = standard_logging_payload["metadata"].get(
+            "user_api_key_end_user_id"
+        )
+    else:
+        end_user_id = None
+
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
