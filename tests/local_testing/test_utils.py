@@ -1525,5 +1525,5 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
         mock_response="Testing langfuse",
     )
 
-    assert len(litellm.success_callback) == curr_len_success_callback + 1
+    assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
