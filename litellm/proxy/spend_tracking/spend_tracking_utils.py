@@ -29,13 +29,36 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     return False
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
-
-    from litellm.proxy.proxy_server import general_settings, master_key
-
+def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
+    if metadata is None:
+        return SpendLogsMetadata(
+            user_api_key=None,
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            additional_usage_values=None,
+        )
     verbose_proxy_logger.debug(
-        f"SpendTable: get_logging_payload - kwargs: {kwargs}\n\n"
+        "getting payload for SpendLogs, available keys in metadata: "
+        + str(list(metadata.keys()))
     )
+
+    # Filter the metadata dictionary to include only the specified keys
+    clean_metadata = SpendLogsMetadata(
+        **{  # type: ignore
+            key: metadata[key]
+            for key in SpendLogsMetadata.__annotations__.keys()
+            if key in metadata
+        }
+    )
+    return clean_metadata
+
+
+def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
+    from litellm.proxy.proxy_server import general_settings, master_key
 
     if kwargs is None:
         kwargs = {}
@@ -55,7 +78,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
     id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
-    api_key = metadata.get("user_api_key", "")
     standard_logging_payload = cast(
         Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
@@ -64,53 +86,23 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         end_user_id = standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
+        api_key = standard_logging_payload["metadata"].get("user_api_key_hash") or ""
+        request_tags = json.dumps(standard_logging_payload["request_tags"])
     else:
         end_user_id = None
-
-    if api_key is not None and isinstance(api_key, str):
-        if api_key.startswith("sk-"):
-            # hash the api_key
-            api_key = hash_token(api_key)
-        if (
-            _is_master_key(api_key=api_key, _master_key=master_key)
-            and general_settings.get("disable_adding_master_key_hash_to_db") is True
-        ):
-            api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
+        api_key = ""
+        request_tags = "[]"
+    if (
+        _is_master_key(api_key=api_key, _master_key=master_key)
+        and general_settings.get("disable_adding_master_key_hash_to_db") is True
+    ):
+        api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
 
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
 
-    request_tags = (
-        json.dumps(metadata.get("tags", []))
-        if isinstance(metadata.get("tags", []), list)
-        else "[]"
-    )
-
     # clean up litellm metadata
-    clean_metadata = SpendLogsMetadata(
-        user_api_key=None,
-        user_api_key_alias=None,
-        user_api_key_team_id=None,
-        user_api_key_user_id=None,
-        user_api_key_team_alias=None,
-        spend_logs_metadata=None,
-        requester_ip_address=None,
-        additional_usage_values=None,
-    )
-    if isinstance(metadata, dict):
-        verbose_proxy_logger.debug(
-            "getting payload for SpendLogs, available keys in metadata: "
-            + str(list(metadata.keys()))
-        )
-
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = SpendLogsMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in SpendLogsMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
+    clean_metadata = _get_spend_logs_metadata(metadata)
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
     additional_usage_values = {}
