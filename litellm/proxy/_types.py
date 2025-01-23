@@ -1479,7 +1479,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                 # Check if the value is None and set the corresponding attribute
                 if getattr(self, attr_name, None) is None:
                     kwargs[attr_name] = value
-
+            if key == "end_user_id" and value is not None and isinstance(value, int):
+                kwargs[key] = str(value)
         # Initialize the superclass
         super().__init__(**kwargs)
 
@@ -2288,7 +2289,6 @@ class ProxyStateVariables(TypedDict):
 UI_TEAM_ID = "litellm-dashboard"
 
 
-
 class JWTAuthBuilderResult(TypedDict):
     is_proxy_admin: bool
     team_object: Optional[LiteLLM_TeamTable]
@@ -2300,6 +2300,7 @@ class JWTAuthBuilderResult(TypedDict):
     user_id: Optional[str]
     end_user_id: Optional[str]
     org_id: Optional[str]
+
 
 class ClientSideFallbackModel(TypedDict, total=False):
     """
