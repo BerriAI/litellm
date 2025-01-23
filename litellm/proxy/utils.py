@@ -2625,12 +2625,10 @@ async def update_spend(  # noqa: PLR0915
         )
     )
     if len(prisma_client.end_user_list_transactons.keys()) > 0:
-        asyncio.create_task(
-            ProxyUpdateSpend.update_end_user_spend(
-                n_retry_times=n_retry_times,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
         )
     ### UPDATE KEY TABLE ###
     verbose_proxy_logger.debug(
@@ -2789,13 +2787,11 @@ async def update_spend(  # noqa: PLR0915
     )
 
     if len(prisma_client.spend_log_transactions) > 0:
-        asyncio.create_task(
-            ProxyUpdateSpend.update_spend_logs(
-                n_retry_times=n_retry_times,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-                db_writer_client=db_writer_client,
-            )
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            db_writer_client=db_writer_client,
         )
 
 
