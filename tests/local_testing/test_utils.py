@@ -1496,24 +1496,34 @@ def test_get_num_retries(num_retries):
     )
 
 
-@pytest.mark.parametrize("filter_invalid_headers", [True, False])
-@pytest.mark.parametrize(
-    "custom_llm_provider, expected_result",
-    [("anthropic", {"anthropic-beta": "123"}), ("bedrock", {}), ("vertex_ai", {})],
-)
-def test_get_clean_extra_headers(
-    filter_invalid_headers, custom_llm_provider, expected_result, monkeypatch
-):
-    from litellm.utils import get_clean_extra_headers
+def test_add_custom_logger_callback_to_specific_event(monkeypatch):
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
 
-    monkeypatch.setattr(litellm, "filter_invalid_headers", filter_invalid_headers)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
 
-    if filter_invalid_headers:
-        assert (
-            get_clean_extra_headers({"anthropic-beta": "123"}, custom_llm_provider)
-            == expected_result
-        )
-    else:
-        assert get_clean_extra_headers(
-            {"anthropic-beta": "123"}, custom_llm_provider
-        ) == {"anthropic-beta": "123"}
+    _add_custom_logger_callback_to_specific_event("langfuse", "success")
+
+    assert len(litellm.success_callback) == 1
+    assert len(litellm.failure_callback) == 0
+
+
+def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    litellm.success_callback = ["humanloop"]
+
+    curr_len_success_callback = len(litellm.success_callback)
+    curr_len_failure_callback = len(litellm.failure_callback)
+
+    litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing langfuse",
+    )
+
+    assert len(litellm.success_callback) == curr_len_success_callback
+    assert len(litellm.failure_callback) == curr_len_failure_callback

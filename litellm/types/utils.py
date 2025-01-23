@@ -1658,6 +1658,7 @@ all_litellm_params = [
     "api_key",
     "api_version",
     "prompt_id",
+    "provider_specific_header",
     "prompt_variables",
     "api_base",
     "force_timeout",
@@ -1879,3 +1880,8 @@ class HttpHandlerRequestFields(TypedDict, total=False):
     params: dict  # query params
     files: dict  # file uploads
     content: Any  # raw content
+
+
+class ProviderSpecificHeader(TypedDict):
+    custom_llm_provider: str
+    extra_headers: dict
