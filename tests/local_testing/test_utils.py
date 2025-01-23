@@ -1512,8 +1512,12 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
 
     litellm.success_callback = ["humanloop"]
+
+    curr_len_success_callback = len(litellm.success_callback)
+    curr_len_failure_callback = len(litellm.failure_callback)
 
     litellm.completion(
         model="gpt-4o-mini",
@@ -1521,5 +1525,5 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
         mock_response="Testing langfuse",
     )
 
-    assert len(litellm.success_callback) == 1
-    assert len(litellm.failure_callback) == 0
+    assert len(litellm.success_callback) == curr_len_success_callback + 1
+    assert len(litellm.failure_callback) == curr_len_failure_callback
