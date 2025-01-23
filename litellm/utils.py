@@ -1118,7 +1118,7 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            logging_task_manager.submit_logging_tasks_for_async_llm_call(
+            await logging_task_manager.submit_logging_tasks_for_async_llm_call(
                 logging_obj=logging_obj,
                 result=result,
                 start_time=start_time,

@@ -83,7 +83,7 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
-        logging_task_manager.submit_logging_tasks_for_async_llm_call(
+        await logging_task_manager.submit_logging_tasks_for_async_llm_call(
             logging_obj=logging_obj,
             result=(
                 json.dumps(result)

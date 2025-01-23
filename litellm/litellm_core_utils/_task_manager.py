@@ -22,20 +22,25 @@ class LoggingTaskManager:
     """
 
     def __init__(self):
-        # 1) Create an event loop specifically for our async logging
-        self._loop = asyncio.new_event_loop()
-        # Start that loop in its own thread
-        self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
-        self._thread.start()
 
-        # 2) Create a single-worker ThreadPoolExecutor for sync logging
+        self.semaphore = asyncio.Semaphore(value=1)
         self.executor = ThreadPoolExecutor(max_workers=1)
 
-    def _run_event_loop(self):
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+    async def _bounded_logging(
+        self,
+        logging_obj: LiteLLMLoggingObject,
+        semaphore: asyncio.Semaphore,
+        result: Any,
+        start_time: datetime,
+        end_time: datetime,
+        **kwargs,
+    ):
+        async with semaphore:
+            await logging_obj.async_success_handler(
+                result, start_time, end_time, **kwargs
+            )
 
-    def submit_logging_tasks_for_async_llm_call(
+    async def submit_logging_tasks_for_async_llm_call(
         self,
         logging_obj: LiteLLMLoggingObject,
         result: Any,
@@ -58,11 +63,16 @@ class LoggingTaskManager:
 
         """
         if not is_completion_with_fallbacks:
-            # Schedule the async callback in the dedicated event-loop thread
-            coro = logging_obj.async_success_handler(
-                result, start_time, end_time, **kwargs
+            asyncio.create_task(
+                self._bounded_logging(
+                    logging_obj=logging_obj,
+                    semaphore=self.semaphore,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    **kwargs,
+                )
             )
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
 
             # Schedule any synchronous callbacks in the executor
             self.executor.submit(
@@ -103,8 +113,3 @@ class LoggingTaskManager:
         """
         # Shut down the ThreadPoolExecutor
         self.executor.shutdown(wait=True)
-
-        # Stop the event loop
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        # Join the event loop thread
-        self._thread.join()

@@ -305,6 +305,7 @@ class DataDogLogger(CustomBatchLogger):
                 "Content-Encoding": "gzip",
                 "Content-Type": "application/json",
             },
+            timeout=10,
         )
         return response
 
