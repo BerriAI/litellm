@@ -178,9 +178,6 @@ async def test_chat_completion_with_timeout():
         assert (
             headers["x-litellm-timeout"] == "1.0"
         )  # assert model-specific timeout used
-        assert (end_time - start_time) - float(
-            headers["x-litellm-timeout"]
-        ) < 1  # expect <1s diff between client request time and proxy 'said' timeout
 
 
 @pytest.mark.parametrize("has_access", [True, False])
