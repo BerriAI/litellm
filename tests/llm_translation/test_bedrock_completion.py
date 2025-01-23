@@ -1659,6 +1659,7 @@ def test_bedrock_completion_test_3():
     ]
 
 
+@pytest.mark.skip(reason="Skipping this test as Bedrock now supports this behavior.")
 @pytest.mark.parametrize("modify_params", [True, False])
 def test_bedrock_completion_test_4(modify_params):
     litellm.set_verbose = True
