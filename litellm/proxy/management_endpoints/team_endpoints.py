@@ -27,6 +27,8 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_ManagementEndpoint_MetadataFields,
+    LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -273,14 +275,12 @@ async def new_team(  # noqa: PLR0915
     )
 
     # Set tags on the new team
-    _team_metadata_fields = ["tags", "guardrails"]
-    for field in _team_metadata_fields:
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if getattr(data, field) is not None:
             _set_team_metadata_field(
                 team_data=complete_team_data,
                 field_name=field,
                 value=getattr(data, field),
-                is_premium_feature=False,
             )
 
     # If budget_duration is set, set `budget_reset_at`
@@ -476,7 +476,6 @@ async def update_team(
             _update_team_metadata_field(
                 updated_kv=updated_kv,
                 field_name=field,
-                is_premium_feature=True,
             )
 
     if "model_aliases" in updated_kv:
@@ -1494,18 +1493,15 @@ async def get_paginated_teams(
         return [], 0
 
 
-def _update_team_metadata_field(
-    updated_kv: dict, field_name: str, is_premium_feature: bool
-) -> None:
+def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
     """
     Helper function to update metadata fields that require premium user checks in the update endpoint
 
     Args:
         updated_kv: The key-value dict being used for the update
         field_name: Name of the metadata field being updated
-        is_premium_feature: Whether the field is a premium feature
     """
-    if is_premium_feature is True:
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         _premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
@@ -1518,7 +1514,7 @@ def _update_team_metadata_field(
 
 
 def _set_team_metadata_field(
-    team_data: LiteLLM_TeamTable, field_name: str, value: Any, is_premium_feature: bool
+    team_data: LiteLLM_TeamTable, field_name: str, value: Any
 ) -> None:
     """
     Helper function to set metadata fields that require premium user checks
@@ -1527,9 +1523,8 @@ def _set_team_metadata_field(
         team_data: The team data object to modify
         field_name: Name of the metadata field to set
         value: Value to set for the field
-        is_premium_feature: Whether the field is a premium feature
     """
-    if is_premium_feature is True:
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         _premium_user_check()
     team_data.metadata = team_data.metadata or {}
     team_data.metadata[field_name] = value

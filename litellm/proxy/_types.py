@@ -943,7 +943,6 @@ class TeamBase(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
-    guardrails: Optional[List[str]] = None
 
     # Budget fields
     max_budget: Optional[float] = None
@@ -956,6 +955,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
+    guardrails: Optional[List[str]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2255,6 +2255,11 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",
+]
+
+LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
+    "guardrails",
+    "tags",
 ]
 
 
