@@ -172,7 +172,7 @@ class GcsPubSubLogger(CustomBatchLogger):
             if isinstance(message, str):
                 message_data = message
             else:
-                message_data = json.dumps(message, default=str, indent=4)
+                message_data = json.dumps(message, default=str)
 
             # Base64 encode the message
             import base64
@@ -190,7 +190,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 url=url, headers=headers, json=request_body
             )
 
-            if response.status_code != 200:
+            if response.status_code not in [200, 202]:
                 verbose_logger.error("Pub/Sub publish error: %s", str(response.text))
                 raise Exception(f"Failed to publish message: {response.text}")
 

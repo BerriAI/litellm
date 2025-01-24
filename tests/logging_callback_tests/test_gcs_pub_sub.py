@@ -76,7 +76,7 @@ async def test_gcs_pub_sub():
             mock_response="hi",
         )
 
-        await asyncio.sleep(3)  # Wait for async flush
+        await asyncio.sleep(11)  # Wait for async flush
 
         # Assert httpx post was called
         mock_httpx_client.post.assert_called_once()
