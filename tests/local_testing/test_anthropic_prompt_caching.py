@@ -16,7 +16,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
 
@@ -608,7 +608,11 @@ async def test_litellm_anthropic_prompt_caching_system():
         }
 
         mock_post.assert_called_once_with(
-            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
+            expected_url,
+            json=expected_json,
+            headers=expected_headers,
+            timeout=600.0,
+            logging_obj=ANY,
         )
 
 
