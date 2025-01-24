@@ -22,7 +22,7 @@ from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 
-class PubSub(CustomBatchLogger):
+class GcsPubSubLogger(CustomBatchLogger):
     def __init__(
         self,
         project_id: Optional[str] = None,

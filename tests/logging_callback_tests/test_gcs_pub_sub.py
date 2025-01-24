@@ -67,7 +67,7 @@ async def test_gcs_pub_sub():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler",
         return_value=mock_httpx_client,
     ):
-        gcs_pub_sub_logger = PubSub(flush_interval=1)
+        gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
         litellm.callbacks = [gcs_pub_sub_logger]
 
         response = await litellm.acompletion(
