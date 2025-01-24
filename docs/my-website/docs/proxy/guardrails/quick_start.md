@@ -390,7 +390,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 
 
-### ✨ Control Guardrails per Project (API Key)
+### ✨ Control Guardrails per API Key
 
 :::info
 
@@ -398,7 +398,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::
 
-Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project (API Key)
+Use this to control what guardrails run per API Key. In this tutorial we only want the following guardrails to run for 1 API Key
 - `guardrails`: ["aporia-pre-guard", "aporia-post-guard"]
 
 **Step 1** Create Key with guardrail settings
