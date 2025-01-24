@@ -1,21 +1,26 @@
+import asyncio
 import json
 import os
+import traceback
 from typing import Any, Dict, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 
-class PubSub:
+class PubSub(CustomBatchLogger):
     def __init__(
         self,
         project_id: Optional[str] = None,
         topic_id: Optional[str] = None,
         credentials_path: Optional[str] = None,
+        **kwargs,
     ):
         """
         Initialize Google Cloud Pub/Sub publisher
@@ -37,6 +42,10 @@ class PubSub:
 
         if not self.project_id or not self.topic_id:
             raise ValueError("Both project_id and topic_id must be provided")
+
+        self.flush_lock = asyncio.Lock()
+        super().__init__(**kwargs, flush_lock=self.flush_lock)
+        asyncio.create_task(self.periodic_flush())
 
     async def construct_request_headers(self) -> Dict[str, str]:
         """Construct authorization headers using Vertex AI auth"""
@@ -68,8 +77,62 @@ class PubSub:
         }
         return headers
 
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Async Log success events to GCS PubSub Topic
+
+        - Creates a SpendLogsPayload
+        - Adds to batch queue
+        - Flushes based on CustomBatchLogger settings
+
+        Raises:
+            Raises a NON Blocking verbose_logger.exception if an error occurs
+        """
+        try:
+            verbose_logger.debug(
+                "PubSub: Logging - Enters logging function for model %s", kwargs
+            )
+            spend_logs_payload = get_logging_payload(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            self.log_queue.append(spend_logs_payload)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"PubSub Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
+
+    async def async_send_batch(self):
+        """
+        Sends the batch of messages to Pub/Sub
+        """
+        try:
+            if not self.log_queue:
+                return
+
+            verbose_logger.debug(
+                f"PubSub - about to flush {len(self.log_queue)} events"
+            )
+
+            for message in self.log_queue:
+                await self.publish_message(message)
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"PubSub Error sending batch - {str(e)}\n{traceback.format_exc()}"
+            )
+        finally:
+            self.log_queue.clear()
+
     async def publish_message(
-        self, message: Union[StandardLoggingPayload, Dict[str, Any], str]
+        self, message: Union[SpendLogsPayload, Dict[str, Any], str]
     ) -> Dict[str, Any]:
         """
         Publish message to Google Cloud Pub/Sub using REST API
