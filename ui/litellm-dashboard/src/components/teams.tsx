@@ -548,7 +548,9 @@ const Team: React.FC<TeamProps> = ({
 
               <TableBody>
                 {teams && teams.length > 0
-                  ? teams.map((team: any) => (
+                  ? teams
+                      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                      .map((team: any) => (
                       <TableRow key={team.team_id}>
                         <TableCell
                           style={{
