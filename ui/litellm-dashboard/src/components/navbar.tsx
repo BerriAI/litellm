@@ -90,8 +90,13 @@ const Navbar: React.FC<NavbarProps> = ({
             {/* Left side - Just Logo */}
             <div className="flex items-center">
               <Link href="/" className="flex items-center">
-                <span className="text-xl">🚅</span>
-                <span className="ml-2 text-base font-medium text-gray-700">LiteLLM</span>
+                <button className="text-gray-800 rounded text-center">
+                  <img
+                    src={imageUrl}
+                    alt="LiteLLM Brand"
+                    className="h-10 w-40 object-contain"
+                  />
+                </button>
               </Link>
             </div>
 
