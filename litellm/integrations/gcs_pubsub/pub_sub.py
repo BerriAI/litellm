@@ -10,7 +10,12 @@ import asyncio
 import json
 import os
 import traceback
-from typing import Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import SpendLogsPayload
+else:
+    SpendLogsPayload = Any
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -18,8 +23,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import SpendLogsPayload
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 
 class GcsPubSubLogger(CustomBatchLogger):
@@ -96,6 +99,10 @@ class GcsPubSubLogger(CustomBatchLogger):
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            get_logging_payload,
+        )
+
         try:
             verbose_logger.debug(
                 "PubSub: Logging - Enters logging function for model %s", kwargs
