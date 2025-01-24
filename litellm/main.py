@@ -1056,10 +1056,6 @@ def completion(  # type: ignore # noqa: PLR0915
             **non_default_params,
         )
 
-        extra_headers = optional_params.pop("extra_headers", None)
-        if extra_headers is not None:
-            headers.update(extra_headers)
-
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
         ):  # if user opts to add it to prompt, when API doesn't support function calling
