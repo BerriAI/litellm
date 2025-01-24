@@ -82,6 +82,12 @@ async def test_gcs_pub_sub():
         mock_httpx_client.post.assert_called_once()
 
         # Get the actual request body from the mock
+        actual_url = mock_httpx_client.post.call_args[1]["url"]
+        print("sent to url", actual_url)
+        assert (
+            actual_url
+            == "https://pubsub.googleapis.com/v1/projects/reliableKeys/topics/litellmDB:publish"
+        )
         actual_request = mock_httpx_client.post.call_args[1]["json"]
 
         # Extract and decode the base64 encoded message
