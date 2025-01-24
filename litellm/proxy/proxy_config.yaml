@@ -13,8 +13,7 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-general_settings:
-  store_prompts_in_spend_logs: true
+
 
 litellm_settings:
   callbacks: ["prometheus"]
