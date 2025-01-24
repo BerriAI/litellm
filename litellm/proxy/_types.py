@@ -939,6 +939,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    guardrails: Optional[List[str]] = None
 
     # Budget fields
     max_budget: Optional[float] = None
@@ -975,6 +976,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+    guardrails: Optional[List[str]] = None
     """
 
     team_id: str  # required
@@ -989,6 +991,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
+    guardrails: Optional[List[str]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
