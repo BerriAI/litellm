@@ -57,7 +57,12 @@ async def make_call(
 
     try:
         response = await client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+            timeout=timeout,
+            logging_obj=logging_obj,
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -108,7 +113,12 @@ def make_sync_call(
 
     try:
         response = client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+            timeout=timeout,
+            logging_obj=logging_obj,
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
@@ -226,7 +236,11 @@ class AnthropicChatCompletion(BaseLLM):
 
         try:
             response = await async_handler.post(
-                api_base, headers=headers, json=data, timeout=timeout
+                api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
             )
         except Exception as e:
             ## LOGGING
@@ -414,6 +428,7 @@ class AnthropicChatCompletion(BaseLLM):
                         headers=headers,
                         data=json.dumps(data),
                         timeout=timeout,
+                        logging_obj=logging_obj,
                     )
                 except Exception as e:
                     status_code = getattr(e, "status_code", 500)
