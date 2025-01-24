@@ -58,7 +58,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -167,177 +167,182 @@ async def new_team(  # noqa: PLR0915
             }'
     ```
     """
-    from litellm.proxy.proxy_server import (
-        create_audit_log_for_update,
-        duration_in_seconds,
-        litellm_proxy_admin_name,
-        prisma_client,
-    )
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
-
-    if data.team_id is None:
-        data.team_id = str(uuid.uuid4())
-    else:
-        # Check if team_id exists already
-        _existing_team_id = await prisma_client.get_data(
-            team_id=data.team_id, table_name="team", query_type="find_unique"
+    try:
+        from litellm.proxy.proxy_server import (
+            create_audit_log_for_update,
+            duration_in_seconds,
+            litellm_proxy_admin_name,
+            prisma_client,
         )
-        if _existing_team_id is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Team id = {data.team_id} already exists. Please use a different team id."
-                },
-            )
 
-    if (
-        user_api_key_dict.user_role is None
-        or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-    ):  # don't restrict proxy admin
-        if (
-            data.tpm_limit is not None
-            and user_api_key_dict.tpm_limit is not None
-            and data.tpm_limit > user_api_key_dict.tpm_limit
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
-                },
+        if prisma_client is None:
+            raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+        if data.team_id is None:
+            data.team_id = str(uuid.uuid4())
+        else:
+            # Check if team_id exists already
+            _existing_team_id = await prisma_client.get_data(
+                team_id=data.team_id, table_name="team", query_type="find_unique"
             )
+            if _existing_team_id is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Team id = {data.team_id} already exists. Please use a different team id."
+                    },
+                )
 
         if (
-            data.rpm_limit is not None
-            and user_api_key_dict.rpm_limit is not None
-            and data.rpm_limit > user_api_key_dict.rpm_limit
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
+            user_api_key_dict.user_role is None
+            or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):  # don't restrict proxy admin
+            if (
+                data.tpm_limit is not None
+                and user_api_key_dict.tpm_limit is not None
+                and data.tpm_limit > user_api_key_dict.tpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"tpm limit higher than user max. User tpm limit={user_api_key_dict.tpm_limit}. User role={user_api_key_dict.user_role}"
+                    },
+                )
+
+            if (
+                data.rpm_limit is not None
+                and user_api_key_dict.rpm_limit is not None
+                and data.rpm_limit > user_api_key_dict.rpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
+                    },
+                )
+
+            if (
+                data.max_budget is not None
+                and user_api_key_dict.max_budget is not None
+                and data.max_budget > user_api_key_dict.max_budget
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}. User role={user_api_key_dict.user_role}"
+                    },
+                )
+
+            if data.models is not None and len(user_api_key_dict.models) > 0:
+                for m in data.models:
+                    if m not in user_api_key_dict.models:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
+                            },
+                        )
+
+        if user_api_key_dict.user_id is not None:
+            creating_user_in_list = False
+            for member in data.members_with_roles:
+                if member.user_id == user_api_key_dict.user_id:
+                    creating_user_in_list = True
+
+            if creating_user_in_list is False:
+                data.members_with_roles.append(
+                    Member(role="admin", user_id=user_api_key_dict.user_id)
+                )
+
+        ## ADD TO MODEL TABLE
+        _model_id = None
+        if data.model_aliases is not None and isinstance(data.model_aliases, dict):
+            litellm_modeltable = LiteLLM_ModelTable(
+                model_aliases=json.dumps(data.model_aliases),
+                created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+            )
+            model_dict = await prisma_client.db.litellm_modeltable.create(
+                {**litellm_modeltable.json(exclude_none=True)}  # type: ignore
+            )  # type: ignore
+
+            _model_id = model_dict.id
+
+        ## ADD TO TEAM TABLE
+        complete_team_data = LiteLLM_TeamTable(
+            **data.json(),
+            model_id=_model_id,
+        )
+
+        # Set Management Endpoint Metadata Fields
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field) is not None:
+                _set_team_metadata_field(
+                    team_data=complete_team_data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+
+        # If budget_duration is set, set `budget_reset_at`
+        if complete_team_data.budget_duration is not None:
+            duration_s = duration_in_seconds(
+                duration=complete_team_data.budget_duration
+            )
+            reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+            complete_team_data.budget_reset_at = reset_at
+
+        complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+        complete_team_data_dict = prisma_client.jsonify_team_object(
+            db_data=complete_team_data_dict
+        )
+        team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
+            data=complete_team_data_dict,
+            include={"litellm_model_table": True},  # type: ignore
+        )
+
+        ## ADD TEAM ID TO USER TABLE ##
+        for user in complete_team_data.members_with_roles:
+            ## add team id to user row ##
+            await prisma_client.update_data(
+                user_id=user.user_id,
+                data={"user_id": user.user_id, "teams": [team_row.team_id]},
+                update_key_values_custom_query={
+                    "teams": {
+                        "push ": [team_row.team_id],
+                    }
                 },
             )
 
-        if (
-            data.max_budget is not None
-            and user_api_key_dict.max_budget is not None
-            and data.max_budget > user_api_key_dict.max_budget
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"max budget higher than user max. User max budget={user_api_key_dict.max_budget}. User role={user_api_key_dict.user_role}"
-                },
-            )
+        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
+        if litellm.store_audit_logs is True:
+            _updated_values = complete_team_data.json(exclude_none=True)
 
-        if data.models is not None and len(user_api_key_dict.models) > 0:
-            for m in data.models:
-                if m not in user_api_key_dict.models:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": f"Model not in allowed user models. User allowed models={user_api_key_dict.models}. User id={user_api_key_dict.user_id}"
-                        },
+            _updated_values = json.dumps(_updated_values, default=str)
+
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id
+                        or litellm_proxy_admin_name,
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                        object_id=data.team_id,
+                        action="created",
+                        updated_values=_updated_values,
+                        before_value=None,
                     )
-
-    if user_api_key_dict.user_id is not None:
-        creating_user_in_list = False
-        for member in data.members_with_roles:
-            if member.user_id == user_api_key_dict.user_id:
-                creating_user_in_list = True
-
-        if creating_user_in_list is False:
-            data.members_with_roles.append(
-                Member(role="admin", user_id=user_api_key_dict.user_id)
-            )
-
-    ## ADD TO MODEL TABLE
-    _model_id = None
-    if data.model_aliases is not None and isinstance(data.model_aliases, dict):
-        litellm_modeltable = LiteLLM_ModelTable(
-            model_aliases=json.dumps(data.model_aliases),
-            created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-            updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-        )
-        model_dict = await prisma_client.db.litellm_modeltable.create(
-            {**litellm_modeltable.json(exclude_none=True)}  # type: ignore
-        )  # type: ignore
-
-        _model_id = model_dict.id
-
-    ## ADD TO TEAM TABLE
-    complete_team_data = LiteLLM_TeamTable(
-        **data.json(),
-        model_id=_model_id,
-    )
-
-    # Set Management Endpoint Metadata Fields
-    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if getattr(data, field) is not None:
-            _set_team_metadata_field(
-                team_data=complete_team_data,
-                field_name=field,
-                value=getattr(data, field),
-            )
-
-    # If budget_duration is set, set `budget_reset_at`
-    if complete_team_data.budget_duration is not None:
-        duration_s = duration_in_seconds(duration=complete_team_data.budget_duration)
-        reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-        complete_team_data.budget_reset_at = reset_at
-
-    complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
-    complete_team_data_dict = prisma_client.jsonify_team_object(
-        db_data=complete_team_data_dict
-    )
-    team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
-        data=complete_team_data_dict,
-        include={"litellm_model_table": True},  # type: ignore
-    )
-
-    ## ADD TEAM ID TO USER TABLE ##
-    for user in complete_team_data.members_with_roles:
-        ## add team id to user row ##
-        await prisma_client.update_data(
-            user_id=user.user_id,
-            data={"user_id": user.user_id, "teams": [team_row.team_id]},
-            update_key_values_custom_query={
-                "teams": {
-                    "push ": [team_row.team_id],
-                }
-            },
-        )
-
-    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-    if litellm.store_audit_logs is True:
-        _updated_values = complete_team_data.json(exclude_none=True)
-
-        _updated_values = json.dumps(_updated_values, default=str)
-
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                    object_id=data.team_id,
-                    action="created",
-                    updated_values=_updated_values,
-                    before_value=None,
                 )
             )
-        )
 
-    try:
-        return team_row.model_dump()
-    except Exception:
-        return team_row.dict()
+        try:
+            return team_row.model_dump()
+        except Exception:
+            return team_row.dict()
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
 
 
 async def _update_model_table(
