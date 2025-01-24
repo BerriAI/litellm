@@ -299,7 +299,7 @@ async def test_guardrails_with_team_controls():
         )
         key_without_team = key_without_team["key"]
 
-        # Test no guardrails triggered for key without team
+        # Test no guardrails triggered for key without a team
         response, headers = await chat_completion(
             session,
             key_without_team,
