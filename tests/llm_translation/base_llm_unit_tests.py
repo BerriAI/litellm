@@ -539,17 +539,19 @@ class BaseLLMChatTest(ABC):
 
         return url
 
-    def test_completion_cost(self):
+    @pytest.mark.asyncio
+    async def test_completion_cost(self):
         from litellm import completion_cost
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm.set_verbose = True
-        response = self.completion_function(
+        response = await self.async_completion_function(
             **self.get_base_completion_call_args(),
             messages=[{"role": "user", "content": "Hello, how are you?"}],
         )
+        print(response._hidden_params)
         cost = completion_cost(response)
 
         assert cost > 0

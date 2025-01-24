@@ -4,6 +4,7 @@ import pytest
 import asyncio
 import aiohttp
 from large_text import text
+import time
 
 
 async def generate_key(
@@ -37,7 +38,14 @@ async def generate_key(
         return await response.json()
 
 
-async def chat_completion(session, key: str, model: str, messages: list, **kwargs):
+async def chat_completion(
+    session,
+    key: str,
+    model: str,
+    messages: list,
+    return_headers: bool = False,
+    **kwargs,
+):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
@@ -53,8 +61,15 @@ async def chat_completion(session, key: str, model: str, messages: list, **kwarg
         print()
 
         if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-        return await response.json()
+            if return_headers:
+                return None, response.headers
+            else:
+                raise Exception(f"Request did not return a 200 status code: {status}")
+
+        if return_headers:
+            return await response.json(), response.headers
+        else:
+            return await response.json()
 
 
 @pytest.mark.asyncio
@@ -103,6 +118,108 @@ async def test_chat_completion_client_fallbacks(has_access):
                 messages=messages,
                 mock_testing_fallbacks=True,
                 fallbacks=["gpt-instruct"],
+            )
+            if not has_access:
+                pytest.fail(
+                    "Expected this to fail, submitted fallback model that key did not have access to"
+                )
+        except Exception as e:
+            if has_access:
+                pytest.fail("Expected this to work: {}".format(str(e)))
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_retries():
+    """
+    make chat completion call with prompt > context window. expect it to work with fallback
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "fake-openai-endpoint-4"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            mock_testing_rate_limit_error=True,
+            return_headers=True,
+        )
+        print(f"headers: {headers}")
+        assert headers["x-litellm-attempted-retries"] == "1"
+        assert headers["x-litellm-max-retries"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_timeout():
+    """
+    make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "fake-openai-endpoint-5"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        start_time = time.time()
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            num_retries=0,
+            mock_timeout=True,
+            return_headers=True,
+        )
+        end_time = time.time()
+        print(f"headers: {headers}")
+        assert (
+            headers["x-litellm-timeout"] == "1.0"
+        )  # assert model-specific timeout used
+
+
+@pytest.mark.parametrize("has_access", [True, False])
+@pytest.mark.asyncio
+async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
+    """
+    make chat completion call with prompt > context window. expect it to work with fallback
+    """
+
+    async with aiohttp.ClientSession() as session:
+        models = ["gpt-3.5-turbo"]
+
+        if has_access:
+            models.append("gpt-instruct")
+
+        ## CREATE KEY WITH MODELS
+        generated_key = await generate_key(session=session, i=0, models=models)
+        calling_key = generated_key["key"]
+        model = "gpt-3.5-turbo"
+        messages = [
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+
+        ## CALL PROXY
+        try:
+            await chat_completion(
+                session=session,
+                key=calling_key,
+                model=model,
+                messages=messages,
+                mock_testing_fallbacks=True,
+                fallbacks=[
+                    {
+                        "model": "gpt-instruct",
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": "This is a custom message",
+                            }
+                        ],
+                    }
+                ],
             )
             if not has_access:
                 pytest.fail(

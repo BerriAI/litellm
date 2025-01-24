@@ -13,7 +13,6 @@ from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    _should_store_prompts_and_responses_in_spend_logs,
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
@@ -1667,17 +1666,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             param="None",
             code=status.HTTP_401_UNAUTHORIZED,
         )
-    if _should_store_prompts_and_responses_in_spend_logs() is not True:
-        verbose_proxy_logger.debug(
-            "Prompts and responses are not stored in spend logs, returning empty list"
-        )
-        return {
-            "data": [],
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": 0,
-        }
+
     if start_date is None or end_date is None:
         raise ProxyException(
             message="Start date and end date are required",

@@ -787,9 +787,10 @@ def get_custom_headers(
     hidden_params: Optional[dict] = None,
     fastest_response_batch_completion: Optional[bool] = None,
     request_data: Optional[dict] = {},
+    timeout: Optional[Union[float, int, httpx.Timeout]] = None,
     **kwargs,
 ) -> dict:
-    exclude_values = {"", None}
+    exclude_values = {"", None, "None"}
     hidden_params = hidden_params or {}
     headers = {
         "x-litellm-call-id": call_id,
@@ -812,6 +813,7 @@ def get_custom_headers(
             if fastest_response_batch_completion is not None
             else None
         ),
+        "x-litellm-timeout": str(timeout) if timeout is not None else None,
         **{k: str(v) for k, v in kwargs.items()},
     }
     if request_data:
@@ -3637,14 +3639,28 @@ async def chat_completion(  # noqa: PLR0915
             litellm_debug_info,
         )
 
+        timeout = getattr(
+            e, "timeout", None
+        )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
+
+        custom_headers = get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            response_cost=0,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            request_data=data,
+            timeout=timeout,
+        )
+        headers = getattr(e, "headers", {}) or {}
+        headers.update(custom_headers)
+
         if isinstance(e, HTTPException):
-            # print("e.headers={}".format(e.headers))
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                headers=getattr(e, "headers", {}),
+                headers=headers,
             )
         error_msg = f"{str(e)}"
         raise ProxyException(
@@ -3652,7 +3668,7 @@ async def chat_completion(  # noqa: PLR0915
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
-            headers=getattr(e, "headers", {}),
+            headers=headers,
         )
 
 

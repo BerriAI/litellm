@@ -955,6 +955,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
+    guardrails: Optional[List[str]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -979,6 +980,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+    guardrails: Optional[List[str]] = None
     """
 
     team_id: str  # required
@@ -993,6 +995,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
+    guardrails: Optional[List[str]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1088,6 +1091,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    created_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2253,6 +2257,11 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",
+]
+
+LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
+    "guardrails",
+    "tags",
 ]
 
 

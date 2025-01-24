@@ -179,6 +179,7 @@ from .types.utils import (
     HiddenParams,
     LlmProviders,
     PromptTokensDetails,
+    ProviderSpecificHeader,
     all_litellm_params,
 )
 
@@ -832,6 +833,9 @@ def completion(  # type: ignore # noqa: PLR0915
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
+    provider_specific_header = cast(
+        Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
+    )
     headers = kwargs.get("headers", None) or extra_headers
     ensure_alternating_roles: Optional[bool] = kwargs.get(
         "ensure_alternating_roles", None
@@ -939,6 +943,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base=api_base,
             api_key=api_key,
         )
+
+        if (
+            provider_specific_header is not None
+            and provider_specific_header["custom_llm_provider"] == custom_llm_provider
+        ):
+            headers.update(provider_specific_header["extra_headers"])
+
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
             model_response._hidden_params["region_name"] = kwargs.get(

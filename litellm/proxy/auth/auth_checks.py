@@ -8,8 +8,8 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
-
 import asyncio
+import re
 import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
@@ -55,7 +55,7 @@ db_cache_expiry = 5  # refresh every 5s
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
-def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -64,6 +64,8 @@ def common_checks(  # noqa: PLR0915
     general_settings: dict,
     route: str,
     llm_router: Optional[Router],
+    proxy_logging_obj: ProxyLogging,
+    valid_token: Optional[UserAPIKeyAuth],
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -80,52 +82,27 @@ def common_checks(  # noqa: PLR0915
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
     _model = request_body.get("model", None)
+
+    # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
+
     # 2. If team can call model
-    if (
-        _model is not None
-        and team_object is not None
-        and team_object.models is not None
-        and len(team_object.models) > 0
-        and _model not in team_object.models
-    ):
-        # this means the team has access to all models on the proxy
-        if (
-            "all-proxy-models" in team_object.models
-            or "*" in team_object.models
-            or "openai/*" in team_object.models
-        ):
-            # this means the team has access to all models on the proxy
-            pass
-        # check if the team model is an access_group
-        elif (
-            model_in_access_group(
-                model=_model, team_models=team_object.models, llm_router=llm_router
-            )
-            is True
-        ):
-            pass
-        elif _model and "*" in _model:
-            pass
-        else:
-            raise Exception(
-                f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
-            )
+    _team_model_access_check(
+        team_object=team_object,
+        model=_model,
+        llm_router=llm_router,
+    )
+
     # 3. If team is in budget
-    if (
-        team_object is not None
-        and team_object.max_budget is not None
-        and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
-    ):
-        raise litellm.BudgetExceededError(
-            current_cost=team_object.spend,
-            max_budget=team_object.max_budget,
-            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
-        )
+    await _team_max_budget_check(
+        team_object=team_object,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+    )
+
     # 4. If user is in budget
     ## 4.1 check personal budget, if personal key
     if (
@@ -140,6 +117,7 @@ def common_checks(  # noqa: PLR0915
                 max_budget=user_budget,
                 message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
             )
+
     ## 4.2 check team member budget, if team key
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
@@ -150,6 +128,7 @@ def common_checks(  # noqa: PLR0915
                 max_budget=end_user_budget,
                 message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
             )
+
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
         general_settings.get("enforce_user_param", None) is not None
@@ -658,6 +637,9 @@ async def get_team_object(
     - Check if team id in proxy Team Table
     - if valid, return LiteLLM_TeamTable object with defined limits
     - if not, then raise an error
+
+    Raises:
+        - Exception: If team doesn't exist in db or cache
     """
     if prisma_client is None:
         raise Exception(
@@ -981,3 +963,144 @@ async def _virtual_key_max_budget_check(
                 current_cost=valid_token.spend,
                 max_budget=valid_token.max_budget,
             )
+
+
+async def _virtual_key_soft_budget_check(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Triggers a budget alert if the token is over it's soft budget.
+
+    """
+
+    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+        verbose_proxy_logger.debug(
+            "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+            valid_token.token,
+            valid_token.spend,
+            valid_token.soft_budget,
+        )
+        call_info = CallInfo(
+            token=valid_token.token,
+            spend=valid_token.spend,
+            max_budget=valid_token.max_budget,
+            soft_budget=valid_token.soft_budget,
+            user_id=valid_token.user_id,
+            team_id=valid_token.team_id,
+            team_alias=valid_token.team_alias,
+            user_email=None,
+            key_alias=valid_token.key_alias,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="soft_budget",
+                user_info=call_info,
+            )
+        )
+
+
+async def _team_max_budget_check(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Check if the team is over it's max budget.
+
+    Raises:
+        BudgetExceededError if the team is over it's max budget.
+        Triggers a budget alert if the team is over it's max budget.
+    """
+    if (
+        team_object is not None
+        and team_object.max_budget is not None
+        and team_object.spend is not None
+        and team_object.spend > team_object.max_budget
+    ):
+        if valid_token:
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=team_object.spend,
+                max_budget=team_object.max_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="team_budget",
+                    user_info=call_info,
+                )
+            )
+
+        raise litellm.BudgetExceededError(
+            current_cost=team_object.spend,
+            max_budget=team_object.max_budget,
+            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
+        )
+
+
+def _team_model_access_check(
+    model: Optional[str],
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+):
+    """
+    Access check for team models
+    Raises:
+        Exception if the team is not allowed to call the`model`
+    """
+    if (
+        model is not None
+        and team_object is not None
+        and team_object.models is not None
+        and len(team_object.models) > 0
+        and model not in team_object.models
+    ):
+        # this means the team has access to all models on the proxy
+        if (
+            "all-proxy-models" in team_object.models
+            or "*" in team_object.models
+            or "openai/*" in team_object.models
+        ):
+            # this means the team has access to all models on the proxy
+            pass
+        # check if the team model is an access_group
+        elif (
+            model_in_access_group(
+                model=model, team_models=team_object.models, llm_router=llm_router
+            )
+            is True
+        ):
+            pass
+        elif model and "*" in model:
+            pass
+        elif any(
+            is_model_allowed_by_pattern(model=model, allowed_model_pattern=team_model)
+            for team_model in team_object.models
+        ):
+            pass
+        else:
+            raise Exception(
+                f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}"
+            )
+
+
+def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
+    """
+    Check if a model matches an allowed pattern.
+    Handles exact matches and wildcard patterns.
+
+    Args:
+        model (str): The model to check (e.g., "bedrock/anthropic.claude-3-5-sonnet-20240620")
+        allowed_model_pattern (str): The allowed pattern (e.g., "bedrock/*", "*", "openai/*")
+
+    Returns:
+        bool: True if model matches the pattern, False otherwise
+    """
+    if "*" in allowed_model_pattern:
+        pattern = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        return bool(re.match(pattern, model))
+
+    return False

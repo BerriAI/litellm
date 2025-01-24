@@ -81,6 +81,12 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_output_tokens_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
+    "litellm_remaining_team_budget_metric",
+    "litellm_team_max_budget_metric",
+    "litellm_team_budget_remaining_hours_metric",
+    "litellm_remaining_api_key_budget_metric",
+    "litellm_api_key_max_budget_metric",
+    "litellm_api_key_budget_remaining_hours_metric",
 ]
 
 
@@ -185,6 +191,32 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
+
+    litellm_remaining_team_budget_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_team_max_budget_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_team_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_remaining_api_key_budget_metric = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_api_key_max_budget_metric = litellm_remaining_api_key_budget_metric
+
+    litellm_api_key_budget_remaining_hours_metric = (
+        litellm_remaining_api_key_budget_metric
+    )
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:

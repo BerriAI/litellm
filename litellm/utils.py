@@ -318,9 +318,61 @@ def custom_llm_setup():
             litellm._custom_providers.append(custom_llm["provider"])
 
 
+def _add_custom_logger_callback_to_specific_event(
+    callback: str, logging_event: Literal["success", "failure"]
+) -> None:
+    """
+    Add a custom logger callback to the specific event
+    """
+    from litellm import _custom_logger_compatible_callbacks_literal
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
+    if callback not in litellm._known_custom_logger_compatible_callbacks:
+        verbose_logger.debug(
+            f"Callback {callback} is not a valid custom logger compatible callback. Known list - {litellm._known_custom_logger_compatible_callbacks}"
+        )
+        return
+
+    callback_class = _init_custom_logger_compatible_class(
+        cast(_custom_logger_compatible_callbacks_literal, callback),
+        internal_usage_cache=None,
+        llm_router=None,
+    )
+
+    # don't double add a callback
+    if callback_class is not None and not any(
+        isinstance(cb, type(callback_class)) for cb in litellm.callbacks  # type: ignore
+    ):
+        if logging_event == "success":
+            litellm.success_callback.append(callback_class)
+            litellm._async_success_callback.append(callback_class)
+            if callback in litellm.success_callback:
+                litellm.success_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+            if callback in litellm._async_success_callback:
+                litellm._async_success_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+        elif logging_event == "failure":
+            litellm.failure_callback.append(callback_class)
+            litellm._async_failure_callback.append(callback_class)
+            if callback in litellm.failure_callback:
+                litellm.failure_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+            if callback in litellm._async_failure_callback:
+                litellm._async_failure_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+
     ### NOTICES ###
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -401,27 +453,11 @@ def function_setup(  # noqa: PLR0915
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks:
-                    from litellm.litellm_core_utils.litellm_logging import (
-                        _init_custom_logger_compatible_class,
-                    )
-
-                    callback_class = _init_custom_logger_compatible_class(
-                        callback,  # type: ignore
-                        internal_usage_cache=None,
-                        llm_router=None,  # type: ignore
-                    )
-
-                    # don't double add a callback
-                    if callback_class is not None and not any(
-                        isinstance(cb, type(callback_class)) for cb in litellm.callbacks
-                    ):
-                        litellm.callbacks.append(callback_class)  # type: ignore
-                        litellm.input_callback.append(callback_class)  # type: ignore
-                        litellm.success_callback.append(callback_class)  # type: ignore
-                        litellm.failure_callback.append(callback_class)  # type: ignore
-                        litellm._async_success_callback.append(callback_class)  # type: ignore
-                        litellm._async_failure_callback.append(callback_class)  # type: ignore
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
+                    _add_custom_logger_callback_to_specific_event(callback, "success")
 
             # Pop the async items from success_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
@@ -633,6 +669,7 @@ def _get_wrapper_num_retries(
     Get the number of retries from the kwargs and the retry policy.
     Used for the wrapper functions.
     """
+
     num_retries = kwargs.get("num_retries", None)
     if num_retries is None:
         num_retries = litellm.num_retries
@@ -646,6 +683,21 @@ def _get_wrapper_num_retries(
             num_retries = retry_policy_num_retries
 
     return num_retries, kwargs
+
+
+def _get_wrapper_timeout(
+    kwargs: Dict[str, Any], exception: Exception
+) -> Optional[Union[float, int, httpx.Timeout]]:
+    """
+    Get the timeout from the kwargs
+    Used for the wrapper functions.
+    """
+
+    timeout = cast(
+        Optional[Union[float, int, httpx.Timeout]], kwargs.get("timeout", None)
+    )
+
+    return timeout
 
 
 def client(original_function):  # noqa: PLR0915
@@ -1207,9 +1259,11 @@ def client(original_function):  # noqa: PLR0915
                 _is_litellm_router_call = "model_group" in kwargs.get(
                     "metadata", {}
                 )  # check if call from litellm.router/proxy
+
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+
                     try:
                         litellm.num_retries = (
                             None  # set retries to None to prevent infinite loops
@@ -1230,6 +1284,7 @@ def client(original_function):  # noqa: PLR0915
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                 ):
+
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]  # type: ignore
                     else:
@@ -1239,6 +1294,9 @@ def client(original_function):  # noqa: PLR0915
             setattr(
                 e, "num_retries", num_retries
             )  ## IMPORTANT: returns the deployment's num_retries to the router
+
+            timeout = _get_wrapper_timeout(kwargs=kwargs, exception=e)
+            setattr(e, "timeout", timeout)
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
@@ -4036,7 +4094,7 @@ def _get_potential_model_names(
     elif custom_llm_provider and model.startswith(
         custom_llm_provider + "/"
     ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
-        split_model = model.split("/")[1]
+        split_model = model.split("/", 1)[1]
         combined_model_name = model
         stripped_model_name = _strip_model_name(
             model=split_model, custom_llm_provider=custom_llm_provider
