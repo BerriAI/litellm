@@ -787,50 +787,79 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setSelectedToken(null);
   };
 
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
-    if (accessToken == null) {
+const handleEditSubmit = async (formValues: Record<string, any>) => {
+  /**
+   * Call API to update team with teamId and values
+   * 
+   * Client-side validation: For selected team, ensure models in team + max budget < team max budget
+   */
+  if (accessToken == null) {
+    return;
+  }
+
+  const currentKey = formValues.token; 
+  formValues.key = currentKey;
+
+  // Convert metadata back to an object if it exists and is a string
+  if (formValues.metadata && typeof formValues.metadata === 'string') {
+    try {
+      const parsedMetadata = JSON.parse(formValues.metadata);
+      // Only add guardrails if they are set in form values
+      formValues.metadata = {
+        ...parsedMetadata,
+        ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {})
+      };
+    } catch (error) {
+      console.error("Error parsing metadata JSON:", error);
+      message.error("Invalid metadata JSON for formValue " + formValues.metadata);
       return;
     }
+  } else {
+    // If metadata is not a string (or doesn't exist), only add guardrails if they are set
+    formValues.metadata = {
+      ...(formValues.metadata || {}),
+      ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {})
+    };
+  }
 
-    // Parse metadata if it exists
-    let metadata: { guardrails?: string[] } = {};
-    try {
-      metadata = typeof formValues.metadata === 'string' ? 
-        JSON.parse(formValues.metadata) : 
-        formValues.metadata || {};
-      
-      if (formValues.guardrails) {
-        metadata.guardrails = formValues.guardrails;
-      }
-    } catch (error) {
-      console.error("Error parsing metadata:", error);
-      message.error("Invalid metadata JSON");
-      return;
+  // Convert the budget_duration back to the API expected format
+  if (formValues.budget_duration) {
+    switch (formValues.budget_duration) {
+      case "daily":
+        formValues.budget_duration = "24h";
+        break;
+      case "weekly":
+        formValues.budget_duration = "7d";
+        break;
+      case "monthly":
+        formValues.budget_duration = "30d";
+        break;
     }
+  }
 
-    // Update formValues with the combined metadata
-    formValues.metadata = metadata;
-    formValues.key = formValues.token;
+  console.log("handleEditSubmit:", formValues);
 
-    try {
-      let newKeyValues = await keyUpdateCall(accessToken, formValues);
-      console.log("Key updated:", newKeyValues);
+  try {
+    let newKeyValues = await keyUpdateCall(accessToken, formValues);
+    console.log("handleEditSubmit: newKeyValues", newKeyValues);
 
-      // Update the keys with the updated key
-      if (data) {
-        const updatedData = data.map((key) =>
-          key.token === formValues.token ? newKeyValues : key
-        );
-        setData(updatedData);
-      }
-      message.success("Key updated successfully");
-      setEditModalVisible(false);
-      setSelectedToken(null);
-    } catch (error) {
-      console.error("Error updating key:", error);
-      message.error("Failed to update key");
+    // Update the keys with the update key
+    if (data) {
+      const updatedData = data.map((key) =>
+        key.token === currentKey ? newKeyValues : key
+      );
+      setData(updatedData);
     }
-  };
+    message.success("Key updated successfully");
+
+    setEditModalVisible(false);
+    setSelectedToken(null);
+  } catch (error) {
+    console.error("Error updating key:", error);
+    message.error("Failed to update key");
+  }
+};
+
 
 
   const handleDelete = async (token: any) => {
