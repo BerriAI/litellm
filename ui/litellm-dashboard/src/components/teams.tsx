@@ -400,6 +400,13 @@ const Team: React.FC<TeamProps> = ({
           formValues.organization_id = organizationId.trim();
         }
         
+        // Create metadata object with guardrails if they exist
+        formValues.metadata = {
+          ...(formValues.guardrails ? { guardrails: formValues.guardrails } : {})
+        };
+        
+        // Remove guardrails from top level since it's now in metadata
+        delete formValues.guardrails;
 
         if (existingTeamAliases.includes(newTeamAlias)) {
           throw new Error(
