@@ -304,8 +304,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
-        litellm_params["aws_region_name"] = aws_region_name
-
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check env #
@@ -325,7 +323,9 @@ class BedrockConverseLLM(BaseAWSLLM):
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        litellm_params["aws_region_name"] = aws_region_name
+        litellm_params["aws_region_name"] = (
+            aws_region_name  # [DO NOT DELETE] important for async calls
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,

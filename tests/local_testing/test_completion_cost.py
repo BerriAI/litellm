@@ -2761,3 +2761,14 @@ def test_add_known_models():
     assert (
         "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0" not in litellm.bedrock_models
     )
+
+
+def test_bedrock_cost_calc_with_region():
+    from litellm import completion
+
+    response = completion(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        aws_region_name="us-east-1",
+    )
+    assert response._hidden_params["response_cost"] > 0

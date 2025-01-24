@@ -2111,6 +2111,7 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         litellm.add_known_models()
         return {
             "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "aws_region_name": "us-east-1",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
