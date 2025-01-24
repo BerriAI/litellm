@@ -1,18 +1,11 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
 import litellm
-from enterprise.enterprise_hooks.secret_detection import _ENTERPRISE_SecretDetection
-from litellm.proxy.guardrails.guardrail_hooks.aim import AimGuardrail
-from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import AporiaGuardrail
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
-from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai import GuardrailsAI
-from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
-from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-    _OPTIONAL_PresidioPIIMasking,
-)
 from litellm.types.guardrails import *
 
 
 def initialize_aporia(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import AporiaGuardrail
+
     _aporia_callback = AporiaGuardrail(
         api_base=litellm_params["api_base"],
         api_key=litellm_params["api_key"],
@@ -24,6 +17,10 @@ def initialize_aporia(litellm_params, guardrail):
 
 
 def initialize_bedrock(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrail,
+    )
+
     _bedrock_callback = BedrockGuardrail(
         guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params["mode"],
@@ -35,6 +32,8 @@ def initialize_bedrock(litellm_params, guardrail):
 
 
 def initialize_lakera(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
+
     _lakera_callback = lakeraAI_Moderation(
         api_base=litellm_params["api_base"],
         api_key=litellm_params["api_key"],
@@ -47,6 +46,8 @@ def initialize_lakera(litellm_params, guardrail):
 
 
 def initialize_aim(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.aim import AimGuardrail
+
     _aim_callback = AimGuardrail(
         api_base=litellm_params["api_base"],
         api_key=litellm_params["api_key"],
@@ -58,6 +59,10 @@ def initialize_aim(litellm_params, guardrail):
 
 
 def initialize_presidio(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
     _presidio_callback = _OPTIONAL_PresidioPIIMasking(
         guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params["mode"],
@@ -80,6 +85,8 @@ def initialize_presidio(litellm_params, guardrail):
 
 
 def initialize_hide_secrets(litellm_params, guardrail):
+    from enterprise.enterprise_hooks.secret_detection import _ENTERPRISE_SecretDetection
+
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.get("detect_secrets_config"),
         event_hook=litellm_params["mode"],
@@ -90,6 +97,8 @@ def initialize_hide_secrets(litellm_params, guardrail):
 
 
 def initialize_guardrails_ai(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai import GuardrailsAI
+
     _guard_name = litellm_params.get("guard_name")
     if not _guard_name:
         raise Exception(
