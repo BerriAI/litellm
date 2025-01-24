@@ -149,6 +149,14 @@ const Team: React.FC<TeamProps> = ({
   }) => {
     const [form] = Form.useForm();
 
+    // Extract existing guardrails from team metadata
+    let existingGuardrails: string[] = [];
+    try {
+      existingGuardrails = team.metadata?.guardrails || [];
+    } catch (error) {
+      console.error("Error extracting guardrails:", error);
+    }
+
     const handleOk = () => {
       form
         .validateFields()
@@ -174,7 +182,10 @@ const Team: React.FC<TeamProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={team} // Pass initial values here
+          initialValues={{
+            ...team,
+            guardrails: existingGuardrails
+          }}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -229,6 +240,33 @@ const Team: React.FC<TeamProps> = ({
               name="team_id"
               hidden={true}
             ></Form.Item>
+            <Form.Item
+              label={
+                <span>
+                  Guardrails{' '}
+                  <Tooltip title="Setup your first guardrail">
+                    <a 
+                      href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </a>
+                  </Tooltip>
+                </span>
+              }
+              name="guardrails" 
+              className="mt-8"
+              help="Select existing guardrails or enter new ones"
+            >
+              <Select2
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="Select or enter guardrails"
+                options={guardrailsList.map(name => ({ value: name, label: name }))}
+              />
+            </Form.Item>
           </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Save</Button2>
@@ -250,12 +288,21 @@ const Team: React.FC<TeamProps> = ({
 
   const handleEditSubmit = async (formValues: Record<string, any>) => {
     // Call API to update team with teamId and values
-    const teamId = formValues.team_id; // get team_id
+    const teamId = formValues.team_id;
 
     console.log("handleEditSubmit:", formValues);
     if (accessToken == null) {
       return;
     }
+
+    // Create metadata object with guardrails if they exist
+    formValues.metadata = {
+      ...(formValues.metadata || {}),
+      ...(formValues.guardrails ? { guardrails: formValues.guardrails } : {})
+    };
+    
+    // Remove guardrails from top level since it's now in metadata
+    delete formValues.guardrails;
 
     let newTeamValues = await teamUpdateCall(accessToken, formValues);
 
