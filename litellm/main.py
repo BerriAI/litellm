@@ -855,6 +855,8 @@ def completion(  # type: ignore # noqa: PLR0915
     cooldown_time = kwargs.get("cooldown_time", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
     organization = kwargs.get("organization", None)
+    ### VERIFY SSL ###
+    ssl_verify = kwargs.get("ssl_verify", None)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -1102,6 +1104,7 @@ def completion(  # type: ignore # noqa: PLR0915
             drop_params=kwargs.get("drop_params"),
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            ssl_verify=ssl_verify,
         )
         logging.update_environment_variables(
             model=model,
