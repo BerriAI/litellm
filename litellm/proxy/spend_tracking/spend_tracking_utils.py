@@ -84,8 +84,29 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     )
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
-    if standard_logging_payload is not None:
-        api_key = standard_logging_payload["metadata"].get("user_api_key_hash") or ""
+
+    api_key = metadata.get("user_api_key", "")
+    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+        "standard_logging_object", None
+    )
+    if api_key is not None and isinstance(api_key, str):
+        if api_key.startswith("sk-"):
+            # hash the api_key
+            api_key = hash_token(api_key)
+        if (
+            _is_master_key(api_key=api_key, _master_key=master_key)
+            and general_settings.get("disable_adding_master_key_hash_to_db") is True
+        ):
+            api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
+
+    if (
+        standard_logging_payload is not None
+    ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
+        api_key = (
+            api_key
+            or standard_logging_payload["metadata"].get("user_api_key_hash")
+            or ""
+        )
         end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
