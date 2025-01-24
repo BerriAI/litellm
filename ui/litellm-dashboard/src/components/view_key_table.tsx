@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall, modelAvailableCall } from "./networking";
+import { keyDeleteCall, modelAvailableCall, getGuardrailsList } from "./networking";
 import { add } from 'date-fns';
 import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall, regenerateKeyCall } from "./networking";
@@ -26,6 +26,7 @@ import {
   TextInput,
   Textarea,
 } from "@tremor/react";
+import { InfoCircleOutlined } from '@ant-design/icons';
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
   Button as Button2,
@@ -130,7 +131,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
-
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
@@ -260,22 +261,47 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     const [keyTeam, setKeyTeam] = useState(selectedTeam);
     const [errorModels, setErrorModels] = useState<string[]>([]);
     const [errorBudget, setErrorBudget] = useState<boolean>(false);
+    const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+    useEffect(() => {
+      const fetchGuardrails = async () => {
+        try {
+          const response = await getGuardrailsList(accessToken);
+          const guardrailNames = response.guardrails.map(
+            (g: { guardrail_name: string }) => g.guardrail_name
+          );
+          setGuardrailsList(guardrailNames);
+        } catch (error) {
+          console.error("Failed to fetch guardrails:", error);
+        }
+      };
+
+      fetchGuardrails();
+    }, [accessToken]);
 
     let metadataString = '';
     try {
       metadataString = JSON.stringify(token.metadata, null, 2);
     } catch (error) {
       console.error("Error stringifying metadata:", error);
-      // You can choose a fallback, such as an empty string or a warning message
       metadataString = '';
+    }
+
+    // Extract existing guardrails from metadata
+    let existingGuardrails: string[] = [];
+    try {
+      existingGuardrails = token.metadata?.guardrails || [];
+    } catch (error) {
+      console.error("Error extracting guardrails:", error);
     }
 
     // Ensure token is defined and handle gracefully if not
     const initialValues = token ? {
       ...token,
       budget_duration: token.budget_duration,
-      metadata: metadataString
-    } : { metadata: metadataString };
+      metadata: metadataString,
+      guardrails: existingGuardrails
+    } : { metadata: metadataString, guardrails: [] };
 
 
     const handleOk = () => {
@@ -456,6 +482,33 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               ]}
               >
                 <InputNumber step={1} precision={1} width={200} />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
+                    Guardrails{' '}
+                    <Tooltip title="Setup your first guardrail">
+                      <a 
+                        href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </a>
+                    </Tooltip>
+                  </span>
+                }
+                name="guardrails" 
+                className="mt-8"
+                help="Select existing guardrails or enter new ones"
+              >
+                <Select
+                  mode="tags"
+                  style={{ width: '100%' }}
+                  placeholder="Select or enter guardrails"
+                  options={guardrailsList.map(name => ({ value: name, label: name }))}
+                />
               </Form.Item>
               <Form.Item
                 label="Metadata (ensure this is valid JSON)"
@@ -681,60 +734,49 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   };
 
   const handleEditSubmit = async (formValues: Record<string, any>) => {
-  /**
-   * Call API to update team with teamId and values
-   * 
-   * Client-side validation: For selected team, ensure models in team + max budget < team max budget
-   */
-  if (accessToken == null) {
-    return;
-  }
-
-  const currentKey = formValues.token; 
-  formValues.key = currentKey;
-
-  // Convert metadata back to an object if it exists and is a string
-  if (formValues.metadata && typeof formValues.metadata === 'string') {
-    try {
-      formValues.metadata = JSON.parse(formValues.metadata);
-    } catch (error) {
-      console.error("Error parsing metadata JSON:", error);
-      message.error("Invalid metadata JSON for formValue " + formValues.metadata);
+    if (accessToken == null) {
       return;
     }
-  }
 
-  // Convert the budget_duration back to the API expected format
-  if (formValues.budget_duration) {
-    switch (formValues.budget_duration) {
-      case "daily":
-        formValues.budget_duration = "24h";
-        break;
-      case "weekly":
-        formValues.budget_duration = "7d";
-        break;
-      case "monthly":
-        formValues.budget_duration = "30d";
-        break;
+    // Parse metadata if it exists
+    let metadata = {};
+    try {
+      metadata = typeof formValues.metadata === 'string' ? 
+        JSON.parse(formValues.metadata) : 
+        formValues.metadata || {};
+    } catch (error) {
+      console.error("Error parsing metadata:", error);
+      message.error("Invalid metadata JSON");
+      return;
     }
-  }
 
-  console.log("handleEditSubmit:", formValues);
+    // Add guardrails to metadata
+    if (formValues.guardrails) {
+      metadata.guardrails = formValues.guardrails;
+    }
 
-  let newKeyValues = await keyUpdateCall(accessToken, formValues);
-  console.log("handleEditSubmit: newKeyValues", newKeyValues);
+    // Update formValues with the new metadata
+    formValues.metadata = metadata;
+    formValues.key = formValues.token;
 
-  // Update the keys with the update key
-  if (data) {
-    const updatedData = data.map((key) =>
-      key.token === currentKey ? newKeyValues : key
-    );
-    setData(updatedData);
-  }
-  message.success("Key updated successfully");
+    try {
+      let newKeyValues = await keyUpdateCall(accessToken, formValues);
+      console.log("Key updated:", newKeyValues);
 
-  setEditModalVisible(false);
-  setSelectedToken(null);
+      // Update the keys with the updated key
+      if (data) {
+        const updatedData = data.map((key) =>
+          key.token === formValues.token ? newKeyValues : key
+        );
+        setData(updatedData);
+      }
+      message.success("Key updated successfully");
+      setEditModalVisible(false);
+      setSelectedToken(null);
+    } catch (error) {
+      console.error("Error updating key:", error);
+      message.error("Failed to update key");
+    }
   };
 
 
