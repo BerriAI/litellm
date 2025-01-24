@@ -206,7 +206,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            
             const teamsArray = [...response["teams"]];
             if (teamsArray.length > 0) {
               console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
