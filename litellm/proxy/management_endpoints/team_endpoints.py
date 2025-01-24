@@ -27,7 +27,6 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
-    LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
