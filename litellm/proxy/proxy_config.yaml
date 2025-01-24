@@ -23,11 +23,6 @@ guardrails:
     litellm_params:
       guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
+      guardrailIdentifier: gf3sc1mzinjw
       guardrailVersion: "DRAFT"
-  - guardrail_name: "bedrock-post-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "post_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+      default_on: true
