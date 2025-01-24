@@ -2790,3 +2790,15 @@ def test_cost_calculator_with_base_model():
     )
     assert resp.model == "random-model"
     assert resp._hidden_params["response_cost"] > 0
+
+
+def test_cost_calculator_with_custom_pricing():
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+        input_cost_per_token=0.0000008,
+        output_cost_per_token=0.0000032,
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
