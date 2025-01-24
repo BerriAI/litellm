@@ -158,7 +158,11 @@ async def test_litellm_anthropic_prompt_caching_tools():
         }
 
         mock_post.assert_called_once_with(
-            expected_url, json=expected_json, headers=expected_headers, timeout=600.0
+            expected_url,
+            json=expected_json,
+            headers=expected_headers,
+            timeout=600.0,
+            logging_obj=ANY,
         )
 
 
