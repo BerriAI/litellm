@@ -837,6 +837,7 @@ def completion(  # type: ignore # noqa: PLR0915
         Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
     )
     headers = kwargs.get("headers", None) or extra_headers
+
     ensure_alternating_roles: Optional[bool] = kwargs.get(
         "ensure_alternating_roles", None
     )
@@ -848,6 +849,8 @@ def completion(  # type: ignore # noqa: PLR0915
     )
     if headers is None:
         headers = {}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
