@@ -251,64 +251,106 @@ def test_increment_token_metrics(prometheus_logger):
     )
 
 
-def test_increment_remaining_budget_metrics(prometheus_logger):
+@pytest.mark.asyncio
+async def test_increment_remaining_budget_metrics(prometheus_logger):
     """
     Test the increment_remaining_budget_metrics method
 
     - team and api key remaining budget metrics are set to the difference between max budget and spend
     - team and api key max budget metrics are set to their respective max budgets
+    - team and api key remaining hours metrics are set based on budget reset timestamps
     """
+    # Mock all budget-related metrics
     prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
     prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
     prometheus_logger.litellm_team_max_budget_metric = MagicMock()
     prometheus_logger.litellm_api_key_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
+    prometheus_logger.litellm_api_key_budget_remaining_hours_metric = MagicMock()
 
-    litellm_params = {
-        "metadata": {
-            "user_api_key_team_spend": 50,
-            "user_api_key_team_max_budget": 100,
-            "user_api_key_spend": 25,
-            "user_api_key_max_budget": 75,
+    # Create a future budget reset time for testing
+    future_reset_time_team = datetime.now() + timedelta(hours=10)
+    future_reset_time_key = datetime.now() + timedelta(hours=12)
+    # Mock the get_team_object and get_key_object functions to return objects with budget reset times
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_object"
+    ) as mock_get_team, patch(
+        "litellm.proxy.auth.auth_checks.get_key_object"
+    ) as mock_get_key:
+
+        mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
+        mock_get_key.return_value = MagicMock(budget_reset_at=future_reset_time_key)
+
+        litellm_params = {
+            "metadata": {
+                "user_api_key_team_spend": 50,
+                "user_api_key_team_max_budget": 100,
+                "user_api_key_spend": 25,
+                "user_api_key_max_budget": 75,
+            }
         }
-    }
 
-    prometheus_logger._increment_remaining_budget_metrics(
-        user_api_team="team1",
-        user_api_team_alias="team_alias1",
-        user_api_key="key1",
-        user_api_key_alias="alias1",
-        litellm_params=litellm_params,
-    )
+        await prometheus_logger._increment_remaining_budget_metrics(
+            user_api_team="team1",
+            user_api_team_alias="team_alias1",
+            user_api_key="key1",
+            user_api_key_alias="alias1",
+            litellm_params=litellm_params,
+            response_cost=10,
+        )
 
-    # Test remaining budget metrics
-    prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
-        "team1", "team_alias1"
-    )
-    prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
-        50  # 100 - 50
-    )
+        # Test remaining budget metrics
+        prometheus_logger.litellm_remaining_team_budget_metric.labels.assert_called_once_with(
+            "team1", "team_alias1"
+        )
+        prometheus_logger.litellm_remaining_team_budget_metric.labels().set.assert_called_once_with(
+            40  # 100 - (50 + 10)
+        )
 
-    prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once_with(
-        "key1", "alias1"
-    )
-    prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.assert_called_once_with(
-        50  # 75 - 25
-    )
+        prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once_with(
+            "key1", "alias1"
+        )
+        prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.assert_called_once_with(
+            40  # 75 - (25 + 10)
+        )
 
-    # Test max budget metrics
-    prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
-        "team1", "team_alias1"
-    )
-    prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(
-        100
-    )
+        # Test max budget metrics
+        prometheus_logger.litellm_team_max_budget_metric.labels.assert_called_once_with(
+            "team1", "team_alias1"
+        )
+        prometheus_logger.litellm_team_max_budget_metric.labels().set.assert_called_once_with(
+            100
+        )
 
-    prometheus_logger.litellm_api_key_max_budget_metric.labels.assert_called_once_with(
-        "key1", "alias1"
-    )
-    prometheus_logger.litellm_api_key_max_budget_metric.labels().set.assert_called_once_with(
-        75
-    )
+        prometheus_logger.litellm_api_key_max_budget_metric.labels.assert_called_once_with(
+            "key1", "alias1"
+        )
+        prometheus_logger.litellm_api_key_max_budget_metric.labels().set.assert_called_once_with(
+            75
+        )
+
+        # Test remaining hours metrics
+        prometheus_logger.litellm_team_budget_remaining_hours_metric.labels.assert_called_once_with(
+            "team1", "team_alias1"
+        )
+        # The remaining hours should be approximately 10 (with some small difference due to test execution time)
+        remaining_hours_call = prometheus_logger.litellm_team_budget_remaining_hours_metric.labels().set.call_args[
+            0
+        ][
+            0
+        ]
+        assert 9.9 <= remaining_hours_call <= 10.0
+
+        prometheus_logger.litellm_api_key_budget_remaining_hours_metric.labels.assert_called_once_with(
+            "key1", "alias1"
+        )
+        # The remaining hours should be approximately 10 (with some small difference due to test execution time)
+        remaining_hours_call = prometheus_logger.litellm_api_key_budget_remaining_hours_metric.labels().set.call_args[
+            0
+        ][
+            0
+        ]
+        assert 11.9 <= remaining_hours_call <= 12.0
 
 
 def test_set_latency_metrics(prometheus_logger):
@@ -944,31 +986,86 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
         "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
     ) as mock_get_teams:
 
-        # Create mock team data
+        # Create mock team data with proper datetime objects for budget_reset_at
+        future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
-            MagicMock(team_id="team1", team_alias="alias1", max_budget=100, spend=30),
-            MagicMock(team_id="team2", team_alias="alias2", max_budget=200, spend=50),
-            MagicMock(team_id="team3", team_alias=None, max_budget=300, spend=100),
+            MagicMock(
+                team_id="team1",
+                team_alias="alias1",
+                max_budget=100,
+                spend=30,
+                budget_reset_at=future_reset,
+            ),
+            MagicMock(
+                team_id="team2",
+                team_alias="alias2",
+                max_budget=200,
+                spend=50,
+                budget_reset_at=future_reset,
+            ),
+            MagicMock(
+                team_id="team3",
+                team_alias=None,
+                max_budget=300,
+                spend=100,
+                budget_reset_at=future_reset,
+            ),
         ]
 
         # Mock get_paginated_teams to return our test data
         mock_get_teams.return_value = (mock_teams, len(mock_teams))
 
-        # Mock the Prometheus metric
+        # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+        prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
 
         # Call the function
         await prometheus_logger._initialize_remaining_budget_metrics()
 
-        # Verify the metric was set correctly for each team
-        expected_calls = [
+        # Verify the remaining budget metric was set correctly for each team
+        expected_budget_calls = [
             call.labels("team1", "alias1").set(70),  # 100 - 30
             call.labels("team2", "alias2").set(150),  # 200 - 50
             call.labels("team3", "").set(200),  # 300 - 100
         ]
 
         prometheus_logger.litellm_remaining_team_budget_metric.assert_has_calls(
-            expected_calls, any_order=True
+            expected_budget_calls, any_order=True
+        )
+
+        # Get all the calls made to the hours metric
+        hours_calls = (
+            prometheus_logger.litellm_team_budget_remaining_hours_metric.mock_calls
+        )
+
+        # Verify the structure and approximate values of the hours calls
+        assert len(hours_calls) == 6  # 3 teams * 2 calls each (labels + set)
+
+        # Helper function to extract hours value from call
+        def get_hours_from_call(call_obj):
+            if "set" in str(call_obj):
+                return call_obj[1][0]  # Extract the hours value
+            return None
+
+        # Verify each team's hours are approximately 24 (within reasonable bounds)
+        hours_values = [
+            get_hours_from_call(call)
+            for call in hours_calls
+            if get_hours_from_call(call) is not None
+        ]
+        for hours in hours_values:
+            assert (
+                23.9 <= hours <= 24.0
+            ), f"Hours value {hours} not within expected range"
+
+        # Verify the labels were called with correct team information
+        label_calls = [
+            call.labels("team1", "alias1"),
+            call.labels("team2", "alias2"),
+            call.labels("team3", ""),
+        ]
+        prometheus_logger.litellm_team_budget_remaining_hours_metric.assert_has_calls(
+            label_calls, any_order=True
         )
 
 
