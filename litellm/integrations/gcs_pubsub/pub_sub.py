@@ -1,3 +1,11 @@
+"""
+BETA
+
+This is the PubSub logger for GCS PubSub, this sends LiteLLM SpendLogs Payloads to GCS PubSub.
+
+Users can use this instead of sending their SpendLogs to their Postgres database.
+"""
+
 import asyncio
 import json
 import os
