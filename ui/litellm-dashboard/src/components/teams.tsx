@@ -20,6 +20,8 @@ import {
   Tooltip
 } from "antd";
 import { Select, SelectItem } from "@tremor/react";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { getGuardrailsList } from "./networking";
 
 import {
   Table,
@@ -118,6 +120,26 @@ const Team: React.FC<TeamProps> = ({
 
   // store team info as {"team_id": team_info_object}
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
+
+  // Add this state near the other useState declarations
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  // Add this useEffect to fetch guardrails
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
 
   const EditTeamModal: React.FC<EditTeamModalProps> = ({
     visible,
@@ -745,34 +767,61 @@ const Team: React.FC<TeamProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Accordion className="mt-20 mb-8">
-                <AccordionHeader>
-                  <b>Additional Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
-                <Form.Item
-                  label="Team ID"
-                  name="team_id"
-                  help="ID of the team you want to create. If not provided, it will be generated automatically."
-                >
-                  <TextInput 
-                    onChange={(e) => {
-                      e.target.value = e.target.value.trim();
-                    }} 
-                  />
-                </Form.Item>
-                <Form.Item
-                  label="Organization ID"
-                  name="organization_id"
-                  help="Assign team to an organization. Found in the 'Organization' tab."
-                >
-                  <TextInput 
-                    placeholder="" 
-                    onChange={(e) => {
-                      e.target.value = e.target.value.trim();
-                    }} 
-                  />
-                </Form.Item>
-                </AccordionBody>
+                  <AccordionHeader>
+                    <b>Additional Settings</b>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <Form.Item
+                      label="Team ID"
+                      name="team_id"
+                      help="ID of the team you want to create. If not provided, it will be generated automatically."
+                    >
+                      <TextInput 
+                        onChange={(e) => {
+                          e.target.value = e.target.value.trim();
+                        }} 
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Organization ID"
+                      name="organization_id"
+                      help="Assign team to an organization. Found in the 'Organization' tab."
+                    >
+                      <TextInput 
+                        placeholder="" 
+                        onChange={(e) => {
+                          e.target.value = e.target.value.trim();
+                        }} 
+                      />
+                    </Form.Item>
+                    <Form.Item 
+                      label={
+                        <span>
+                          Guardrails{' '}
+                          <Tooltip title="Setup your first guardrail">
+                            <a 
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </a>
+                          </Tooltip>
+                        </span>
+                      }
+                      name="guardrails" 
+                      className="mt-8"
+                      help="Select existing guardrails or enter new ones"
+                    >
+                      <Select2
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        placeholder="Select or enter guardrails"
+                        options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Form.Item>
+                  </AccordionBody>
                 </Accordion>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>
