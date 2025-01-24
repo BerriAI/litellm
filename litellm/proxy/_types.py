@@ -1483,7 +1483,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                 # Check if the value is None and set the corresponding attribute
                 if getattr(self, attr_name, None) is None:
                     kwargs[attr_name] = value
-
+            if key == "end_user_id" and value is not None and isinstance(value, int):
+                kwargs[key] = str(value)
         # Initialize the superclass
         super().__init__(**kwargs)
 
