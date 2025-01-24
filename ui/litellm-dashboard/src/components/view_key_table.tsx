@@ -281,7 +281,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     let metadataString = '';
     try {
-      metadataString = JSON.stringify(token.metadata, null, 2);
+      // Create a copy of metadata without guardrails for display
+      const displayMetadata = { ...token.metadata };
+      delete displayMetadata.guardrails;
+      metadataString = JSON.stringify(displayMetadata, null, 2);
     } catch (error) {
       console.error("Error stringifying metadata:", error);
       metadataString = '';
@@ -295,7 +298,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       console.error("Error extracting guardrails:", error);
     }
 
-    // Ensure token is defined and handle gracefully if not
     const initialValues = token ? {
       ...token,
       budget_duration: token.budget_duration,
@@ -739,23 +741,22 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
 
     // Parse metadata if it exists
-    let metadata = {};
+    let metadata: { guardrails?: string[] } = {};
     try {
       metadata = typeof formValues.metadata === 'string' ? 
         JSON.parse(formValues.metadata) : 
         formValues.metadata || {};
+      
+      if (formValues.guardrails) {
+        metadata.guardrails = formValues.guardrails;
+      }
     } catch (error) {
       console.error("Error parsing metadata:", error);
       message.error("Invalid metadata JSON");
       return;
     }
 
-    // Add guardrails to metadata
-    if (formValues.guardrails) {
-      metadata.guardrails = formValues.guardrails;
-    }
-
-    // Update formValues with the new metadata
+    // Update formValues with the combined metadata
     formValues.metadata = metadata;
     formValues.key = formValues.token;
 
