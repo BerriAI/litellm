@@ -25,4 +25,3 @@ guardrails:
       mode: "during_call"
       guardrailIdentifier: gf3sc1mzinjw
       guardrailVersion: "DRAFT"
-      default_on: true

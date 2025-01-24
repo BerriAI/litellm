@@ -150,7 +150,6 @@ async def test_no_llm_guard_triggered():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Aporia account disabled")
 async def test_guardrails_with_api_key_controls():
     """
     - Make two API Keys
@@ -163,8 +162,7 @@ async def test_guardrails_with_api_key_controls():
         key_with_guardrails = await generate_key(
             session=session,
             guardrails=[
-                "aporia-post-guard",
-                "aporia-pre-guard",
+                "bedrock-pre-guard",
             ],
         )
 
@@ -187,19 +185,15 @@ async def test_guardrails_with_api_key_controls():
         assert "x-litellm-applied-guardrails" not in headers
 
         # test guardrails triggered for key with guardrails
-        try:
-            response, headers = await chat_completion(
-                session,
-                key_with_guardrails,
-                model="fake-openai-endpoint",
-                messages=[
-                    {"role": "user", "content": f"Hello my name is ishaan@berri.ai"}
-                ],
-            )
-            pytest.fail("Should have thrown an exception")
-        except Exception as e:
-            print(e)
-            assert "Aporia detected and blocked PII" in str(e)
+        response, headers = await chat_completion(
+            session,
+            key_with_guardrails,
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello my name is ishaan@berri.ai"}],
+        )
+
+        assert "x-litellm-applied-guardrails" in headers
+        assert headers["x-litellm-applied-guardrails"] == "bedrock-pre-guard"
 
 
 @pytest.mark.asyncio
