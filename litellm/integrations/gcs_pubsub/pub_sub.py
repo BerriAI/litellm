@@ -150,7 +150,7 @@ class PubSub(CustomBatchLogger):
             if isinstance(message, str):
                 message_data = message
             else:
-                message_data = json.dumps(message, default=str)
+                message_data = json.dumps(message, default=str, indent=4)
 
             # Base64 encode the message
             import base64
