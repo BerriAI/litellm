@@ -530,6 +530,7 @@ def completion_cost(  # noqa: PLR0915
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (
