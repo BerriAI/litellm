@@ -1037,7 +1037,7 @@ async def _team_max_budget_check(
         raise litellm.BudgetExceededError(
             current_cost=team_object.spend,
             max_budget=team_object.max_budget,
-            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
+            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
         )
 
 
