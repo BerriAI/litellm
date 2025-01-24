@@ -2,6 +2,7 @@
 import collections
 import os
 from datetime import datetime, timedelta
+from dateutil.parser import parse
 from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
@@ -1750,12 +1751,20 @@ async def view_spend_logs(  # noqa: PLR0915
     ),
     start_date: Optional[str] = fastapi.Query(
         default=None,
-        description="Time from which to start viewing key spend",
+        description="If both start_date and end_date are provided, response is an aggregated daily spend report between those dates. Format: YYYY-MM-DD",
     ),
     end_date: Optional[str] = fastapi.Query(
         default=None,
-        description="Time till which to view key spend",
+        description="If both start_date and end_date are provided, response is an aggregated daily spend report between those dates. Format: YYYY-MM-DD",
     ),
+    start_time: Optional[str] = fastapi.Query(
+        default=None,
+        description="Consider only request starting from this date-time (inclusive). Format: YYYY-MM-DDTHH:MM:SS (ISO 8601–like datetime strting, time portion is optional)",
+    ),
+    end_time: Optional[str] = fastapi.Query(
+        default=None,
+        description="Consider only request starting up to this date-time (inclusive). Format: YYYY-MM-DDTHH:MM:SS (ISO 8601–like datetime strting, time portion is optional)",
+    ),    
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1782,6 +1791,18 @@ async def view_spend_logs(  # noqa: PLR0915
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for all logs between two times
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?start_time=2025-12-02T08:45&end_time=2025-12-02T12:01" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for daily spend summary between two dates
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-12-01&end_date=2024-12-31" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -1823,6 +1844,13 @@ async def view_spend_logs(  # noqa: PLR0915
                 filter_query["request_id"] = request_id  # type: ignore
             elif user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id  # type: ignore
+
+            if start_time is not None or end_time is not None:
+                filter_query["startTime"] = {}
+                if start_time is not None:
+                    filter_query["startTime"]["gte"] = parse(start_time)
+                if end_time is not None:
+                    filter_query["startTime"]["lte"] = parse(end_time)
 
             # SQL query
             response = await prisma_client.db.litellm_spendlogs.group_by(
@@ -1895,6 +1923,8 @@ async def view_spend_logs(  # noqa: PLR0915
                 table_name="spend",
                 query_type="find_all",
                 key_val={"key": "api_key", "value": hashed_token},
+                filter_start_time=parse(start_time) if start_time else None,
+                filter_end_time=parse(end_time) if end_time else None,
             )
             if isinstance(spend_log, list):
                 return spend_log
@@ -1905,6 +1935,8 @@ async def view_spend_logs(  # noqa: PLR0915
                 table_name="spend",
                 query_type="find_unique",
                 key_val={"key": "request_id", "value": request_id},
+                filter_start_time=parse(start_time) if start_time else None,
+                filter_end_time=parse(end_time) if end_time else None,                
             )
             return [spend_log]
         elif user_id is not None:
@@ -1912,6 +1944,8 @@ async def view_spend_logs(  # noqa: PLR0915
                 table_name="spend",
                 query_type="find_all",
                 key_val={"key": "user", "value": user_id},
+                filter_start_time=parse(start_time) if start_time else None,
+                filter_end_time=parse(end_time) if end_time else None,                
             )
             if isinstance(spend_log, list):
                 return spend_log
@@ -1919,7 +1953,9 @@ async def view_spend_logs(  # noqa: PLR0915
                 return [spend_log]
         else:
             spend_logs = await prisma_client.get_data(
-                table_name="spend", query_type="find_all"
+                table_name="spend", query_type="find_all",
+                filter_start_time=parse(start_time) if start_time else None,
+                filter_end_time=parse(end_time) if end_time else None,                
             )
 
             return spend_logs

@@ -1300,6 +1300,8 @@ class PrismaClient:
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
+        filter_start_time: Optional[datetime] = None,
+        filter_end_time: Optional[datetime] = None,
         offset: Optional[int] = None,  # pagination, what row number to start from
         limit: Optional[
             int
@@ -1465,22 +1467,38 @@ class PrismaClient:
                 verbose_proxy_logger.debug(
                     "PrismaClient: get_data: table_name == 'spend'"
                 )
+                # Build a "startTime" sub-dict only if needed
+                start_time_clause = {}
+                if filter_start_time is not None or filter_end_time is not None:
+                    start_time_clause = {
+                        "startTime": {}
+                    }
+                    if filter_start_time is not None:
+                        start_time_clause["startTime"]["gte"] = filter_start_time
+                    if filter_end_time is not None:
+                        start_time_clause["startTime"]["lte"] = filter_end_time
+
                 if key_val is not None:
                     if query_type == "find_unique":
                         response = await self.db.litellm_spendlogs.find_unique(  # type: ignore
                             where={  # type: ignore
                                 key_val["key"]: key_val["value"],  # type: ignore
+                                **start_time_clause,
                             }
                         )
                     elif query_type == "find_all":
                         response = await self.db.litellm_spendlogs.find_many(  # type: ignore
                             where={
                                 key_val["key"]: key_val["value"],  # type: ignore
+                                **start_time_clause,
                             }
                         )
                     return response
                 else:
                     response = await self.db.litellm_spendlogs.find_many(  # type: ignore
+                        where = {
+                                **start_time_clause,
+                        },
                         order={"startTime": "desc"},
                     )
                     return response
