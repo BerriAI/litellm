@@ -274,8 +274,8 @@ async def new_team(  # noqa: PLR0915
         model_id=_model_id,
     )
 
-    # Set tags on the new team
-    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         if getattr(data, field) is not None:
             _set_team_metadata_field(
                 team_data=complete_team_data,
@@ -470,7 +470,7 @@ async def update_team(
         updated_kv["budget_reset_at"] = reset_at
 
     # update team metadata fields
-    _team_metadata_fields = ["tags", "guardrails"]
+    _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
     for field in _team_metadata_fields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_team_metadata_field(
