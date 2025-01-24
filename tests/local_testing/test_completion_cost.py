@@ -2772,3 +2772,21 @@ def test_bedrock_cost_calc_with_region():
         aws_region_name="us-east-1",
     )
     assert response._hidden_params["response_cost"] > 0
+
+
+# @pytest.mark.parametrize(
+#     "base_model_arg", [
+#         {"base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"},
+#         {"model_info": "anthropic.claude-3-sonnet-20240229-v1:0"},
+#     ]
+# )
+def test_cost_calculator_with_base_model():
+
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        base_model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        mock_response="Hello, how are you?",
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
