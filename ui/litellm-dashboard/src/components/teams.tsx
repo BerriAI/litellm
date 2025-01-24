@@ -21,6 +21,8 @@ import {
   Tooltip
 } from "antd";
 import { Select, SelectItem } from "@tremor/react";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { getGuardrailsList } from "./networking";
 
 import {
   Table,
@@ -72,6 +74,7 @@ import {
   teamListCall
 } from "./networking";
 
+
 const Team: React.FC<TeamProps> = ({
   teams,
   searchParams,
@@ -119,7 +122,32 @@ const Team: React.FC<TeamProps> = ({
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
   const [selectedEditMember, setSelectedEditMember] = useState<null | TeamMember>(null);
 
+
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
+
+  // Add this state near the other useState declarations
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  // Add this useEffect to fetch guardrails
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        if (accessToken == null) {
+          return;
+        }
+
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
 
   const EditTeamModal: React.FC<EditTeamModalProps> = ({
     visible,
@@ -128,6 +156,14 @@ const Team: React.FC<TeamProps> = ({
     onSubmit,
   }) => {
     const [form] = Form.useForm();
+
+    // Extract existing guardrails from team metadata
+    let existingGuardrails: string[] = [];
+    try {
+      existingGuardrails = team.metadata?.guardrails || [];
+    } catch (error) {
+      console.error("Error extracting guardrails:", error);
+    }
 
     const handleOk = () => {
       form
@@ -154,7 +190,10 @@ const Team: React.FC<TeamProps> = ({
         <Form
           form={form}
           onFinish={handleEditSubmit}
-          initialValues={team} // Pass initial values here
+          initialValues={{
+            ...team,
+            guardrails: existingGuardrails
+          }}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -209,6 +248,33 @@ const Team: React.FC<TeamProps> = ({
               name="team_id"
               hidden={true}
             ></Form.Item>
+            <Form.Item
+              label={
+                <span>
+                  Guardrails{' '}
+                  <Tooltip title="Setup your first guardrail">
+                    <a 
+                      href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </a>
+                  </Tooltip>
+                </span>
+              }
+              name="guardrails" 
+              className="mt-8"
+              help="Select existing guardrails or enter new ones"
+            >
+              <Select2
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="Select or enter guardrails"
+                options={guardrailsList.map(name => ({ value: name, label: name }))}
+              />
+            </Form.Item>
           </>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button2 htmlType="submit">Save</Button2>
@@ -236,6 +302,15 @@ const Team: React.FC<TeamProps> = ({
     if (accessToken == null) {
       return;
     }
+
+    // Create metadata object with guardrails if they exist
+    formValues.metadata = {
+      ...(formValues.metadata || {}),
+      ...(formValues.guardrails ? { guardrails: formValues.guardrails } : {})
+    };
+    
+    // Remove guardrails from top level since it's now in metadata
+    delete formValues.guardrails;
 
     let newTeamValues = await teamUpdateCall(accessToken, formValues);
 
@@ -383,6 +458,13 @@ const Team: React.FC<TeamProps> = ({
           formValues.organization_id = organizationId.trim();
         }
         
+        // Create metadata object with guardrails if they exist
+        formValues.metadata = {
+          ...(formValues.guardrails ? { guardrails: formValues.guardrails } : {})
+        };
+        
+        // Remove guardrails from top level since it's now in metadata
+        delete formValues.guardrails;
 
         if (existingTeamAliases.includes(newTeamAlias)) {
           throw new Error(
@@ -429,11 +511,11 @@ const Team: React.FC<TeamProps> = ({
         let response: any;
         if (callType == "add") {
           response = await teamMemberAddCall(
-            accessToken,
-            selectedTeam["team_id"],
-            user_role
-          );
-          message.success("Member added");
+          accessToken,
+          selectedTeam["team_id"],
+          user_role
+        );
+        message.success("Member added");
         } else {
           response = await teamMemberUpdateCall(
             accessToken,
@@ -488,6 +570,7 @@ const Team: React.FC<TeamProps> = ({
                 <TableRow>
                   <TableHeaderCell>Team Name</TableHeaderCell>
                   <TableHeaderCell>Team ID</TableHeaderCell>
+                  <TableHeaderCell>Created</TableHeaderCell>
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
                   <TableHeaderCell>Models</TableHeaderCell>
@@ -498,7 +581,9 @@ const Team: React.FC<TeamProps> = ({
 
               <TableBody>
                 {teams && teams.length > 0
-                  ? teams.map((team: any) => (
+                  ? teams
+                      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                      .map((team: any) => (
                       <TableRow key={team.team_id}>
                         <TableCell
                           style={{
@@ -521,6 +606,15 @@ const Team: React.FC<TeamProps> = ({
                           <Tooltip title={team.team_id}>
                           {team.team_id}
                           </Tooltip>
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "4px",
+                            whiteSpace: "pre-wrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
                         </TableCell>
                         <TableCell
                           style={{
@@ -772,34 +866,61 @@ const Team: React.FC<TeamProps> = ({
                   <InputNumber step={1} width={400} />
                 </Form.Item>
                 <Accordion className="mt-20 mb-8">
-                <AccordionHeader>
-                  <b>Additional Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
-                <Form.Item
-                  label="Team ID"
-                  name="team_id"
-                  help="ID of the team you want to create. If not provided, it will be generated automatically."
-                >
-                  <TextInput 
-                    onChange={(e) => {
-                      e.target.value = e.target.value.trim();
-                    }} 
-                  />
-                </Form.Item>
-                <Form.Item
-                  label="Organization ID"
-                  name="organization_id"
-                  help="Assign team to an organization. Found in the 'Organization' tab."
-                >
-                  <TextInput 
-                    placeholder="" 
-                    onChange={(e) => {
-                      e.target.value = e.target.value.trim();
-                    }} 
-                  />
-                </Form.Item>
-                </AccordionBody>
+                  <AccordionHeader>
+                    <b>Additional Settings</b>
+                  </AccordionHeader>
+                  <AccordionBody>
+                    <Form.Item
+                      label="Team ID"
+                      name="team_id"
+                      help="ID of the team you want to create. If not provided, it will be generated automatically."
+                    >
+                      <TextInput 
+                        onChange={(e) => {
+                          e.target.value = e.target.value.trim();
+                        }} 
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Organization ID"
+                      name="organization_id"
+                      help="Assign team to an organization. Found in the 'Organization' tab."
+                    >
+                      <TextInput 
+                        placeholder="" 
+                        onChange={(e) => {
+                          e.target.value = e.target.value.trim();
+                        }} 
+                      />
+                    </Form.Item>
+                    <Form.Item 
+                      label={
+                        <span>
+                          Guardrails{' '}
+                          <Tooltip title="Setup your first guardrail">
+                            <a 
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </a>
+                          </Tooltip>
+                        </span>
+                      }
+                      name="guardrails" 
+                      className="mt-8"
+                      help="Select existing guardrails or enter new ones"
+                    >
+                      <Select2
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        placeholder="Select or enter guardrails"
+                        options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Form.Item>
+                  </AccordionBody>
                 </Accordion>
               </>
               <div style={{ textAlign: "right", marginTop: "10px" }}>
