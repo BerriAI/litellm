@@ -34,8 +34,8 @@ class PubSub(CustomBatchLogger):
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
-        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT_ID")
-        self.topic_id = topic_id or os.getenv("GOOGLE_CLOUD_PUBSUB_TOPIC_ID")
+        self.project_id = project_id or os.getenv("GCS_PUBSUB_PROJECT_ID")
+        self.topic_id = topic_id or os.getenv("GCS_PUBSUB_TOPIC_ID")
         self.path_service_account_json = credentials_path or os.getenv(
             "GCS_PATH_SERVICE_ACCOUNT"
         )
