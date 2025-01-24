@@ -537,6 +537,7 @@ const Team: React.FC<TeamProps> = ({
                 <TableRow>
                   <TableHeaderCell>Team Name</TableHeaderCell>
                   <TableHeaderCell>Team ID</TableHeaderCell>
+                  <TableHeaderCell>Created</TableHeaderCell>
                   <TableHeaderCell>Spend (USD)</TableHeaderCell>
                   <TableHeaderCell>Budget (USD)</TableHeaderCell>
                   <TableHeaderCell>Models</TableHeaderCell>
@@ -570,6 +571,15 @@ const Team: React.FC<TeamProps> = ({
                           <Tooltip title={team.team_id}>
                           {team.team_id}
                           </Tooltip>
+                        </TableCell>
+                        <TableCell
+                          style={{
+                            maxWidth: "4px",
+                            whiteSpace: "pre-wrap",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {team.created_at ? new Date(team.created_at).toLocaleDateString() : "N/A"}
                         </TableCell>
                         <TableCell
                           style={{

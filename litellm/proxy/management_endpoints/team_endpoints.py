@@ -1429,7 +1429,7 @@ async def list_team(
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias
-    returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    returned_responses.sort(key=lambda x: (getattr(x, "created_at", "") or ""))
     return returned_responses
 
 
