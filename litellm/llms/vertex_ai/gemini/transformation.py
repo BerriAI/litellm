@@ -76,9 +76,10 @@ def _process_gemini_image(image_url: str) -> PartType:
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
 
             return PartType(file_data=file_data)
-        elif ("http://" in image_url or "https://" in image_url) and (
-            image_type := _get_image_mime_type_from_url(image_url)
-        ) is not None:
+        elif (
+            "https://" in image_url
+            and (image_type := _get_image_mime_type_from_url(image_url)) is not None
+        ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
