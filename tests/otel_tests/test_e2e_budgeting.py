@@ -386,3 +386,67 @@ async def test_team_and_key_budget_enforcement():
             ), "Error should mention team budget being exceeded"
 
             assert team_id in error_dict["message"], "Error should mention team id"
+
+
+async def update_team_budget(session, team_id: str, max_budget: float):
+    """Helper function to update a team's max budget"""
+    url = "http://0.0.0.0:4000/team/update"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    data = {
+        "team_id": team_id,
+        "max_budget": max_budget,
+    }
+    async with session.post(url, headers=headers, json=data) as response:
+        return await response.json()
+
+
+@pytest.mark.asyncio
+async def test_team_budget_update():
+    """
+    Test that requests continue working after updating a team's budget:
+    1. Create team with low budget
+    2. Create key for that team
+    3. Make calls until team budget exceeded
+    4. Update team with higher budget
+    5. Verify calls work again
+    """
+    async with aiohttp.ClientSession() as session:
+        # Create team with very low budget
+        team_response = await create_team(session=session, max_budget=0.0000000005)
+        team_id = team_response["team_id"]
+
+        # Create key for team (no specific budget)
+        key_gen = await generate_team_key(session=session, team_id=team_id)
+        key = key_gen["key"]
+
+        # Make calls until budget exceeded
+        calls_made = await make_calls_until_budget_exceeded(
+            session=session,
+            key=key,
+            call_function=chat_completion,
+            model="fake-openai-endpoint",
+        )
+
+        assert (
+            calls_made > 0
+        ), "Should make at least one successful call before team budget exceeded"
+
+        # Update team with higher budget
+        await update_team_budget(session, team_id, max_budget=0.001)
+
+        # Verify calls work again
+        for _ in range(3):
+            try:
+                response = await chat_completion(
+                    session=session, key=key, model="fake-openai-endpoint"
+                )
+                print("response: ", response)
+                assert (
+                    response is not None
+                ), "Should get valid response after budget update"
+            except Exception as e:
+                pytest.fail(
+                    f"Request should succeed after team budget update but got error: {e}"
+                )
+
+        # Verify it was the team budget that was exceeded
