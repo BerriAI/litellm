@@ -637,6 +637,9 @@ async def get_team_object(
     - Check if team id in proxy Team Table
     - if valid, return LiteLLM_TeamTable object with defined limits
     - if not, then raise an error
+
+    Raises:
+        - Exception: If team doesn't exist in db or cache
     """
     if prisma_client is None:
         raise Exception(

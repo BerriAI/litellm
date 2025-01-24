@@ -27,7 +27,10 @@ import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
   modelAvailableCall,
+  getGuardrailsList,
 } from "./networking";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Tooltip } from 'antd';
 
 const { Option } = Select;
 
@@ -81,7 +84,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [modelsToPick, setModelsToPick] = useState([]);
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
-
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -120,6 +123,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
     fetchUserModels();
   }, [accessToken, userID, userRole]);
+
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
@@ -391,6 +410,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   className="mt-8"
                 >
                   <TextInput placeholder="" />
+                </Form.Item>
+                <Form.Item 
+                  label={
+                    <span>
+                      Guardrails{' '}
+                      <Tooltip title="Setup your first guardrail">
+                        <a 
+                          href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                        >
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </a>
+                      </Tooltip>
+                    </span>
+                  }
+                  name="guardrails" 
+                  className="mt-8"
+                  help="Select existing guardrails or enter new ones"
+                >
+                  <Select
+                    mode="tags"
+                    style={{ width: '100%' }}
+                    placeholder="Select or enter guardrails"
+                    options={guardrailsList.map(name => ({ value: name, label: name }))}
+                  />
                 </Form.Item>
 
                 <Form.Item label="Metadata" name="metadata" className="mt-8">

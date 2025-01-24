@@ -14,7 +14,7 @@ import json
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple, Union, cast
+from typing import Any, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -134,7 +135,7 @@ async def new_team(  # noqa: PLR0915
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-
+    - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
 
@@ -272,18 +273,14 @@ async def new_team(  # noqa: PLR0915
         model_id=_model_id,
     )
 
-    # Set tags on the new team
-    if data.tags is not None:
-        from litellm.proxy.proxy_server import premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field) is not None:
+            _set_team_metadata_field(
+                team_data=complete_team_data,
+                field_name=field,
+                value=getattr(data, field),
             )
-        if complete_team_data.metadata is None:
-            complete_team_data.metadata = {"tags": data.tags}
-        else:
-            complete_team_data.metadata["tags"] = data.tags
 
     # If budget_duration is set, set `budget_reset_at`
     if complete_team_data.budget_duration is not None:
@@ -410,7 +407,7 @@ async def update_team(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-
+    - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     Example - update team TPM Limit
 
     ```
@@ -471,20 +468,14 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
-    # check if user is trying to update tags for team
-    if "tags" in updated_kv and updated_kv["tags"] is not None:
-        from litellm.proxy.proxy_server import premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                f"Only premium users can add tags to teams. {CommonProxyErrors.not_premium_user.value}"
+    # update team metadata fields
+    _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
+    for field in _team_metadata_fields:
+        if field in updated_kv and updated_kv[field] is not None:
+            _update_team_metadata_field(
+                updated_kv=updated_kv,
+                field_name=field,
             )
-        # remove tags from updated_kv
-        _tags = updated_kv.pop("tags")
-        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
-            updated_kv["metadata"]["tags"] = _tags
-        else:
-            updated_kv["metadata"] = {"tags": _tags}
 
     if "model_aliases" in updated_kv:
         updated_kv.pop("model_aliases")
@@ -1499,3 +1490,52 @@ async def get_paginated_teams(
             f"[Non-Blocking] Error getting paginated teams: {e}"
         )
         return [], 0
+
+
+def _update_team_metadata_field(updated_kv: dict, field_name: str) -> None:
+    """
+    Helper function to update metadata fields that require premium user checks in the update endpoint
+
+    Args:
+        updated_kv: The key-value dict being used for the update
+        field_name: Name of the metadata field being updated
+    """
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        _premium_user_check()
+
+    if field_name in updated_kv and updated_kv[field_name] is not None:
+        # remove field from updated_kv
+        _value = updated_kv.pop(field_name)
+        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
+            updated_kv["metadata"][field_name] = _value
+        else:
+            updated_kv["metadata"] = {field_name: _value}
+
+
+def _set_team_metadata_field(
+    team_data: LiteLLM_TeamTable, field_name: str, value: Any
+) -> None:
+    """
+    Helper function to set metadata fields that require premium user checks
+
+    Args:
+        team_data: The team data object to modify
+        field_name: Name of the metadata field to set
+        value: Value to set for the field
+    """
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        _premium_user_check()
+    team_data.metadata = team_data.metadata or {}
+    team_data.metadata[field_name] = value
+
+
+def _premium_user_check():
+    from litellm.proxy.proxy_server import premium_user
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+            },
+        )
