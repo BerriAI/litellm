@@ -1301,7 +1301,7 @@ LiteLLM supports customizing the following Datadog environment variables
 
 
 ## Lunary
-### Step1: Install dependencies and set your environment variables 
+#### Step1: Install dependencies and set your environment variables 
 Install the dependencies
 ```shell
 pip install litellm lunary
@@ -1312,7 +1312,7 @@ Get you Lunary public key from from https://app.lunary.ai/settings
 export LUNARY_PUBLIC_KEY="<your-public-key>"
 ```
 
-### Step 2: Create a `config.yaml` and set `lunary` callbacks
+#### Step 2: Create a `config.yaml` and set `lunary` callbacks
 
 ```yaml
 model_list:
@@ -1324,12 +1324,12 @@ litellm_settings:
   failure_callback: ["lunary"]
 ```
 
-### Step 3: Start the LiteLLM proxy
+#### Step 3: Start the LiteLLM proxy
 ```shell
 litellm --config config.yaml
 ```
 
-### Step 4: Make a request
+#### Step 4: Make a request
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -1352,14 +1352,14 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ## MLflow
 
 
-### Step1: Install dependencies
+#### Step1: Install dependencies
 Install the dependencies.
 
 ```shell
 pip install litellm mlflow
 ```
 
-### Step 2: Create a `config.yaml` with `mlflow` callback
+#### Step 2: Create a `config.yaml` with `mlflow` callback
 
 ```yaml
 model_list:
@@ -1371,12 +1371,12 @@ litellm_settings:
   failure_callback: ["mlflow"]
 ```
 
-### Step 3: Start the LiteLLM proxy
+#### Step 3: Start the LiteLLM proxy
 ```shell
 litellm --config config.yaml
 ```
 
-### Step 4: Make a request
+#### Step 4: Make a request
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -1392,7 +1392,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-### Step 5: Review traces
+#### Step 5: Review traces
 
 Run the following command to start MLflow UI and review recorded traces.
 
