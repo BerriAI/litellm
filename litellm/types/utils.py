@@ -18,7 +18,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -88,6 +88,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_audio_output: Optional[bool]
     supports_pdf_input: Optional[bool]
     supports_native_streaming: Optional[bool]
+    supports_parallel_function_calling: Optional[bool]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -437,6 +438,9 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
 
     def __init__(
         self,
@@ -445,6 +449,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -480,6 +485,9 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
+        if provider_specific_fields:  # set if provider_specific_fields is not empty
+            self.provider_specific_fields = provider_specific_fields
+
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
@@ -501,6 +509,10 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
+
     def __init__(
         self,
         content=None,
@@ -510,14 +522,20 @@ class Delta(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
+        provider_specific_fields: Dict[str, Any] = {}
+        if "reasoning_content" in params:
+            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
+            del params["reasoning_content"]
         super(Delta, self).__init__(**params)
         self.content = content
         self.role = role
-
+        self.provider_specific_fields = provider_specific_fields
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        if provider_specific_fields:  # set if provider_specific_fields is not empty
+            self.provider_specific_fields = provider_specific_fields
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -1489,6 +1507,7 @@ class StandardLoggingHiddenParams(TypedDict):
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
+    litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
 
 
@@ -1639,6 +1658,7 @@ all_litellm_params = [
     "api_key",
     "api_version",
     "prompt_id",
+    "provider_specific_header",
     "prompt_variables",
     "api_base",
     "force_timeout",
@@ -1860,3 +1880,8 @@ class HttpHandlerRequestFields(TypedDict, total=False):
     params: dict  # query params
     files: dict  # file uploads
     content: Any  # raw content
+
+
+class ProviderSpecificHeader(TypedDict):
+    custom_llm_provider: str
+    extra_headers: dict

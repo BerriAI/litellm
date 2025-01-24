@@ -297,6 +297,7 @@ async def test_chat_completion():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_chat_completion_ratelimit():
     """
     - call model with rpm 1

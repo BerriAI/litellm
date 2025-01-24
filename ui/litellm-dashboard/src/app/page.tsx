@@ -1,8 +1,12 @@
 "use client";
+
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import Navbar from "../components/navbar";
-import UserDashboard from "../components/user_dashboard";
+import { jwtDecode } from "jwt-decode";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import Navbar from "@/components/navbar";
+import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
 import Teams from "@/components/teams";
@@ -12,15 +16,14 @@ import Settings from "@/components/settings";
 import GeneralSettings from "@/components/general_settings";
 import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
+import SpendLogsTable from "@/components/view_logs";
 import ModelHub from "@/components/model_hub";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
-import Sidebar from "../components/leftnav";
-import Usage from "../components/usage";
+import Sidebar from "@/components/leftnav";
+import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { jwtDecode } from "jwt-decode";
-import { Typography } from "antd";
-import { setGlobalLitellmHeaderName } from "../components/networking";
+import { setGlobalLitellmHeaderName } from "@/components/networking";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -62,8 +65,9 @@ interface ProxySettings {
   PROXY_LOGOUT_URL: string;
 }
 
-const CreateKeyPage = () => {
-  const { Title, Paragraph } = Typography;
+const queryClient = new QueryClient();
+
+export default function CreateKeyPage() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] =
@@ -164,161 +168,168 @@ const CreateKeyPage = () => {
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      {invitation_id ? (
-        <UserDashboard
-          userID={userID}
-          userRole={userRole}
-          premiumUser={premiumUser}
-          teams={teams}
-          keys={keys}
-          setUserRole={setUserRole}
-          userEmail={userEmail}
-          setUserEmail={setUserEmail}
-          setTeams={setTeams}
-          setKeys={setKeys}
-        />
-      ) : (
-        <div className="flex flex-col min-h-screen">
-          <Navbar
+      <QueryClientProvider client={queryClient}>
+        {invitation_id ? (
+          <UserDashboard
             userID={userID}
             userRole={userRole}
-            userEmail={userEmail}
             premiumUser={premiumUser}
-            setProxySettings={setProxySettings}
-            proxySettings={proxySettings}
+            teams={teams}
+            keys={keys}
+            setUserRole={setUserRole}
+            userEmail={userEmail}
+            setUserEmail={setUserEmail}
+            setTeams={setTeams}
+            setKeys={setKeys}
           />
-          <div className="flex flex-1 overflow-auto">
-            <div className="mt-8">
-              <Sidebar
-                setPage={updatePage}
-                userRole={userRole}
-                defaultSelectedKey={page}
-              />
-            </div>
+        ) : (
+          <div className="flex flex-col min-h-screen">
+            <Navbar
+              userID={userID}
+              userRole={userRole}
+              userEmail={userEmail}
+              premiumUser={premiumUser}
+              setProxySettings={setProxySettings}
+              proxySettings={proxySettings}
+            />
+            <div className="flex flex-1 overflow-auto">
+              <div className="mt-8">
+                <Sidebar
+                  setPage={updatePage}
+                  userRole={userRole}
+                  defaultSelectedKey={page}
+                />
+              </div>
 
-            {page == "api-keys" ? (
-              <UserDashboard
-                userID={userID}
-                userRole={userRole}
-                premiumUser={premiumUser}
-                teams={teams}
-                keys={keys}
-                setUserRole={setUserRole}
-                userEmail={userEmail}
-                setUserEmail={setUserEmail}
-                setTeams={setTeams}
-                setKeys={setKeys}
-              />
-            ) : page == "models" ? (
-              <ModelDashboard
-                userID={userID}
-                userRole={userRole}
-                token={token}
-                keys={keys}
-                accessToken={accessToken}
-                modelData={modelData}
-                setModelData={setModelData}
-                premiumUser={premiumUser}
-              />
-            ) : page == "llm-playground" ? (
-              <ChatUI
-                userID={userID}
-                userRole={userRole}
-                token={token}
-                accessToken={accessToken}
-                disabledPersonalKeyCreation={disabledPersonalKeyCreation}
-              />
-            ) : page == "users" ? (
-              <ViewUserDashboard
-                userID={userID}
-                userRole={userRole}
-                token={token}
-                keys={keys}
-                teams={teams}
-                accessToken={accessToken}
-                setKeys={setKeys}
-              />
-            ) : page == "teams" ? (
-              <Teams
-                teams={teams}
-                setTeams={setTeams}
-                searchParams={searchParams}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
-              />
-            ) : page == "organizations" ? (
-              <Organizations
-                teams={teams}
-                setTeams={setTeams}
-                searchParams={searchParams}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
-                premiumUser={premiumUser}
-              />
-            ) : page == "admin-panel" ? (
-              <AdminPanel
-                setTeams={setTeams}
-                searchParams={searchParams}
-                accessToken={accessToken}
-                showSSOBanner={showSSOBanner}
-                premiumUser={premiumUser}
-              />
-            ) : page == "api_ref" ? (
-              <APIRef proxySettings={proxySettings} />
-            ) : page == "settings" ? (
-              <Settings
-                userID={userID}
-                userRole={userRole}
-                accessToken={accessToken}
-                premiumUser={premiumUser}
-              />
-            ) : page == "budgets" ? (
-              <BudgetPanel accessToken={accessToken} />
-            ) : page == "general-settings" ? (
-              <GeneralSettings
-                userID={userID}
-                userRole={userRole}
-                accessToken={accessToken}
-                modelData={modelData}
-              />
-            ) : page == "model-hub" ? (
-              <ModelHub
-                accessToken={accessToken}
-                publicPage={false}
-                premiumUser={premiumUser}
-              />
-            ) : page == "caching" ? (
-              <CacheDashboard
-                userID={userID}
-                userRole={userRole}
-                token={token}
-                accessToken={accessToken}
-                premiumUser={premiumUser}
-              />
-            ) : page == "pass-through-settings" ? (
-              <PassThroughSettings
-                userID={userID}
-                userRole={userRole}
-                accessToken={accessToken}
-                modelData={modelData}
-              />
-            ) : (
-              <Usage
-                userID={userID}
-                userRole={userRole}
-                token={token}
-                accessToken={accessToken}
-                keys={keys}
-                premiumUser={premiumUser}
-              />
-            )}
+              {page == "api-keys" ? (
+                <UserDashboard
+                  userID={userID}
+                  userRole={userRole}
+                  premiumUser={premiumUser}
+                  teams={teams}
+                  keys={keys}
+                  setUserRole={setUserRole}
+                  userEmail={userEmail}
+                  setUserEmail={setUserEmail}
+                  setTeams={setTeams}
+                  setKeys={setKeys}
+                />
+              ) : page == "models" ? (
+                <ModelDashboard
+                  userID={userID}
+                  userRole={userRole}
+                  token={token}
+                  keys={keys}
+                  accessToken={accessToken}
+                  modelData={modelData}
+                  setModelData={setModelData}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "llm-playground" ? (
+                <ChatUI
+                  userID={userID}
+                  userRole={userRole}
+                  token={token}
+                  accessToken={accessToken}
+                  disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                />
+              ) : page == "users" ? (
+                <ViewUserDashboard
+                  userID={userID}
+                  userRole={userRole}
+                  token={token}
+                  keys={keys}
+                  teams={teams}
+                  accessToken={accessToken}
+                  setKeys={setKeys}
+                />
+              ) : page == "teams" ? (
+                <Teams
+                  teams={teams}
+                  setTeams={setTeams}
+                  searchParams={searchParams}
+                  accessToken={accessToken}
+                  userID={userID}
+                  userRole={userRole}
+                />
+              ) : page == "organizations" ? (
+                <Organizations
+                  teams={teams}
+                  setTeams={setTeams}
+                  searchParams={searchParams}
+                  accessToken={accessToken}
+                  userID={userID}
+                  userRole={userRole}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "admin-panel" ? (
+                <AdminPanel
+                  setTeams={setTeams}
+                  searchParams={searchParams}
+                  accessToken={accessToken}
+                  showSSOBanner={showSSOBanner}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "api_ref" ? (
+                <APIRef proxySettings={proxySettings} />
+              ) : page == "settings" ? (
+                <Settings
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "budgets" ? (
+                <BudgetPanel accessToken={accessToken} />
+              ) : page == "general-settings" ? (
+                <GeneralSettings
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                  modelData={modelData}
+                />
+              ) : page == "model-hub" ? (
+                <ModelHub
+                  accessToken={accessToken}
+                  publicPage={false}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "caching" ? (
+                <CacheDashboard
+                  userID={userID}
+                  userRole={userRole}
+                  token={token}
+                  accessToken={accessToken}
+                  premiumUser={premiumUser}
+                />
+              ) : page == "pass-through-settings" ? (
+                <PassThroughSettings
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                  modelData={modelData}
+                />
+              ) : page == "logs" ? (
+                <SpendLogsTable
+                  userID={userID}
+                  userRole={userRole}
+                  token={token}
+                  accessToken={accessToken}
+                />
+              ) : (
+                <Usage
+                  userID={userID}
+                  userRole={userRole}
+                  token={token}
+                  accessToken={accessToken}
+                  keys={keys}
+                  premiumUser={premiumUser}
+                />
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </QueryClientProvider>
     </Suspense>
   );
-};
-
-export default CreateKeyPage;
+}

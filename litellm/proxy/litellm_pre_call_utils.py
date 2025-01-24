@@ -17,8 +17,10 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    ProviderSpecificHeader,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
@@ -396,6 +398,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         dict: The modified data dictionary.
 
     """
+
     from litellm.proxy.proxy_server import llm_router, premium_user
 
     safe_add_api_version_from_query_params(data, request)
@@ -626,6 +629,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
     )
+
     return data
 
 
@@ -726,23 +730,20 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
-    ANTHROPIC_API_HEADERS = [
-        "anthropic-version",
-        "anthropic-beta",
-    ]
-
-    extra_headers = data.get("extra_headers", {}) or {}
-
+    anthropic_headers = {}
     # boolean to indicate if a header was added
     added_header = False
     for header in ANTHROPIC_API_HEADERS:
         if header in headers:
             header_value = headers[header]
-            extra_headers.update({header: header_value})
+            anthropic_headers[header] = header_value
             added_header = True
 
     if added_header is True:
-        data["extra_headers"] = extra_headers
+        data["provider_specific_header"] = ProviderSpecificHeader(
+            custom_llm_provider="anthropic",
+            extra_headers=anthropic_headers,
+        )
 
     return
 

@@ -15,12 +15,14 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import datetime
+import json
 import os
 import traceback
 import uuid
 from datetime import datetime as datetimeObj
 from typing import Any, List, Optional, Union
 
+import httpx
 from httpx import Response
 
 import litellm
@@ -31,14 +33,20 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
 
+from ..base_health_check import HealthCheckIntegration
+
 DD_MAX_BATCH_SIZE = 1000  # max number of logs DD API can accept
 
 
-class DataDogLogger(CustomBatchLogger):
+class DataDogLogger(
+    CustomBatchLogger,
+    HealthCheckIntegration,
+):
     # Class variables or attributes
     def __init__(
         self,
@@ -235,6 +243,25 @@ class DataDogLogger(CustomBatchLogger):
         if len(self.log_queue) >= self.batch_size:
             await self.async_send_batch()
 
+    def _create_datadog_logging_payload_helper(
+        self,
+        standard_logging_object: StandardLoggingPayload,
+        status: DataDogStatus,
+    ) -> DatadogPayload:
+        json_payload = json.dumps(standard_logging_object, default=str)
+        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
+        dd_payload = DatadogPayload(
+            ddsource=self._get_datadog_source(),
+            ddtags=self._get_datadog_tags(
+                standard_logging_object=standard_logging_object
+            ),
+            hostname=self._get_datadog_hostname(),
+            message=json_payload,
+            service=self._get_datadog_service(),
+            status=status,
+        )
+        return dd_payload
+
     def create_datadog_logging_payload(
         self,
         kwargs: Union[dict, Any],
@@ -254,7 +281,6 @@ class DataDogLogger(CustomBatchLogger):
         Returns:
             DatadogPayload: defined in types.py
         """
-        import json
 
         standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object", None
@@ -268,16 +294,9 @@ class DataDogLogger(CustomBatchLogger):
 
         # Build the initial payload
         self.truncate_standard_logging_payload_content(standard_logging_object)
-        json_payload = json.dumps(standard_logging_object, default=str)
 
-        verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
-
-        dd_payload = DatadogPayload(
-            ddsource=self._get_datadog_source(),
-            ddtags=self._get_datadog_tags(),
-            hostname=self._get_datadog_hostname(),
-            message=json_payload,
-            service=self._get_datadog_service(),
+        dd_payload = self._create_datadog_logging_payload_helper(
+            standard_logging_object=standard_logging_object,
             status=status,
         )
         return dd_payload
@@ -291,6 +310,7 @@ class DataDogLogger(CustomBatchLogger):
 
         "Datadog recommends sending your logs compressed. Add the Content-Encoding: gzip header to the request when sending"
         """
+
         import gzip
         import json
 
@@ -444,8 +464,33 @@ class DataDogLogger(CustomBatchLogger):
         return dd_payload
 
     @staticmethod
-    def _get_datadog_tags():
-        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')},HOSTNAME:{DataDogLogger._get_datadog_hostname()},POD_NAME:{os.getenv('POD_NAME', 'unknown')}"
+    def _get_datadog_tags(
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> str:
+        """
+        Get the datadog tags for the request
+
+        DD tags need to be as follows:
+            - tags: ["user_handle:dog@gmail.com", "app_version:1.0.0"]
+        """
+        base_tags = {
+            "env": os.getenv("DD_ENV", "unknown"),
+            "service": os.getenv("DD_SERVICE", "litellm"),
+            "version": os.getenv("DD_VERSION", "unknown"),
+            "HOSTNAME": DataDogLogger._get_datadog_hostname(),
+            "POD_NAME": os.getenv("POD_NAME", "unknown"),
+        }
+
+        tags = [f"{k}:{v}" for k, v in base_tags.items()]
+
+        if standard_logging_object:
+            _request_tags: List[str] = (
+                standard_logging_object.get("request_tags", []) or []
+            )
+            request_tags = [f"request_tag:{tag}" for tag in _request_tags]
+            tags.extend(request_tags)
+
+        return ",".join(tags)
 
     @staticmethod
     def _get_datadog_source():
@@ -466,3 +511,35 @@ class DataDogLogger(CustomBatchLogger):
     @staticmethod
     def _get_datadog_pod_name():
         return os.getenv("POD_NAME", "unknown")
+
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
+        """
+        Check if the service is healthy
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            create_dummy_standard_logging_payload,
+        )
+
+        standard_logging_object = create_dummy_standard_logging_payload()
+        dd_payload = self._create_datadog_logging_payload_helper(
+            standard_logging_object=standard_logging_object,
+            status=DataDogStatus.INFO,
+        )
+        log_queue = [dd_payload]
+        response = await self.async_send_compressed_data(log_queue)
+        try:
+            response.raise_for_status()
+            return IntegrationHealthCheckStatus(
+                status="healthy",
+                error_message=None,
+            )
+        except httpx.HTTPStatusError as e:
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message=e.response.text,
+            )
+        except Exception as e:
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message=str(e),
+            )

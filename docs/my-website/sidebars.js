@@ -416,6 +416,7 @@ const sidebars = {
       items: [
         "extras/contributing",
         "data_security",
+        "data_retention",
         "migration_policy",
         "contributing",
         "proxy/pii_masking",

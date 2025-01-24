@@ -642,19 +642,27 @@ def tgi_mock_post(*args, **kwargs):
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_hf_embedding_sentence_sim(sync_mode):
+@patch("litellm.llms.huggingface.chat.handler.async_get_hf_task_embedding_for_model")
+@patch("litellm.llms.huggingface.chat.handler.get_hf_task_embedding_for_model")
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_hf_embedding_sentence_sim(
+    mock_async_get_hf_task_embedding_for_model,
+    mock_get_hf_task_embedding_for_model,
+    sync_mode,
+):
     try:
         # huggingface/microsoft/codebert-base
         # huggingface/facebook/bart-large
+        mock_get_hf_task_embedding_for_model.return_value = "sentence-similarity"
+        mock_async_get_hf_task_embedding_for_model.return_value = "sentence-similarity"
         if sync_mode is True:
             client = HTTPHandler(concurrent_limit=1)
         else:
             client = AsyncHTTPHandler(concurrent_limit=1)
         with patch.object(client, "post", side_effect=tgi_mock_post) as mock_client:
             data = {
-                "model": "huggingface/TaylorAI/bge-micro-v2",
+                "model": "huggingface/sentence-transformers/TaylorAI/bge-micro-v2",
                 "input": ["good morning from litellm", "this is another item"],
                 "client": client,
             }

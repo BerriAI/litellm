@@ -30,7 +30,7 @@ import TabItem from '@theme/TabItem';
 6. [**litellm.completion() / litellm.embedding()**:](../index#litellm-python-sdk) The litellm Python SDK is used to call the LLM in the OpenAI API format (Translation and parameter mapping)
 
 7. **Post-Request Processing**: After the response is sent back to the client, the following **asynchronous** tasks are performed:
-   - [Logging to Lunary, LangFuse or other logging destinations](./logging)
+   - [Logging to Lunary, MLflow, LangFuse or other logging destinations](./logging)
    - The [MaxParallelRequestsHandler](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py) updates the rpm/tpm usage for the 
         - Global Server Rate Limit
         - Virtual Key Rate Limit

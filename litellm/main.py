@@ -179,6 +179,7 @@ from .types.utils import (
     HiddenParams,
     LlmProviders,
     PromptTokensDetails,
+    ProviderSpecificHeader,
     all_litellm_params,
 )
 
@@ -832,6 +833,9 @@ def completion(  # type: ignore # noqa: PLR0915
     model_info = kwargs.get("model_info", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
+    provider_specific_header = cast(
+        Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
+    )
     headers = kwargs.get("headers", None) or extra_headers
     ensure_alternating_roles: Optional[bool] = kwargs.get(
         "ensure_alternating_roles", None
@@ -844,9 +848,6 @@ def completion(  # type: ignore # noqa: PLR0915
     )
     if headers is None:
         headers = {}
-
-    if extra_headers is not None:
-        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -940,6 +941,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base=api_base,
             api_key=api_key,
         )
+
+        if (
+            provider_specific_header is not None
+            and provider_specific_header["custom_llm_provider"] == custom_llm_provider
+        ):
+            headers.update(provider_specific_header["extra_headers"])
+
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
             model_response._hidden_params["region_name"] = kwargs.get(
@@ -1042,8 +1050,13 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
+            extra_headers=extra_headers,
             **non_default_params,
         )
+
+        extra_headers = optional_params.pop("extra_headers", None)
+        if extra_headers is not None:
+            headers.update(extra_headers)
 
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
@@ -4685,7 +4698,7 @@ def image_variation(
     **kwargs,
 ) -> ImageResponse:
     # get non-default params
-
+    client = kwargs.get("client", None)
     # get logging object
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
 
@@ -4759,6 +4772,7 @@ def image_variation(
             logging_obj=litellm_logging_obj,
             optional_params={},
             litellm_params=litellm_params,
+            client=client,
         )
 
     # return the response

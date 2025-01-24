@@ -1960,6 +1960,20 @@
         "litellm_provider": "mistral",
         "mode": "embedding"
     },
+    "deepseek/deepseek-reasoner": {
+        "max_tokens": 8192,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000055,
+        "input_cost_per_token_cache_hit": 0.00000014,
+        "output_cost_per_token": 0.00000219,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
+    },
     "deepseek/deepseek-chat": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -5364,7 +5378,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true
     },
     "bedrock/us-west-2/mistral.mistral-large-2402-v1:0": {
         "max_tokens": 8191,
@@ -5397,6 +5412,17 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true
     },
+    "us.amazon.nova-micro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.000000035,
+        "output_cost_per_token": 0.00000014,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true
+    },
     "amazon.nova-lite-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 128000,
@@ -5410,7 +5436,33 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true
     },
+    "us.amazon.nova-lite-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.00000006,
+        "output_cost_per_token": 0.00000024,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true
+    },
     "amazon.nova-pro-v1:0": {
+        "max_tokens": 4096, 
+        "max_input_tokens": 300000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000032,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true
+    },
+    "us.amazon.nova-pro-v1:0": {
         "max_tokens": 4096, 
         "max_input_tokens": 300000,
         "max_output_tokens": 4096,
@@ -5456,7 +5508,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_assistant_prefill": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true, 
+        "supports_response_schema": true
     },
     "anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096, 
@@ -5524,7 +5577,9 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "us.anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -5546,7 +5601,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_assistant_prefill": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_prompt_caching": true
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
@@ -5591,7 +5647,9 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_assistant_prefill": true
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "eu.anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -5612,7 +5670,10 @@
         "output_cost_per_token": 0.000005,
         "litellm_provider": "bedrock",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
@@ -6577,7 +6638,35 @@
         "litellm_provider": "bedrock",
         "mode": "image_generation"
     },
+    "stability.sd3-5-large-v1:0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.08,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "stability.stable-image-core-v1:0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "stability.stable-image-core-v1:1": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
     "stability.stable-image-ultra-v1:0": {
+        "max_tokens": 77, 
+        "max_input_tokens": 77, 
+        "output_cost_per_image": 0.14,
+        "litellm_provider": "bedrock",
+        "mode": "image_generation"
+    },
+    "stability.stable-image-ultra-v1:1": {
         "max_tokens": 77, 
         "max_input_tokens": 77, 
         "output_cost_per_image": 0.14,
@@ -6711,6 +6800,24 @@
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "mode": "chat"
+    },
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+        "input_cost_per_token": 0.00000088,
+        "output_cost_per_token": 0.00000088,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "mode": "chat"
+    },
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": {
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
         "mode": "chat"
     },
     "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
@@ -7355,6 +7462,18 @@
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": {
+        "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.0000001, 
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "fireworks_ai", 
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing"
+    },
+    "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
         "max_output_tokens": 16384,
