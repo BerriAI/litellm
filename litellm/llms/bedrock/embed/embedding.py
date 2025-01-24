@@ -9,6 +9,7 @@ from typing import Any, Callable, List, Optional, Tuple, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -93,6 +94,7 @@ class BedrockEmbedding(BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: dict,
+        logging_obj: LiteLLMLoggingObject,
     ) -> dict:
         if client is None or not isinstance(client, HTTPHandler):
             _params = {}
@@ -104,7 +106,12 @@ class BedrockEmbedding(BaseAWSLLM):
         else:
             client = client
         try:
-            response = client.post(url=api_base, headers=headers, data=json.dumps(data))  # type: ignore
+            response = client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                logging_obj=logging_obj,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -121,6 +128,7 @@ class BedrockEmbedding(BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: dict,
+        logging_obj: LiteLLMLoggingObject,
     ) -> dict:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             _params = {}
@@ -135,7 +143,12 @@ class BedrockEmbedding(BaseAWSLLM):
             client = client
 
         try:
-            response = await client.post(url=api_base, headers=headers, data=json.dumps(data))  # type: ignore
+            response = await client.post(
+                url=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                logging_obj=logging_obj,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -195,6 +208,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 api_base=prepped.url,
                 headers=prepped.headers,  # type: ignore
                 data=data,
+                logging_obj=logging_obj,
             )
 
             ## LOGGING
@@ -284,6 +298,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 api_base=prepped.url,
                 headers=prepped.headers,  # type: ignore
                 data=data,
+                logging_obj=logging_obj,
             )
 
             ## LOGGING
@@ -331,7 +346,7 @@ class BedrockEmbedding(BaseAWSLLM):
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObject,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
         timeout: Optional[Union[float, httpx.Timeout]],
         aembedding: Optional[bool],

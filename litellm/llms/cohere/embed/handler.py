@@ -76,7 +76,9 @@ async def async_embedding(
         )
 
     try:
-        response = await client.post(api_base, headers=headers, data=json.dumps(data))
+        response = await client.post(
+            api_base, headers=headers, data=json.dumps(data), logging_obj=logging_obj
+        )
     except httpx.HTTPStatusError as e:
         ## LOGGING
         logging_obj.post_call(
@@ -164,7 +166,9 @@ def embedding(
     if client is None or not isinstance(client, HTTPHandler):
         client = HTTPHandler(concurrent_limit=1)
 
-    response = client.post(embed_url, headers=headers, data=json.dumps(data))
+    response = client.post(
+        embed_url, headers=headers, data=json.dumps(data), logging_obj=logging_obj
+    )
 
     return CohereEmbeddingConfig()._transform_response(
         response=response,
