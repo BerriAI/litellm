@@ -10,6 +10,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import get_end_user_id_for_cost_tracking
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -82,16 +83,14 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
 
+    end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
     if standard_logging_payload is not None:
-        end_user_id = standard_logging_payload["metadata"].get(
+        api_key = standard_logging_payload["metadata"].get("user_api_key_hash") or ""
+        end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
-        api_key = standard_logging_payload["metadata"].get("user_api_key_hash") or ""
-
     else:
-        end_user_id = None
         api_key = ""
-
     request_tags = (
         json.dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
