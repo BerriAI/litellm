@@ -166,7 +166,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     });
 
     // If no team is selected, show all accessible keys
-    if (!selectedTeam && data) {
+    if ((!selectedTeam || selectedTeam.team_alias === "Default Team") && data) {
       const personalKeys = data.filter(key => !key.team_id || key.team_id === "default-team");
       const adminTeamKeys = teams
         .filter(team => isUserTeamAdmin(team))
