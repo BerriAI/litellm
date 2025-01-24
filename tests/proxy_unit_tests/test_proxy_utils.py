@@ -1497,6 +1497,62 @@ def test_custom_openapi(mock_get_openapi_schema):
     assert openapi_schema is not None
 
 
+import pytest
+from unittest.mock import MagicMock, AsyncMock
+import asyncio
+from datetime import timedelta
+from litellm.proxy.utils import ProxyUpdateSpend
+
+
+@pytest.mark.asyncio
+async def test_end_user_transactions_reset():
+    # Setup
+    mock_client = MagicMock()
+    mock_client.end_user_list_transactons = {"1": 10.0}  # Bad log
+    mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=0, prisma_client=mock_client, proxy_logging_obj=MagicMock()
+        )
+
+    # Verify cleanup happened
+    assert (
+        mock_client.end_user_list_transactons == {}
+    ), "Transactions list should be empty after error"
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_cleanup_after_error():
+    # Setup test data
+    mock_client = MagicMock()
+    mock_client.spend_log_transactions = [
+        {"id": 1, "amount": 10.0},
+        {"id": 2, "amount": 20.0},
+        {"id": 3, "amount": 30.0},
+    ]
+    # Make the DB operation fail
+    mock_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=Exception("DB Error")
+    )
+
+    original_logs = mock_client.spend_log_transactions.copy()
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_client,
+            db_writer_client=None,  # Test DB write path
+            proxy_logging_obj=MagicMock(),
+        )
+
+    # Verify the first batch was removed from spend_log_transactions
+    assert (
+        mock_client.spend_log_transactions == original_logs[100:]
+    ), "Should remove processed logs even after error"
+
 def test_provider_specific_header():
     from litellm.proxy.litellm_pre_call_utils import (
         add_provider_specific_headers_to_request,

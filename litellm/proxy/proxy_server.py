@@ -1051,7 +1051,6 @@ async def update_database(  # noqa: PLR0915
                         response_obj=completion_response,
                         start_time=start_time,
                         end_time=end_time,
-                        end_user_id=end_user_id,
                     )
 
                     payload["spend"] = response_cost
