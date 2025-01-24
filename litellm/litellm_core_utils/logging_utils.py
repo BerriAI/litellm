@@ -110,7 +110,7 @@ def _set_duration_in_model_call_details(
         if logging_obj and hasattr(logging_obj, "model_call_details"):
             logging_obj.model_call_details["llm_api_duration_ms"] = duration_ms
         else:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 "`logging_obj` not found - unable to track `llm_api_duration_ms"
             )
     except Exception as e:

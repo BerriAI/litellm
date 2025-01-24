@@ -207,7 +207,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": prepped.headers,
             },
         )
 
@@ -226,7 +226,10 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         try:
             response = await client.post(
-                url=api_base, headers=headers, data=data, logging_obj=logging_obj
+                url=api_base,
+                headers=headers,
+                data=data,
+                logging_obj=logging_obj,
             )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -267,6 +270,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ):
+
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -300,8 +304,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
 
-        litellm_params["aws_region_name"] = aws_region_name
-
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check env #
@@ -320,6 +322,10 @@ class BedrockConverseLLM(BaseAWSLLM):
 
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
+
+        litellm_params["aws_region_name"] = (
+            aws_region_name  # [DO NOT DELETE] important for async calls
+        )
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -347,7 +353,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/converse"
 
         ## COMPLETION CALL
-
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
