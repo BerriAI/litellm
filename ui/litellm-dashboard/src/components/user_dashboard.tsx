@@ -193,14 +193,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            setKeys(response["keys"]); // Assuming this is the correct path to your data
-            setTeams(response["teams"]);
+            
             const teamsArray = [...response["teams"]];
             if (teamsArray.length > 0) {
-              console.log(`response['teams']: ${teamsArray}`);
+              console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
               setSelectedTeam(teamsArray[0]);
+              setKeys(teamsArray[0]["keys"]); // Assuming this is the correct path to your data
             } else {
               setSelectedTeam(defaultTeam);
+              setKeys(response["keys"]); // Assuming this is the correct path to your data
             }
             sessionStorage.setItem(
               "userData" + userID,
@@ -248,6 +249,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       selectedTeam.team_id !== null
     ) {
       let sum = 0;
+      console.log(`keys: ${JSON.stringify(keys)}`)
       for (const key of keys) {
         if (
           selectedTeam.hasOwnProperty("team_id") &&
@@ -257,6 +259,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           sum += key.spend;
         }
       }
+      console.log(`sum: ${sum}`)
       setTeamSpend(sum);
     } else if (keys !== null) {
       // sum the keys which don't have team-id set (default team)
@@ -354,6 +357,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setProxySettings={setProxySettings}
             userInfo={userSpendData}
             accessToken={accessToken}
+            setKeys={setKeys}
           />
         </Col>
       </Grid>
