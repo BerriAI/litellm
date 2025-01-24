@@ -1228,9 +1228,6 @@ class PrismaClient:
         """
         Generic implementation of get data
         """
-        verbose_proxy_logger.debug(
-            f"PrismaClient: get_generic_data: {key}, table_name: {table_name}"
-        )
         start_time = time.time()
         try:
             if table_name == "users":
