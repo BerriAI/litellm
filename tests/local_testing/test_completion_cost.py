@@ -2600,7 +2600,14 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     assert round(cost, 2) == round(total_input_cost + total_output_cost, 2)
 
 
-def test_completion_cost_azure_ai_meta():
+@pytest.mark.parametrize(
+    "response_model, custom_llm_provider",
+    [
+        ("azure_ai/Meta-Llama-3.1-70B-Instruct", "azure_ai"),
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+    ],
+)
+def test_completion_cost_model_response_cost(response_model, custom_llm_provider):
     """
     Relevant issue: https://github.com/BerriAI/litellm/issues/6310
     """
@@ -2628,7 +2635,7 @@ def test_completion_cost_azure_ai_meta():
             }
         ],
         "created": 1729243714,
-        "model": "azure_ai/Meta-Llama-3.1-70B-Instruct",
+        "model": response_model,
         "object": "chat.completion",
         "service_tier": None,
         "system_fingerprint": None,
@@ -2642,7 +2649,7 @@ def test_completion_cost_azure_ai_meta():
     }
 
     model_response = ModelResponse(**response)
-    cost = completion_cost(model_response, custom_llm_provider="azure_ai")
+    cost = completion_cost(model_response, custom_llm_provider=custom_llm_provider)
 
     assert cost > 0
 
