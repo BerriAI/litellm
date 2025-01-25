@@ -1962,23 +1962,11 @@ def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bo
     Returns:
     bool: True if the model supports vision, False otherwise.
     """
-    try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if model_info.get("supports_vision", False) is True:
-            return True
-        return False
-    except Exception as e:
-        verbose_logger.error(
-            f"Model not found or error in checking vision support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
-        )
-        return False
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_vision",
+    )
 
 
 def supports_embedding_image_input(
