@@ -1329,11 +1329,11 @@ class PrometheusLogger(CustomLogger):
                 f"No running event loop - skipping budget metrics initialization: {str(e)}"
             )
 
-    async def _initialize_remaining_budget_metrics(self):
+    async def _initialize_team_budget_metrics(self):
         """
-        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+        Initialize team budget metrics
 
-        Runs when prometheus logger starts up.
+        Lists all teams and sets budget metrics for each team
         """
         from litellm.proxy.management_endpoints.team_endpoints import (
             get_paginated_teams,
@@ -1367,6 +1367,79 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.exception(
                 f"Error initializing team budget metrics: {str(e)}"
             )
+
+    async def _initialize_api_key_budget_metrics(self):
+        """
+        Initialize api key budget metrics
+
+        Lists all keys and sets budget metrics for each key
+        """
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _list_key_helper,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return
+
+        try:
+            page = 1
+            page_size = 50
+            key_list_response = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=page,
+                size=page_size,
+                user_id=None,
+                team_id=None,
+                key_alias=None,
+                exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
+                return_full_object=True,
+            )
+            keys, total_pages = key_list_response.get(
+                "keys", []
+            ), key_list_response.get("total_pages", 1)
+            await self._set_key_list_budget_metrics(keys)
+            total_pages = total_pages or 1
+
+            for page in range(2, total_pages + 1):
+                key_list_response = await _list_key_helper(
+                    prisma_client=prisma_client,
+                    page=page,
+                    size=page_size,
+                    user_id=None,
+                    team_id=None,
+                    key_alias=None,
+                    exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
+                    return_full_object=True,
+                )
+                keys.extend(key_list_response.get("keys", []))
+
+            await self._set_key_list_budget_metrics(key_list_response.get("keys", []))
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error initializing api key budget metrics: {str(e)}"
+            )
+
+        pass
+
+    async def _initialize_remaining_budget_metrics(self):
+        """
+        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+
+        Runs when prometheus logger starts up.
+        """
+        await self._initialize_team_budget_metrics()
+        await self._initialize_api_key_budget_metrics()
+
+    async def _set_key_list_budget_metrics(
+        self, keys: List[Union[str, UserAPIKeyAuth]]
+    ):
+        """Helper function to set budget metrics for a list of keys"""
+        for key in keys:
+            if isinstance(key, UserAPIKeyAuth):
+                self._set_key_budget_metrics(key)
 
     async def _set_team_list_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""

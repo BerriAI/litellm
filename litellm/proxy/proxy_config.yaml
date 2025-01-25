@@ -15,7 +15,7 @@ model_list:
 
 
 litellm_settings:
-  callbacks: ["gcs_pubsub"]
+  callbacks: ["prometheus"]
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
