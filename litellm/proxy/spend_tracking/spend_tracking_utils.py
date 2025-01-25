@@ -86,9 +86,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 
     api_key = metadata.get("user_api_key", "")
-    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-        "standard_logging_object", None
-    )
+
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
