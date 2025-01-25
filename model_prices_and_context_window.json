@@ -2064,7 +2064,9 @@
         "input_cost_per_token": 0.00000059,
         "output_cost_per_token": 0.00000079,
         "litellm_provider": "groq",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "groq/llama-3.3-70b-specdec": {
         "max_tokens": 8192,
