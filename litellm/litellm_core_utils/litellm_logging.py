@@ -77,6 +77,7 @@ from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+from ..integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.humanloop import HumanloopLogger
@@ -2571,6 +2572,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger  # type: ignore
+        elif logging_integration == "gcs_pubsub":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GcsPubSubLogger):
+                    return callback
+            _gcs_pubsub_logger = GcsPubSubLogger()
+            _in_memory_loggers.append(_gcs_pubsub_logger)
+            return _gcs_pubsub_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -2703,6 +2711,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
+                    return callback
+        elif logging_integration == "gcs_pubsub":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GcsPubSubLogger):
                     return callback
 
         return None
