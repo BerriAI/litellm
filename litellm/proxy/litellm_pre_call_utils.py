@@ -691,20 +691,24 @@ def _enforced_params_check(
     return True
 
 
-def move_guardrails_to_metadata(
+def _add_guardrails_from_key_or_team_metadata(
+    key_metadata: Optional[dict],
+    team_metadata: Optional[dict],
     data: dict,
-    _metadata_variable_name: str,
-    user_api_key_dict: UserAPIKeyAuth,
-):
+    metadata_variable_name: str,
+) -> None:
     """
-    Heper to add guardrails from request to metadata
+    Helper add guardrails from key or team metadata to request data
 
-    - If guardrails set on API Key metadata then sets guardrails on request metadata
-    - If guardrails not set on API key, then checks request metadata
+    Args:
+        key_metadata: The key metadata dictionary to check for guardrails
+        team_metadata: The team metadata dictionary to check for guardrails
+        data: The request data to update
+        metadata_variable_name: The name of the metadata field in data
 
     """
-    if user_api_key_dict.metadata:
-        if "guardrails" in user_api_key_dict.metadata:
+    for _management_object_metadata in [key_metadata, team_metadata]:
+        if _management_object_metadata and "guardrails" in _management_object_metadata:
             from litellm.proxy.proxy_server import premium_user
 
             if premium_user is not True:
@@ -712,11 +716,31 @@ def move_guardrails_to_metadata(
                     f"Using Guardrails on API Key {CommonProxyErrors.not_premium_user}"
                 )
 
-            data[_metadata_variable_name]["guardrails"] = user_api_key_dict.metadata[
+            data[metadata_variable_name]["guardrails"] = _management_object_metadata[
                 "guardrails"
             ]
-            return
 
+
+def move_guardrails_to_metadata(
+    data: dict,
+    _metadata_variable_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Helper to add guardrails from request to metadata
+
+    - If guardrails set on API Key metadata then sets guardrails on request metadata
+    - If guardrails not set on API key, then checks request metadata
+    """
+    # Check key-level guardrails
+    _add_guardrails_from_key_or_team_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
+    )
+
+    # Check request-level guardrails
     if "guardrails" in data:
         data[_metadata_variable_name]["guardrails"] = data["guardrails"]
         del data["guardrails"]
