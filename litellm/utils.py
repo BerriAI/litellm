@@ -1895,6 +1895,13 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+
+        provider_info = get_provider_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if provider_info is not None and provider_info.get(key, False) is True:
+            return True
         return False
 
 
