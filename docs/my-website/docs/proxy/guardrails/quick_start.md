@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Quick Start
+# Guardrails - Quick Start
 
 Setup Prompt Injection Detection, PII Masking on LiteLLM Proxy (AI Gateway)
 
@@ -119,6 +119,47 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 
 </Tabs>
+
+
+## **Default On Guardrails**
+
+Set `default_on: true` in your guardrail config to run the guardrail on every request. This is useful if you want to run a guardrail on every request without the user having to specify it.
+
+```yaml
+guardrails:
+  - guardrail_name: "aporia-pre-guard"
+    litellm_params:
+      guardrail: aporia
+      mode: "pre_call"
+      default_on: true
+```
+
+**Test Request**
+
+In this request, the guardrail `aporia-pre-guard` will run on every request because `default_on: true` is set.
+
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "hi my email is ishaan@berri.ai"}
+    ]
+  }'
+```
+
+**Expected response**
+
+Your response headers will incude `x-litellm-applied-guardrails` with the guardrail applied 
+
+```
+x-litellm-applied-guardrails: aporia-pre-guard
+```
+
+
 
 
 ## **Using Guardrails Client Side**
@@ -349,7 +390,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 
 
-### ✨ Control Guardrails per Project (API Key)
+### ✨ Control Guardrails per API Key
 
 :::info
 
@@ -357,7 +398,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::
 
-Use this to control what guardrails run per project. In this tutorial we only want the following guardrails to run for 1 project (API Key)
+Use this to control what guardrails run per API Key. In this tutorial we only want the following guardrails to run for 1 API Key
 - `guardrails`: ["aporia-pre-guard", "aporia-post-guard"]
 
 **Step 1** Create Key with guardrail settings
@@ -484,6 +525,7 @@ guardrails:
       mode: string             # Required: One of "pre_call", "post_call", "during_call", "logging_only"
       api_key: string          # Required: API key for the guardrail service
       api_base: string         # Optional: Base URL for the guardrail service
+      default_on: boolean      # Optional: Default False. When set to True, will run on every request, does not need client to specify guardrail in request
     guardrail_info:            # Optional[Dict]: Additional information about the guardrail
       
 ```
