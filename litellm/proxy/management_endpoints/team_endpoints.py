@@ -58,7 +58,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, _premium_user_check
 
 router = APIRouter()
 
@@ -1527,15 +1527,3 @@ def _set_team_metadata_field(
         _premium_user_check()
     team_data.metadata = team_data.metadata or {}
     team_data.metadata[field_name] = value
-
-
-def _premium_user_check():
-    from litellm.proxy.proxy_server import premium_user
-
-    if not premium_user:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
-            },
-        )
