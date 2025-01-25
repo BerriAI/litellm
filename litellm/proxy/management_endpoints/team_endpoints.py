@@ -1420,12 +1420,12 @@ async def list_available_teams(
         team for team in available_teams if team not in user_info_correct_type.teams
     ]
 
-    available_teams = await prisma_client.db.litellm_teamtable.find_many(
+    available_teams_db = await prisma_client.db.litellm_teamtable.find_many(
         where={"team_id": {"in": available_teams}}
     )
 
     available_teams_correct_type = [
-        LiteLLM_TeamTable(**team.model_dump()) for team in available_teams
+        LiteLLM_TeamTable(**team.model_dump()) for team in available_teams_db
     ]
 
     return available_teams_correct_type
