@@ -73,6 +73,14 @@ def _is_user_team_admin(
     return False
 
 
+def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    if litellm.default_internal_user_params is None:
+        return False
+    if "available_teams" in litellm.default_internal_user_params:
+        return team_id in litellm.default_internal_user_params["available_teams"]
+    return False
+
+
 async def get_all_team_memberships(
     prisma_client: PrismaClient, team_id: List[str], user_id: Optional[str] = None
 ) -> List[LiteLLM_TeamMembership]:
@@ -655,6 +663,10 @@ async def team_member_add(
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
         and not _is_user_team_admin(
             user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+        )
+        and not _is_available_team(
+            team_id=complete_team_data.team_id,
+            user_api_key_dict=user_api_key_dict,
         )
     ):
         raise HTTPException(
@@ -1361,6 +1373,62 @@ async def unblock_team(
         )
 
     return record
+
+
+@router.get("/team/available")
+async def list_available_teams(
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    response_model=List[LiteLLM_TeamTable],
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    available_teams = cast(
+        Optional[List[str]],
+        (
+            litellm.default_internal_user_params.get("available_teams")
+            if litellm.default_internal_user_params is not None
+            else None
+        ),
+    )
+    if available_teams is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "No available teams for user to join. See how to set available teams here: https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
+            },
+        )
+
+    # filter out teams that the user is already a member of
+    user_info = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id}
+    )
+    if user_info is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "User not found"},
+        )
+    user_info_correct_type = LiteLLM_UserTable(**user_info.model_dump())
+
+    available_teams = [
+        team for team in available_teams if team not in user_info_correct_type.teams
+    ]
+
+    available_teams_db = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": available_teams}}
+    )
+
+    available_teams_correct_type = [
+        LiteLLM_TeamTable(**team.model_dump()) for team in available_teams_db
+    ]
+
+    return available_teams_correct_type
 
 
 @router.get(
