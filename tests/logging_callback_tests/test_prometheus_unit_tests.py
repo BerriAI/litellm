@@ -981,6 +981,7 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     Test that _initialize_remaining_budget_metrics correctly sets budget metrics for all teams
     """
+    litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
@@ -1076,30 +1077,41 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     """
     Test that _initialize_remaining_budget_metrics properly handles exceptions
     """
+    litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function to raise an exception
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams:
+    ) as mock_get_teams, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+    ) as mock_list_keys:
 
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
+        mock_list_keys.side_effect = Exception("Key listing error")
 
-        # Mock the Prometheus metric
+        # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+        prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
 
         # Mock the logger to capture the error
         with patch("litellm._logging.verbose_logger.exception") as mock_logger:
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify the error was logged
-            mock_logger.assert_called_once()
+            # Verify both errors were logged
+            assert mock_logger.call_count == 2
             assert (
-                "Error initializing team budget metrics" in mock_logger.call_args[0][0]
+                "Error initializing teams budget metrics"
+                in mock_logger.call_args_list[0][0][0]
+            )
+            assert (
+                "Error initializing keys budget metrics"
+                in mock_logger.call_args_list[1][0][0]
             )
 
-        # Verify the metric was never called
+        # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
+        prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
 
 
 def test_initialize_prometheus_startup_metrics_no_loop(prometheus_logger):
@@ -1107,6 +1119,7 @@ def test_initialize_prometheus_startup_metrics_no_loop(prometheus_logger):
     Test that _initialize_prometheus_startup_metrics handles case when no event loop exists
     """
     # Mock asyncio.get_running_loop to raise RuntimeError
+    litellm.prometheus_initialize_budget_metrics = True
     with patch(
         "asyncio.get_running_loop", side_effect=RuntimeError("No running event loop")
     ), patch("litellm._logging.verbose_logger.exception") as mock_logger:
@@ -1117,3 +1130,109 @@ def test_initialize_prometheus_startup_metrics_no_loop(prometheus_logger):
         # Verify the error was logged
         mock_logger.assert_called_once()
         assert "No running event loop" in mock_logger.call_args[0][0]
+
+
+@pytest.mark.asyncio(scope="session")
+async def test_initialize_api_key_budget_metrics(prometheus_logger):
+    """
+    Test that _initialize_api_key_budget_metrics correctly sets budget metrics for all API keys
+    """
+    litellm.prometheus_initialize_budget_metrics = True
+    # Mock the prisma client and _list_key_helper function
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+    ) as mock_list_keys:
+
+        # Create mock key data with proper datetime objects for budget_reset_at
+        future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
+        key1 = UserAPIKeyAuth(
+            api_key="key1_hash",
+            key_alias="alias1",
+            team_id="team1",
+            max_budget=100,
+            spend=30,
+            budget_reset_at=future_reset,
+        )
+        key1.token = "key1_hash"
+        key2 = UserAPIKeyAuth(
+            api_key="key2_hash",
+            key_alias="alias2",
+            team_id="team2",
+            max_budget=200,
+            spend=50,
+            budget_reset_at=future_reset,
+        )
+        key2.token = "key2_hash"
+
+        key3 = UserAPIKeyAuth(
+            api_key="key3_hash",
+            key_alias=None,
+            team_id="team3",
+            max_budget=300,
+            spend=100,
+            budget_reset_at=future_reset,
+        )
+        key3.token = "key3_hash"
+
+        mock_keys = [
+            key1,
+            key2,
+            key3,
+        ]
+
+        # Mock _list_key_helper to return our test data
+        mock_list_keys.return_value = {"keys": mock_keys, "total_count": len(mock_keys)}
+
+        # Mock the Prometheus metrics
+        prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
+        prometheus_logger.litellm_api_key_budget_remaining_hours_metric = MagicMock()
+        prometheus_logger.litellm_api_key_max_budget_metric = MagicMock()
+
+        # Call the function
+        await prometheus_logger._initialize_api_key_budget_metrics()
+
+        # Verify the remaining budget metric was set correctly for each key
+        expected_budget_calls = [
+            call.labels("key1_hash", "alias1").set(70),  # 100 - 30
+            call.labels("key2_hash", "alias2").set(150),  # 200 - 50
+            call.labels("key3_hash", "").set(200),  # 300 - 100
+        ]
+
+        prometheus_logger.litellm_remaining_api_key_budget_metric.assert_has_calls(
+            expected_budget_calls, any_order=True
+        )
+
+        # Get all the calls made to the hours metric
+        hours_calls = (
+            prometheus_logger.litellm_api_key_budget_remaining_hours_metric.mock_calls
+        )
+
+        # Verify the structure and approximate values of the hours calls
+        assert len(hours_calls) == 6  # 3 keys * 2 calls each (labels + set)
+
+        # Helper function to extract hours value from call
+        def get_hours_from_call(call_obj):
+            if "set" in str(call_obj):
+                return call_obj[1][0]  # Extract the hours value
+            return None
+
+        # Verify each key's hours are approximately 24 (within reasonable bounds)
+        hours_values = [
+            get_hours_from_call(call)
+            for call in hours_calls
+            if get_hours_from_call(call) is not None
+        ]
+        for hours in hours_values:
+            assert (
+                23.9 <= hours <= 24.0
+            ), f"Hours value {hours} not within expected range"
+
+        # Verify max budget metric was set correctly for each key
+        expected_max_budget_calls = [
+            call.labels("key1_hash", "alias1").set(100),
+            call.labels("key2_hash", "alias2").set(200),
+            call.labels("key3_hash", "").set(300),
+        ]
+        prometheus_logger.litellm_api_key_max_budget_metric.assert_has_calls(
+            expected_max_budget_calls, any_order=True
+        )
