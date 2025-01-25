@@ -3246,14 +3246,14 @@ def embedding(  # noqa: PLR0915
                 }
             }
         )
-    litellm_params = get_litellm_params(**kwargs)
+    litellm_params_dict = get_litellm_params(**kwargs)
 
     logging: Logging = litellm_logging_obj  # type: ignore
     logging.update_environment_variables(
         model=model,
         user=user,
         optional_params=optional_params,
-        litellm_params=litellm_params,
+        litellm_params=litellm_params_dict,
         custom_llm_provider=custom_llm_provider,
     )
 
