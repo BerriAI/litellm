@@ -165,6 +165,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
     to: new Date(),
   });
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
+  const [totalMonthlySpend, setTotalMonthlySpend] = useState<number>(0);
 
   const firstDay = new Date(
     currentDate.getFullYear(),
@@ -375,6 +376,10 @@ const UsagePage: React.FC<UsagePageProps> = ({
       
       // Fill in missing dates
       const filledData = fillMissingDates(data, firstDay, lastDay, []);
+      
+      // Calculate total spend for the month and round to 2 decimal places
+      const monthlyTotal = Number(filledData.reduce((sum, day) => sum + (day.spend || 0), 0).toFixed(2));
+      setTotalMonthlySpend(monthlyTotal);
       
       setKeySpendData(filledData);
     } catch (error) {
@@ -624,7 +629,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
             userID={userID}
             userRole={userRole}
             accessToken={accessToken}
-            userSpend={null}
+            userSpend={totalMonthlySpend}
             selectedTeam={null}
             userMaxBudget={null}
           />
