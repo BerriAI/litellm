@@ -2156,6 +2156,13 @@ class TeamListResponseObject(LiteLLM_TeamTable):
     keys: List  # list of keys that belong to the team
 
 
+class KeyListResponseObject(TypedDict, total=False):
+    keys: List[Union[str, UserAPIKeyAuth]]
+    total_count: Optional[int]
+    current_page: Optional[int]
+    total_pages: Optional[int]
+
+
 class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
