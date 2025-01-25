@@ -559,6 +559,10 @@ def completion_cost(  # noqa: PLR0915
             base_model=base_model,
         )
 
+        verbose_logger.debug(
+            f"completion_response _select_model_name_for_cost_calc: {model}"
+        )
+
         if completion_response is not None and (
             isinstance(completion_response, BaseModel)
             or isinstance(completion_response, dict)
@@ -597,9 +601,6 @@ def completion_cost(  # noqa: PLR0915
                 cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
             total_time = getattr(completion_response, "_response_ms", 0)
-            verbose_logger.debug(
-                f"completion_response response ms: {getattr(completion_response, '_response_ms', None)} "
-            )
 
             hidden_params = getattr(completion_response, "_hidden_params", None)
             if hidden_params is not None:

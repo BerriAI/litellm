@@ -145,6 +145,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     ProviderField,
+    ProviderSpecificModelInfo,
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
@@ -2033,6 +2034,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         },
     }
     """
+
     loaded_model_cost = {}
     if isinstance(model_cost, dict):
         loaded_model_cost = model_cost
@@ -2050,6 +2052,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        verbose_logger.debug(
+            f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}"
+        )
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -4157,6 +4162,26 @@ def _cached_get_model_info_helper(
     return _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
 
+def get_provider_info(
+    model: str, custom_llm_provider: Optional[str]
+) -> Optional[ProviderSpecificModelInfo]:
+    ## PROVIDER-SPECIFIC INFORMATION
+    # if custom_llm_provider == "predibase":
+    #     _model_info["supports_response_schema"] = True
+    provider_config: Optional[BaseLLMModelInfo] = None
+    if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        # Check if the provider string exists in LlmProviders enum
+        provider_config = ProviderConfigManager.get_provider_model_info(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+
+    model_info: Optional[ProviderSpecificModelInfo] = None
+    if provider_config:
+        model_info = provider_config.get_provider_info(model=model)
+
+    return model_info
+
+
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
@@ -4180,6 +4205,11 @@ def _get_model_info_helper(  # noqa: PLR0915
         potential_model_names = _get_potential_model_names(
             model=model, custom_llm_provider=custom_llm_provider
         )
+
+        verbose_logger.debug(
+            f"checking potential_model_names in litellm.model_cost: {potential_model_names}"
+        )
+
         combined_model_name = potential_model_names["combined_model_name"]
         stripped_model_name = potential_model_names["stripped_model_name"]
         combined_stripped_model_name = potential_model_names[
@@ -4220,7 +4250,6 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
-            provider_config: Optional[BaseLLMModelInfo] = None
 
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
@@ -4230,6 +4259,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and model in litellm.model_cost:
+
                 key = model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4240,6 +4270,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 _model_info is None
                 and combined_stripped_model_name in litellm.model_cost
             ):
+
                 key = combined_stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4247,6 +4278,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and stripped_model_name in litellm.model_cost:
+
                 key = stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4254,6 +4286,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and split_model in litellm.model_cost:
+
                 key = split_model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4261,28 +4294,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
 
-            if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
-                # Check if the provider string exists in LlmProviders enum
-                provider_config = ProviderConfigManager.get_provider_model_info(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
-
-            if _model_info is None and provider_config is not None:
-                _model_info = cast(
-                    Optional[Dict],
-                    provider_config.get_model_info(
-                        model=model, existing_model_info=_model_info
-                    ),
-                )
-                key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
-
-            ## PROVIDER-SPECIFIC INFORMATION
-            if custom_llm_provider == "predibase":
-                _model_info["supports_response_schema"] = True
 
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
@@ -4465,6 +4480,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         model=model,
         custom_llm_provider=custom_llm_provider,
     )
+
+    verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
