@@ -17,7 +17,7 @@ async def generate_key(session, models: Optional[List[str]] = None):
         return await response.json()
 
 
-async def chat_completion(session, key: str, model: str):
+async def mock_chat_completion(session, key: str, model: str):
     """Make a chat completion request using OpenAI SDK"""
     from openai import AsyncOpenAI
     import uuid
@@ -60,7 +60,7 @@ async def test_model_access_patterns(key_models, test_model, expect_success):
         key = key_gen["key"]
 
         try:
-            response = await chat_completion(
+            response = await mock_chat_completion(
                 session=session,
                 key=key,
                 model=test_model,
@@ -105,17 +105,14 @@ async def test_model_access_update():
     # Test initial access
     async with aiohttp.ClientSession() as session:
         # Should work with gpt-4
-        await chat_completion(session=session, key=key, model="openai/gpt-4")
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-4")
 
         # Should fail with gpt-3.5-turbo
         with pytest.raises(Exception) as exc_info:
-            await chat_completion(
+            await mock_chat_completion(
                 session=session, key=key, model="openai/gpt-3.5-turbo"
             )
-        assert (
-            "Invalid model" in str(exc_info.value)
-            or "permission denied" in str(exc_info.value).lower()
-        )
+        _validate_model_access_exception(exc_info.value)
 
     # Update key with new model access
     response = await client.post(
@@ -126,13 +123,24 @@ async def test_model_access_update():
     # Test updated access
     async with aiohttp.ClientSession() as session:
         # Both models should now work
-        await chat_completion(session=session, key=key, model="openai/gpt-4")
-        await chat_completion(session=session, key=key, model="openai/gpt-3.5-turbo")
+        await mock_chat_completion(session=session, key=key, model="openai/gpt-4")
+        await mock_chat_completion(
+            session=session, key=key, model="openai/gpt-3.5-turbo"
+        )
 
         # Non-OpenAI model should still fail
         with pytest.raises(Exception) as exc_info:
-            await chat_completion(session=session, key=key, model="anthropic/claude-2")
-        assert (
-            "Invalid model" in str(exc_info.value)
-            or "permission denied" in str(exc_info.value).lower()
-        )
+            await mock_chat_completion(
+                session=session, key=key, model="anthropic/claude-2"
+            )
+        _validate_model_access_exception(exc_info.value)
+
+
+def _validate_model_access_exception(e: Exception):
+    _error_body = e.body
+
+    # Assert error structure and values
+    assert _error_body["type"] == "key_model_access_denied"
+    assert _error_body["param"] == "model"
+    assert _error_body["code"] == "401"
+    assert "API Key not allowed to access model" in _error_body["message"]
