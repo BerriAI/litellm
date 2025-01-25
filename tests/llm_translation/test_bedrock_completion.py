@@ -2483,3 +2483,36 @@ def test_bedrock_error_handling_streaming():
     assert isinstance(e.value, BedrockError)
     assert "Bedrock is unable to process your request." in e.value.message
     assert e.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_bedrock_image_url_async_client():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockImageProcessor,
+    )
+
+    with patch.object(
+        BedrockImageProcessor, "process_image_async"
+    ) as mock_get_image_details_async:
+        try:
+            await litellm.acompletion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What's in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+        except Exception as e:
+            print(e)
+        mock_get_image_details_async.assert_called_once()
