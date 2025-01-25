@@ -60,48 +60,50 @@ def assert_gcs_pubsub_request_matches_expected(
 
 
 @pytest.mark.asyncio
-async def test_gcs_pub_sub():
-    mock_httpx_client = AsyncMock()
+async def test_async_gcs_pub_sub():
+    # Create a mock for the async_httpx_client's post method
+    mock_post = AsyncMock()
+    mock_post.return_value.status_code = 202
+    mock_post.return_value.text = "Accepted"
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler",
-        return_value=mock_httpx_client,
-    ):
-        gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
-        litellm.callbacks = [gcs_pub_sub_logger]
+    # Initialize the GcsPubSubLogger and set the mock
+    gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
+    gcs_pub_sub_logger.async_httpx_client.post = mock_post
+    litellm.callbacks = [gcs_pub_sub_logger]
 
-        response = await litellm.acompletion(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            mock_response="hi",
-        )
+    # Make the completion call
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="hi",
+    )
 
-        await asyncio.sleep(11)  # Wait for async flush
+    await asyncio.sleep(3)  # Wait for async flush
 
-        # Assert httpx post was called
-        mock_httpx_client.post.assert_called_once()
+    # Assert httpx post was called
+    mock_post.assert_called_once()
 
-        # Get the actual request body from the mock
-        actual_url = mock_httpx_client.post.call_args[1]["url"]
-        print("sent to url", actual_url)
-        assert (
-            actual_url
-            == "https://pubsub.googleapis.com/v1/projects/reliableKeys/topics/litellmDB:publish"
-        )
-        actual_request = mock_httpx_client.post.call_args[1]["json"]
+    # Get the actual request body from the mock
+    actual_url = mock_post.call_args[1]["url"]
+    print("sent to url", actual_url)
+    assert (
+        actual_url
+        == "https://pubsub.googleapis.com/v1/projects/reliableKeys/topics/litellmDB:publish"
+    )
+    actual_request = mock_post.call_args[1]["json"]
 
-        # Extract and decode the base64 encoded message
-        encoded_message = actual_request["messages"][0]["data"]
-        import base64
+    # Extract and decode the base64 encoded message
+    encoded_message = actual_request["messages"][0]["data"]
+    import base64
 
-        decoded_message = base64.b64decode(encoded_message).decode("utf-8")
+    decoded_message = base64.b64decode(encoded_message).decode("utf-8")
 
-        # Parse the JSON string into a dictionary
-        actual_request = json.loads(decoded_message)
-        print("##########\n")
-        print(json.dumps(actual_request, indent=4))
-        print("##########\n")
-        # Verify the request body matches expected format
-        assert_gcs_pubsub_request_matches_expected(
-            actual_request, "spend_logs_payload.json"
-        )
+    # Parse the JSON string into a dictionary
+    actual_request = json.loads(decoded_message)
+    print("##########\n")
+    print(json.dumps(actual_request, indent=4))
+    print("##########\n")
+    # Verify the request body matches expected format
+    assert_gcs_pubsub_request_matches_expected(
+        actual_request, "spend_logs_payload.json"
+    )
