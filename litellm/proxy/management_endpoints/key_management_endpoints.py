@@ -1746,7 +1746,7 @@ async def _list_key_helper(
     """
 
     # Prepare filter conditions
-    where = {}
+    where: Dict[str, Union[str, Dict[str, str]]] = {}
     if user_id and isinstance(user_id, str):
         where["user_id"] = user_id
     if team_id and isinstance(team_id, str):
@@ -1754,7 +1754,7 @@ async def _list_key_helper(
     if key_alias and isinstance(key_alias, str):
         where["key_alias"] = key_alias
     if exclude_team_id and isinstance(exclude_team_id, str):
-        where["team_id"] = {"not": exclude_team_id}  # Exclude specific team_id
+        where["team_id"] = {"not": exclude_team_id}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
 
@@ -1783,7 +1783,7 @@ async def _list_key_helper(
     total_pages = -(-total_count // size)  # Ceiling division
 
     # Prepare response
-    key_list = []
+    key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
         if return_full_object is True:
             key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
