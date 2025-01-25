@@ -1070,11 +1070,7 @@ def _team_model_access_check(
         and model not in team_object.models
     ):
         # this means the team has access to all models on the proxy
-        if (
-            "all-proxy-models" in team_object.models
-            or "*" in team_object.models
-            or "openai/*" in team_object.models
-        ):
+        if "all-proxy-models" in team_object.models or "*" in team_object.models:
             # this means the team has access to all models on the proxy
             pass
         # check if the team model is an access_group
@@ -1093,7 +1089,7 @@ def _team_model_access_check(
             pass
         else:
             raise ProxyException(
-                message=f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}",
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={model}. Allowed team models = {team_object.models}",
                 type=ProxyErrorTypes.team_model_access_denied,
                 param="model",
                 code=status.HTTP_401_UNAUTHORIZED,
