@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -61,6 +61,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
+        self.log_queue: List[SpendLogsPayload] = []
 
     async def construct_request_headers(self) -> Dict[str, str]:
         """Construct authorization headers using Vertex AI auth"""
@@ -154,8 +155,8 @@ class GcsPubSubLogger(CustomBatchLogger):
             self.log_queue.clear()
 
     async def publish_message(
-        self, message: Union[SpendLogsPayload, Dict[str, Any], str]
-    ) -> Dict[str, Any]:
+        self, message: SpendLogsPayload
+    ) -> Optional[Dict[str, Any]]:
         """
         Publish message to Google Cloud Pub/Sub using REST API
 
@@ -199,4 +200,3 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         except Exception as e:
             verbose_logger.error("Pub/Sub publish error: %s", str(e))
-            raise Exception(f"Failed to publish message to Pub/Sub: {str(e)}")

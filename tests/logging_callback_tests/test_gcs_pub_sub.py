@@ -69,6 +69,10 @@ async def test_async_gcs_pub_sub():
     # Initialize the GcsPubSubLogger and set the mock
     gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
+
+    mock_construct_request_headers = AsyncMock()
+    mock_construct_request_headers.return_value = {"Authorization": "Bearer mock_token"}
+    gcs_pub_sub_logger.construct_request_headers = mock_construct_request_headers
     litellm.callbacks = [gcs_pub_sub_logger]
 
     # Make the completion call
