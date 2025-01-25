@@ -14,6 +14,7 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
+from fastapi import status
 from pydantic import BaseModel
 
 import litellm
@@ -31,6 +32,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -887,8 +890,11 @@ async def can_key_call_model(
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:
-        raise ValueError(
-            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+        raise ProxyException(
+            message=f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
         )
     valid_token.models = filtered_models
     verbose_proxy_logger.debug(
@@ -1086,8 +1092,11 @@ def _team_model_access_check(
         ):
             pass
         else:
-            raise Exception(
-                f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}"
+            raise ProxyException(
+                message=f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}",
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=status.HTTP_401_UNAUTHORIZED,
             )
 
 

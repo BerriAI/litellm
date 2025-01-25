@@ -31,6 +31,10 @@ model_list:
      api_key: fake-key
    model_info:
      supports_vision: True
+  - model_name: bedrock/*
+    litellm_params:
+      model:  bedrock/*
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
 
