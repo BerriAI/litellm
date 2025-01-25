@@ -58,9 +58,9 @@ def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
     return clean_metadata
 
 
-def get_logging_payload(
+def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
-) -> SpendLogsPayload:  # noqa: PLR0915
+) -> SpendLogsPayload:
     from litellm.proxy.proxy_server import general_settings, master_key
 
     if kwargs is None:
