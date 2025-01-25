@@ -2485,25 +2485,30 @@ def test_bedrock_error_handling_streaming():
     assert e.value.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
+        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
+        "http://www.krishdholakia.com/",
+        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
+        "https://raw.githubusercontent.com/mdn/content/main/README.md",
+    ],
+)
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
-async def test_bedrock_document_understanding():
+async def test_bedrock_document_understanding(image_url):
     from litellm import acompletion
 
     litellm._turn_on_debug()
-
-    # pdf url
-    image_url = (
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
-    )
-
-    # model
     model = "bedrock/us.amazon.nova-pro-v1:0"
 
     image_content = [
-        {"type": "text", "text": "What's this file about?"},
+        {"type": "text", "text": f"What's this file about?"},
         {
             "type": "image_url",
-            "image_url": image_url,  # OR {"url": image_url}
+            "image_url": image_url,
         },
     ]
 
@@ -2512,3 +2517,4 @@ async def test_bedrock_document_understanding():
         messages=[{"role": "user", "content": image_content}],
     )
     assert response is not None
+    assert response.choices[0].message.content != ""

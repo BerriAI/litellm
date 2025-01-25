@@ -2152,6 +2152,7 @@ def stringify_json_tool_call_content(messages: List) -> List:
 ###### AMAZON BEDROCK #######
 
 import base64
+import mimetypes
 from cgi import parse_header
 
 import httpx
@@ -2178,53 +2179,50 @@ def _parse_content_type(content_type: str) -> str:
     return main_type
 
 
-def _post_call_image_processing(response: httpx.Response) -> Tuple[str, str]:
-    # Check the response's content type to ensure it is an image
-    content_type = response.headers.get("content-type")
-    if not content_type:
-        raise ValueError(
-            f"URL does not contain content-type (content-type: {content_type})"
-        )
-    content_type = _parse_content_type(content_type)
-
-    # Convert the image content to base64 bytes
-    base64_bytes = base64.b64encode(response.content).decode("utf-8")
-
-    return base64_bytes, content_type
-
-
-async def get_image_details_async(image_url) -> Tuple[str, str]:
-    try:
-        import base64
-
-        client = AsyncHTTPHandler(concurrent_limit=1)
-        # Send a GET request to the image URL
-        response = await client.get(image_url)
-        response.raise_for_status()  # Raise an exception for HTTP errors
-
-        return _post_call_image_processing(response)
-
-    except Exception as e:
-        raise e
-
-
-def get_image_details(image_url) -> Tuple[str, str]:
-    try:
-        import base64
-
-        client = HTTPHandler(concurrent_limit=1)
-        # Send a GET request to the image URL
-        response = client.get(image_url)
-        response.raise_for_status()  # Raise an exception for HTTP errors
-
-        return _post_call_image_processing(response)
-
-    except Exception as e:
-        raise e
-
-
 class BedrockImageProcessor:
     """Handles both sync and async image processing for Bedrock conversations."""
+
+    @staticmethod
+    def _post_call_image_processing(response: httpx.Response) -> Tuple[str, str]:
+        # Check the response's content type to ensure it is an image
+        content_type = response.headers.get("content-type")
+        if not content_type:
+            raise ValueError(
+                f"URL does not contain content-type (content-type: {content_type})"
+            )
+        content_type = _parse_content_type(content_type)
+
+        # Convert the image content to base64 bytes
+        base64_bytes = base64.b64encode(response.content).decode("utf-8")
+
+        return base64_bytes, content_type
+
+    @staticmethod
+    async def get_image_details_async(image_url) -> Tuple[str, str]:
+        try:
+
+            client = AsyncHTTPHandler(concurrent_limit=1)
+            # Send a GET request to the image URL
+            response = await client.get(image_url, follow_redirects=True)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+
+            return BedrockImageProcessor._post_call_image_processing(response)
+
+        except Exception as e:
+            raise e
+
+    @staticmethod
+    def get_image_details(image_url) -> Tuple[str, str]:
+        try:
+            client = HTTPHandler(concurrent_limit=1)
+            # Send a GET request to the image URL
+            response = client.get(image_url, follow_redirects=True)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+
+            return BedrockImageProcessor._post_call_image_processing(response)
+
+        except Exception as e:
+            raise e
 
     @staticmethod
     def _parse_base64_image(image_url: str) -> Tuple[str, str, str]:
@@ -2243,18 +2241,40 @@ class BedrockImageProcessor:
         return img_without_base_64, mime_type, image_format
 
     @staticmethod
-    def _validate_format(mime_type: str, image_format: str) -> None:
-        """Validate image format and mime type."""
+    def _validate_format(mime_type: str, image_format: str) -> str:
+        """Validate image format and mime type for both images and documents."""
+
         supported_image_formats = (
             litellm.AmazonConverseConfig().get_supported_image_types()
         )
+        supported_doc_formats = (
+            litellm.AmazonConverseConfig().get_supported_document_types()
+        )
+
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
-        if image_format not in supported_image_formats and not is_document:
-            raise ValueError(
-                f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
-            )
+        if is_document:
+            potential_extensions = mimetypes.guess_all_extensions(mime_type)
+            valid_extensions = [
+                ext[1:]
+                for ext in potential_extensions
+                if ext[1:] in supported_doc_formats
+            ]
+
+            if not valid_extensions:
+                raise ValueError(
+                    f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
+                )
+
+            # Use first valid extension instead of provided image_format
+            return valid_extensions[0]
+        else:
+            if image_format not in supported_image_formats:
+                raise ValueError(
+                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
+                )
+            return image_format
 
     @staticmethod
     def _create_bedrock_block(
@@ -2285,14 +2305,14 @@ class BedrockImageProcessor:
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "https:/" in image_url:
-            img_bytes, mime_type = get_image_details(image_url)
+            img_bytes, mime_type = BedrockImageProcessor.get_image_details(image_url)
             image_format = mime_type.split("/")[1]
         else:
             raise ValueError(
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
 
-        cls._validate_format(mime_type, image_format)
+        image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
     @classmethod
@@ -2301,12 +2321,9 @@ class BedrockImageProcessor:
 
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
-        elif "https:/" in image_url:
-            verbose_logger.info("Processing async image url. Converting to base64")
-            start_time = time.time()
-            img_bytes, mime_type = await get_image_details_async(image_url)
-            verbose_logger.info(
-                "time taken to convert to base64: {}".format(time.time() - start_time)
+        elif "http://" in image_url or "https://" in image_url:
+            img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(
+                image_url
             )
             image_format = mime_type.split("/")[1]
         else:
@@ -2314,7 +2331,7 @@ class BedrockImageProcessor:
                 "Unsupported image type. Expected either image url or base64 encoded string"
             )
 
-        cls._validate_format(mime_type, image_format)
+        image_format = cls._validate_format(mime_type, image_format)
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
 
