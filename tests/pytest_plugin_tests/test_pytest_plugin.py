@@ -15,10 +15,15 @@ class TestIsolationFixture:
 
     def test_fixture_isolates(self, testdir: Pytester) -> None:
         testdir.makepyfile(self.CODE)
-        result = testdir.runpytest("-p", "litellm.pytest_plugin")
+        result = testdir.runpytest("-p", "pytest_litellm")
         result.assert_outcomes(passed=2)
 
     def test_fixture_needed(self, testdir: Pytester) -> None:
         testdir.makepyfile(self.CODE)
-        result = testdir.runpytest("-p", "no:litellm.pytest_plugin")
+        result = testdir.runpytest("-p", "no:pytest_litellm")
         result.assert_outcomes(passed=1, failed=1)
+
+    def test_fixture_used_automatically(self, testdir: Pytester) -> None:
+        testdir.makepyfile(self.CODE)
+        result = testdir.runpytest()
+        result.assert_outcomes(passed=2)
