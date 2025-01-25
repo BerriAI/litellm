@@ -112,7 +112,7 @@ const Navbar: React.FC<NavbarProps> = ({
               </a>
               <Dropdown menu={{ items }}>
                 <button className="flex items-center text-sm text-gray-600 hover:text-gray-800">
-                  Admin
+                  User
                   <svg 
                     className="ml-1 w-4 h-4" 
                     fill="none" 
