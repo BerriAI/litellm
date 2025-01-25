@@ -200,3 +200,4 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         except Exception as e:
             verbose_logger.error("Pub/Sub publish error: %s", str(e))
+            return None
