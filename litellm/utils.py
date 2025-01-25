@@ -2584,25 +2584,6 @@ def _remove_unsupported_params(
     return non_default_params
 
 
-def get_clean_extra_headers(extra_headers: dict, custom_llm_provider: str) -> dict:
-    """
-    For `anthropic-beta` headers, ensure provider is anthropic.
-
-    Vertex AI raises an exception if `anthropic-beta` is passed in.
-    """
-    if litellm.filter_invalid_headers is not True:  # allow user to opt out of filtering
-        return extra_headers
-    clean_extra_headers = {}
-    for k, v in extra_headers.items():
-        if k in ANTHROPIC_API_ONLY_HEADERS and custom_llm_provider != "anthropic":
-            verbose_logger.debug(
-                f"Provider {custom_llm_provider} does not support {k} header. Dropping from request, to prevent errors."
-            )  # Switching between anthropic api and vertex ai anthropic fails when anthropic-beta is passed in. Welcome feedback on this.
-        else:
-            clean_extra_headers[k] = v
-    return clean_extra_headers
-
-
 def get_optional_params(  # noqa: PLR0915
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -2740,12 +2721,6 @@ def get_optional_params(  # noqa: PLR0915
             is False
         )
     }
-
-    ## Supports anthropic headers
-    if extra_headers is not None:
-        extra_headers = get_clean_extra_headers(
-            extra_headers=extra_headers, custom_llm_provider=custom_llm_provider
-        )
 
     ## raise exception if function calling passed in for a provider that doesn't support it
     if (
@@ -3516,12 +3491,6 @@ def get_optional_params(  # noqa: PLR0915
         for k in passed_params.keys():
             if k not in default_params.keys():
                 optional_params[k] = passed_params[k]
-    if extra_headers is not None:
-        optional_params.setdefault("extra_headers", {})
-        optional_params["extra_headers"] = {
-            **optional_params["extra_headers"],
-            **extra_headers,
-        }
     print_verbose(f"Final returned optional params: {optional_params}")
     return optional_params
 

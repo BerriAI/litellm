@@ -1191,7 +1191,74 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
+## Calling via Proxy
 
+Here's how to call bedrock via your internal proxy.
+
+This example uses Cloudflare's AI Gateway.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "What's AWS?"}],
+    client=client,
+    extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+    api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      litellm_params:
+        model: anthropic.claude-3-sonnet-20240229-v1:0
+        api_base: https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "anthropic-claude",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      { "content": "Hello, how are you?", "role": "user" }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Output URL**
+
+```bash
+https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse
+```
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
@@ -1406,3 +1473,5 @@ curl http://0.0.0.0:4000/rerank \
 
 </TabItem>
 </Tabs>
+
+
