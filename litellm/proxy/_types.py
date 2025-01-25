@@ -1992,6 +1992,8 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    key_model_access_denied = "key_model_access_denied"
+    team_model_access_denied = "team_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
