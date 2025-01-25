@@ -3198,10 +3198,9 @@ async def test_team_access_groups(prisma_client):
             pytest.fail(f"This should have failed!. IT's an invalid model")
         except Exception as e:
             print("got exception", e)
-            assert (
-                "not allowed to call model" in e.message
-                and "Allowed team models" in e.message
-            )
+            assert isinstance(e, ProxyException)
+            assert e.type == ProxyErrorTypes.team_model_access_denied
+            assert e.param == "model"
 
 
 @pytest.mark.asyncio()
