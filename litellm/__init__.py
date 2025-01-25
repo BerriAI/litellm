@@ -402,7 +402,7 @@ def identify(event_details):
 
 
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
-api_base = None
+api_base: Optional[str] = None
 headers = None
 api_version = None
 organization = None
