@@ -1081,27 +1081,37 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     # Mock the prisma client and get_paginated_teams function to raise an exception
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams:
+    ) as mock_get_teams, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+    ) as mock_list_keys:
 
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
+        mock_list_keys.side_effect = Exception("Key listing error")
 
-        # Mock the Prometheus metric
+        # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+        prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
 
         # Mock the logger to capture the error
         with patch("litellm._logging.verbose_logger.exception") as mock_logger:
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify the error was logged
-            mock_logger.assert_called_once()
+            # Verify both errors were logged
+            assert mock_logger.call_count == 2
             assert (
-                "Error initializing team budget metrics" in mock_logger.call_args[0][0]
+                "Error initializing teams budget metrics"
+                in mock_logger.call_args_list[0][0][0]
+            )
+            assert (
+                "Error initializing keys budget metrics"
+                in mock_logger.call_args_list[1][0][0]
             )
 
-        # Verify the metric was never called
+        # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
+        prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
 
 
 def test_initialize_prometheus_startup_metrics_no_loop(prometheus_logger):
