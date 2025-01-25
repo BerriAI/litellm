@@ -297,14 +297,35 @@ const UsagePage: React.FC<UsagePageProps> = ({
     }
   };
 
-  // Add this helper function to fill in missing dates with zero values
+  // Update the fillMissingDates function to handle different date formats
   const fillMissingDates = (data: any[], startDate: Date, endDate: Date, categories: string[]) => {
     const filledData = [];
     const currentDate = new Date(startDate);
     
+    // Helper function to standardize date format
+    const standardizeDate = (dateStr: string) => {
+      if (dateStr.includes('-')) {
+        // Already in YYYY-MM-DD format
+        return dateStr;
+      } else {
+        // Convert "Jan 06" format
+        const [month, day] = dateStr.split(' ');
+        const year = new Date().getFullYear();
+        const monthIndex = new Date(`${month} 01 2024`).getMonth();
+        const fullDate = new Date(year, monthIndex, parseInt(day));
+        return fullDate.toISOString().split('T')[0];
+      }
+    };
+
     // Create a map of existing dates for quick lookup
     const existingDates = new Map(
-      data.map(item => [item.date, item])
+      data.map(item => {
+        const standardizedDate = standardizeDate(item.date);
+        return [standardizedDate, {
+          ...item,
+          date: standardizedDate // Store standardized date format
+        }];
+      })
     );
 
     // Iterate through each date in the range
@@ -318,14 +339,15 @@ const UsagePage: React.FC<UsagePageProps> = ({
         // Create an entry with zero values
         const emptyEntry: any = {
           date: dateStr,
-          spend: 0,
           api_requests: 0,
           total_tokens: 0
         };
         
         // Add zero values for each model/team if needed
         categories.forEach(category => {
-          emptyEntry[category] = 0;
+          if (!emptyEntry[category]) {
+            emptyEntry[category] = 0;
+          }
         });
 
         filledData.push(emptyEntry);
@@ -459,22 +481,59 @@ const UsagePage: React.FC<UsagePageProps> = ({
   };
 
   // Update the fetchGlobalActivity function
-  const fetchGlobalActivity = () => {
+  const fetchGlobalActivity = async () => {
     if (!accessToken) return;
-    fetchAndSetData(
-      () => adminGlobalActivity(accessToken, startTime, endTime),
-      setGlobalActivity,
-      "Error fetching global activity"
-    );
+    try {
+      const data = await adminGlobalActivity(accessToken, startTime, endTime);
+      
+      // Get the date range from the current month
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
+      // Fill in missing dates for daily_data
+      const filledDailyData = fillMissingDates(
+        data.daily_data || [],
+        firstDay,
+        lastDay,
+        ['api_requests', 'total_tokens']
+      );
+      
+      setGlobalActivity({
+        ...data,
+        daily_data: filledDailyData
+      });
+    } catch (error) {
+      console.error("Error fetching global activity:", error);
+    }
   };
 
-  const fetchGlobalActivityPerModel = () => {
+  // Update the fetchGlobalActivityPerModel function
+  const fetchGlobalActivityPerModel = async () => {
     if (!accessToken) return;
-    fetchAndSetData(
-      () => adminGlobalActivityPerModel(accessToken, startTime, endTime),
-      setGlobalActivityPerModel,
-      "Error fetching global activity per model"
-    );
+    try {
+      const data = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
+      
+      // Get the date range from the current month
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      
+      // Fill in missing dates for each model's daily data
+      const filledModelData = data.map((modelData: any) => ({
+        ...modelData,
+        daily_data: fillMissingDates(
+          modelData.daily_data || [],
+          firstDay,
+          lastDay,
+          ['api_requests', 'total_tokens']
+        )
+      }));
+      
+      setGlobalActivityPerModel(filledModelData);
+    } catch (error) {
+      console.error("Error fetching global activity per model:", error);
+    }
   };
 
   useEffect(() => {
