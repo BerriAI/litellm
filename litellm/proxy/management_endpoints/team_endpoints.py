@@ -1363,6 +1363,47 @@ async def unblock_team(
     return record
 
 
+@router.get("/team/available")
+async def list_available_teams(
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    response_model=List[LiteLLM_TeamTable],
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    available_teams = cast(
+        Optional[List[str]],
+        (
+            litellm.default_internal_user_params.get("available_teams")
+            if litellm.default_internal_user_params is not None
+            else None
+        ),
+    )
+    if available_teams is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "No available teams for user to join. See how to set available teams here: https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
+            },
+        )
+
+    available_teams = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": available_teams}}
+    )
+
+    available_teams_correct_type = [
+        LiteLLM_TeamTable(**team.model_dump()) for team in available_teams
+    ]
+
+    return available_teams_correct_type
+
+
 @router.get(
     "/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
