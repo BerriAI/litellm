@@ -379,6 +379,41 @@ async def test_chat_completion_streaming():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_anthropic_structured_output():
+    """
+    Ensure nested pydantic output is returned correctly
+    """
+    from pydantic import BaseModel
+
+    class CalendarEvent(BaseModel):
+        name: str
+        date: str
+        participants: list[str]
+
+    class EventsList(BaseModel):
+        events: list[CalendarEvent]
+
+    messages = [
+        {"role": "user", "content": "List 5 important events in the XIX century"}
+    ]
+
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    res = await client.beta.chat.completions.parse(
+        model="anthropic/claude-3-5-haiku-20241022",
+        messages=messages,
+        response_format=EventsList,
+        timeout=60,
+    )
+    assert res is not None
+
+    print(res.choices[0].message)
+
+    assert res.choices[0].message.content is not None
+    assert res.choices[0].message.tool_calls is None
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_old_key():
     """
     Production test for backwards compatibility. Test db against a pre-generated (old key)

@@ -1,3 +1,4 @@
+import copy
 from abc import ABC, abstractmethod
 from typing import List, Optional, Type, Union
 
@@ -31,6 +32,34 @@ class BaseLLMModelInfo(ABC):
         pass
 
 
+def _dict_to_response_format_helper(
+    response_format: dict, ref_template: Optional[str] = None
+) -> dict:
+    if ref_template is not None and response_format.get("type") == "json_schema":
+        # Deep copy to avoid modifying original
+        modified_format = copy.deepcopy(response_format)
+        schema = modified_format["json_schema"]["schema"]
+
+        # Update all $ref values in the schema
+        def update_refs(obj):
+            if isinstance(obj, dict):
+                if "$ref" in obj:
+                    ref_path = obj["$ref"]
+                    # Extract model name from reference path
+                    model_name = ref_path.split("/")[-1]
+                    # Apply new template
+                    obj["$ref"] = ref_template.format(model=model_name)
+                for value in obj.values():
+                    update_refs(value)
+            elif isinstance(obj, list):
+                for item in obj:
+                    update_refs(item)
+
+        update_refs(schema)
+        return modified_format
+    return response_format
+
+
 def type_to_response_format_param(
     response_format: Optional[Union[Type[BaseModel], dict]],
     ref_template: Optional[str] = None,
@@ -44,7 +73,7 @@ def type_to_response_format_param(
         return None
 
     if isinstance(response_format, dict):
-        return response_format
+        return _dict_to_response_format_helper(response_format, ref_template)
 
     # type checkers don't narrow the negation of a `TypeGuard` as it isn't
     # a safe default behaviour but we know that at this point the `response_format`
