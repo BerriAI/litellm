@@ -11,7 +11,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelInfoBase, ModelResponse, ProviderSpecificModelInfo
+from litellm.types.utils import ModelResponse
 
 from ..common_utils import OpenAIError
 

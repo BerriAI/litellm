@@ -1,7 +1,6 @@
 from typing import List, Optional
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ModelInfoBase
 
 from ..base_llm.base_utils import BaseLLMModelInfo
 from ..base_llm.chat.transformation import BaseLLMException

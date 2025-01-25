@@ -3,7 +3,7 @@ from typing import List, Literal, Optional, Tuple, Union, cast
 import litellm
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
-from litellm.types.utils import ModelInfoBase, ProviderSpecificModelInfo
+from litellm.types.utils import ProviderSpecificModelInfo
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
