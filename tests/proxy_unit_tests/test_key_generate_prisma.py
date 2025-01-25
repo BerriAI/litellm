@@ -361,11 +361,9 @@ def test_call_with_invalid_model(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
-        assert (
-            e.message
-            == "Authentication Error, API Key not allowed to access model. This token can only access models=['mistral']. Tried to access gemini-pro-vision"
-        )
-        pass
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.key_model_access_denied
+        assert e.param == "model"
 
 
 def test_call_with_valid_model(prisma_client):
