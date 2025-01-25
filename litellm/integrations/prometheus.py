@@ -4,7 +4,7 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import List, Optional, cast
+from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -1321,6 +1321,10 @@ class PrometheusLogger(CustomLogger):
 
         Helper to create tasks for initializing metrics that are required on startup - eg. remaining budget metrics
         """
+        if litellm.prometheus_initialize_budget_metrics is not True:
+            verbose_logger.debug("Prometheus: skipping budget metrics initialization")
+            return
+
         try:
             if asyncio.get_running_loop():
                 asyncio.create_task(self._initialize_remaining_budget_metrics())
@@ -1329,15 +1333,20 @@ class PrometheusLogger(CustomLogger):
                 f"No running event loop - skipping budget metrics initialization: {str(e)}"
             )
 
-    async def _initialize_remaining_budget_metrics(self):
+    async def _initialize_budget_metrics(
+        self,
+        data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
+        set_metrics_function: Callable[[List[Any]], Awaitable[None]],
+        data_type: Literal["teams", "keys"],
+    ):
         """
-        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+        Generic method to initialize budget metrics for teams or API keys.
 
-        Runs when prometheus logger starts up.
+        Args:
+            data_fetch_function: Function to fetch data with pagination.
+            set_metrics_function: Function to set metrics for the fetched data.
+            data_type: String representing the type of data ("teams" or "keys") for logging purposes.
         """
-        from litellm.proxy.management_endpoints.team_endpoints import (
-            get_paginated_teams,
-        )
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -1346,27 +1355,119 @@ class PrometheusLogger(CustomLogger):
         try:
             page = 1
             page_size = 50
-            teams, total_count = await get_paginated_teams(
-                prisma_client=prisma_client, page_size=page_size, page=page
+            data, total_count = await data_fetch_function(
+                page_size=page_size, page=page
             )
+
+            if total_count is None:
+                total_count = len(data)
 
             # Calculate total pages needed
             total_pages = (total_count + page_size - 1) // page_size
 
-            # Set metrics for first page of teams
-            await self._set_team_list_budget_metrics(teams)
+            # Set metrics for first page of data
+            await set_metrics_function(data)
 
             # Get and set metrics for remaining pages
             for page in range(2, total_pages + 1):
-                teams, _ = await get_paginated_teams(
-                    prisma_client=prisma_client, page_size=page_size, page=page
-                )
-                await self._set_team_list_budget_metrics(teams)
+                data, _ = await data_fetch_function(page_size=page_size, page=page)
+                await set_metrics_function(data)
 
         except Exception as e:
             verbose_logger.exception(
-                f"Error initializing team budget metrics: {str(e)}"
+                f"Error initializing {data_type} budget metrics: {str(e)}"
             )
+
+    async def _initialize_team_budget_metrics(self):
+        """
+        Initialize team budget metrics by reusing the generic pagination logic.
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            get_paginated_teams,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping team metrics initialization, DB not initialized"
+            )
+            return
+
+        async def fetch_teams(
+            page_size: int, page: int
+        ) -> Tuple[List[LiteLLM_TeamTable], Optional[int]]:
+            teams, total_count = await get_paginated_teams(
+                prisma_client=prisma_client, page_size=page_size, page=page
+            )
+            if total_count is None:
+                total_count = len(teams)
+            return teams, total_count
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=fetch_teams,
+            set_metrics_function=self._set_team_list_budget_metrics,
+            data_type="teams",
+        )
+
+    async def _initialize_api_key_budget_metrics(self):
+        """
+        Initialize API key budget metrics by reusing the generic pagination logic.
+        """
+        from typing import Union
+
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _list_key_helper,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping key metrics initialization, DB not initialized"
+            )
+            return
+
+        async def fetch_keys(
+            page_size: int, page: int
+        ) -> Tuple[List[Union[str, UserAPIKeyAuth]], Optional[int]]:
+            key_list_response = await _list_key_helper(
+                prisma_client=prisma_client,
+                page=page,
+                size=page_size,
+                user_id=None,
+                team_id=None,
+                key_alias=None,
+                exclude_team_id=UI_SESSION_TOKEN_TEAM_ID,
+                return_full_object=True,
+            )
+            keys = key_list_response.get("keys", [])
+            total_count = key_list_response.get("total_count")
+            if total_count is None:
+                total_count = len(keys)
+            return keys, total_count
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=fetch_keys,
+            set_metrics_function=self._set_key_list_budget_metrics,
+            data_type="keys",
+        )
+
+    async def _initialize_remaining_budget_metrics(self):
+        """
+        Initialize remaining budget metrics for all teams to avoid metric discrepancies.
+
+        Runs when prometheus logger starts up.
+        """
+        await self._initialize_team_budget_metrics()
+        await self._initialize_api_key_budget_metrics()
+
+    async def _set_key_list_budget_metrics(
+        self, keys: List[Union[str, UserAPIKeyAuth]]
+    ):
+        """Helper function to set budget metrics for a list of keys"""
+        for key in keys:
+            if isinstance(key, UserAPIKeyAuth):
+                self._set_key_budget_metrics(key)
 
     async def _set_team_list_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""
@@ -1431,7 +1532,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.exception(
+            verbose_logger.debug(
                 f"[Non-Blocking] Prometheus: Error getting team info: {str(e)}"
             )
             return team_object
@@ -1487,7 +1588,8 @@ class PrometheusLogger(CustomLogger):
         - Budget Reset At
         """
         self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key_dict.token, user_api_key_dict.key_alias
+            user_api_key_dict.token,
+            user_api_key_dict.key_alias or "",
         ).set(
             self._safe_get_remaining_budget(
                 max_budget=user_api_key_dict.max_budget,
@@ -1558,7 +1660,7 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.exception(
+            verbose_logger.debug(
                 f"[Non-Blocking] Prometheus: Error getting key info: {str(e)}"
             )
 

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, overload
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
 )
@@ -2959,3 +2960,18 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         param=getattr(e, "param", "None"),
         code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
+
+
+def _premium_user_check():
+    """
+    Raises an HTTPException if the user is not a premium user
+    """
+    from litellm.proxy.proxy_server import premium_user
+
+    if not premium_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+            },
+        )

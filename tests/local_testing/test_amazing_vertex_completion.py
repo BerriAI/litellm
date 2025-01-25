@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
 import httpx
 
@@ -1222,6 +1222,7 @@ Using this JSON schema:
             messages=messages,
             response_format={"type": "json_object"},
             client=client,
+            logging_obj=ANY,
         )
 
         assert response.choices[0].finish_reason == "content_filter"

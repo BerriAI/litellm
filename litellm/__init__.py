@@ -77,6 +77,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langfuse",
     "pagerduty",
     "humanloop",
+    "gcs_pubsub",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -87,6 +88,7 @@ callbacks: List[
 ] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
+prometheus_initialize_budget_metrics: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
@@ -401,7 +403,7 @@ def identify(event_details):
 
 
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
-api_base = None
+api_base: Optional[str] = None
 headers = None
 api_version = None
 organization = None
