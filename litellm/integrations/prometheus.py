@@ -1588,7 +1588,8 @@ class PrometheusLogger(CustomLogger):
         - Budget Reset At
         """
         self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key_dict.token, user_api_key_dict.key_alias
+            user_api_key_dict.token,
+            user_api_key_dict.key_alias or "",
         ).set(
             self._safe_get_remaining_budget(
                 max_budget=user_api_key_dict.max_budget,
