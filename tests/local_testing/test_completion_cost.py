@@ -2791,6 +2791,24 @@ def test_cost_calculator_with_base_model():
     assert resp._hidden_params["response_cost"] > 0
 
 
+@pytest.fixture
+def model_item():
+    return {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "openai/my-fake-model",
+            "api_key": "my-fake-key",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+        },
+        "model_info": {},
+    }
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg, model_item):
+    from litellm import Router
+
+
 @pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
 def test_cost_calculator_with_base_model_with_router(base_model_arg):
     from litellm import Router
