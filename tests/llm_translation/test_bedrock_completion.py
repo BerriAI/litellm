@@ -2407,10 +2407,10 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
 
 def test_process_bedrock_converse_image_block():
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        _process_bedrock_converse_image_block,
+        BedrockImageProcessor,
     )
 
-    block = _process_bedrock_converse_image_block(
+    block = BedrockImageProcessor.process_image_sync(
         image_url="data:text/plain;base64,base64file"
     )
 

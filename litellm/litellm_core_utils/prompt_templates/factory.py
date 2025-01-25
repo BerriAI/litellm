@@ -2313,58 +2313,6 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
 
-def _process_bedrock_converse_image_block(
-    image_url: str,
-) -> BedrockContentBlock:
-    if "base64" in image_url:
-        # Case 1: Images with base64 encoding
-        import re
-
-        # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
-        image_metadata, img_without_base_64 = image_url.split(",")
-
-        # read mime_type from img_without_base_64=data:image/jpeg;base64
-        # Extract MIME type using regular expression
-        mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
-        if mime_type_match:
-            mime_type = mime_type_match.group(1)
-            image_format = mime_type.split("/")[1]
-        else:
-            mime_type = "image/jpeg"
-            image_format = "jpeg"
-        _blob = BedrockSourceBlock(bytes=img_without_base_64)
-
-    elif "https:/" in image_url:
-        # Case 2: Images with direct links
-        image_bytes, mime_type = get_image_details(image_url)
-        image_format = mime_type.split("/")[1]
-        _blob = BedrockSourceBlock(bytes=image_bytes)
-    else:
-        raise ValueError(
-            "Unsupported image type. Expected either image url or base64 encoded string - \
-                e.g. 'data:image/jpeg;base64,<base64-encoded-string>'"
-        )
-
-    supported_image_formats = litellm.AmazonConverseConfig().get_supported_image_types()
-
-    document_types = ["application", "text"]
-    is_document = any(
-        mime_type.startswith(document_type) for document_type in document_types
-    )
-
-    if image_format in supported_image_formats:
-        return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))  # type: ignore
-    elif is_document:
-        return BedrockContentBlock(document=BedrockDocumentBlock(source=_blob, format=image_format, name="DocumentPDFmessages_{}".format(str(uuid.uuid4()))))  # type: ignore
-    else:
-        # Handle the case when the image format is not supported
-        raise ValueError(
-            "Unsupported image format: {}. Supported formats: {}".format(
-                image_format, supported_image_formats
-            )
-        )
-
-
 def _convert_to_bedrock_tool_call_invoke(
     tool_calls: list,
 ) -> List[BedrockContentBlock]:
@@ -3061,7 +3009,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url = element["image_url"]["url"]
                             else:
                                 image_url = element["image_url"]
-                            _part = _process_bedrock_converse_image_block(  # type: ignore
+                            _part = BedrockImageProcessor.process_image_sync(  # type: ignore
                                 image_url=image_url
                             )
                             _parts.append(_part)  # type: ignore
@@ -3160,7 +3108,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url = element["image_url"]["url"]
                             else:
                                 image_url = element["image_url"]
-                            assistants_part = _process_bedrock_converse_image_block(  # type: ignore
+                            assistants_part = BedrockImageProcessor.process_image_sync(  # type: ignore
                                 image_url=image_url
                             )
                             assistants_parts.append(assistants_part)
