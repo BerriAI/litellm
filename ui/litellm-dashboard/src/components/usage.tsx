@@ -373,7 +373,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         const top_keys = await adminTopKeysCall(accessToken);
         return top_keys.map((k: any) => ({
           key: (k["key_alias"] || k["key_name"] || k["api_key"]).substring(0, 10),
-          spend: k["total_spend"],
+          spend: Number(k["total_spend"].toFixed(2)),
         }));
       },
       setTopKeys,
@@ -388,7 +388,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         const top_models = await adminTopModelsCall(accessToken);
         return top_models.map((k: any) => ({
           key: k["model"],
-          spend: k["total_spend"],
+          spend: Number(k["total_spend"].toFixed(2)),
         }));
       },
       setTopModels,
@@ -625,6 +625,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     layout="vertical"
                     showXAxis={false}
                     showLegend={false}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
                   />
                 </Card>
               </Col>
@@ -641,6 +642,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     layout="vertical"
                     showXAxis={false}
                     showLegend={false}
+                    valueFormatter={(value) => `$${value.toFixed(2)}`}
                   />
                 </Card>
                
@@ -661,6 +663,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       index="provider"
                       category="spend"
                       colors={["cyan"]}
+                      valueFormatter={(value) => `$${value.toFixed(2)}`}
                     />
                   </Col>
                   <Col numColSpan={1}>
