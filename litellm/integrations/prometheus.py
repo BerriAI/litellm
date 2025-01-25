@@ -1321,6 +1321,10 @@ class PrometheusLogger(CustomLogger):
 
         Helper to create tasks for initializing metrics that are required on startup - eg. remaining budget metrics
         """
+        if litellm.prometheus_initialize_budget_metrics is not True:
+            verbose_logger.debug("Prometheus: skipping budget metrics initialization")
+            return
+
         try:
             if asyncio.get_running_loop():
                 asyncio.create_task(self._initialize_remaining_budget_metrics())
@@ -1504,7 +1508,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
-            verbose_logger.exception(
+            verbose_logger.debug(
                 f"[Non-Blocking] Prometheus: Error getting team info: {str(e)}"
             )
             return team_object
@@ -1631,7 +1635,7 @@ class PrometheusLogger(CustomLogger):
                 if key_object:
                     user_api_key_dict.budget_reset_at = key_object.budget_reset_at
         except Exception as e:
-            verbose_logger.exception(
+            verbose_logger.debug(
                 f"[Non-Blocking] Prometheus: Error getting key info: {str(e)}"
             )
 

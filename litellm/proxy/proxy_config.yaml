@@ -16,7 +16,7 @@ model_list:
 
 litellm_settings:
   callbacks: ["prometheus"]
-
+  prometheus_initialize_budget_metrics: true
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
