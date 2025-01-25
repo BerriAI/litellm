@@ -1123,7 +1123,7 @@ def _model_matches_any_wildcard_pattern_in_list(
     model: str, allowed_model_list: list
 ) -> bool:
     """
-    Check if a model matches any wildcard pattern in a list.
+    Returns True if a model matches any wildcard pattern in a list.
 
     eg.
     - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns True
