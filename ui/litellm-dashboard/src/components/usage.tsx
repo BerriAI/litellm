@@ -625,14 +625,19 @@ const UsagePage: React.FC<UsagePageProps> = ({
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 h-[100vh] w-full">
-            <ViewUserSpend
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            userSpend={totalMonthlySpend}
-            selectedTeam={null}
-            userMaxBudget={null}
-          />
+              <Col numColSpan={2}>
+                <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
+                  Project Spend {new Date().toLocaleString('default', { month: 'long' })} 1 - {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
+                </Text>
+                <ViewUserSpend
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
+                  userSpend={totalMonthlySpend}
+                  selectedTeam={null}
+                  userMaxBudget={null}
+                />
+              </Col>
               <Col numColSpan={2}>
                 <Card>
                   <Title>Monthly Spend</Title>
