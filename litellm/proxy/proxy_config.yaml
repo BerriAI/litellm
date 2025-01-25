@@ -15,8 +15,7 @@ model_list:
 
 
 litellm_settings:
-  callbacks: ["prometheus"]
-
+  callbacks: ["gcs_pubsub"]
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
@@ -26,3 +25,4 @@ guardrails:
       guardrailIdentifier: gf3sc1mzinjw
       guardrailVersion: "DRAFT"
       default_on: true
+
