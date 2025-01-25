@@ -49,7 +49,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         is_internal_user = True
         if litellm.default_internal_user_params:
             for key, value in litellm.default_internal_user_params.items():
-                if key not in data_json or data_json[key] is None:
+                if key == "available_teams":
+                    continue
+                elif key not in data_json or data_json[key] is None:
                     data_json[key] = value
                 elif (
                     key == "models"
