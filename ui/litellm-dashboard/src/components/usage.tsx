@@ -459,49 +459,22 @@ const UsagePage: React.FC<UsagePageProps> = ({
   };
 
   // Update the fetchGlobalActivity function
-  const fetchGlobalActivity = async () => {
+  const fetchGlobalActivity = () => {
     if (!accessToken) return;
-    try {
-      const data = await adminGlobalActivity(accessToken, startTime, endTime);
-      
-      // Fill in missing dates for activity data
-      const filledData = fillMissingDates(
-        data.daily_data,
-        new Date(startTime),
-        new Date(endTime),
-        []
-      );
-      
-      setGlobalActivity({
-        ...data,
-        daily_data: filledData
-      });
-    } catch (error) {
-      console.error("Error fetching global activity:", error);
-    }
+    fetchAndSetData(
+      () => adminGlobalActivity(accessToken, startTime, endTime),
+      setGlobalActivity,
+      "Error fetching global activity"
+    );
   };
 
-  // Update the fetchGlobalActivityPerModel function
-  const fetchGlobalActivityPerModel = async () => {
+  const fetchGlobalActivityPerModel = () => {
     if (!accessToken) return;
-    try {
-      const data = await adminGlobalActivityPerModel(accessToken, startTime, endTime);
-      
-      // Fill in missing dates for each model's data
-      const filledData = data.map((modelData: any) => ({
-        ...modelData,
-        daily_data: fillMissingDates(
-          modelData.daily_data,
-          new Date(startTime),
-          new Date(endTime),
-          []
-        )
-      }));
-      
-      setGlobalActivityPerModel(filledData);
-    } catch (error) {
-      console.error("Error fetching global activity per model:", error);
-    }
+    fetchAndSetData(
+      () => adminGlobalActivityPerModel(accessToken, startTime, endTime),
+      setGlobalActivityPerModel,
+      "Error fetching global activity per model"
+    );
   };
 
   useEffect(() => {
