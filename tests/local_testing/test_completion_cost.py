@@ -2772,3 +2772,92 @@ def test_bedrock_cost_calc_with_region():
         aws_region_name="us-east-1",
     )
     assert response._hidden_params["response_cost"] > 0
+
+
+# @pytest.mark.parametrize(
+#     "base_model_arg", [
+#         {"base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"},
+#         {"model_info": "anthropic.claude-3-sonnet-20240229-v1:0"},
+#     ]
+# )
+def test_cost_calculator_with_base_model():
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        base_model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        mock_response="Hello, how are you?",
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg):
+    from litellm import Router
+
+    model_item = {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "bedrock/random-model",
+        },
+    }
+
+    if base_model_arg == "litellm_param":
+        model_item["litellm_params"][
+            "base_model"
+        ] = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+    elif base_model_arg == "model_info":
+        model_item["model_info"] = {
+            "base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        }
+
+    router = Router(model_list=[model_item])
+    resp = router.completion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router_embedding(base_model_arg):
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    model_item = {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "bedrock/random-model",
+        },
+    }
+
+    if base_model_arg == "litellm_param":
+        model_item["litellm_params"]["base_model"] = "cohere.embed-english-v3"
+    elif base_model_arg == "model_info":
+        model_item["model_info"] = {
+            "base_model": "cohere.embed-english-v3",
+        }
+
+    router = Router(model_list=[model_item])
+    resp = router.embedding(
+        model="random-model",
+        input="Hello, how are you?",
+        mock_response=[1, 2, 3],
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+def test_cost_calculator_with_custom_pricing():
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+        input_cost_per_token=0.0000008,
+        output_cost_per_token=0.0000032,
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0

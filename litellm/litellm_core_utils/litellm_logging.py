@@ -32,6 +32,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -257,10 +258,19 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
 
+        # INITIAL LITELLM_PARAMS
+        litellm_params = {}
+        if kwargs is not None:
+            litellm_params = get_litellm_params(**kwargs)
+            litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
+
+        self.litellm_params = litellm_params
+
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
             "input": _input,
+            "litellm_params": litellm_params,
         }
 
     def process_dynamic_callbacks(self):
@@ -359,7 +369,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
-        self.litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
+        self.litellm_params = {
+            **self.litellm_params,
+            **scrub_sensitive_keys_in_metadata(litellm_params),
+        }
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
@@ -785,6 +798,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
