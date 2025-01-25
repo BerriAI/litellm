@@ -2151,6 +2151,11 @@ def stringify_json_tool_call_content(messages: List) -> List:
 
 ###### AMAZON BEDROCK #######
 
+import base64
+from cgi import parse_header
+
+import httpx
+
 from litellm.types.llms.bedrock import BedrockDocumentTypes
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
@@ -2168,6 +2173,26 @@ from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 
 
+def _parse_content_type(content_type: str) -> str:
+    main_type, _ = parse_header(content_type)
+    return main_type
+
+
+def _post_call_image_processing(response: httpx.Response) -> Tuple[str, str]:
+    # Check the response's content type to ensure it is an image
+    content_type = response.headers.get("content-type")
+    if not content_type:
+        raise ValueError(
+            f"URL does not contain content-type (content-type: {content_type})"
+        )
+    content_type = _parse_content_type(content_type)
+
+    # Convert the image content to base64 bytes
+    base64_bytes = base64.b64encode(response.content).decode("utf-8")
+
+    return base64_bytes, content_type
+
+
 async def get_image_details_async(image_url) -> Tuple[str, str]:
     try:
         import base64
@@ -2177,17 +2202,7 @@ async def get_image_details_async(image_url) -> Tuple[str, str]:
         response = await client.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
-        # Check the response's content type to ensure it is an image
-        content_type = response.headers.get("content-type")
-        if not content_type or "image" not in content_type:
-            raise ValueError(
-                f"URL does not point to a valid image (content-type: {content_type})"
-            )
-
-        # Convert the image content to base64 bytes
-        base64_bytes = base64.b64encode(response.content).decode("utf-8")
-
-        return base64_bytes, content_type
+        return _post_call_image_processing(response)
 
     except Exception as e:
         raise e
@@ -2202,17 +2217,7 @@ def get_image_details(image_url) -> Tuple[str, str]:
         response = client.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
-        # Check the response's content type to ensure it is an image
-        content_type = response.headers.get("content-type")
-        if not content_type or "image" not in content_type:
-            raise ValueError(
-                f"URL does not point to a valid image (content-type: {content_type})"
-            )
-
-        # Convert the image content to base64 bytes
-        base64_bytes = base64.b64encode(response.content).decode("utf-8")
-
-        return base64_bytes, content_type
+        return _post_call_image_processing(response)
 
     except Exception as e:
         raise e

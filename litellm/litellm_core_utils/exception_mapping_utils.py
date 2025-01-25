@@ -140,7 +140,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
         )  # noqa
         print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'."  # noqa
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
         )  # noqa
         print()  # noqa
 

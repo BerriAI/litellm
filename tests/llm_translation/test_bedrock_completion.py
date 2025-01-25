@@ -2407,10 +2407,10 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
 
 def test_process_bedrock_converse_image_block():
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        BedrockImageProcessor,
+        _process_bedrock_converse_image_block,
     )
 
-    block = BedrockImageProcessor.process_image_sync(
+    block = _process_bedrock_converse_image_block(
         image_url="data:text/plain;base64,base64file"
     )
 
@@ -2486,33 +2486,29 @@ def test_bedrock_error_handling_streaming():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_image_url_async_client():
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        BedrockImageProcessor,
+async def test_bedrock_document_understanding():
+    from litellm import acompletion
+
+    litellm._turn_on_debug()
+
+    # pdf url
+    image_url = (
+        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
     )
 
-    with patch.object(
-        BedrockImageProcessor, "process_image_async"
-    ) as mock_get_image_details_async:
-        try:
-            await litellm.acompletion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "What's in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-                                },
-                            },
-                        ],
-                    }
-                ],
-            )
-        except Exception as e:
-            print(e)
-        mock_get_image_details_async.assert_called_once()
+    # model
+    model = "bedrock/us.amazon.nova-pro-v1:0"
+
+    image_content = [
+        {"type": "text", "text": "What's this file about?"},
+        {
+            "type": "image_url",
+            "image_url": image_url,  # OR {"url": image_url}
+        },
+    ]
+
+    response = await acompletion(
+        model=model,
+        messages=[{"role": "user", "content": image_content}],
+    )
+    assert response is not None
