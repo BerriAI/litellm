@@ -19,7 +19,6 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
-    StreamingChatCompletionChunk,
     StreamingChoices,
     Usage,
 )
