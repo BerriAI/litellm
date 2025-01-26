@@ -19,6 +19,18 @@ model_list:
 
 
 
+
 litellm_settings:
   callbacks: ["langfuse"]
 
+
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_initialize_budget_metrics: true
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: gf3sc1mzinjw
+      guardrailVersion: "DRAFT"
