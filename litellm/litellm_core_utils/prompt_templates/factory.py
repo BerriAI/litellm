@@ -14,9 +14,14 @@ import litellm
 import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.ollama import OllamaVisionModelObject
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2171,7 +2176,10 @@ async def get_image_details_async(image_url) -> Tuple[str, str]:
     try:
         import base64
 
-        client = AsyncHTTPHandler(concurrent_limit=1)
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.PromptFactory,
+            params={"concurrent_limit": 1},
+        )
         # Send a GET request to the image URL
         response = await client.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
