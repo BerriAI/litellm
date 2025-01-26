@@ -383,6 +383,10 @@ async def acompletion(
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
     fallbacks = kwargs.get("fallbacks", None)
+    mock_timeout = kwargs.get("mock_timeout", None)
+
+    if mock_timeout is True:
+        await _handle_mock_timeout_async(mock_timeout, timeout, model)
 
     loop = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
@@ -565,17 +569,44 @@ def _handle_mock_timeout(
     model: str,
 ):
     if mock_timeout is True and timeout is not None:
-        if isinstance(timeout, float):
-            time.sleep(timeout)
-        elif isinstance(timeout, str):
-            time.sleep(float(timeout))
-        elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
-            time.sleep(timeout.connect)
+        _sleep_for_timeout(timeout)
         raise litellm.Timeout(
             message="This is a mock timeout error",
             llm_provider="openai",
             model=model,
         )
+
+
+async def _handle_mock_timeout_async(
+    mock_timeout: Optional[bool],
+    timeout: Optional[Union[float, str, httpx.Timeout]],
+    model: str,
+):
+    if mock_timeout is True and timeout is not None:
+        await _sleep_for_timeout_async(timeout)
+        raise litellm.Timeout(
+            message="This is a mock timeout error",
+            llm_provider="openai",
+            model=model,
+        )
+
+
+def _sleep_for_timeout(timeout: Union[float, str, httpx.Timeout]):
+    if isinstance(timeout, float):
+        time.sleep(timeout)
+    elif isinstance(timeout, str):
+        time.sleep(float(timeout))
+    elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+        time.sleep(timeout.connect)
+
+
+async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
+    if isinstance(timeout, float):
+        await asyncio.sleep(timeout)
+    elif isinstance(timeout, str):
+        await asyncio.sleep(float(timeout))
+    elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+        await asyncio.sleep(timeout.connect)
 
 
 def mock_completion(

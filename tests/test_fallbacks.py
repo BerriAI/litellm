@@ -228,3 +228,52 @@ async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
         except Exception as e:
             if has_access:
                 pytest.fail("Expected this to work: {}".format(str(e)))
+
+
+import asyncio
+from openai import AsyncOpenAI
+from typing import List
+import time
+
+
+async def make_request(client: AsyncOpenAI, model: str) -> bool:
+    try:
+        await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Who was Alexander?"}],
+        )
+        return True
+    except Exception as e:
+        print(f"Error with {model}: {str(e)}")
+        return False
+
+
+async def run_good_model_test(client: AsyncOpenAI, num_requests: int) -> bool:
+    tasks = [make_request(client, "good-model") for _ in range(num_requests)]
+    good_results = await asyncio.gather(*tasks)
+    return all(good_results)
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_bad_and_good_model():
+    """
+    Prod test - ensure even if bad model is down, good model is still working.
+    """
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    num_requests = 100
+    num_iterations = 3
+
+    for iteration in range(num_iterations):
+        print(f"\nIteration {iteration + 1}/{num_iterations}")
+        start_time = time.time()
+
+        # Fire and forget bad model requests
+        for _ in range(num_requests):
+            asyncio.create_task(make_request(client, "bad-model"))
+
+        # Wait only for good model requests
+        success = await run_good_model_test(client, num_requests)
+        print(
+            f"Iteration {iteration + 1}: {'✓' if success else '✗'} ({time.time() - start_time:.2f}s)"
+        )
+        assert success, "Not all good model requests succeeded"
