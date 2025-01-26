@@ -3,6 +3,10 @@ model_list:
     litellm_params:
       model:  openai/*
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: bedrock/*
+    litellm_params:
+      model:  bedrock/*
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
   - model_name: text-embedding-ada-002
     litellm_params:
       model: openai/text-embedding-ada-002
@@ -12,6 +16,12 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+
+
+
+litellm_settings:
+  callbacks: ["langfuse"]
 
 
 litellm_settings:
