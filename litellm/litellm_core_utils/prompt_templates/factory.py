@@ -14,11 +14,7 @@ import litellm
 import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    get_async_httpx_client,
-)
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
