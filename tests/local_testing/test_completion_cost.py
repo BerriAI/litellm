@@ -2791,6 +2791,24 @@ def test_cost_calculator_with_base_model():
     assert resp._hidden_params["response_cost"] > 0
 
 
+@pytest.fixture
+def model_item():
+    return {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "openai/my-fake-model",
+            "api_key": "my-fake-key",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+        },
+        "model_info": {},
+    }
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg, model_item):
+    from litellm import Router
+
+
 @pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
 def test_cost_calculator_with_base_model_with_router(base_model_arg):
     from litellm import Router
@@ -2860,4 +2878,34 @@ def test_cost_calculator_with_custom_pricing():
         output_cost_per_token=0.0000032,
     )
     assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "custom_pricing",
+    [
+        "litellm_params",
+        "model_info",
+    ],
+)
+@pytest.mark.asyncio
+async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    if custom_pricing == "litellm_params":
+        model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
+        model_item["litellm_params"]["output_cost_per_token"] = 0.0000032
+    elif custom_pricing == "model_info":
+        model_item["model_info"]["input_cost_per_token"] = 0.0000008
+        model_item["model_info"]["output_cost_per_token"] = 0.0000032
+
+    router = Router(model_list=[model_item])
+    resp = await router.acompletion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+    # assert resp.model == "random-model"
     assert resp._hidden_params["response_cost"] > 0
