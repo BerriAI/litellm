@@ -294,6 +294,28 @@ def test_get_langfuse_tags():
     assert result == []
 
 
+
+@patch.dict(os.environ, {}, clear=True)  # Start with empty environment
+def test_get_langfuse_flush_interval():
+    """
+    Test that _get_langfuse_flush_interval correctly reads from environment variable
+    or falls back to the provided flush_interval
+    """
+    default_interval = 60
+
+    # Test when env var is not set
+    result = LangFuseLogger._get_langfuse_flush_interval(
+        flush_interval=default_interval
+    )
+    assert result == default_interval
+
+    # Test when env var is set
+    with patch.dict(os.environ, {"LANGFUSE_FLUSH_INTERVAL": "120"}):
+        result = LangFuseLogger._get_langfuse_flush_interval(
+            flush_interval=default_interval
+        )
+        assert result == 120
+
 def test_langfuse_e2e_sync(monkeypatch):
     from litellm import completion
     import litellm
@@ -320,3 +342,4 @@ def test_langfuse_e2e_sync(monkeypatch):
         time.sleep(3)
 
         assert langfuse_mock.called
+

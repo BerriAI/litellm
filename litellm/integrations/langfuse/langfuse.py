@@ -54,8 +54,8 @@ class LangFuseLogger:
             self.langfuse_host = "http://" + self.langfuse_host
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.langfuse_flush_interval = (
-            os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
+        self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
+            flush_interval
         )
         http_client = _get_httpx_client()
         self.langfuse_client = http_client.client
@@ -707,6 +707,22 @@ class LangFuseLogger:
     def _supports_completion_start_time(self):
         """Check if current langfuse version supports completion start time"""
         return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    @staticmethod
+    def _get_langfuse_flush_interval(flush_interval: int) -> int:
+        """
+        Get the langfuse flush interval to initialize the Langfuse client
+
+        Reads `LANGFUSE_FLUSH_INTERVAL` from the environment variable.
+        If not set, uses the flush interval passed in as an argument.
+
+        Args:
+            flush_interval: The flush interval to use if LANGFUSE_FLUSH_INTERVAL is not set
+
+        Returns:
+            [int] The flush interval to use to initialize the Langfuse client
+        """
+        return int(os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval)
 
 
 def _add_prompt_to_generation_params(
