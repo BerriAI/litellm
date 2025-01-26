@@ -11,6 +11,7 @@ from typing_extensions import TypeAlias
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
@@ -230,6 +231,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             prompt_template_model=template_model,
             prompt_template_optional_params=template_optional_params,
             completed_messages=None,
+        )
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        return run_async_function(
+            self.async_log_success_event, kwargs, response_obj, start_time, end_time
         )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
