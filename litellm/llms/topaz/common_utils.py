@@ -1,7 +1,6 @@
 from typing import List, Optional
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import ModelInfoBase
 
 from ..base_llm.base_utils import BaseLLMModelInfo
 from ..base_llm.chat.transformation import BaseLLMException
@@ -12,11 +11,6 @@ class TopazException(BaseLLMException):
 
 
 class TopazModelInfo(BaseLLMModelInfo):
-    def get_model_info(
-        self, model: str, existing_model_info: Optional[ModelInfoBase] = None
-    ) -> Optional[ModelInfoBase]:
-        return existing_model_info
-
     def get_models(self) -> List[str]:
         return [
             "topaz/Standard V2",

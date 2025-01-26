@@ -5,17 +5,15 @@ from typing import List, Optional, Type, Union
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
-from litellm.types.utils import ModelInfoBase
+from litellm.types.utils import ProviderSpecificModelInfo
 
 
 class BaseLLMModelInfo(ABC):
-    @abstractmethod
-    def get_model_info(
+    def get_provider_info(
         self,
         model: str,
-        existing_model_info: Optional[ModelInfoBase] = None,
-    ) -> Optional[ModelInfoBase]:
-        pass
+    ) -> Optional[ProviderSpecificModelInfo]:
+        return None
 
     @abstractmethod
     def get_models(self) -> List[str]:
