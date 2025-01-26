@@ -37,7 +37,7 @@ guardrails:
   - guardrail_name: aim-protected-app
     litellm_params:
       guardrail: aim
-      mode: pre_call # 'during_call' is also available
+      mode: pre_call # 'during_call' and `post_call` are also available
       api_key: os.environ/AIM_API_KEY
       api_base: os.environ/AIM_API_BASE # Optional, use only when using a self-hosted Aim Outpost
 ```
