@@ -707,14 +707,12 @@ def _add_guardrails_from_key_or_team_metadata(
         metadata_variable_name: The name of the metadata field in data
 
     """
+    from litellm.proxy.utils import _premium_user_check
+
     for _management_object_metadata in [key_metadata, team_metadata]:
         if _management_object_metadata and "guardrails" in _management_object_metadata:
-            from litellm.proxy.proxy_server import premium_user
-
-            if premium_user is not True:
-                raise ValueError(
-                    f"Using Guardrails on API Key {CommonProxyErrors.not_premium_user}"
-                )
+            if len(_management_object_metadata["guardrails"]) > 0:
+                _premium_user_check()
 
             data[metadata_variable_name]["guardrails"] = _management_object_metadata[
                 "guardrails"
