@@ -292,3 +292,29 @@ def test_get_langfuse_tags():
     mock_payload["request_tags"] = []
     result = global_langfuse_logger._get_langfuse_tags(mock_payload)
     assert result == []
+
+
+def test_get_langfuse_flush_interval():
+    """
+    Test that _get_langfuse_flush_interval correctly reads from environment variable
+    or falls back to the provided flush_interval
+    """
+    # Test when env var is not set
+    if "LANGFUSE_FLUSH_INTERVAL" in os.environ:
+        del os.environ["LANGFUSE_FLUSH_INTERVAL"]
+
+    default_interval = 60
+    result = LangFuseLogger._get_langfuse_flush_interval(
+        flush_interval=default_interval
+    )
+    assert result == default_interval
+
+    # Test when env var is set
+    os.environ["LANGFUSE_FLUSH_INTERVAL"] = "120"
+    result = LangFuseLogger._get_langfuse_flush_interval(
+        flush_interval=default_interval
+    )
+    assert result == 120
+
+    # Clean up
+    del os.environ["LANGFUSE_FLUSH_INTERVAL"]
