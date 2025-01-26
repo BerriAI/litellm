@@ -4546,10 +4546,7 @@ def test_deepseek_reasoning_content_completion():
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
 
-    assert (
-        resp.choices[0].message.provider_specific_fields["reasoning_content"]
-        is not None
-    )
+    assert resp.choices[0].message.reasoning_content is not None
 
 
 @pytest.mark.parametrize(

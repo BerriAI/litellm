@@ -19,6 +19,7 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
+    StreamingChatCompletionChunk,
     StreamingChoices,
     Usage,
 )
@@ -471,6 +472,7 @@ class CustomStreamWrapper:
             finish_reason = None
             logprobs = None
             usage = None
+
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
                     str_line.choices[0].delta is not None
@@ -750,6 +752,7 @@ class CustomStreamWrapper:
                 "function_call" in completion_obj
                 and completion_obj["function_call"] is not None
             )
+            or (model_response.choices[0].delta.provider_specific_fields is not None)
             or (
                 "provider_specific_fields" in response_obj
                 and response_obj["provider_specific_fields"] is not None
