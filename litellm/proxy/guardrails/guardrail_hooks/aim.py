@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -52,7 +52,7 @@ class AimGuardrail(CustomGuardrail):
             "pass_through_endpoint",
             "rerank",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
 
         await self.call_aim_guardrail(data, hook="pre_call")
@@ -69,13 +69,13 @@ class AimGuardrail(CustomGuardrail):
             "moderation",
             "audio_transcription",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
 
         await self.call_aim_guardrail(data, hook="moderation")
         return data
 
-    async def call_aim_guardrail(self, data: dict, hook: str):
+    async def call_aim_guardrail(self, data: dict, hook: str) -> None:
         user_email = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         headers = {"Authorization": f"Bearer {self.api_key}", "x-aim-litellm-hook": hook} | (
             {"x-aim-user-email": user_email} if user_email else {}
