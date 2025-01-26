@@ -2151,7 +2151,6 @@ def stringify_json_tool_call_content(messages: List) -> List:
 
 ###### AMAZON BEDROCK #######
 
-from litellm.types.llms.bedrock import BedrockDocumentTypes
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
