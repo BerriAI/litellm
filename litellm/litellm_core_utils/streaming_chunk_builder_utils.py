@@ -221,6 +221,30 @@ class ChunkProcessor:
         # Update the "content" field within the response dictionary
         return combined_content
 
+    def get_combined_provider_specific_fields(
+        self, chunks: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        fields_content_list: Dict[str, List[str]] = {}
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta") or {}
+                provider_specific_fields = delta.get("provider_specific_fields", {})
+                if provider_specific_fields is None:
+                    continue
+                for field in provider_specific_fields.keys():
+                    # only handle strings, maybe add warning for other types?
+                    if isinstance(provider_specific_fields[field], str):
+                        if field not in fields_content_list:
+                            fields_content_list[field] = []
+                        fields_content_list[field].append(
+                            provider_specific_fields[field]
+                        )
+        return {
+            field: "".join(fields_content)
+            for field, fields_content in fields_content_list.items()
+        }
+
     def get_combined_audio_content(
         self, chunks: List[Dict[str, Any]]
     ) -> ChatCompletionAudioResponse:
