@@ -19,6 +19,7 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
+    StreamingChatCompletionChunk,
     StreamingChoices,
     Usage,
 )
@@ -735,6 +736,7 @@ class CustomStreamWrapper:
         print_verbose(
             f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
         )
+
         if (
             "content" in completion_obj
             and (
@@ -750,10 +752,7 @@ class CustomStreamWrapper:
                 "function_call" in completion_obj
                 and completion_obj["function_call"] is not None
             )
-            or (
-                "provider_specific_fields" in response_obj
-                and response_obj["provider_specific_fields"] is not None
-            )
+            or (model_response.choices[0].delta.provider_specific_fields)
         ):  # cannot set content of an OpenAI Object to be an empty string
 
             self.safety_checker()
@@ -765,7 +764,10 @@ class CustomStreamWrapper:
             if hold is False:
                 ## check if openai/azure chunk
                 original_chunk = response_obj.get("original_chunk", None)
-                if original_chunk:
+                if (
+                    original_chunk
+                    and not model_response.choices[0].delta.provider_specific_fields
+                ):
                     model_response.id = original_chunk.id
                     self.response_id = original_chunk.id
                     if len(original_chunk.choices) > 0:
@@ -813,7 +815,13 @@ class CustomStreamWrapper:
                         completion_obj["role"] = "assistant"
                         self.sent_first_chunk = True
 
+                    initial_provider_specific_fields = model_response.choices[
+                        0
+                    ].delta.provider_specific_fields
                     model_response.choices[0].delta = Delta(**completion_obj)
+                    model_response.choices[0].delta.provider_specific_fields = (
+                        initial_provider_specific_fields
+                    )
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
