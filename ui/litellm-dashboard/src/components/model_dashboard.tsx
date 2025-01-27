@@ -83,6 +83,8 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   FilterIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
 } from "@heroicons/react/outline";
 import DeleteModelButton from "./delete_model_button";
 const { Title: Title2, Link } = Typography;
@@ -1975,12 +1977,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       <TextInput placeholder="us-east-1" />
                     </Form.Item>
                   )}
-                  <Button
-                    onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+
+                  <Card 
                     className="mb-4"
+                    onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                    style={{ cursor: 'pointer' }}
                   >
-                    {showAdvancedSettings ? "Hide" : "Show"} Advanced Settings
-                  </Button>
+                    <div className="flex justify-between items-center">
+                      <Text>Advanced Settings</Text>
+                      <Icon 
+                        icon={showAdvancedSettings ? ChevronUpIcon : ChevronDownIcon} 
+                        size="sm"
+                      />
+                    </div>
+
 
                   {showAdvancedSettings && (
                     <>
@@ -2115,6 +2125,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Form.Item>
                     </>
                   )}
+                </Card>
                  
                 </>
                 <div style={{ textAlign: "center", marginTop: "10px" }}>
