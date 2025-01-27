@@ -100,6 +100,14 @@ async def common_checks(
         llm_router=llm_router,
     )
 
+    ## 2.1 If user can call model (if personal key)
+    if team_object is None and user_object is not None:
+        await can_user_call_model(
+            model=_model,
+            llm_router=llm_router,
+            user_object=user_object,
+        )
+
     # 3. If team is in budget
     await _team_max_budget_check(
         team_object=team_object,
@@ -836,6 +844,68 @@ async def get_org_object(
         )
 
 
+async def _can_object_call_model(
+    model: str,
+    llm_router: Optional[Router],
+    models: List[str],
+) -> Literal[True]:
+    """
+    Checks if token can call a given model
+
+    Returns:
+        - True: if token allowed to call model
+
+    Raises:
+        - Exception: If token not allowed to call model
+    """
+    if model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
+
+    ## check if model in allowed model names
+    from collections import defaultdict
+
+    access_groups: Dict[str, List[str]] = defaultdict(list)
+
+    if llm_router:
+        access_groups = llm_router.get_model_access_groups(model_name=model)
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
+        for idx, m in enumerate(
+            models
+        ):  # loop token models, if any of them are an access group add the access group
+            if m in access_groups:
+                return True
+
+    # Filter out models that are access_groups
+    filtered_models = [m for m in models if m not in access_groups]
+
+    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
+
+    if _model_matches_any_wildcard_pattern_in_list(
+        model=model, allowed_model_list=filtered_models
+    ):
+        return True
+
+    all_model_access: bool = False
+
+    if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
+        all_model_access = True
+
+    if model is not None and model not in filtered_models and all_model_access is False:
+        raise ProxyException(
+            message=f"API Key not allowed to access model. This token can only access models={models}. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    verbose_proxy_logger.debug(
+        f"filtered allowed_models: {filtered_models}; models: {models}"
+    )
+    return True
+
+
 async def can_key_call_model(
     model: str,
     llm_model_list: Optional[list],
@@ -851,57 +921,27 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    if model in litellm.model_alias_map:
-        model = litellm.model_alias_map[model]
-
-    ## check if model in allowed model names
-    verbose_proxy_logger.debug(
-        f"LLM Model List pre access group check: {llm_model_list}"
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=valid_token.models,
     )
-    from collections import defaultdict
 
-    access_groups: Dict[str, List[str]] = defaultdict(list)
 
-    if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
-    if (
-        len(access_groups) > 0 and llm_router is not None
-    ):  # check if token contains any model access groups
-        for idx, m in enumerate(
-            valid_token.models
-        ):  # loop token models, if any of them are an access group add the access group
-            if m in access_groups:
-                return True
+async def can_user_call_model(
+    model: str,
+    llm_router: Optional[Router],
+    user_object: Optional[LiteLLM_UserTable],
+) -> Literal[True]:
 
-    # Filter out models that are access_groups
-    filtered_models = [m for m in valid_token.models if m not in access_groups]
-
-    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
-
-    if _model_matches_any_wildcard_pattern_in_list(
-        model=model, allowed_model_list=filtered_models
-    ):
+    if user_object is None:
         return True
 
-    all_model_access: bool = False
-
-    if (
-        len(filtered_models) == 0 and len(valid_token.models) == 0
-    ) or "*" in filtered_models:
-        all_model_access = True
-
-    if model is not None and model not in filtered_models and all_model_access is False:
-        raise ProxyException(
-            message=f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}",
-            type=ProxyErrorTypes.key_model_access_denied,
-            param="model",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
-    valid_token.models = filtered_models
-    verbose_proxy_logger.debug(
-        f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=user_object.models,
     )
-    return True
 
 
 async def is_valid_fallback_model(
