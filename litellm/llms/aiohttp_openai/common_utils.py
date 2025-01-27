@@ -2,6 +2,7 @@ import json
 from typing import List, Optional
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -43,12 +44,11 @@ class ModelResponseIterator:
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: List = []
-        self.tool_index = -1
         self.json_mode = json_mode
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
+            # Initialize default values
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
@@ -56,17 +56,21 @@ class ModelResponseIterator:
             usage: Optional[ChatCompletionUsageBlock] = None
             provider_specific_fields = None
 
-            index = int(chunk.get("index", 0))
+            # Extract the index from the chunk
+            index = int(chunk.get("choices", [{}])[0].get("index", 0))
 
-            if "text" in chunk:
-                text = chunk["text"]
-            elif "is_finished" in chunk and chunk["is_finished"] is True:
-                is_finished = chunk["is_finished"]
-                finish_reason = chunk["finish_reason"]
+            # Extract the text or delta content from the first choice
+            delta = chunk.get("choices", [{}])[0].get("delta", {})
+            if "content" in delta:
+                text = delta["content"]
 
-            if "citations" in chunk:
-                provider_specific_fields = {"citations": chunk["citations"]}
+            # Check for finish_reason
+            finish_reason = chunk.get("choices", [{}])[0].get("finish_reason", "")
 
+            # Determine if the stream has finished
+            is_finished = finish_reason in ("length", "stop")
+
+            # Create and return the parsed chunk
             returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
@@ -82,9 +86,36 @@ class ModelResponseIterator:
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
+
     # Sync iterator
     def __iter__(self):
         return self
+
+    def _handle_string_chunk(
+        self, str_line: str
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+        # chunk is a str at this point
+        if "[DONE]" in str_line:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=True,
+                finish_reason="stop",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+        elif str_line.startswith("data:"):
+            data_json = json.loads(str_line[5:])
+            return self.chunk_parser(chunk=data_json)
+        else:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
 
     def __next__(self):
         try:
@@ -101,8 +132,8 @@ class ModelResponseIterator:
                 index = str_line.find("data:")
                 if index != -1:
                     str_line = str_line[index:]
-            data_json = json.loads(str_line)
-            return self.chunk_parser(chunk=data_json)
+            # chunk is a str at this point
+            return self._handle_string_chunk(str_line=str_line)
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -129,9 +160,10 @@ class ModelResponseIterator:
                 if index != -1:
                     str_line = str_line[index:]
 
-            data_json = json.loads(str_line)
-            return self.chunk_parser(chunk=data_json)
+            # chunk is a str at this point
+            return self._handle_string_chunk(str_line=str_line)
         except StopAsyncIteration:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+        
