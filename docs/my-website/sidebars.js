@@ -436,7 +436,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
-            "projects/smolagents",
+            "projects/🤗 smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
             "projects/dbally",
