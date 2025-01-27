@@ -372,6 +372,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
+  // Add state for advanced settings visibility
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
 
   const updateModelMetrics = async (
     modelGroup: string | null,
@@ -1826,89 +1828,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Select>
                   </Form.Item>
 
-                  <Form.Item
-                    rules={[{ required: false }]} // Changed from required: true
-                    label="Public Model Name"
-                    name="model_name"
-                    tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
-                    className="mb-0"
-                  >
-                    <TextInput />
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Model name your users will pass in.
-                      </Text>
-                    </Col>
-                  </Row>
-                  <Form.Item
-                  label="LiteLLM Model Name(s)"
-                  tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
-                  className="mb-0"
-                >
-                  <Form.Item
-                    name="model"
-                    rules={[{ required: false }]} // Changed from required: true
-                    noStyle
-                  >
-                     { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
-                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                    ) : providerModels.length > 0 ? (
-                      <MultiSelect>
-                      <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
-                        {providerModels.map((model, index) => (
-                          <MultiSelectItem key={index} value={model}>
-                            {model}
-                          </MultiSelectItem>
-                        ))}
-                      </MultiSelect>
-                    ) : (
-                      <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                    )}
-                  </Form.Item>
+                  <Text className="mb-4 text-gray-500 italic">
+                    By default, all {selectedProvider.toLowerCase()}/* models can be called using this API key. Click Advanced Settings to restrict to specific models.
+                  </Text>
 
-                  <Form.Item
-                    noStyle
-                    shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
-                  >
-                    {({ getFieldValue }) => {
-                      const selectedModels = getFieldValue('model') || [];
-                      return selectedModels.includes('custom') && (
-                        <Form.Item
-                          name="custom_model_name"
-                          rules={[{ required: true, message: "Please enter a custom model name" }]}
-                          className="mt-2"
-                        >
-                          <TextInput placeholder="Enter custom model name" />
-                        </Form.Item>
-                      )
-                    }}
-                  </Form.Item>
-                </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Actual model name used for making{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/providers"
-                          target="_blank"
-                        >
-                          litellm.completion() call
-                        </Link>
-                        . We&apos;ll{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
-                          target="_blank"
-                        >
-                          loadbalance
-                        </Link>{" "}
-                        models with the same &apos;public name&apos;
-                      </Text>
-                    </Col>
-                  </Row>
                   {dynamicProviderForm !== undefined &&
                     dynamicProviderForm.fields.length > 0 && (
                       <DynamicFields
@@ -2052,7 +1975,103 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       <TextInput placeholder="us-east-1" />
                     </Form.Item>
                   )}
-                  <Form.Item
+                  <Button
+                    onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                    className="mb-4"
+                  >
+                    {showAdvancedSettings ? "Hide" : "Show"} Advanced Settings
+                  </Button>
+
+                  {showAdvancedSettings && (
+                    <>
+                      <Form.Item
+                        label="Public Model Name"
+                        name="model_name"
+                        tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
+                        className="mb-0"
+                        rules={[{ required: false }]}
+                      >
+                        <TextInput />
+                      </Form.Item>
+                      <Row>
+                        <Col span={10}></Col>
+                        <Col span={10}>
+                          <Text className="mb-3 mt-1">
+                            Model name your users will pass in.
+                          </Text>
+                        </Col>
+                      </Row>
+                      
+
+                      <Form.Item
+                        label="LiteLLM Model Name(s)"
+                        tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
+                        className="mb-0"
+                      >
+                        <Form.Item
+                          name="model"
+                          rules={[{ required: false }]}
+                          noStyle
+                        >
+                          {(selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
+                            <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
+                          ) : providerModels.length > 0 ? (
+                            <MultiSelect>
+                              <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
+                              {providerModels.map((model, index) => (
+                                <MultiSelectItem key={index} value={model}>
+                                  {model}
+                                </MultiSelectItem>
+                              ))}
+                            </MultiSelect>
+                          ) : (
+                            <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
+                          )}
+                        
+                        </Form.Item>
+
+                        <Form.Item
+                          noStyle
+                          shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
+                        >
+                          {({ getFieldValue }) => {
+                            const selectedModels = getFieldValue('model') || [];
+                            return selectedModels.includes('custom') && (
+                              <Form.Item
+                                name="custom_model_name"
+                                rules={[{ required: true, message: "Please enter a custom model name" }]}
+                                className="mt-2"
+                              >
+                                <TextInput placeholder="Enter custom model name" />
+                              </Form.Item>
+                            )
+                          }}
+                        </Form.Item>
+                        
+                      </Form.Item>
+                      <Row>
+                    <Col span={10}></Col>
+                    <Col span={10}>
+                      <Text className="mb-3 mt-1">
+                        Actual model name used for making{" "}
+                        <Link
+                          href="https://docs.litellm.ai/docs/providers"
+                          target="_blank"
+                        >
+                          litellm.completion() call
+                        </Link>
+                        . We&apos;ll{" "}
+                        <Link
+                          href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
+                          target="_blank"
+                        >
+                          loadbalance
+                        </Link>{" "}
+                        models with the same &apos;public name&apos;
+                      </Text>
+                    </Col>
+                  </Row>
+                      <Form.Item
                     label="LiteLLM Params"
                     name="litellm_extra_params"
                     tooltip="Optional litellm params used for making a litellm.completion() call."
@@ -2094,6 +2113,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   }'
                     />
                   </Form.Item>
+                    </>
+                  )}
+                 
                 </>
                 <div style={{ textAlign: "center", marginTop: "10px" }}>
                   <Button2 htmlType="submit">Add Model</Button2>
