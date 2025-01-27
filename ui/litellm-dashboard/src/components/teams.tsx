@@ -21,6 +21,7 @@ import {
   message,
   Tooltip
 } from "antd";
+import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
@@ -134,7 +135,7 @@ const Team: React.FC<TeamProps> = ({
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
-  const [userModels, setUserModels] = useState([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
   const [selectedEditMember, setSelectedEditMember] = useState<null | TeamMember>(null);
@@ -405,21 +406,12 @@ const Team: React.FC<TeamProps> = ({
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
-        if (userID === null || userRole === null) {
+        if (userID === null || userRole === null || accessToken === null) {
           return;
         }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+        const models = await fetchAvailableModelsForTeamOrKey(userID, userRole, accessToken);
+        if (models) {
+          setUserModels(models);
         }
       } catch (error) {
         console.error("Error fetching user models:", error);
@@ -715,8 +707,8 @@ const Team: React.FC<TeamProps> = ({
                                       >
                                         <Text>
                                           {model.length > 30
-                                            ? `${model.slice(0, 30)}...`
-                                            : model}
+                                            ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                            : getModelDisplayName(model)}
                                         </Text>
                                       </Badge>
                                     )
@@ -875,7 +867,7 @@ const Team: React.FC<TeamProps> = ({
                     </Select2.Option>
                     {userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
-                        {model}
+                        {getModelDisplayName(model)}
                       </Select2.Option>
                     ))}
                   </Select2>
