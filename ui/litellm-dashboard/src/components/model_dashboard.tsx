@@ -188,6 +188,16 @@ const handleSubmit = async (
   form: any
 ) => {
   try {
+    // If model_name is not provided, use provider.toLowerCase() + "/*"
+    if (!formValues["model_name"]) {
+      formValues["model_name"] = formValues["custom_llm_provider"].toLowerCase() + "/*";
+    }
+
+    // If model is not provided, use provider.toLowerCase() + "/*"
+    if (!formValues["model"]) {
+      formValues["model"] = [formValues["custom_llm_provider"].toLowerCase() + "/*"];
+    }
+
     /**
      * For multiple litellm model names - create a separate deployment for each
      * - get the list
@@ -1817,15 +1827,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Form.Item>
 
                   <Form.Item
-                    rules={[{ required: true, message: "Required" }]}
+                    rules={[{ required: false }]} // Changed from required: true
                     label="Public Model Name"
                     name="model_name"
                     tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
                     className="mb-0"
                   >
-                    <TextInput
-                      
-                    />
+                    <TextInput />
                   </Form.Item>
                   <Row>
                     <Col span={10}></Col>
@@ -1842,7 +1850,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 >
                   <Form.Item
                     name="model"
-                    rules={[{ required: true, message: "Required" }]}
+                    rules={[{ required: false }]} // Changed from required: true
                     noStyle
                   >
                      { (selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
