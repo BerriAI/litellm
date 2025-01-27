@@ -108,6 +108,23 @@ response = completion(
 
 </TabItem>
 
+<TabItem value="nvidia_nim" label="NVIDIA_NIM">
+
+```python
+from litellm import completion
+import os
+
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
 <TabItem value="hugging" label="HuggingFace">
 
 ```python
@@ -272,6 +289,23 @@ response = completion(
 )
 ```
 
+</TabItem>
+
+<TabItem value="nvidia_nim" label="NVIDIA_NIM">
+
+```python
+from litellm import completion
+import os
+
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+  stream=True,
+)
+```
 </TabItem>
 
 <TabItem value="hugging" label="HuggingFace">
