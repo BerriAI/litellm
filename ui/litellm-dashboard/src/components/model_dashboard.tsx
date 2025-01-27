@@ -1806,6 +1806,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 labelAlign="left"
               >
                 <>
+                      
                   <Form.Item
                     rules={[{ required: true, message: "Required" }]}
                     label="Provider:"
@@ -1829,11 +1830,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       ))}
                     </Select>
                   </Form.Item>
-
-                  <Text className="mb-4 text-gray-500 italic">
-                    By default, all {selectedProvider.toLowerCase()}/* models can be called using this API key. Click Advanced Settings to restrict to specific models.
-                  </Text>
-
                   {dynamicProviderForm !== undefined &&
                     dynamicProviderForm.fields.length > 0 && (
                       <DynamicFields
@@ -1850,6 +1846,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         rules={[{ required: true, message: "Required" }]}
                         label="API Key"
                         name="api_key"
+                        tooltip="LLM API Credentials"
                       >
                         <TextInput placeholder="sk-" type="password" />
                       </Form.Item>
@@ -2128,14 +2125,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 </Card>
                  
                 </>
-                <div style={{ textAlign: "center", marginTop: "10px" }}>
+        
+                <div className="flex justify-between items-center mb-4">
+                  <Tooltip title="Get help on our github">
+                    <Typography.Link href="https://github.com/BerriAI/litellm/issues">
+                      Need Help?
+                    </Typography.Link>
+                  </Tooltip>
                   <Button2 htmlType="submit">Add Model</Button2>
                 </div>
-                <Tooltip title="Get help on our github">
-                  <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                    Need Help?
-                  </Typography.Link>
-                </Tooltip>
               </Form>
             </Card>
           </TabPanel>
