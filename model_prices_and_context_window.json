@@ -5050,6 +5050,11 @@
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
+        "Qwen/Qwen2.5-14B-Instruct-GPTQ-Int8": {
+        "max_tokens": 8192, 
+        "litellm_provider": "hosted_vllm",  
+        "mode": "chat" 
+    },
     "j2-ultra": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
