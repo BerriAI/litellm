@@ -114,6 +114,7 @@ response = completion(
 from litellm import completion
 import os
 
+## set ENV variables
 os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
 os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
 
@@ -261,6 +262,7 @@ response = completion(
 from litellm import completion
 import os
 
+## set ENV variables
 os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
 os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
 
@@ -270,6 +272,7 @@ response = completion(
   stream=True,
 )
 ```
+</TabItem>
 
 <TabItem value="hugging" label="HuggingFace">
 
