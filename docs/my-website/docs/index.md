@@ -187,7 +187,7 @@ import os
 os.environ["NOVITA_API_KEY"] = "novita-api-key"
 
 response = completion(
-  model="novita/meta-llama/llama-3.3-70b-instruct",
+  model="novita/deepseek/deepseek-r1",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -373,7 +373,7 @@ import os
 os.environ["NOVITA_API_KEY"] = "novita_api_key"
 
 response = completion(
-  model="novita/meta-llama/llama-3.3-70b-instruct",
+  model="novita/deepseek/deepseek-r1",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
