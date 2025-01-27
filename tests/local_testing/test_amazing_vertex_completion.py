@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
 import httpx
 
@@ -61,6 +61,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-pro-flash",
     "gemini-1.5-flash-exp-0827",
     "gemini-2.0-flash-exp",
+    "gemini-2.0-flash-thinking-exp",
 ]
 
 
@@ -1221,6 +1222,7 @@ Using this JSON schema:
             messages=messages,
             response_format={"type": "json_object"},
             client=client,
+            logging_obj=ANY,
         )
 
         assert response.choices[0].finish_reason == "content_filter"

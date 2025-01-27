@@ -8,6 +8,7 @@ import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
@@ -93,6 +94,14 @@ class AnthropicConfig(BaseConfig):
             "response_format",
             "user",
         ]
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: Union[Any, Dict, None]
+    ) -> Optional[dict]:
+
+        return type_to_response_format_param(
+            response_format, ref_template="/$defs/{model}"
+        )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
 
     def get_cache_control_headers(self) -> dict:
         return {

@@ -260,6 +260,109 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
     @pytest.mark.flaky(retries=6, delay=1)
+    def test_json_response_pydantic_obj_nested_obj(self):
+        litellm.set_verbose = True
+        from pydantic import BaseModel
+        from litellm.utils import supports_response_schema
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_json_response_nested_pydantic_obj(self):
+        from pydantic import BaseModel
+        from litellm.utils import supports_response_schema
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        class CalendarEvent(BaseModel):
+            name: str
+            date: str
+            participants: list[str]
+
+        class EventsList(BaseModel):
+            events: list[CalendarEvent]
+
+        messages = [
+            {"role": "user", "content": "List 5 important events in the XIX century"}
+        ]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_response_schema(base_completion_call_args["model"], None):
+            pytest.skip(
+                f"Model={base_completion_call_args['model']} does not support response schema"
+            )
+
+        try:
+            res = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                response_format=EventsList,
+                timeout=60,
+            )
+            assert res is not None
+
+            print(res.choices[0].message)
+
+            assert res.choices[0].message.content is not None
+            assert res.choices[0].message.tool_calls is None
+        except litellm.Timeout:
+            pytest.skip("Model took too long to respond")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+    @pytest.mark.flaky(retries=6, delay=1)
+    def test_json_response_nested_json_schema(self):
+        """
+        PROD Test: ensure nested json schema sent to proxy works as expected.
+        """
+        from pydantic import BaseModel
+        from litellm.utils import supports_response_schema
+        from litellm.llms.base_llm.base_utils import type_to_response_format_param
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        class CalendarEvent(BaseModel):
+            name: str
+            date: str
+            participants: list[str]
+
+        class EventsList(BaseModel):
+            events: list[CalendarEvent]
+
+        response_format = type_to_response_format_param(EventsList)
+
+        messages = [
+            {"role": "user", "content": "List 5 important events in the XIX century"}
+        ]
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_response_schema(base_completion_call_args["model"], None):
+            pytest.skip(
+                f"Model={base_completion_call_args['model']} does not support response schema"
+            )
+
+        try:
+            res = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+                response_format=response_format,
+                timeout=60,
+            )
+            assert res is not None
+
+            print(res.choices[0].message)
+
+            assert res.choices[0].message.content is not None
+            assert res.choices[0].message.tool_calls is None
+        except litellm.Timeout:
+            pytest.skip("Model took too long to respond")
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_format_stream(self):
         """
         Test that the JSON response format with streaming is supported by the LLM API
@@ -486,17 +589,19 @@ class BaseLLMChatTest(ABC):
 
         return url
 
-    def test_completion_cost(self):
+    @pytest.mark.asyncio
+    async def test_completion_cost(self):
         from litellm import completion_cost
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm.set_verbose = True
-        response = self.completion_function(
+        response = await self.async_completion_function(
             **self.get_base_completion_call_args(),
             messages=[{"role": "user", "content": "Hello, how are you?"}],
         )
+        print(response._hidden_params)
         cost = completion_cost(response)
 
         assert cost > 0

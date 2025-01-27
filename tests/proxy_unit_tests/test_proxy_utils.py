@@ -1479,3 +1479,140 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
 
     # Verify health check wasn't called
     mock_prisma.health_check.assert_not_called()
+
+
+@patch(
+    "litellm.proxy.proxy_server.get_openapi_schema",
+    return_value={
+        "paths": {
+            "/new/route": {"get": {"summary": "New"}},
+        }
+    },
+)
+def test_custom_openapi(mock_get_openapi_schema):
+    from litellm.proxy.proxy_server import custom_openapi
+    from litellm.proxy.proxy_server import app
+
+    openapi_schema = custom_openapi()
+    assert openapi_schema is not None
+
+
+import pytest
+from unittest.mock import MagicMock, AsyncMock
+import asyncio
+from datetime import timedelta
+from litellm.proxy.utils import ProxyUpdateSpend
+
+
+@pytest.mark.asyncio
+async def test_end_user_transactions_reset():
+    # Setup
+    mock_client = MagicMock()
+    mock_client.end_user_list_transactons = {"1": 10.0}  # Bad log
+    mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_end_user_spend(
+            n_retry_times=0, prisma_client=mock_client, proxy_logging_obj=MagicMock()
+        )
+
+    # Verify cleanup happened
+    assert (
+        mock_client.end_user_list_transactons == {}
+    ), "Transactions list should be empty after error"
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_cleanup_after_error():
+    # Setup test data
+    mock_client = MagicMock()
+    mock_client.spend_log_transactions = [
+        {"id": 1, "amount": 10.0},
+        {"id": 2, "amount": 20.0},
+        {"id": 3, "amount": 30.0},
+    ]
+    # Make the DB operation fail
+    mock_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=Exception("DB Error")
+    )
+
+    original_logs = mock_client.spend_log_transactions.copy()
+
+    # Call function - should raise error
+    with pytest.raises(Exception):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_client,
+            db_writer_client=None,  # Test DB write path
+            proxy_logging_obj=MagicMock(),
+        )
+
+    # Verify the first batch was removed from spend_log_transactions
+    assert (
+        mock_client.spend_log_transactions == original_logs[100:]
+    ), "Should remove processed logs even after error"
+
+def test_provider_specific_header():
+    from litellm.proxy.litellm_pre_call_utils import (
+        add_provider_specific_headers_to_request,
+    )
+
+    data = {
+        "model": "gemini-1.5-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Tell me a joke"}],
+            }
+        ],
+        "stream": True,
+        "proxy_server_request": {
+            "url": "http://0.0.0.0:4000/v1/chat/completions",
+            "method": "POST",
+            "headers": {
+                "content-type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-31",
+                "user-agent": "PostmanRuntime/7.32.3",
+                "accept": "*/*",
+                "postman-token": "81cccd87-c91d-4b2f-b252-c0fe0ca82529",
+                "host": "0.0.0.0:4000",
+                "accept-encoding": "gzip, deflate, br",
+                "connection": "keep-alive",
+                "content-length": "240",
+            },
+            "body": {
+                "model": "gemini-1.5-flash",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Tell me a joke"}],
+                    }
+                ],
+                "stream": True,
+            },
+        },
+    }
+
+    headers = {
+        "content-type": "application/json",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+        "user-agent": "PostmanRuntime/7.32.3",
+        "accept": "*/*",
+        "postman-token": "81cccd87-c91d-4b2f-b252-c0fe0ca82529",
+        "host": "0.0.0.0:4000",
+        "accept-encoding": "gzip, deflate, br",
+        "connection": "keep-alive",
+        "content-length": "240",
+    }
+
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers=headers,
+    )
+    assert data["provider_specific_header"] == {
+        "custom_llm_provider": "anthropic",
+        "extra_headers": {
+            "anthropic-beta": "prompt-caching-2024-07-31",
+        },
+    }
