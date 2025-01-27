@@ -94,6 +94,7 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder } from "./provider_info_helpers";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -138,42 +139,6 @@ interface ProviderSettings {
   fields: ProviderFields[];
 }
 
-enum Providers {
-  OpenAI = "OpenAI",
-  Azure = "Azure",
-  Azure_AI_Studio = "Azure AI Studio",
-  Anthropic = "Anthropic",
-  Google_AI_Studio = "Google AI Studio",
-  Bedrock = "Amazon Bedrock",
-  Groq = "Groq",
-  MistralAI = "Mistral AI",
-  Deepseek = "Deepseek",
-  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
-  Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
-  Cohere = "Cohere",
-  Databricks = "Databricks",
-  Ollama = "Ollama",
-  xAI = "xAI",
-}
-
-const provider_map: Record<string, string> = {
-  OpenAI: "openai",
-  Azure: "azure",
-  Azure_AI_Studio: "azure_ai",
-  Anthropic: "anthropic",
-  Google_AI_Studio: "gemini",
-  Bedrock: "bedrock",
-  Groq: "groq",
-  MistralAI: "mistral",
-  Cohere: "cohere_chat",
-  OpenAI_Compatible: "openai",
-  Vertex_AI: "vertex_ai",
-  Databricks: "databricks",
-  xAI: "xai",
-  Deepseek: "deepseek",
-  Ollama: "ollama",
-
-};
 
 const retry_policy_map: Record<string, string> = {
   "BadRequestError (400)": "BadRequestErrorRetries",
@@ -184,7 +149,7 @@ const retry_policy_map: Record<string, string> = {
   "InternalServerError (500)": "InternalServerErrorRetries",
 };
 
-const handleSubmit = async (
+export const handleSubmit = async (
   formValues: Record<string, any>,
   accessToken: string,
   form: any
@@ -1346,23 +1311,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   };
 
-  const getPlaceholder = (selectedProvider: string): string => {
-    if (selectedProvider === Providers.Vertex_AI) {
-      return "gemini-pro";
-    } else if (selectedProvider == Providers.Anthropic) {
-      return "claude-3-opus";
-    } else if (selectedProvider == Providers.Bedrock) {
-      return "claude-3-opus";
-    } else if (selectedProvider == Providers.Google_AI_Studio) {
-      return "gemini-pro";
-    } else if (selectedProvider == Providers.Azure_AI_Studio) {
-      return "azure_ai/command-r-plus";
-    } else if (selectedProvider == Providers.Azure) {
-      return "azure/my-deployment";
-    } else {
-      return "gpt-3.5-turbo";
-    }
-  };
 
   const handleOk = () => {
     form
@@ -1601,14 +1549,35 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             <p className="text-xs">{model.model_name || "-"}</p>
                           </TableCell>
                           <TableCell
-                            style={{
-                              maxWidth: "100px",
-                              whiteSpace: "normal",
-                              wordBreak: "break-word",
-                            }}
-                          >
-                            <p className="text-xs">{model.provider || "-"}</p>
+                              style={{
+                                maxWidth: "100px",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              <div className="flex items-center space-x-2">
+                                {model.provider && (
+                                  <img
+                                    src={getProviderLogoAndName(model.provider).logo}
+                                    alt={`${model.provider} logo`}
+                                    className="w-4 h-4"
+                                    onError={(e) => {
+                                      // Create a div with provider initial as fallback
+                                      const target = e.target as HTMLImageElement;
+                                      const parent = target.parentElement;
+                                      if (parent) {
+                                        const fallbackDiv = document.createElement('div');
+                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                        fallbackDiv.textContent = model.provider?.charAt(0) || '-';
+                                        parent.replaceChild(fallbackDiv, target);
+                                      }
+                                    }}
+                                  />
+                                )}
+                                <p className="text-xs">{model.provider || "-"}</p>
+                              </div>
                           </TableCell>
+                          
                           <TableCell
                             style={{
                               maxWidth: "100px",
@@ -1825,7 +1794,25 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             setSelectedProvider(provider);
                           }}
                         >
-                          {provider}
+                          <div className="flex items-center space-x-2">
+                            <img
+                              src={providerLogoMap[provider]}
+                              alt={`${provider} logo`}
+                              className="w-5 h-5"
+                              onError={(e) => {
+                                // Create a div with provider initial as fallback
+                                const target = e.target as HTMLImageElement;
+                                const parent = target.parentElement;
+                                if (parent) {
+                                  const fallbackDiv = document.createElement('div');
+                                  fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                  fallbackDiv.textContent = provider.charAt(0);
+                                  parent.replaceChild(fallbackDiv, target);
+                                }
+                              }}
+                            />
+                            <span>{provider}</span>
+                          </div>
                         </SelectItem>
                       ))}
                     </Select>
