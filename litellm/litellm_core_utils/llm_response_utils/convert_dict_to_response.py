@@ -424,6 +424,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields=provider_specific_fields,
                     )
                     finish_reason = choice.get("finish_reason", None)
+                
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
