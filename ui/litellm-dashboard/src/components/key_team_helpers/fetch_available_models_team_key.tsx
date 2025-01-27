@@ -1,4 +1,3 @@
-
 import { modelAvailableCall } from "../networking";
 
 
@@ -48,13 +47,14 @@ export const getModelDisplayName = (model: string) => {
   console.log("getModelDisplayName", model);
   if (model.endsWith('/*')) {
     const provider = model.replace('/*', '');
-    return `All ${provider} Models`;
+    return `All ${provider} models`;
   }
   return model;
 };
 
 export const unfurlWildcardModelsInList = (teamModels: string[], allModels: string[]): string[] => {
-  const result: string[] = [];
+  const wildcardDisplayNames: string[] = [];
+  const expandedModels: string[] = [];
   console.log("teamModels", teamModels);
   console.log("allModels", allModels);
   
@@ -67,14 +67,16 @@ export const unfurlWildcardModelsInList = (teamModels: string[], allModels: stri
       const matchingModels = allModels.filter(model => 
         model.startsWith(provider + '/')
       );
-      
-      result.push(...matchingModels);
-    } else {
-      // For non-wildcard models, add them directly
-      result.push(teamModel);
+      expandedModels.push(...matchingModels);
+      wildcardDisplayNames.push(teamModel);
+    }
+    else {
+      expandedModels.push(teamModel);
     }
   });
   
-  // Remove duplicates and return
-  return result.filter((item, index) => result.indexOf(item) === index);
+  // Combine arrays with wildcard display names first, then remove duplicates
+  return [...wildcardDisplayNames, ...expandedModels].filter((item, index, array) => 
+    array.indexOf(item) === index
+  );
 };
