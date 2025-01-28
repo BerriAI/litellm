@@ -1161,11 +1161,14 @@ def _model_custom_llm_provider_matches_wildcard_pattern(
     - `model=claude-3-5-sonnet-20240620`
     - `allowed_model_pattern=anthropic/*`
     """
-    model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-    return is_model_allowed_by_pattern(
-        model=f"{custom_llm_provider}/{model}",
-        allowed_model_pattern=allowed_model_pattern,
-    )
+    try:
+        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        return is_model_allowed_by_pattern(
+            model=f"{custom_llm_provider}/{model}",
+            allowed_model_pattern=allowed_model_pattern,
+        )
+    except Exception:
+        return False
 
 
 def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
