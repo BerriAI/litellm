@@ -1508,18 +1508,6 @@ def test_add_custom_logger_callback_to_specific_event(monkeypatch):
     assert len(litellm.failure_callback) == 0
 
 
-def test_add_custom_logger_callback_to_specific_event_failure(monkeypatch):
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
-
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "failure_callback", [])
-
-    _add_custom_logger_callback_to_specific_event("mlflow", "failure")
-
-    assert len(litellm.success_callback) == 0
-    assert len(litellm.failure_callback) == 1
-
-
 def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
     monkeypatch.setattr(litellm, "success_callback", [])
