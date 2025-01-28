@@ -1627,7 +1627,19 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     request_id: Optional[str] = fastapi.Query(
         default=None,
-        description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
+        description="request_id to get spend logs for specific request_id",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter spend logs by team_id",
+    ),
+    min_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend greater than or equal to this value",
+    ),
+    max_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend less than or equal to this value",
     ),
     start_date: Optional[str] = fastapi.Query(
         default=None,
@@ -1674,6 +1686,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             param="None",
             code=status.HTTP_400_BAD_REQUEST,
         )
+
     # Convert the date strings to datetime objects
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
@@ -1682,21 +1695,40 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
     end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
 
+    # Build where conditions
+    where_conditions: dict[str, Any] = {
+        "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+    }
+
+    if team_id is not None:
+        where_conditions["team_id"] = team_id
+
+    if api_key is not None:
+        where_conditions["api_key"] = api_key
+
+    if user_id is not None:
+        where_conditions["user"] = user_id
+
+    if request_id is not None:
+        where_conditions["request_id"] = request_id
+
+    if min_spend is not None or max_spend is not None:
+        where_conditions["spend"] = {}
+        if min_spend is not None:
+            where_conditions["spend"]["gte"] = min_spend
+        if max_spend is not None:
+            where_conditions["spend"]["lte"] = max_spend
     # Calculate skip value for pagination
     skip = (page - 1) * page_size
 
     # Get total count of records
     total_records = await prisma_client.db.litellm_spendlogs.count(
-        where={
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
-        }
+        where=where_conditions,
     )
 
     # Get paginated data
     data = await prisma_client.db.litellm_spendlogs.find_many(
-        where={
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
-        },
+        where=where_conditions,
         order={
             "startTime": "desc",
         },
