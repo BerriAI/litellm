@@ -27,6 +27,7 @@ import {
   Textarea,
 } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
+import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
   Button as Button2,
@@ -121,7 +122,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [infoDialogVisible, setInfoDialogVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
-  const [userModels, setUserModels] = useState([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
   const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
@@ -238,17 +239,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
-        if (userID === null) {
+        if (userID === null || userRole === null || accessToken === null) {
           return;
         }
 
-        if (accessToken !== null && userRole !== null) {
-          const model_available = await modelAvailableCall(accessToken, userID, userRole);
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+        const models = await fetchAvailableModelsForTeamOrKey(userID, userRole, accessToken);
+        if (models) {
+          setUserModels(models);
         }
       } catch (error) {
         console.error("Error fetching user models:", error);
@@ -424,20 +421,20 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     keyTeam.models.includes("all-proxy-models") ? (
                       userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
                         <Option key={model} value={model}>
-                          {model}
+                          {getModelDisplayName(model)}
                         </Option>
                       ))
                     ) : (
                       keyTeam.models.map((model: string) => (
                         <Option key={model} value={model}>
-                          {model}
+                          {getModelDisplayName(model)}
                         </Option>
                       ))
                     )
                   ) : (
                     userModels.map((model: string) => (
                       <Option key={model} value={model}>
-                        {model}
+                        {getModelDisplayName(model)}
                       </Option>
                     ))
                   )}
@@ -1095,7 +1092,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
                 </Badge>
               ) : (
                 <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                  <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                  <Text>{model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}</Text>
                 </Badge>
               )
             ))
@@ -1118,7 +1115,7 @@ const handleEditSubmit = async (formValues: Record<string, any>) => {
             </Badge>
           ) : (
             <Badge key={index} size={"xs"} className="mb-1" color="blue">
-              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+              <Text>{model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}</Text>
             </Badge>
           )
         ))
