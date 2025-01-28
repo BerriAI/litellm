@@ -1810,6 +1810,7 @@ class LlmProviders(str, Enum):
     MISTRAL = "mistral"
     GROQ = "groq"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA = "nvidia"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
