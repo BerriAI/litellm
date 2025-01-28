@@ -37,7 +37,7 @@ async def test_aiohttp_openai_gpt_4o():
 
 @pytest.mark.asyncio()
 async def test_completion_model_stream():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     api_key = os.getenv("OPENAI_API_KEY")
     assert api_key is not None, "API key is not set in environment variables"
 
@@ -46,27 +46,21 @@ async def test_completion_model_stream():
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
-                "content": "who are you?",
+                "content": "how does a court case get to the Supreme Court?",
             },
         ]
         response = await litellm.acompletion(
-            api_key=api_key,
-            model="aiohttp_openai/gpt-4o",
-            messages=messages,
-            stream=True,
-            max_tokens=50,
+            api_key=api_key, model="aiohttp_openai/gpt-4o", messages=messages, stream=True, max_tokens=50
         )
 
         complete_response = ""
         idx = 0  # Initialize index manually
         async for chunk in response:  # Use async for to handle async iterator
-            _chunk, finished = streaming_format_tests(
-                idx, chunk
-            )  # Await if streaming_format_tests is async
+            chunk, finished = streaming_format_tests(idx, chunk)  # Await if streaming_format_tests is async
             print(f"outside chunk: {chunk}")
             if finished:
                 break
-            complete_response += chunk.choices[0].delta.content or ""
+            complete_response += chunk
             idx += 1  # Increment index manually
 
         if complete_response.strip() == "":

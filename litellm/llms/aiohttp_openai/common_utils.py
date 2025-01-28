@@ -2,15 +2,16 @@ import json
 from typing import List, Optional, Union
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     GenericStreamingChunk,
-    ModelResponseStream,
+    ModelResponseStream
 )
 
-
+        
 class AioHttpOpenAIError(BaseLLMException):
     def __init__(self, status_code, message):
         super().__init__(status_code=status_code, message=message)
@@ -37,7 +38,6 @@ def validate_environment(
         headers["Authorization"] = f"bearer {api_key}"
     return headers
 
-
 class ModelResponseIterator:
     def __init__(
         self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
@@ -46,9 +46,7 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
 
-    def chunk_parser(
-        self, chunk: dict
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
             # Initialize default values
             text = ""
@@ -88,6 +86,7 @@ class ModelResponseIterator:
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
+
     # Sync iterator
     def __iter__(self):
         return self
@@ -107,6 +106,7 @@ class ModelResponseIterator:
             )
         elif str_line.startswith("data:"):
             data_json = json.loads(str_line[5:])
+            print("Data from Common"+ str(data_json))
             return self.chunk_parser(chunk=data_json)
         else:
             return GenericStreamingChunk(
@@ -167,3 +167,4 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+       

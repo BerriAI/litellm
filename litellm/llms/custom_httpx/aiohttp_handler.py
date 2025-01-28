@@ -51,7 +51,7 @@ class BaseLLMAIOHTTPHandler:
 
     async def _make_common_async_call(
         self,
-        async_client_session: Optional[ClientSession],
+        async_client_session: Optional[AsyncHTTPHandler],
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
@@ -296,7 +296,7 @@ class BaseLLMAIOHTTPHandler:
                     encoding=encoding,
                     client=(
                         client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
+                        if client is not None and isinstance(client, ClientSession)
                         else None
                     ),
                 )
@@ -428,8 +428,9 @@ class BaseLLMAIOHTTPHandler:
         )
 
         if fake_stream is True:
+            json_response = await response.json()
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(), sync_stream=False
+                streaming_response=json_response, sync_stream=False
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
@@ -445,65 +446,6 @@ class BaseLLMAIOHTTPHandler:
 
         return completion_stream, response.headers
     
-    async def make_async_call_stream_helper(
-        self,
-        custom_llm_provider: str,
-        provider_config: BaseConfig,
-        api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
-        logging_obj: LiteLLMLoggingObj,
-        timeout: Union[float, httpx.Timeout],
-        litellm_params: dict,
-        fake_stream: bool = False,
-        client: Optional[AsyncHTTPHandler] = None,
-    ) -> Tuple[Any, httpx.Headers]:
-        """
-        Helper function for making an async call with stream.
-
-        Handles fake stream as well.
-        """
-        if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
-        else:
-            async_httpx_client = client
-        stream = True
-        if fake_stream is True:
-            stream = False
-
-        response = await self._make_common_async_call(
-            async_client_session=async_httpx_client,
-            provider_config=provider_config,
-            api_base=api_base,
-            headers=headers,
-            data=data,
-            timeout=timeout,
-            litellm_params=litellm_params,
-            stream=stream,
-        )
-
-        if fake_stream is True:
-            completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.json(), sync_stream=False
-            )
-        else:
-            completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.aiter_lines(), sync_stream=False
-            )
-        # LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response="first stream response received make_async_call_stream_helper",
-            additional_args={"complete_input_dict": data},
-        )
-
-        logging_obj.post_call(original_response=completion_stream)
-        return completion_stream, response.headers
     
     def make_sync_call(
         self,
