@@ -10,7 +10,6 @@ from typing import List, Literal, Optional, Tuple, Union, overload
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.factory import (

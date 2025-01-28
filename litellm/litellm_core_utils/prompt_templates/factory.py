@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import time
 import traceback
 import uuid
 import xml.etree.ElementTree as ET
@@ -2157,7 +2156,6 @@ from cgi import parse_header
 
 import httpx
 
-from litellm.types.llms.bedrock import BedrockDocumentTypes
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
