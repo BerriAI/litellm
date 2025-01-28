@@ -1687,65 +1687,69 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Convert the date strings to datetime objects
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+    try:
+        # Convert the date strings to datetime objects
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
 
-    # Convert to ISO format strings for Prisma
-    start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
-    end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+        # Convert to ISO format strings for Prisma
+        start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+        end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
 
-    # Build where conditions
-    where_conditions: dict[str, Any] = {
-        "startTime": {"gte": start_date_iso, "lte": end_date_iso},
-    }
+        # Build where conditions
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
 
-    if team_id is not None:
-        where_conditions["team_id"] = team_id
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
 
-    if api_key is not None:
-        where_conditions["api_key"] = api_key
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
 
-    if user_id is not None:
-        where_conditions["user"] = user_id
+        if user_id is not None:
+            where_conditions["user"] = user_id
 
-    if request_id is not None:
-        where_conditions["request_id"] = request_id
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
 
-    if min_spend is not None or max_spend is not None:
-        where_conditions["spend"] = {}
-        if min_spend is not None:
-            where_conditions["spend"]["gte"] = min_spend
-        if max_spend is not None:
-            where_conditions["spend"]["lte"] = max_spend
-    # Calculate skip value for pagination
-    skip = (page - 1) * page_size
+        if min_spend is not None or max_spend is not None:
+            where_conditions["spend"] = {}
+            if min_spend is not None:
+                where_conditions["spend"]["gte"] = min_spend
+            if max_spend is not None:
+                where_conditions["spend"]["lte"] = max_spend
+        # Calculate skip value for pagination
+        skip = (page - 1) * page_size
 
-    # Get total count of records
-    total_records = await prisma_client.db.litellm_spendlogs.count(
-        where=where_conditions,
-    )
+        # Get total count of records
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions,
+        )
 
-    # Get paginated data
-    data = await prisma_client.db.litellm_spendlogs.find_many(
-        where=where_conditions,
-        order={
-            "startTime": "desc",
-        },
-        skip=skip,
-        take=page_size,
-    )
+        # Get paginated data
+        data = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions,
+            order={
+                "startTime": "desc",
+            },
+            skip=skip,
+            take=page_size,
+        )
 
-    # Calculate total pages
-    total_pages = (total_records + page_size - 1) // page_size
+        # Calculate total pages
+        total_pages = (total_records + page_size - 1) // page_size
 
-    return {
-        "data": data,
-        "total": total_records,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-    }
+        return {
+            "data": data,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
