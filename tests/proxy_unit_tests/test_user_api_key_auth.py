@@ -855,6 +855,8 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
         "user_api_key_cache": Mock(),
         "parent_otel_span": None,
         "proxy_logging_obj": Mock(),
+        "request_data": {},
+        "general_settings": {},
     }
 
     if enforce_rbac:
