@@ -2345,3 +2345,15 @@ class ClientSideFallbackModel(TypedDict, total=False):
 
 
 ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+
+
+RBAC_ROLES = Literal[
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.TEAM,
+    LitellmUserRoles.INTERNAL_USER,
+]
+
+
+class RoleBasedPermissions(TypedDict):
+    role: Required[RBAC_ROLES]
+    models: Required[List[str]]

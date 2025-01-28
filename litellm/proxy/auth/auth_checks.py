@@ -12,7 +12,7 @@ import asyncio
 import re
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 from fastapi import status
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
@@ -35,6 +36,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
+    RoleBasedPermissions,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -397,6 +399,30 @@ def _update_last_db_access_time(
     key: str, value: Optional[Any], last_db_access_time: LimitedSizeOrderedDict
 ):
     last_db_access_time[key] = (value, time.time())
+
+
+def get_role_based_models(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+) -> Optional[List[str]]:
+    """
+    Get the models allowed for a user role.
+
+    Used by JWT Auth.
+    """
+
+    role_based_permissions = cast(
+        Optional[List[RoleBasedPermissions]],
+        general_settings.get("role_permissions", []),
+    )
+    if role_based_permissions is None:
+        return None
+
+    for role_based_permission in role_based_permissions:
+        if role_based_permission["role"] == rbac_role:
+            return role_based_permission["models"]
+
+    return None
 
 
 @log_db_metrics

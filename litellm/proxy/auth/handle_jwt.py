@@ -19,6 +19,7 @@ from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
+    RBAC_ROLES,
     JWKKeyValue,
     JWTKeyItem,
     LiteLLM_JWTAuth,
@@ -60,7 +61,7 @@ class JWTHandler:
         parts = token.split(".")
         return len(parts) == 3
 
-    def get_rbac_role(self, token: dict) -> Optional[LitellmUserRoles]:
+    def get_rbac_role(self, token: dict) -> Optional[RBAC_ROLES]:
         """
         Returns the RBAC role the token 'belongs' to.
 
