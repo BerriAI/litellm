@@ -1508,6 +1508,18 @@ def test_add_custom_logger_callback_to_specific_event(monkeypatch):
     assert len(litellm.failure_callback) == 0
 
 
+def test_add_custom_logger_callback_to_specific_event_failure(monkeypatch):
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    _add_custom_logger_callback_to_specific_event("mlflow", "failure")
+
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 1
+
+
 def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
     monkeypatch.setattr(litellm, "success_callback", [])
@@ -1527,6 +1539,33 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
+
+
+def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
+    from litellm.integrations.mlflow import MlflowLogger
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    litellm.success_callback = ["mlflow"]
+    litellm.failure_callback = ["mlflow"]
+
+    curr_len_success_callback = len(litellm.success_callback)
+    curr_len_failure_callback = len(litellm.failure_callback)
+
+    litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing langfuse",
+    )
+
+    assert len(litellm.success_callback) == curr_len_success_callback
+    assert len(litellm.failure_callback) == curr_len_failure_callback
+
+    assert any(
+        isinstance(callback, MlflowLogger) for callback in litellm.failure_callback
+    )
 
 
 @pytest.mark.asyncio
