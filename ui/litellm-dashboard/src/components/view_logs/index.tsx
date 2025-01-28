@@ -34,6 +34,8 @@ export default function SpendLogsTable({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const quickSelectRef = useRef<HTMLDivElement>(null);
 
   // New state variables for Start and End Time
   const [startTime, setStartTime] = useState<string>(
@@ -60,6 +62,18 @@ export default function SpendLogsTable({
         !dropdownRef.current.contains(event.target as Node)
       ) {
         setShowColumnDropdown(false);
+      }
+      if (
+        filtersRef.current &&
+        !filtersRef.current.contains(event.target as Node)
+      ) {
+        setShowFilters(false);
+      }
+      if (
+        quickSelectRef.current &&
+        !quickSelectRef.current.contains(event.target as Node)
+      ) {
+        setQuickSelectOpen(false);
       }
     }
 
@@ -157,7 +171,7 @@ export default function SpendLogsTable({
                   />
                 </svg>
               </div>
-              <div className="relative" ref={dropdownRef}>
+              <div className="relative" ref={filtersRef}>
                 <button
                   className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
                   onClick={() => setShowFilters(!showFilters)}
@@ -296,7 +310,7 @@ export default function SpendLogsTable({
                 )}
               </div>
 
-              <div className="relative">
+              <div className="relative" ref={quickSelectRef}>
                 <button
                   onClick={() => setQuickSelectOpen(!quickSelectOpen)}
                   className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
