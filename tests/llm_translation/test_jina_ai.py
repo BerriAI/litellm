@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from base_rerank_unit_tests import BaseLLMRerankTest
+from .base_rerank_unit_tests import BaseLLMRerankTest
 import litellm
 
 

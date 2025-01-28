@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from .base_embedding_unit_tests import BaseLLMEmbeddingTest
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from unittest.mock import patch, MagicMock

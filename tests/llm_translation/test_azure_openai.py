@@ -8,7 +8,7 @@ sys.path.insert(
 import pytest
 from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
-from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from .base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 
 def test_process_azure_headers_empty():

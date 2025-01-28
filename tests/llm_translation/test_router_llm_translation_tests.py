@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from base_llm_unit_tests import BaseLLMChatTest
+from .base_llm_unit_tests import BaseLLMChatTest
 from litellm.router import Router
 from litellm._logging import verbose_logger, verbose_router_logger
 import logging

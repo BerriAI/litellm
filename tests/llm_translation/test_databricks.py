@@ -15,7 +15,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
-from base_llm_unit_tests import BaseLLMChatTest
+from .base_llm_unit_tests import BaseLLMChatTest
 
 try:
     import databricks.sdk

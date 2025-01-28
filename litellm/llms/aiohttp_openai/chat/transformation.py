@@ -7,13 +7,15 @@ https://github.com/BerriAI/litellm/issues/6592
 New config to ensure we introduce this without causing breaking changes for users
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Union, Iterator, List, Optional
 
 from aiohttp import ClientResponse
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse
+
+from ..common_utils import ModelResponseIterator as AiohttpOpenAIResponseIterator
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -24,6 +26,7 @@ else:
 
 
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
+
     def get_complete_url(
         self,
         api_base: str,
@@ -75,3 +78,15 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         model_response.object = _json_response.get("object")
         model_response.system_fingerprint = _json_response.get("system_fingerprint")
         return model_response
+    
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return AiohttpOpenAIResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )

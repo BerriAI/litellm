@@ -25,7 +25,7 @@ import litellm
 
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from httpx import Headers
-from base_llm_unit_tests import BaseLLMChatTest
+from .base_llm_unit_tests import BaseLLMChatTest
 
 
 class TestMistralCompletion(BaseLLMChatTest):
