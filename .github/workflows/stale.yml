@@ -14,6 +14,7 @@ jobs:
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
           stale-issue-message: "This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs."
           stale-pr-message: "This pull request has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs."
-          days-before-stale: 60        # Revert to 60 days
+          days-before-stale: 90        # Revert to 60 days
           days-before-close: 7         # Revert to 7 days
           stale-issue-label: "stale"
+          operations-per-run: 1000
