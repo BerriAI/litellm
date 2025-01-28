@@ -877,3 +877,39 @@ def test_user_api_key_auth_end_user_str():
 
     user_api_key_auth = UserAPIKeyAuth(**user_api_key_args)
     assert user_api_key_auth.end_user_id == "1"
+
+
+def test_can_rbac_role_call_model():
+    from litellm.proxy.auth.user_api_key_auth import can_rbac_role_call_model
+    from litellm.proxy._types import RoleBasedPermissions
+
+    roles_based_permissions = [
+        RoleBasedPermissions(
+            role=LitellmUserRoles.INTERNAL_USER,
+            models=["gpt-4"],
+        ),
+        RoleBasedPermissions(
+            role=LitellmUserRoles.PROXY_ADMIN,
+            models=["anthropic-claude"],
+        ),
+    ]
+
+    assert can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={"role_permissions": roles_based_permissions},
+        model="gpt-4",
+    )
+
+    with pytest.raises(HTTPException):
+        can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="gpt-4o",
+        )
+
+    with pytest.raises(HTTPException):
+        can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.PROXY_ADMIN,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="gpt-4o",
+        )
