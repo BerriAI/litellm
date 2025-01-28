@@ -1617,6 +1617,11 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
+            if (
+                litellm.enable_preview_features and metadata is not None
+            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+                optional_params["metadata"] = metadata
+
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
             for k, v in config.items():
