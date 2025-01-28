@@ -415,9 +415,8 @@ def bytes_to_mb(bytes_value: int):
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
 def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
-    if user_api_key_dict.metadata:
-        if "model_rpm_limit" in user_api_key_dict.metadata:
-            return user_api_key_dict.metadata["model_rpm_limit"]
+    if user_api_key_dict.rpm_limit_per_model:
+        return user_api_key_dict.rpm_limit_per_model
     elif user_api_key_dict.model_max_budget:
         model_rpm_limit: Dict[str, Any] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
@@ -429,9 +428,8 @@ def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]
 
 
 def get_key_model_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
-    if user_api_key_dict.metadata:
-        if "model_tpm_limit" in user_api_key_dict.metadata:
-            return user_api_key_dict.metadata["model_tpm_limit"]
+    if user_api_key_dict.tpm_limit_per_model:
+        return user_api_key_dict.tpm_limit_per_model
     elif user_api_key_dict.model_max_budget:
         if "tpm_limit" in user_api_key_dict.model_max_budget:
             return user_api_key_dict.model_max_budget["tpm_limit"]
