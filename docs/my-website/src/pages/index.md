@@ -108,7 +108,7 @@ response = completion(
 
 </TabItem>
 
-<TabItem value="nvidia_nim" label="NVIDIA_NIM">
+<TabItem value="nvidia" label="NVIDIA">
 
 ```python
 from litellm import completion
@@ -256,7 +256,7 @@ response = completion(
 
 </TabItem>
 
-<TabItem value="nvidia_nim" label="NVIDIA_NIM">
+<TabItem value="nvidia" label="NVIDIA">
 
 ```python
 from litellm import completion
