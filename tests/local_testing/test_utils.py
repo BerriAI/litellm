@@ -1542,14 +1542,13 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
 
 def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
-    from litellm.integrations.mlflow import MlflowLogger
+    from litellm.integrations.openmeter import OpenMeterLogger
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
 
-    litellm.success_callback = ["mlflow"]
-    litellm.failure_callback = ["mlflow"]
+    litellm.failure_callback = ["openmeter"]
 
     curr_len_success_callback = len(litellm.success_callback)
     curr_len_failure_callback = len(litellm.failure_callback)
@@ -1564,7 +1563,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     assert len(litellm.failure_callback) == curr_len_failure_callback
 
     assert any(
-        isinstance(callback, MlflowLogger) for callback in litellm.failure_callback
+        isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback
     )
 
 
