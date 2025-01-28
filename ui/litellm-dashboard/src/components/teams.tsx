@@ -237,7 +237,7 @@ const Team: React.FC<TeamProps> = ({
                 {userModels &&
                   userModels.map((model) => (
                     <Select2.Option key={model} value={model}>
-                      {model}
+                      {getModelDisplayName(model)}
                     </Select2.Option>
                   ))}
               </Select2>
