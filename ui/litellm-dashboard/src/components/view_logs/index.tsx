@@ -29,11 +29,8 @@ export default function SpendLogsTable({
   userID,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
-  const [keyNameFilter, setKeyNameFilter] = useState("");
-  const [teamNameFilter, setTeamNameFilter] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
-  const [selectedColumn, setSelectedColumn] = useState("Key Name");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -49,6 +46,11 @@ export default function SpendLogsTable({
   // Add these new state variables at the top with other useState declarations
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+  const [tempTeamId, setTempTeamId] = useState("");
+  const [tempKeyHash, setTempKeyHash] = useState("");
+  const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [selectedKeyHash, setSelectedKeyHash] = useState("");
+  const [selectedFilter, setSelectedFilter] = useState("Team ID");
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -67,12 +69,19 @@ export default function SpendLogsTable({
   }, []);
 
   const logs = useQuery<PaginatedResponse>({
-    queryKey: ["logs", "table", currentPage, pageSize, startTime, endTime],
+    queryKey: [
+      "logs",
+      "table",
+      currentPage,
+      pageSize,
+      startTime,
+      endTime,
+      selectedTeamId,
+      selectedKeyHash,
+    ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
-        console.log(
-          "got None values for one of accessToken, token, userRole, userID",
-        );
+        console.log("Missing required auth parameters");
         return {
           data: [],
           total: 0,
@@ -85,20 +94,17 @@ export default function SpendLogsTable({
       const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = moment(endTime).format("YYYY-MM-DD HH:mm:ss");
 
-      const data = await uiSpendLogsCall(
+      return await uiSpendLogsCall(
         accessToken,
-        token,
-        userRole,
-        userID,
+        selectedKeyHash || undefined,
+        selectedTeamId || undefined,
+        undefined,  // This parameter might be setting a default min_spend
         formattedStartTime,
         formattedEndTime,
         currentPage,
-        pageSize,
+        pageSize
       );
-
-      return data;
     },
-    // Refetch when startTime or endTime changes
     enabled: !!accessToken && !!token && !!userRole && !!userID,
   });
 
@@ -116,20 +122,11 @@ export default function SpendLogsTable({
         log.request_id.includes(searchTerm) ||
         log.model.includes(searchTerm) ||
         (log.user && log.user.includes(searchTerm));
-      const matchesKeyName =
-        !keyNameFilter ||
-        (log.metadata?.user_api_key_alias &&
-          log.metadata.user_api_key_alias
-            .toLowerCase()
-            .includes(keyNameFilter.toLowerCase()));
-      const matchesTeamName =
-        !teamNameFilter ||
-        (log.metadata?.user_api_key_team_alias &&
-          log.metadata.user_api_key_team_alias
-            .toLowerCase()
-            .includes(teamNameFilter.toLowerCase()));
-      return matchesSearch && matchesKeyName && matchesTeamName;
+      
+      // No need for additional filtering since we're now handling this in the API call
+      return matchesSearch;
     }) || [];
+
 
   return (
     <div className="w-full">
@@ -183,94 +180,117 @@ export default function SpendLogsTable({
 
                 {showFilters && (
                   <div className="absolute left-0 mt-2 w-[500px] bg-white rounded-lg shadow-lg border p-4 z-50">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">Where</span>
-                      <div className="relative">
-                        <button
-                          onClick={() =>
-                            setShowColumnDropdown(!showColumnDropdown)
-                          }
-                          className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
-                        >
-                          {selectedColumn}
-                          <svg
-                            className="h-4 w-4 text-gray-500"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">Where</span>
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowColumnDropdown(!showColumnDropdown)}
+                            className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
                           >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M19 9l-7 7-7-7"
-                            />
-                          </svg>
+                            {selectedFilter}
+                            <svg
+                              className="h-4 w-4 text-gray-500"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 9l-7 7-7-7"
+                              />
+                            </svg>
+                          </button>
+                          {showColumnDropdown && (
+                            <div className="absolute left-0 mt-1 w-[160px] bg-white border rounded-md shadow-lg z-50">
+                              {["Team ID", "Key Hash"].map((option) => (
+                                <button
+                                  key={option}
+                                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
+                                    selectedFilter === option
+                                      ? "bg-blue-50 text-blue-600"
+                                      : ""
+                                  }`}
+                                  onClick={() => {
+                                    setSelectedFilter(option);
+                                    setShowColumnDropdown(false);
+                                    if (option === "Team ID") {
+                                      setTempKeyHash("");
+                                    } else {
+                                      setTempTeamId("");
+                                    }
+                                  }}
+                                >
+                                  {selectedFilter === option && (
+                                    <svg
+                                      className="h-4 w-4 text-blue-600"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      stroke="currentColor"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M5 13l4 4L19 7"
+                                      />
+                                    </svg>
+                                  )}
+                                  {option}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Enter value..."
+                          className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={selectedFilter === "Team ID" ? tempTeamId : tempKeyHash}
+                          onChange={(e) => {
+                            if (selectedFilter === "Team ID") {
+                              setTempTeamId(e.target.value);
+                            } else {
+                              setTempKeyHash(e.target.value);
+                            }
+                          }}
+                        />
+                        <button
+                          className="p-1 hover:bg-gray-100 rounded-md"
+                          onClick={() => {
+                            setTempTeamId("");
+                            setTempKeyHash("");
+                          }}
+                        >
+                          <span className="text-gray-500">×</span>
                         </button>
-                        {showColumnDropdown && (
-                          <div className="absolute left-0 mt-1 w-[160px] bg-white border rounded-md shadow-lg z-50">
-                            {["Key Name", "Team Name"].map((option) => (
-                              <button
-                                key={option}
-                                className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
-                                  selectedColumn === option
-                                    ? "bg-blue-50 text-blue-600"
-                                    : ""
-                                }`}
-                                onClick={() => {
-                                  setSelectedColumn(option);
-                                  setShowColumnDropdown(false);
-                                  if (option === "Key Name") {
-                                    setTeamNameFilter("");
-                                  } else {
-                                    setKeyNameFilter("");
-                                  }
-                                }}
-                              >
-                                {selectedColumn === option && (
-                                  <svg
-                                    className="h-4 w-4 text-blue-600"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                    stroke="currentColor"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth={2}
-                                      d="M5 13l4 4L19 7"
-                                    />
-                                  </svg>
-                                )}
-                                {option}
-                              </button>
-                            ))}
-                          </div>
-                        )}
                       </div>
-                      <input
-                        type="text"
-                        placeholder="Enter value..."
-                        className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        value={keyNameFilter || teamNameFilter}
-                        onChange={(e) => {
-                          if (selectedColumn === "Key Name") {
-                            setKeyNameFilter(e.target.value);
-                          } else {
-                            setTeamNameFilter(e.target.value);
-                          }
-                        }}
-                      />
-                      <button
-                        className="p-1 hover:bg-gray-100 rounded-md"
-                        onClick={() => {
-                          setKeyNameFilter("");
-                          setTeamNameFilter("");
-                          setShowFilters(false);
-                        }}
-                      >
-                        <span className="text-gray-500">×</span>
-                      </button>
+                      
+                      <div className="flex justify-end gap-2">
+                        <button
+                          className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50"
+                          onClick={() => {
+                            setTempTeamId("");
+                            setTempKeyHash("");
+                            setShowFilters(false);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                          onClick={() => {
+                            setSelectedTeamId(tempTeamId);
+                            setSelectedKeyHash(tempKeyHash);
+                            setCurrentPage(1); // Reset to first page when applying new filters
+                            setShowFilters(false);
+                          }}
+                        >
+                          Apply Filters
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}

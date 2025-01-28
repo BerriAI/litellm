@@ -1553,7 +1553,6 @@ export const userSpendLogsCall = async (
 export const uiSpendLogsCall = async (
   accessToken: String,
   api_key?: string, 
-  user_id?: string,
   team_id?: string,
   request_id?: string,
   start_date?: string,
@@ -1570,7 +1569,6 @@ export const uiSpendLogsCall = async (
     // Add query parameters if they exist
     const queryParams = new URLSearchParams();
     if (api_key) queryParams.append('api_key', api_key);
-    if (user_id) queryParams.append('user_id', user_id);
     if (team_id) queryParams.append('team_id', team_id);
     if (min_spend) queryParams.append('min_spend', min_spend.toString());
     if (max_spend) queryParams.append('max_spend', max_spend.toString());

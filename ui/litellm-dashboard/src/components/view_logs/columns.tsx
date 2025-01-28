@@ -7,6 +7,7 @@ import { CountryCell } from "./country_cell";
 export type LogEntry = {
   request_id: string;
   api_key: string;
+  team_id: string;
   model: string;
   api_base?: string;
   call_type: string;
