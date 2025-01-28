@@ -1005,7 +1005,7 @@ all_embedding_models = (
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 from .timeout import timeout
-from .cost_calculator import completion_cost
+from .cost_calculator import completion_cost as completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
