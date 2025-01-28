@@ -2,7 +2,6 @@
 openai==1.54.0 
 python-dotenv
 tiktoken
-importlib_metadata
 cohere
 redis
 anthropic
