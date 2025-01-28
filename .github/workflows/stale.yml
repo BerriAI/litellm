@@ -17,4 +17,3 @@ jobs:
           days-before-stale: 60        # Revert to 60 days
           days-before-close: 7         # Revert to 7 days
           stale-issue-label: "stale"
-          ignore-issue-labels: ["pinned", "security"]
