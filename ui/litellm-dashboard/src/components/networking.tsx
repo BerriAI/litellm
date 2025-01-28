@@ -1318,7 +1318,8 @@ export const modelExceptionsCall = async (
 export const modelAvailableCall = async (
   accessToken: String,
   userID: String,
-  userRole: String
+  userRole: String,
+  return_wildcard_routes: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1326,6 +1327,9 @@ export const modelAvailableCall = async (
   console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName)
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
+    if (return_wildcard_routes === true) {
+      url += `?return_wildcard_routes=True`;
+    }
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
