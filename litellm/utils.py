@@ -347,8 +347,9 @@ def _add_custom_logger_callback_to_specific_event(
     )
 
     # don't double add a callback
-    if callback_class is not None and not any(
-        isinstance(cb, type(callback_class)) for cb in litellm.callbacks  # type: ignore
+    if (
+        callback_class
+        and _custom_logger_exists_in_litellm_callbacks(callback_class) is not True
     ):
         if logging_event == "success":
             litellm.success_callback.append(callback_class)
@@ -372,6 +373,27 @@ def _add_custom_logger_callback_to_specific_event(
                 litellm._async_failure_callback.remove(
                     callback
                 )  # remove the string from the callback list
+
+
+def _custom_logger_exists_in_litellm_callbacks(callback: CustomLogger) -> bool:
+    """
+    Returns True if the custom logger exists in any of the litellm callbacks
+        - litellm.callbacks
+        - litellm._async_success_callback
+        - litellm._async_failure_callback
+        - litellm.success_callback
+        - litellm.failure_callback
+
+    This is used to prevent double adding a custom logger callback to the litellm callbacks
+    """
+    return any(
+        isinstance(cb, type(callback))
+        for cb in litellm.callbacks
+        + litellm._async_success_callback
+        + litellm._async_failure_callback
+        + litellm.success_callback
+        + litellm.failure_callback
+    )
 
 
 def function_setup(  # noqa: PLR0915
