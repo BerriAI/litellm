@@ -62,6 +62,29 @@ You will get a Weave URL in the stdout. Open it up to see the trace, cost, token
 
 ## Building a simple LLM application
 
+Now let's use LiteLLM and W&B Weave to build a simple LLM application to translate text from source language to target language.
+
+The function `translate` takes in a text and target language, and returns the translated text using the model of your choice. Note that the `translate` function is decorated with `weave.op()`. This is how W&B Weave knows that this function is a part of your application and will be traced when called along with the inputs to the function and the output(s) from the function.
+
+Since the underlying LiteLLM calls are automatically traced, you can see a nested trace of the LiteLLM call(s) made with details like the model, cost, token usage, etc.
+
+```python
+@weave.op()
+def translate(text: str, target_language: str, model: str) -> str:
+    response = litellm.completion(
+        model=model,
+        messages=[
+            {"role": "user", "content": f"Translate '{text}' to {target_language}"}
+        ],
+    )
+    return response.choices[0].message.content
+
+print(translate("Hello, how are you?", "French", "gpt-4o"))
+```
+
+<Image img={require('../../img/weave_trace_application.png')} />
 
 
 ## Building evaluation pipeline
+
+
