@@ -1784,20 +1784,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     labelCol={{ span: 10 }}
                     labelAlign="left"
                   >
-                    <Select value={selectedProvider.toString()}>
-                      {providers.map((provider, index) => (
+
+                    <Select value={provider_map[selectedProvider as keyof typeof Providers]}>
+                      {Object.keys(Providers).map((providerKey) => (
                         <SelectItem
-                          key={index}
-                          value={provider}
+                          key={providerKey}
+                          value={provider_map[providerKey as keyof typeof Providers]}
                           onClick={() => {
-                            setProviderModelsFn(provider);
-                            setSelectedProvider(provider);
+                            setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
+                            setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
                           }}
                         >
                           <div className="flex items-center space-x-2">
                             <img
-                              src={providerLogoMap[provider]}
-                              alt={`${provider} logo`}
+                              src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
+                              alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
                               className="w-5 h-5"
                               onError={(e) => {
                                 // Create a div with provider initial as fallback
@@ -1806,12 +1807,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 if (parent) {
                                   const fallbackDiv = document.createElement('div');
                                   fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                  fallbackDiv.textContent = provider.charAt(0);
+                                  fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
                                   parent.replaceChild(fallbackDiv, target);
                                 }
                               }}
                             />
-                            <span>{provider}</span>
+                            <span>{Providers[providerKey as keyof typeof Providers]}</span>
                           </div>
                         </SelectItem>
                       ))}
