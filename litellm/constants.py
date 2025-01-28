@@ -2,11 +2,16 @@ ROUTER_MAX_FALLBACKS = 5
 DEFAULT_BATCH_SIZE = 512
 DEFAULT_FLUSH_INTERVAL_SECONDS = 5
 DEFAULT_MAX_RETRIES = 2
+DEFAULT_FAILURE_THRESHOLD_PERCENT = (
+    0.5  # default cooldown a deployment if 50% of requests fail in a given minute
+)
+DEFAULT_COOLDOWN_TIME_SECONDS = 5
 DEFAULT_REPLICATE_POLLING_RETRIES = 5
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = 1
 DEFAULT_IMAGE_TOKEN_COUNT = 250
 DEFAULT_IMAGE_WIDTH = 300
 DEFAULT_IMAGE_HEIGHT = 300
+SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
@@ -69,6 +74,46 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
 ]
 
+
+OPENAI_CHAT_COMPLETION_PARAMS = [
+    "functions",
+    "function_call",
+    "temperature",
+    "temperature",
+    "top_p",
+    "n",
+    "stream",
+    "stream_options",
+    "stop",
+    "max_completion_tokens",
+    "modalities",
+    "prediction",
+    "audio",
+    "max_tokens",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "user",
+    "request_timeout",
+    "api_base",
+    "api_version",
+    "api_key",
+    "deployment_id",
+    "organization",
+    "base_url",
+    "default_headers",
+    "timeout",
+    "response_format",
+    "seed",
+    "tools",
+    "tool_choice",
+    "max_retries",
+    "parallel_tool_calls",
+    "logprobs",
+    "top_logprobs",
+    "extra_headers",
+]
+HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = 60  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
 ########################### Logging Callback Constants ###########################
@@ -92,3 +137,10 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+
+BATCH_STATUS_POLL_INTERVAL_SECONDS = 3600  # 1 hour
+BATCH_STATUS_POLL_MAX_ATTEMPTS = 24  # for 24 hours
+
+HEALTH_CHECK_TIMEOUT_SECONDS = 60  # 60 seconds
+
+UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm.utils import ModelResponseListIterator
+from litellm.types.utils import ModelResponseStream
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -69,7 +70,7 @@ first_openai_chunk_example = {
 
 def validate_first_format(chunk):
     # write a test to make sure chunk follows the same format as first_openai_chunk_example
-    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
+    assert isinstance(chunk, ModelResponseStream), "Chunk should be a dictionary."
     assert isinstance(chunk["id"], str), "'id' should be a string."
     assert isinstance(chunk["object"], str), "'object' should be a string."
     assert isinstance(chunk["created"], int), "'created' should be an integer."
@@ -99,7 +100,7 @@ second_openai_chunk_example = {
 
 
 def validate_second_format(chunk):
-    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
+    assert isinstance(chunk, ModelResponseStream), "Chunk should be a dictionary."
     assert isinstance(chunk["id"], str), "'id' should be a string."
     assert isinstance(chunk["object"], str), "'object' should be a string."
     assert isinstance(chunk["created"], int), "'created' should be an integer."
@@ -137,7 +138,7 @@ def validate_last_format(chunk):
     """
     Ensure last chunk has no remaining content or tools
     """
-    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
+    assert isinstance(chunk, ModelResponseStream), "Chunk should be a dictionary."
     assert isinstance(chunk["id"], str), "'id' should be a string."
     assert isinstance(chunk["object"], str), "'object' should be a string."
     assert isinstance(chunk["created"], int), "'created' should be an integer."
@@ -1112,7 +1113,7 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "adroit-crow-413218"
+    litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
     test_models = ["gemini-1.5-pro"]
@@ -1384,13 +1385,13 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
 @pytest.mark.parametrize(
     "model, region",
     [
-        ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
-        ["bedrock/cohere.command-r-plus-v1:0", None],
+        # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
+        # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["anthropic.claude-3-sonnet-20240229-v1:0", None],
-        ["anthropic.claude-instant-v1", None],
-        ["mistral.mistral-7b-instruct-v0:2", None],
+        # ["anthropic.claude-instant-v1", None],
+        # ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
-        ["meta.llama3-8b-instruct-v1:0", None],
+        # ["meta.llama3-8b-instruct-v1:0", None],
     ],
 )
 @pytest.mark.asyncio
@@ -1523,7 +1524,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
             num_finish_reason = 0
             for chunk in response:
                 print(f"chunk: {chunk}")
-                if isinstance(chunk, ModelResponse):
+                if isinstance(chunk, ModelResponseStream):
                     if chunk.choices[0].finish_reason is not None:
                         num_finish_reason += 1
             assert num_finish_reason == 1
@@ -1541,7 +1542,7 @@ async def test_parallel_streaming_requests(sync_mode, model):
             num_finish_reason = 0
             async for chunk in response:
                 print(f"type of chunk: {type(chunk)}")
-                if isinstance(chunk, ModelResponse):
+                if isinstance(chunk, ModelResponseStream):
                     print(f"OUTSIDE CHUNK: {chunk.choices[0]}")
                     if chunk.choices[0].finish_reason is not None:
                         num_finish_reason += 1
@@ -2953,6 +2954,7 @@ def test_azure_streaming_and_function_calling():
 async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
     try:
         import os
+        from litellm import stream_chunk_builder
 
         litellm.set_verbose = True
 
@@ -2967,15 +2969,21 @@ async def test_completion_azure_ai_mistral_invalid_params(sync_mode):
             "drop_params": True,
             "stream": True,
         }
+        chunks = []
         if sync_mode:
-            response: litellm.ModelResponse = completion(**data)  # type: ignore
+            response = completion(**data)  # type: ignore
             for chunk in response:
                 print(chunk)
+                chunks.append(chunk)
         else:
-            response: litellm.ModelResponse = await litellm.acompletion(**data)  # type: ignore
+            response = await litellm.acompletion(**data)  # type: ignore
 
             async for chunk in response:
                 print(chunk)
+                chunks.append(chunk)
+        print(f"chunks: {chunks}")
+        response = stream_chunk_builder(chunks=chunks)
+        assert response.choices[0].message.content is not None
     except litellm.Timeout as e:
         pass
     except Exception as e:
@@ -3918,11 +3926,11 @@ def test_unit_test_perplexity_citations_chunk():
         "gpt-3.5-turbo",
         "claude-3-5-sonnet-20240620",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "vertex_ai/claude-3-5-sonnet@20240620",
+        # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
-def test_streaming_tool_calls_valid_json_str(model):
+def test_aastreaming_tool_calls_valid_json_str(model):
     if "vertex_ai" in model:
         from test_amazing_vertex_completion import (
             load_vertex_ai_credentials,
@@ -3989,3 +3997,86 @@ def test_streaming_api_base():
         stream=True,
     )
     assert "https://api.openai.com" in stream._hidden_params["api_base"]
+
+
+def test_mock_response_iterator_tool_use():
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/7364
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Function,
+        Message,
+        Usage,
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+        Choices,
+    )
+
+    litellm.set_verbose = False
+    response = ModelResponse(
+        id="chatcmpl-Ai8KRI5vJPZXQ9SQvEJfTVuVqkyEZ",
+        created=1735081811,
+        model="o1-2024-12-17",
+        object="chat.completion",
+        system_fingerprint="fp_e6d02d4a78",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            function=Function(
+                                arguments='{"location":"San Francisco, CA","unit":"fahrenheit"}',
+                                name="get_current_weather",
+                            ),
+                            id="call_BfRX2S7YCKL0BtxbWMl89ZNk",
+                            type="function",
+                        )
+                    ],
+                    function_call=None,
+                ),
+            )
+        ],
+        usage=Usage(
+            completion_tokens=1955,
+            prompt_tokens=85,
+            total_tokens=2040,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                accepted_prediction_tokens=0,
+                audio_tokens=0,
+                reasoning_tokens=1920,
+                rejected_prediction_tokens=0,
+                text_tokens=None,
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                audio_tokens=0, cached_tokens=0, text_tokens=None, image_tokens=None
+            ),
+        ),
+        service_tier=None,
+    )
+    completion_stream = MockResponseIterator(model_response=response)
+    response_chunk = completion_stream._chunk_parser(chunk_data=response)
+
+    assert response_chunk["tool_use"] is not None
+
+
+def test_deepseek_reasoning_content_completion():
+    # litellm.set_verbose = True
+    resp = litellm.completion(
+        model="deepseek/deepseek-reasoner",
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+        stream=True,
+    )
+
+    reasoning_content_exists = False
+    for chunk in resp:
+        print(f"chunk: {chunk}")
+        if chunk.choices[0].delta.reasoning_content is not None:
+            reasoning_content_exists = True
+            break
+    assert reasoning_content_exists

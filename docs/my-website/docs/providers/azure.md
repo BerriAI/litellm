@@ -4,6 +4,16 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Azure OpenAI
+
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
+| Provider Route on LiteLLM | `azure/` |
+| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/completions`](#azure-instruct-models), [`/embeddings`](../embedding/supported_embedding#azure-openai-embedding-models), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
+| Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
+
 ## API Keys, Params
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
@@ -518,6 +528,39 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+### Entrata ID - use client_id, username, password
+
+Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      client_id: os.environ/AZURE_CLIENT_ID
+      azure_username: os.environ/AZURE_USERNAME
+      azure_password: os.environ/AZURE_PASSWORD
+```
+
+Test it 
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+
 ### Azure AD Token Refresh - `DefaultAzureCredential`
 
 Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests
@@ -544,6 +587,16 @@ response = completion(
 </TabItem>
 <TabItem value="proxy" label="PROXY config.yaml">
 
+1. Add relevant env vars
+
+```bash
+export AZURE_TENANT_ID=""
+export AZURE_CLIENT_ID=""
+export AZURE_CLIENT_SECRET=""
+```
+
+2. Setup config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -555,11 +608,28 @@ litellm_settings:
     enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
 ```
 
+3. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
 </TabItem>
 </Tabs>
 
 
-## **Azure Batches API** 
+## **Azure Batches API**
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Batches API |
+| `custom_llm_provider` on LiteLLM | `azure/` |
+| Supported Operations | `/v1/batches`, `/v1/files` |
+| Azure OpenAI Batches API | [Azure OpenAI Batches API ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/batch) |
+| Cost Tracking, Logging Support | ✅ LiteLLM will log, track cost for Batch API Requests |
+
+
+### Quick Start
 
 Just add the azure env vars to your environment. 
 
@@ -568,40 +638,71 @@ export AZURE_API_KEY=""
 export AZURE_API_BASE=""
 ```
 
-AND use `/azure/*` for the Batches API calls
+<Tabs>
+<TabItem value="proxy" label="LiteLLM PROXY Server">
 
-```bash
-http://0.0.0.0:4000/azure/v1/batches
+**1. Upload a File**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-api-key"
+)
+
+batch_input_file = client.files.create(
+    file=open("mydata.jsonl", "rb"),
+    purpose="batch",
+    extra_body={"custom_llm_provider": "azure"}
+)
+file_id = batch_input_file.id
 ```
-### Usage
 
-**Setup**
-
-- Add Azure API Keys to your environment
-
-#### 1. Upload a File
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
-curl http://localhost:4000/azure/v1/files \
+curl http://localhost:4000/v1/files \
     -H "Authorization: Bearer sk-1234" \
     -F purpose="batch" \
     -F file="@mydata.jsonl"
 ```
 
-**Example File**
+</TabItem>
+</Tabs>
 
-Note: `model` should be your azure deployment name.
-
+**Example File Format**
 ```json
 {"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
 {"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
 {"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
 ```
 
-#### 2. Create a batch 
+**2. Create a Batch Request**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+batch = client.batches.create( # re use client from above
+    input_file_id=file_id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+    metadata={"description": "My batch job"},
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
-curl http://0.0.0.0:4000/azure/v1/batches \
+curl http://localhost:4000/v1/batches \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -609,34 +710,144 @@ curl http://0.0.0.0:4000/azure/v1/batches \
     "endpoint": "/v1/chat/completions",
     "completion_window": "24h"
   }'
+```
+</TabItem>
+</Tabs>
 
+**3. Retrieve a Batch**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+retrieved_batch = client.batches.retrieve(
+    batch.id,
+    extra_body={"custom_llm_provider": "azure"}
+)
 ```
 
-#### 3. Retrieve batch
-
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
-curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123 \
+curl http://localhost:4000/v1/batches/batch_abc123 \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
 ```
 
-#### 4. Cancel batch 
+</TabItem>
+</Tabs>
+
+**4. Cancel a Batch**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+cancelled_batch = client.batches.cancel(
+    batch.id,
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
-curl http://0.0.0.0:4000/azure/v1/batches/batch_abc123/cancel \
+curl http://localhost:4000/v1/batches/batch_abc123/cancel \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -X POST
 ```
 
-#### 5. List Batch
+</TabItem>
+</Tabs>
+
+**5. List Batches**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+client.batches.list(extra_body={"custom_llm_provider": "azure"})
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
 
 ```bash
-curl http://0.0.0.0:4000/v1/batches?limit=2 \
+curl http://localhost:4000/v1/batches?limit=2 \
   -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json"
 ```
+</TabItem>
+</Tabs>
+</TabItem>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+**1. Create File for Batch Completion**
+
+```python
+from litellm
+import os 
+
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+
+file_name = "azure_batch_completions.jsonl"
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.join(_current_dir, file_name)
+file_obj = await litellm.acreate_file(
+    file=open(file_path, "rb"),
+    purpose="batch",
+    custom_llm_provider="azure",
+)
+print("Response from creating file=", file_obj)
+```
+
+**2. Create Batch Request**
+
+```python
+create_batch_response = await litellm.acreate_batch(
+    completion_window="24h",
+    endpoint="/v1/chat/completions",
+    input_file_id=batch_input_file_id,
+    custom_llm_provider="azure",
+    metadata={"key1": "value1", "key2": "value2"},
+)
+
+print("response from litellm.create_batch=", create_batch_response)
+```
+
+**3. Retrieve Batch and File Content**
+
+```python
+retrieved_batch = await litellm.aretrieve_batch(
+    batch_id=create_batch_response.id, 
+    custom_llm_provider="azure"
+)
+print("retrieved batch=", retrieved_batch)
+
+# Get file content
+file_content = await litellm.afile_content(
+    file_id=batch_input_file_id, 
+    custom_llm_provider="azure"
+)
+print("file content = ", file_content)
+```
+
+**4. List Batches**
+
+```python
+list_batches_response = litellm.list_batches(
+    custom_llm_provider="azure", 
+    limit=2
+)
+print("list_batches_response=", list_batches_response)
+```
+
+</TabItem>
+</Tabs>
 
 ### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
 
@@ -736,7 +947,6 @@ Expected Response:
 ```bash
 {"data":[{"id":"batch_R3V...}
 ```
-
 
 ## Advanced
 ### Azure API Load-Balancing

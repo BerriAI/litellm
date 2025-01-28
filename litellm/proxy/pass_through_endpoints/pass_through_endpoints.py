@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -330,15 +331,7 @@ async def pass_through_request(  # noqa: PLR0915
         if custom_body:
             _parsed_body = custom_body
         else:
-            request_body = await request.body()
-            if request_body == b"" or request_body is None:
-                _parsed_body = None
-            else:
-                body_str = request_body.decode()
-                try:
-                    _parsed_body = ast.literal_eval(body_str)
-                except Exception:
-                    _parsed_body = json.loads(body_str)
+            _parsed_body = await _read_request_body(request)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL {}\nheaders: {}\nbody: {}\n".format(
                 url, headers, _parsed_body
@@ -573,7 +566,7 @@ def _init_kwargs_for_pass_through_endpoint(
         "user_api_key": user_api_key_dict.api_key,
         "user_api_key_user_id": user_api_key_dict.user_id,
         "user_api_key_team_id": user_api_key_dict.team_id,
-        "user_api_key_end_user_id": user_api_key_dict.user_id,
+        "user_api_key_end_user_id": user_api_key_dict.end_user_id,
     }
     if _litellm_metadata:
         _metadata.update(_litellm_metadata)

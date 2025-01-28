@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Any, Callable, Coroutine, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union
 
 import httpx  # type: ignore
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -28,13 +28,7 @@ from litellm.utils import (
     modify_url,
 )
 
-from ...types.llms.openai import (
-    Batch,
-    CancelBatchRequest,
-    CreateBatchRequest,
-    HttpxBinaryResponseContent,
-    RetrieveBatchRequest,
-)
+from ...types.llms.openai import HttpxBinaryResponseContent
 from ..base import BaseLLM
 from .common_utils import AzureOpenAIError, process_azure_headers
 
@@ -861,7 +855,8 @@ class AzureChatCompletion(BaseLLM):
             self._client_session = self.create_client_session()
         try:
             data = {"model": model, "input": input, **optional_params}
-            max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
+            if max_retries is None:
+                max_retries = litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(
                     status_code=422, message="max retries must be an int"
@@ -1386,7 +1381,7 @@ class AzureChatCompletion(BaseLLM):
             input=input,
             **optional_params,
         )
-        return response
+        return HttpxBinaryResponseContent(response=response.response)
 
     async def async_audio_speech(
         self,
@@ -1415,14 +1410,14 @@ class AzureChatCompletion(BaseLLM):
             client_type="async",
         )  # type: ignore
 
-        response = await azure_client.audio.speech.create(
+        azure_response = await azure_client.audio.speech.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
             **optional_params,
         )
 
-        return response
+        return HttpxBinaryResponseContent(response=azure_response.response)
 
     def get_headers(
         self,
@@ -1495,334 +1490,4 @@ class AzureChatCompletion(BaseLLM):
         if completion.headers.get("x-ms-region", None) is not None:
             response["x-ms-region"] = completion.headers["x-ms-region"]
 
-        return response
-
-    async def ahealth_check(
-        self,
-        model: Optional[str],
-        api_key: Optional[str],
-        api_base: str,
-        api_version: Optional[str],
-        timeout: float,
-        mode: str,
-        messages: Optional[list] = None,
-        input: Optional[list] = None,
-        prompt: Optional[str] = None,
-    ) -> dict:
-        client_session = (
-            litellm.aclient_session
-            or get_async_httpx_client(llm_provider=LlmProviders.AZURE).client
-        )  # handle dall-e-2 calls
-
-        if "gateway.ai.cloudflare.com" in api_base:
-            ## build base url - assume api base includes resource name
-            if not api_base.endswith("/"):
-                api_base += "/"
-            api_base += f"{model}"
-            client = AsyncAzureOpenAI(
-                base_url=api_base,
-                api_version=api_version,
-                api_key=api_key,
-                timeout=timeout,
-                http_client=client_session,
-            )
-            model = None
-            # cloudflare ai gateway, needs model=None
-        else:
-            client = AsyncAzureOpenAI(
-                api_version=api_version,
-                azure_endpoint=api_base,
-                api_key=api_key,
-                timeout=timeout,
-                http_client=client_session,
-            )
-
-            # only run this check if it's not cloudflare ai gateway
-            if model is None and mode != "image_generation":
-                raise Exception("model is not set")
-
-        completion = None
-
-        if mode == "completion":
-            completion = await client.completions.with_raw_response.create(
-                model=model,  # type: ignore
-                prompt=prompt,  # type: ignore
-            )
-        elif mode == "chat":
-            if messages is None:
-                raise Exception("messages is not set")
-            completion = await client.chat.completions.with_raw_response.create(
-                model=model,  # type: ignore
-                messages=messages,  # type: ignore
-            )
-        elif mode == "embedding":
-            if input is None:
-                raise Exception("input is not set")
-            completion = await client.embeddings.with_raw_response.create(
-                model=model,  # type: ignore
-                input=input,  # type: ignore
-            )
-        elif mode == "image_generation":
-            if prompt is None:
-                raise Exception("prompt is not set")
-            completion = await client.images.with_raw_response.generate(
-                model=model,  # type: ignore
-                prompt=prompt,  # type: ignore
-            )
-        elif mode == "audio_transcription":
-            # Get the current directory of the file being run
-            pwd = os.path.dirname(os.path.realpath(__file__))
-            file_path = os.path.join(
-                pwd, "../../../tests/gettysburg.wav"
-            )  # proxy address
-            audio_file = open(file_path, "rb")
-            completion = await client.audio.transcriptions.with_raw_response.create(
-                file=audio_file,
-                model=model,  # type: ignore
-                prompt=prompt,  # type: ignore
-            )
-        elif mode == "audio_speech":
-            # Get the current directory of the file being run
-            completion = await client.audio.speech.with_raw_response.create(
-                model=model,  # type: ignore
-                input=prompt,  # type: ignore
-                voice="alloy",
-            )
-        elif mode == "batch":
-            completion = await client.batches.with_raw_response.list(limit=1)  # type: ignore
-        else:
-            raise Exception("mode not set")
-        response = {}
-
-        if completion is None or not hasattr(completion, "headers"):
-            raise Exception("invalid completion response")
-
-        if (
-            completion.headers.get("x-ratelimit-remaining-requests", None) is not None
-        ):  # not provided for dall-e requests
-            response["x-ratelimit-remaining-requests"] = completion.headers[
-                "x-ratelimit-remaining-requests"
-            ]
-
-        if completion.headers.get("x-ratelimit-remaining-tokens", None) is not None:
-            response["x-ratelimit-remaining-tokens"] = completion.headers[
-                "x-ratelimit-remaining-tokens"
-            ]
-
-        if completion.headers.get("x-ms-region", None) is not None:
-            response["x-ms-region"] = completion.headers["x-ms-region"]
-
-        return response
-
-
-class AzureBatchesAPI(BaseLLM):
-    """
-    Azure methods to support for batches
-    - create_batch()
-    - retrieve_batch()
-    - cancel_batch()
-    - list_batch()
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-
-    def get_azure_openai_client(
-        self,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
-        _is_async: bool = False,
-    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-        received_args = locals()
-        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
-        if client is None:
-            data = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client" or k == "_is_async":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["azure_endpoint"] = v
-                elif v is not None:
-                    data[k] = v
-            if "api_version" not in data:
-                data["api_version"] = litellm.AZURE_DEFAULT_API_VERSION
-            if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**data)
-            else:
-                openai_client = AzureOpenAI(**data)  # type: ignore
-        else:
-            openai_client = client
-
-        return openai_client
-
-    async def acreate_batch(
-        self,
-        create_batch_data: CreateBatchRequest,
-        azure_client: AsyncAzureOpenAI,
-    ) -> Batch:
-        response = await azure_client.batches.create(**create_batch_data)
-        return response
-
-    def create_batch(
-        self,
-        _is_async: bool,
-        create_batch_data: CreateBatchRequest,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        api_version: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
-    ) -> Union[Batch, Coroutine[Any, Any, Batch]]:
-        azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
-            self.get_azure_openai_client(
-                api_key=api_key,
-                api_base=api_base,
-                timeout=timeout,
-                api_version=api_version,
-                max_retries=max_retries,
-                client=client,
-                _is_async=_is_async,
-            )
-        )
-        if azure_client is None:
-            raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
-            )
-
-        if _is_async is True:
-            if not isinstance(azure_client, AsyncAzureOpenAI):
-                raise ValueError(
-                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
-                )
-            return self.acreate_batch(  # type: ignore
-                create_batch_data=create_batch_data, azure_client=azure_client
-            )
-        response = azure_client.batches.create(**create_batch_data)
-        return response
-
-    async def aretrieve_batch(
-        self,
-        retrieve_batch_data: RetrieveBatchRequest,
-        client: AsyncAzureOpenAI,
-    ) -> Batch:
-        response = await client.batches.retrieve(**retrieve_batch_data)
-        return response
-
-    def retrieve_batch(
-        self,
-        _is_async: bool,
-        retrieve_batch_data: RetrieveBatchRequest,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        api_version: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        client: Optional[AzureOpenAI] = None,
-    ):
-        azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
-            self.get_azure_openai_client(
-                api_key=api_key,
-                api_base=api_base,
-                api_version=api_version,
-                timeout=timeout,
-                max_retries=max_retries,
-                client=client,
-                _is_async=_is_async,
-            )
-        )
-        if azure_client is None:
-            raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
-            )
-
-        if _is_async is True:
-            if not isinstance(azure_client, AsyncAzureOpenAI):
-                raise ValueError(
-                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
-                )
-            return self.aretrieve_batch(  # type: ignore
-                retrieve_batch_data=retrieve_batch_data, client=azure_client
-            )
-        response = azure_client.batches.retrieve(**retrieve_batch_data)
-        return response
-
-    def cancel_batch(
-        self,
-        _is_async: bool,
-        cancel_batch_data: CancelBatchRequest,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        organization: Optional[str],
-        client: Optional[AzureOpenAI] = None,
-    ):
-        azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
-            self.get_azure_openai_client(
-                api_key=api_key,
-                api_base=api_base,
-                timeout=timeout,
-                max_retries=max_retries,
-                client=client,
-                _is_async=_is_async,
-            )
-        )
-        if azure_client is None:
-            raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
-            )
-        response = azure_client.batches.cancel(**cancel_batch_data)
-        return response
-
-    async def alist_batches(
-        self,
-        client: AsyncAzureOpenAI,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-    ):
-        response = await client.batches.list(after=after, limit=limit)  # type: ignore
-        return response
-
-    def list_batches(
-        self,
-        _is_async: bool,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        api_version: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        client: Optional[AzureOpenAI] = None,
-    ):
-        azure_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = (
-            self.get_azure_openai_client(
-                api_key=api_key,
-                api_base=api_base,
-                timeout=timeout,
-                max_retries=max_retries,
-                api_version=api_version,
-                client=client,
-                _is_async=_is_async,
-            )
-        )
-        if azure_client is None:
-            raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
-            )
-
-        if _is_async is True:
-            if not isinstance(azure_client, AsyncAzureOpenAI):
-                raise ValueError(
-                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
-                )
-            return self.alist_batches(  # type: ignore
-                client=azure_client, after=after, limit=limit
-            )
-        response = azure_client.batches.list(after=after, limit=limit)  # type: ignore
         return response

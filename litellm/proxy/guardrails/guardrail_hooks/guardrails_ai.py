@@ -12,7 +12,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
@@ -48,10 +51,13 @@ class GuardrailsAI(CustomGuardrail):
         supported_event_hooks = [GuardrailEventHooks.post_call]
         super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
-    async def make_guardrails_ai_api_request(self, llm_output: str):
+    async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict):
         from httpx import URL
 
-        data = {"llmOutput": llm_output}
+        data = {
+            "llmOutput": llm_output,
+            **self.get_guardrail_dynamic_request_body_params(request_data=request_data),
+        }
         _json_data = json.dumps(data)
         response = await litellm.module_level_aclient.post(
             url=str(
@@ -76,6 +82,7 @@ class GuardrailsAI(CustomGuardrail):
             )
         return _json_response
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
@@ -96,7 +103,9 @@ class GuardrailsAI(CustomGuardrail):
 
         response_str: str = get_content_from_model_response(response)
         if response_str is not None and len(response_str) > 0:
-            await self.make_guardrails_ai_api_request(llm_output=response_str)
+            await self.make_guardrails_ai_api_request(
+                llm_output=response_str, request_data=data
+            )
 
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=self.guardrail_name

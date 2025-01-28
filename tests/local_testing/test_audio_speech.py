@@ -61,7 +61,7 @@ async def test_audio_speech_litellm(sync_mode, model, api_base, api_key):
             optional_params={},
         )
 
-        from litellm.llms.openai.openai import HttpxBinaryResponseContent
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         assert isinstance(response, HttpxBinaryResponseContent)
     else:
@@ -281,6 +281,7 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
         }
 
 
+@pytest.mark.skip(reason="causes openai rate limit errors")
 def test_audio_speech_cost_calc():
     from litellm.integrations.custom_logger import CustomLogger
 

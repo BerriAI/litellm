@@ -136,7 +136,13 @@ class ReplicateConfig(BaseConfig):
             status_code=status_code, message=error_message, headers=headers
         )
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         version_id = self.model_to_version_id(model)
         base_url = api_base
         if "deployments" in version_id:
@@ -303,6 +309,7 @@ class ReplicateConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = {
             "Authorization": f"Token {api_key}",

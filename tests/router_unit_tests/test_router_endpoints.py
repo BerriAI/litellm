@@ -1,6 +1,8 @@
 import sys
 import os
+import json
 import traceback
+from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
@@ -9,6 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm import Router, CustomLogger
+from litellm.types.utils import StandardLoggingPayload
 
 # Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
@@ -76,12 +79,12 @@ class MyCustomHandler(CustomLogger):
             print("logging a transcript kwargs: ", kwargs)
             print("openai client=", kwargs.get("client"))
             self.openai_client = kwargs.get("client")
+            self.standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
 
         except Exception:
             pass
-
-
-proxy_handler_instance = MyCustomHandler()
 
 
 # Set litellm.callbacks = [proxy_handler_instance] on the proxy
@@ -89,6 +92,7 @@ proxy_handler_instance = MyCustomHandler()
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=10)
 async def test_transcription_on_router():
+    proxy_handler_instance = MyCustomHandler()
     litellm.set_verbose = True
     litellm.callbacks = [proxy_handler_instance]
     print("\n Testing async transcription on router\n")
@@ -150,7 +154,9 @@ async def test_transcription_on_router():
 @pytest.mark.parametrize("mode", ["iterator"])  # "file",
 @pytest.mark.asyncio
 async def test_audio_speech_router(mode):
-
+    litellm.set_verbose = True
+    test_logger = MyCustomHandler()
+    litellm.callbacks = [test_logger]
     from litellm import Router
 
     client = Router(
@@ -178,9 +184,18 @@ async def test_audio_speech_router(mode):
         optional_params={},
     )
 
+    await asyncio.sleep(3)
+
     from litellm.llms.openai.openai import HttpxBinaryResponseContent
 
     assert isinstance(response, HttpxBinaryResponseContent)
+
+    assert test_logger.standard_logging_object is not None
+    print(
+        "standard_logging_object=",
+        json.dumps(test_logger.standard_logging_object, indent=4),
+    )
+    assert test_logger.standard_logging_object["model_group"] == "tts"
 
 
 @pytest.mark.asyncio()
@@ -211,6 +226,37 @@ async def test_rerank_endpoint(model_list):
     assert response.results is not None
 
     RerankResponse.model_validate(response)
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "model", ["omni-moderation-latest", "openai/omni-moderation-latest", None]
+)
+async def test_moderation_endpoint(model):
+    litellm.set_verbose = True
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+        ]
+    )
+
+    if model is None:
+        response = await router.amoderation(input="hello this is a test")
+    else:
+        response = await router.amoderation(model=model, input="hello this is a test")
+
+    print("moderation response: ", response)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

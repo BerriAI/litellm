@@ -1070,11 +1070,25 @@ response = completion(
 )
 ```
 
-### STS based Auth
+### STS (Role-based Auth)
 
-- Set `aws_role_name` and `aws_session_name` in completion() / embedding() function
+- Set `aws_role_name` and `aws_session_name`
+
+
+| LiteLLM Parameter | Boto3 Parameter | Description | Boto3 Documentation |
+|------------------|-----------------|-------------|-------------------|
+| `aws_access_key_id` | `aws_access_key_id` | AWS access key associated with an IAM user or role | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_secret_access_key` | `aws_secret_access_key` | AWS secret key associated with the access key | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_role_name` | `RoleArn` | The Amazon Resource Name (ARN) of the role to assume | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+| `aws_session_name` | `RoleSessionName` | An identifier for the assumed role session | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+
+
 
 Make the bedrock completion call
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import completion
 
@@ -1105,6 +1119,25 @@ response = completion(
             aws_session_name="my-test-session",
         )
 ```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      aws_role_name: arn:aws:iam::888602223428:role/iam_local_role # AWS RoleArn
+      aws_session_name: "bedrock-session" # AWS RoleSessionName
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID # [OPTIONAL - not required if using role]
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY # [OPTIONAL - not required if using role]
+```
+
+
+</TabItem>
+
+</Tabs>
 
 
 ### Passing an external BedrockRuntime.Client as a parameter - Completion()
@@ -1158,7 +1191,73 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
+## Calling via Proxy
 
+Here's how to call bedrock via your internal proxy.
+
+This example uses Cloudflare's AI Gateway.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "What's AWS?"}],
+    extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+    api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      litellm_params:
+        model: anthropic.claude-3-sonnet-20240229-v1:0
+        api_base: https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "anthropic-claude",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      { "content": "Hello, how are you?", "role": "user" }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Output URL**
+
+```bash
+https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse
+```
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
@@ -1373,3 +1472,5 @@ curl http://0.0.0.0:4000/rerank \
 
 </TabItem>
 </Tabs>
+
+

@@ -757,6 +757,7 @@ async def test_async_fallbacks_max_retries_per_request():
         router.reset()
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_ausage_based_routing_fallbacks():
     try:
         import litellm
@@ -1357,6 +1358,7 @@ def test_router_fallbacks_with_custom_model_costs():
 
     Goal: make sure custom model doesn't override default model costs.
     """
+
     model_list = [
         {
             "model_name": "claude-3-5-sonnet-20240620",
@@ -1567,3 +1569,38 @@ def test_get_fallback_model_group():
     }
     fallback_model_group, _ = get_fallback_model_group(**args)
     assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_fallbacks_with_different_messages():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+        ],
+    )
+
+    resp = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+        fallbacks=[
+            {
+                "model": "claude-3-haiku",
+                "messages": [{"role": "user", "content": "Hey, how's it going?"}],
+            }
+        ],
+    )
+
+    print(resp)

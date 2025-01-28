@@ -172,6 +172,11 @@ def main():
         "delete_organization",
         "list_organization",
         "user_update",
+        "new_budget",
+        "info_budget",
+        "update_budget",
+        "delete_budget",
+        "list_budget",
     ]
     # directory = "../../litellm/proxy/management_endpoints"  # LOCAL
     directory = "./litellm/proxy/management_endpoints"
