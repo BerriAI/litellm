@@ -4538,7 +4538,6 @@ def test_humanloop_completion(monkeypatch):
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
 
-
 def test_completion_novita_ai():
     try:
         litellm.set_verbose = True
@@ -4579,3 +4578,42 @@ def test_completion_novita_ai_dynamic_params(api_key):
         pytest.fail(f"This call should have failed!")
     except Exception as e:
         pass
+
+def test_deepseek_reasoning_content_completion():
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="deepseek/deepseek-reasoner",
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+    )
+
+    assert resp.choices[0].message.reasoning_content is not None
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected_result",
+    [("anthropic", {"anthropic-beta": "test"}), ("bedrock", {}), ("vertex_ai", {})],
+)
+def test_provider_specific_header(custom_llm_provider, expected_result):
+    from litellm.types.utils import ProviderSpecificHeader
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            resp = litellm.completion(
+                model="anthropic/claude-3-5-sonnet-v2@20241022",
+                messages=[{"role": "user", "content": "Hello world"}],
+                provider_specific_header=ProviderSpecificHeader(
+                    custom_llm_provider="anthropic",
+                    extra_headers={"anthropic-beta": "test"},
+                ),
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["headers"])
+        assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]

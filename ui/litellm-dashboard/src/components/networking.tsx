@@ -742,6 +742,38 @@ export const teamListCall = async (
   }
 };
 
+
+export const availableTeamListCall = async (
+  accessToken: String, 
+) => {
+  /**
+   * Get all available teams on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/available` : `/team/available`;
+    console.log("in availableTeamListCall");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("/team/available_teams API Response:", data);
+    return data;
+  } catch (error) {
+    throw error;
+  }
+};
+
 export const organizationListCall = async (accessToken: String) => {
   /**
    * Get all organizations on proxy
@@ -1286,7 +1318,8 @@ export const modelExceptionsCall = async (
 export const modelAvailableCall = async (
   accessToken: String,
   userID: String,
-  userRole: String
+  userRole: String,
+  return_wildcard_routes: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1294,6 +1327,9 @@ export const modelAvailableCall = async (
   console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName)
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
+    if (return_wildcard_routes === true) {
+      url += `?return_wildcard_routes=True`;
+    }
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
@@ -2278,7 +2314,7 @@ export const modelUpdateCall = async (
 export interface Member {
   role: string;
   user_id: string | null;
-  user_email: string | null;
+  user_email?: string | null;
 }
 
 export const teamMemberAddCall = async (
@@ -3050,3 +3086,31 @@ export const getProxyUISettings = async (
   }
 };
 
+
+
+export const getGuardrailsList = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Guardrails list response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch guardrails list:", error);
+    throw error;
+  }
+};

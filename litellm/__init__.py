@@ -50,10 +50,10 @@ if set_verbose == True:
     _turn_on_debug()
 ###############################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-input_callback: List[Union[str, Callable]] = []
-success_callback: List[Union[str, Callable]] = []
-failure_callback: List[Union[str, Callable]] = []
-service_callback: List[Union[str, Callable]] = []
+input_callback: List[Union[str, Callable, CustomLogger]] = []
+success_callback: List[Union[str, Callable, CustomLogger]] = []
+failure_callback: List[Union[str, Callable, CustomLogger]] = []
+service_callback: List[Union[str, Callable, CustomLogger]] = []
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -77,6 +77,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langfuse",
     "pagerduty",
     "humanloop",
+    "gcs_pubsub",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -87,16 +88,17 @@ callbacks: List[
 ] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
+prometheus_initialize_budget_metrics: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Callable] = (
+_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable]] = (
+_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Callable] = (
+_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -105,6 +107,7 @@ turn_off_message_logging: Optional[bool] = False
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
@@ -401,7 +404,7 @@ def identify(event_details):
 
 
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
-api_base = None
+api_base: Optional[str] = None
 headers = None
 api_version = None
 organization = None

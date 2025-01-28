@@ -224,8 +224,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 or "Timed out generating response" in error_str
             ):
                 exception_mapping_worked = True
+
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,

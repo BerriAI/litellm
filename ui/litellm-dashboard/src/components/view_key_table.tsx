@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall, modelAvailableCall } from "./networking";
+import { keyDeleteCall, modelAvailableCall, getGuardrailsList } from "./networking";
 import { add } from 'date-fns';
 import { InformationCircleIcon, StatusOnlineIcon, TrashIcon, PencilAltIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keySpendLogsCall, PredictedSpendLogsCall, keyUpdateCall, modelInfoCall, regenerateKeyCall } from "./networking";
@@ -26,6 +26,8 @@ import {
   TextInput,
   Textarea,
 } from "@tremor/react";
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select as Select3, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
 import {
   Button as Button2,
@@ -120,7 +122,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [infoDialogVisible, setInfoDialogVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
-  const [userModels, setUserModels] = useState([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
   const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
@@ -130,6 +132,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   // Function to check if user is admin of a team
   const isUserTeamAdmin = (team: any) => {
@@ -164,7 +167,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     });
 
     // If no team is selected, show all accessible keys
-    if (!selectedTeam && data) {
+    if ((!selectedTeam || selectedTeam.team_alias === "Default Team") && data) {
       const personalKeys = data.filter(key => !key.team_id || key.team_id === "default-team");
       const adminTeamKeys = teams
         .filter(team => isUserTeamAdmin(team))
@@ -236,17 +239,13 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
-        if (userID === null) {
+        if (userID === null || userRole === null || accessToken === null) {
           return;
         }
 
-        if (accessToken !== null && userRole !== null) {
-          const model_available = await modelAvailableCall(accessToken, userID, userRole);
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+        const models = await fetchAvailableModelsForTeamOrKey(userID, userRole, accessToken);
+        if (models) {
+          setUserModels(models);
         }
       } catch (error) {
         console.error("Error fetching user models:", error);
@@ -311,22 +310,49 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     const [keyTeam, setKeyTeam] = useState(selectedTeam);
     const [errorModels, setErrorModels] = useState<string[]>([]);
     const [errorBudget, setErrorBudget] = useState<boolean>(false);
+    const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+    useEffect(() => {
+      const fetchGuardrails = async () => {
+        try {
+          const response = await getGuardrailsList(accessToken);
+          const guardrailNames = response.guardrails.map(
+            (g: { guardrail_name: string }) => g.guardrail_name
+          );
+          setGuardrailsList(guardrailNames);
+        } catch (error) {
+          console.error("Failed to fetch guardrails:", error);
+        }
+      };
+
+      fetchGuardrails();
+    }, [accessToken]);
 
     let metadataString = '';
     try {
-      metadataString = JSON.stringify(token.metadata, null, 2);
+      // Create a copy of metadata without guardrails for display
+      const displayMetadata = { ...token.metadata };
+      delete displayMetadata.guardrails;
+      metadataString = JSON.stringify(displayMetadata, null, 2);
     } catch (error) {
       console.error("Error stringifying metadata:", error);
-      // You can choose a fallback, such as an empty string or a warning message
       metadataString = '';
     }
 
-    // Ensure token is defined and handle gracefully if not
+    // Extract existing guardrails from metadata
+    let existingGuardrails: string[] = [];
+    try {
+      existingGuardrails = token.metadata?.guardrails || [];
+    } catch (error) {
+      console.error("Error extracting guardrails:", error);
+    }
+
     const initialValues = token ? {
       ...token,
       budget_duration: token.budget_duration,
-      metadata: metadataString
-    } : { metadata: metadataString };
+      metadata: metadataString,
+      guardrails: existingGuardrails
+    } : { metadata: metadataString, guardrails: [] };
 
 
     const handleOk = () => {
@@ -395,20 +421,20 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     keyTeam.models.includes("all-proxy-models") ? (
                       userModels.filter(model => model !== "all-proxy-models").map((model: string) => (
                         <Option key={model} value={model}>
-                          {model}
+                          {getModelDisplayName(model)}
                         </Option>
                       ))
                     ) : (
                       keyTeam.models.map((model: string) => (
                         <Option key={model} value={model}>
-                          {model}
+                          {getModelDisplayName(model)}
                         </Option>
                       ))
                     )
                   ) : (
                     userModels.map((model: string) => (
                       <Option key={model} value={model}>
-                        {model}
+                        {getModelDisplayName(model)}
                       </Option>
                     ))
                   )}
@@ -507,6 +533,33 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               ]}
               >
                 <InputNumber step={1} precision={1} width={200} />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
+                    Guardrails{' '}
+                    <Tooltip title="Setup your first guardrail">
+                      <a 
+                        href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                      </a>
+                    </Tooltip>
+                  </span>
+                }
+                name="guardrails" 
+                className="mt-8"
+                help="Select existing guardrails or enter new ones"
+              >
+                <Select
+                  mode="tags"
+                  style={{ width: '100%' }}
+                  placeholder="Select or enter guardrails"
+                  options={guardrailsList.map(name => ({ value: name, label: name }))}
+                />
               </Form.Item>
               <Form.Item
                 label="Metadata (ensure this is valid JSON)"
@@ -731,7 +784,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     setSelectedToken(null);
   };
 
-  const handleEditSubmit = async (formValues: Record<string, any>) => {
+const handleEditSubmit = async (formValues: Record<string, any>) => {
   /**
    * Call API to update team with teamId and values
    * 
@@ -747,12 +800,23 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   // Convert metadata back to an object if it exists and is a string
   if (formValues.metadata && typeof formValues.metadata === 'string') {
     try {
-      formValues.metadata = JSON.parse(formValues.metadata);
+      const parsedMetadata = JSON.parse(formValues.metadata);
+      // Only add guardrails if they are set in form values
+      formValues.metadata = {
+        ...parsedMetadata,
+        ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {})
+      };
     } catch (error) {
       console.error("Error parsing metadata JSON:", error);
       message.error("Invalid metadata JSON for formValue " + formValues.metadata);
       return;
     }
+  } else {
+    // If metadata is not a string (or doesn't exist), only add guardrails if they are set
+    formValues.metadata = {
+      ...(formValues.metadata || {}),
+      ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {})
+    };
   }
 
   // Convert the budget_duration back to the API expected format
@@ -772,21 +836,27 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   console.log("handleEditSubmit:", formValues);
 
-  let newKeyValues = await keyUpdateCall(accessToken, formValues);
-  console.log("handleEditSubmit: newKeyValues", newKeyValues);
+  try {
+    let newKeyValues = await keyUpdateCall(accessToken, formValues);
+    console.log("handleEditSubmit: newKeyValues", newKeyValues);
 
-  // Update the keys with the update key
-  if (data) {
-    const updatedData = data.map((key) =>
-      key.token === currentKey ? newKeyValues : key
-    );
-    setData(updatedData);
+    // Update the keys with the update key
+    if (data) {
+      const updatedData = data.map((key) =>
+        key.token === currentKey ? newKeyValues : key
+      );
+      setData(updatedData);
+    }
+    message.success("Key updated successfully");
+
+    setEditModalVisible(false);
+    setSelectedToken(null);
+  } catch (error) {
+    console.error("Error updating key:", error);
+    message.error("Failed to update key");
   }
-  message.success("Key updated successfully");
+};
 
-  setEditModalVisible(false);
-  setSelectedToken(null);
-  };
 
 
   const handleDelete = async (token: any) => {
@@ -1022,7 +1092,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 </Badge>
               ) : (
                 <Badge key={index} size={"xs"} className="mb-1" color="blue">
-                  <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+                  <Text>{model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}</Text>
                 </Badge>
               )
             ))
@@ -1045,7 +1115,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             </Badge>
           ) : (
             <Badge key={index} size={"xs"} className="mb-1" color="blue">
-              <Text>{model.length > 30 ? `${model.slice(0, 30)}...` : model}</Text>
+              <Text>{model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}</Text>
             </Badge>
           )
         ))

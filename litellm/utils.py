@@ -71,6 +71,10 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     exception_type,
     get_error_message,
 )
+from litellm.litellm_core_utils.get_litellm_params import (
+    _get_base_model_from_litellm_call_metadata,
+    get_litellm_params,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     _is_non_openai_azure_model,
     get_llm_provider,
@@ -93,6 +97,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    ResponseMetadata,
+)
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -109,6 +116,7 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.anthropic import ANTHROPIC_API_ONLY_HEADERS
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -141,6 +149,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     ProviderField,
+    ProviderSpecificModelInfo,
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
@@ -314,9 +323,61 @@ def custom_llm_setup():
             litellm._custom_providers.append(custom_llm["provider"])
 
 
+def _add_custom_logger_callback_to_specific_event(
+    callback: str, logging_event: Literal["success", "failure"]
+) -> None:
+    """
+    Add a custom logger callback to the specific event
+    """
+    from litellm import _custom_logger_compatible_callbacks_literal
+    from litellm.litellm_core_utils.litellm_logging import (
+        _init_custom_logger_compatible_class,
+    )
+
+    if callback not in litellm._known_custom_logger_compatible_callbacks:
+        verbose_logger.debug(
+            f"Callback {callback} is not a valid custom logger compatible callback. Known list - {litellm._known_custom_logger_compatible_callbacks}"
+        )
+        return
+
+    callback_class = _init_custom_logger_compatible_class(
+        cast(_custom_logger_compatible_callbacks_literal, callback),
+        internal_usage_cache=None,
+        llm_router=None,
+    )
+
+    # don't double add a callback
+    if callback_class is not None and not any(
+        isinstance(cb, type(callback_class)) for cb in litellm.callbacks  # type: ignore
+    ):
+        if logging_event == "success":
+            litellm.success_callback.append(callback_class)
+            litellm._async_success_callback.append(callback_class)
+            if callback in litellm.success_callback:
+                litellm.success_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+            if callback in litellm._async_success_callback:
+                litellm._async_success_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+        elif logging_event == "failure":
+            litellm.failure_callback.append(callback_class)
+            litellm._async_failure_callback.append(callback_class)
+            if callback in litellm.failure_callback:
+                litellm.failure_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+            if callback in litellm._async_failure_callback:
+                litellm._async_failure_callback.remove(
+                    callback
+                )  # remove the string from the callback list
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+
     ### NOTICES ###
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -397,27 +458,11 @@ def function_setup(  # noqa: PLR0915
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
                     litellm._async_success_callback.append(callback)
                     removed_async_items.append(index)
-                elif callback in litellm._known_custom_logger_compatible_callbacks:
-                    from litellm.litellm_core_utils.litellm_logging import (
-                        _init_custom_logger_compatible_class,
-                    )
-
-                    callback_class = _init_custom_logger_compatible_class(
-                        callback,  # type: ignore
-                        internal_usage_cache=None,
-                        llm_router=None,  # type: ignore
-                    )
-
-                    # don't double add a callback
-                    if callback_class is not None and not any(
-                        isinstance(cb, type(callback_class)) for cb in litellm.callbacks
-                    ):
-                        litellm.callbacks.append(callback_class)  # type: ignore
-                        litellm.input_callback.append(callback_class)  # type: ignore
-                        litellm.success_callback.append(callback_class)  # type: ignore
-                        litellm.failure_callback.append(callback_class)  # type: ignore
-                        litellm._async_success_callback.append(callback_class)  # type: ignore
-                        litellm._async_failure_callback.append(callback_class)  # type: ignore
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
+                    _add_custom_logger_callback_to_specific_event(callback, "success")
 
             # Pop the async items from success_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
@@ -622,6 +667,44 @@ async def _client_async_logging_helper(
         )
 
 
+def _get_wrapper_num_retries(
+    kwargs: Dict[str, Any], exception: Exception
+) -> Tuple[Optional[int], Dict[str, Any]]:
+    """
+    Get the number of retries from the kwargs and the retry policy.
+    Used for the wrapper functions.
+    """
+
+    num_retries = kwargs.get("num_retries", None)
+    if num_retries is None:
+        num_retries = litellm.num_retries
+    if kwargs.get("retry_policy", None):
+        retry_policy_num_retries = get_num_retries_from_retry_policy(
+            exception=exception,
+            retry_policy=kwargs.get("retry_policy"),
+        )
+        kwargs["retry_policy"] = reset_retry_policy()
+        if retry_policy_num_retries is not None:
+            num_retries = retry_policy_num_retries
+
+    return num_retries, kwargs
+
+
+def _get_wrapper_timeout(
+    kwargs: Dict[str, Any], exception: Exception
+) -> Optional[Union[float, int, httpx.Timeout]]:
+    """
+    Get the timeout from the kwargs
+    Used for the wrapper functions.
+    """
+
+    timeout = cast(
+        Optional[Union[float, int, httpx.Timeout]], kwargs.get("timeout", None)
+    )
+
+    return timeout
+
+
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
@@ -735,19 +818,6 @@ def client(original_function):  # noqa: PLR0915
 
         except Exception as e:
             raise e
-
-    def _get_num_retries(
-        kwargs: Dict[str, Any], exception: Exception
-    ) -> Tuple[Optional[int], Dict[str, Any]]:
-        num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
-        if kwargs.get("retry_policy", None):
-            num_retries = get_num_retries_from_retry_policy(
-                exception=exception,
-                retry_policy=kwargs.get("retry_policy"),
-            )
-            kwargs["retry_policy"] = reset_retry_policy()
-
-        return num_retries, kwargs
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -920,6 +990,15 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    # RETURN RESULT
+                    update_response_metadata(
+                        result=result,
+                        logging_obj=logging_obj,
+                        model=model,
+                        kwargs=kwargs,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] is True:
                 return result
@@ -957,25 +1036,14 @@ def client(original_function):  # noqa: PLR0915
                 end_time,
             )
             # RETURN RESULT
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model or "",
-                    optional_params=getattr(logging_obj, "optional_params", {}),
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if result is not None:
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1107,39 +1175,17 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    update_response_metadata(
+                        result=result,
+                        logging_obj=logging_obj,
+                        model=model,
+                        kwargs=kwargs,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                     return result
             elif call_type == CallTypes.arealtime.value:
                 return result
-
-            # ADD HIDDEN PARAMS - additional call metadata
-            if hasattr(result, "_hidden_params"):
-                result._hidden_params["litellm_call_id"] = getattr(
-                    logging_obj, "litellm_call_id", None
-                )
-                result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
-                    "id", None
-                )
-                result._hidden_params["api_base"] = get_api_base(
-                    model=model or "",
-                    optional_params=kwargs,
-                )
-                result._hidden_params["response_cost"] = (
-                    logging_obj._response_cost_calculator(result=result)
-                )
-                result._hidden_params["additional_headers"] = process_response_headers(
-                    result._hidden_params.get("additional_headers") or {}
-                )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-            if (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
-                or isinstance(result, TranscriptionResponse)
-            ):
-                setattr(
-                    result,
-                    "_response_ms",
-                    (end_time - start_time).total_seconds() * 1000,
-                )  # return response latency in ms like openai
-
             ### POST-CALL RULES ###
             post_call_processing(
                 original_response=result, model=model, optional_params=kwargs
@@ -1181,6 +1227,15 @@ def client(original_function):  # noqa: PLR0915
                     end_time=end_time,
                 )
 
+            update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -1200,7 +1255,7 @@ def client(original_function):  # noqa: PLR0915
                     raise e
 
             call_type = original_function.__name__
-            num_retries, kwargs = _get_num_retries(kwargs=kwargs, exception=e)
+            num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict = kwargs.get(
                     "context_window_fallback_dict", {}
@@ -1209,9 +1264,11 @@ def client(original_function):  # noqa: PLR0915
                 _is_litellm_router_call = "model_group" in kwargs.get(
                     "metadata", {}
                 )  # check if call from litellm.router/proxy
+
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+
                     try:
                         litellm.num_retries = (
                             None  # set retries to None to prevent infinite loops
@@ -1232,6 +1289,7 @@ def client(original_function):  # noqa: PLR0915
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
                 ):
+
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]  # type: ignore
                     else:
@@ -1241,6 +1299,9 @@ def client(original_function):  # noqa: PLR0915
             setattr(
                 e, "num_retries", num_retries
             )  ## IMPORTANT: returns the deployment's num_retries to the router
+
+            timeout = _get_wrapper_timeout(kwargs=kwargs, exception=e)
+            setattr(e, "timeout", timeout)
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
@@ -1282,6 +1343,31 @@ def _is_async_request(
     ):
         return True
     return False
+
+
+def update_response_metadata(
+    result: Any,
+    logging_obj: LiteLLMLoggingObject,
+    model: Optional[str],
+    kwargs: dict,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    """
+    Updates response metadata, adds the following:
+        - response._hidden_params
+        - response._hidden_params["litellm_overhead_time_ms"]
+        - response.response_time_ms
+    """
+    if result is None:
+        return
+
+    metadata = ResponseMetadata(result)
+    metadata.set_hidden_params(logging_obj=logging_obj, model=model, kwargs=kwargs)
+    metadata.set_timing_metrics(
+        start_time=start_time, end_time=end_time, logging_obj=logging_obj
+    )
+    metadata.apply()
 
 
 def _select_tokenizer(
@@ -1813,6 +1899,13 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         verbose_logger.debug(
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
+
+        provider_info = get_provider_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if provider_info is not None and provider_info.get(key, False) is True:
+            return True
         return False
 
 
@@ -1873,23 +1966,11 @@ def supports_vision(model: str, custom_llm_provider: Optional[str] = None) -> bo
     Returns:
     bool: True if the model supports vision, False otherwise.
     """
-    try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if model_info.get("supports_vision", False) is True:
-            return True
-        return False
-    except Exception as e:
-        verbose_logger.error(
-            f"Model not found or error in checking vision support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
-        )
-        return False
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_vision",
+    )
 
 
 def supports_embedding_image_input(
@@ -1952,6 +2033,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         },
     }
     """
+
     loaded_model_cost = {}
     if isinstance(model_cost, dict):
         loaded_model_cost = model_cost
@@ -1969,6 +2051,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        verbose_logger.debug(
+            f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}"
+        )
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -2014,86 +2099,6 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             if key not in litellm.novita_models:
                 litellm.novita_models.append(key)
     return model_cost
-
-
-def get_litellm_params(
-    api_key: Optional[str] = None,
-    force_timeout=600,
-    azure=False,
-    logger_fn=None,
-    verbose=False,
-    hugging_face=False,
-    replicate=False,
-    together_ai=False,
-    custom_llm_provider: Optional[str] = None,
-    api_base: Optional[str] = None,
-    litellm_call_id=None,
-    model_alias_map=None,
-    completion_call_id=None,
-    metadata: Optional[dict] = None,
-    model_info=None,
-    proxy_server_request=None,
-    acompletion=None,
-    preset_cache_key=None,
-    no_log=None,
-    input_cost_per_second=None,
-    input_cost_per_token=None,
-    output_cost_per_token=None,
-    output_cost_per_second=None,
-    cooldown_time=None,
-    text_completion=None,
-    azure_ad_token_provider=None,
-    user_continue_message=None,
-    base_model: Optional[str] = None,
-    litellm_trace_id: Optional[str] = None,
-    hf_model_name: Optional[str] = None,
-    custom_prompt_dict: Optional[dict] = None,
-    litellm_metadata: Optional[dict] = None,
-    disable_add_transform_inline_image_block: Optional[bool] = None,
-    drop_params: Optional[bool] = None,
-    prompt_id: Optional[str] = None,
-    prompt_variables: Optional[dict] = None,
-    async_call: Optional[bool] = None,
-    **kwargs,
-) -> dict:
-    litellm_params = {
-        "acompletion": acompletion,
-        "api_key": api_key,
-        "force_timeout": force_timeout,
-        "logger_fn": logger_fn,
-        "verbose": verbose,
-        "custom_llm_provider": custom_llm_provider,
-        "api_base": api_base,
-        "litellm_call_id": litellm_call_id,
-        "model_alias_map": model_alias_map,
-        "completion_call_id": completion_call_id,
-        "metadata": metadata,
-        "model_info": model_info,
-        "proxy_server_request": proxy_server_request,
-        "preset_cache_key": preset_cache_key,
-        "no-log": no_log,
-        "stream_response": {},  # litellm_call_id: ModelResponse Dict
-        "input_cost_per_token": input_cost_per_token,
-        "input_cost_per_second": input_cost_per_second,
-        "output_cost_per_token": output_cost_per_token,
-        "output_cost_per_second": output_cost_per_second,
-        "cooldown_time": cooldown_time,
-        "text_completion": text_completion,
-        "azure_ad_token_provider": azure_ad_token_provider,
-        "user_continue_message": user_continue_message,
-        "base_model": base_model
-        or _get_base_model_from_litellm_call_metadata(metadata=metadata),
-        "litellm_trace_id": litellm_trace_id,
-        "hf_model_name": hf_model_name,
-        "custom_prompt_dict": custom_prompt_dict,
-        "litellm_metadata": litellm_metadata,
-        "disable_add_transform_inline_image_block": disable_add_transform_inline_image_block,
-        "drop_params": drop_params,
-        "prompt_id": prompt_id,
-        "prompt_variables": prompt_variables,
-        "async_call": async_call,
-    }
-    return litellm_params
 
 
 def _should_drop_param(k, additional_drop_params) -> bool:
@@ -3984,7 +3989,7 @@ def _get_potential_model_names(
     elif custom_llm_provider and model.startswith(
         custom_llm_provider + "/"
     ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
-        split_model = model.split("/")[1]
+        split_model = model.split("/", 1)[1]
         combined_model_name = model
         stripped_model_name = _strip_model_name(
             model=split_model, custom_llm_provider=custom_llm_provider
@@ -4047,6 +4052,26 @@ def _cached_get_model_info_helper(
     return _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
 
+def get_provider_info(
+    model: str, custom_llm_provider: Optional[str]
+) -> Optional[ProviderSpecificModelInfo]:
+    ## PROVIDER-SPECIFIC INFORMATION
+    # if custom_llm_provider == "predibase":
+    #     _model_info["supports_response_schema"] = True
+    provider_config: Optional[BaseLLMModelInfo] = None
+    if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+        # Check if the provider string exists in LlmProviders enum
+        provider_config = ProviderConfigManager.get_provider_model_info(
+            model=model, provider=LlmProviders(custom_llm_provider)
+        )
+
+    model_info: Optional[ProviderSpecificModelInfo] = None
+    if provider_config:
+        model_info = provider_config.get_provider_info(model=model)
+
+    return model_info
+
+
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
 ) -> ModelInfoBase:
@@ -4070,6 +4095,11 @@ def _get_model_info_helper(  # noqa: PLR0915
         potential_model_names = _get_potential_model_names(
             model=model, custom_llm_provider=custom_llm_provider
         )
+
+        verbose_logger.debug(
+            f"checking potential_model_names in litellm.model_cost: {potential_model_names}"
+        )
+
         combined_model_name = potential_model_names["combined_model_name"]
         stripped_model_name = potential_model_names["stripped_model_name"]
         combined_stripped_model_name = potential_model_names[
@@ -4110,7 +4140,6 @@ def _get_model_info_helper(  # noqa: PLR0915
 
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
-            provider_config: Optional[BaseLLMModelInfo] = None
 
             if combined_model_name in litellm.model_cost:
                 key = combined_model_name
@@ -4120,6 +4149,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and model in litellm.model_cost:
+
                 key = model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4130,6 +4160,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 _model_info is None
                 and combined_stripped_model_name in litellm.model_cost
             ):
+
                 key = combined_stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4137,6 +4168,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and stripped_model_name in litellm.model_cost:
+
                 key = stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4144,6 +4176,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and split_model in litellm.model_cost:
+
                 key = split_model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4151,28 +4184,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
 
-            if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
-                # Check if the provider string exists in LlmProviders enum
-                provider_config = ProviderConfigManager.get_provider_model_info(
-                    model=model, provider=LlmProviders(custom_llm_provider)
-                )
-
-            if _model_info is None and provider_config is not None:
-                _model_info = cast(
-                    Optional[Dict],
-                    provider_config.get_model_info(
-                        model=model, existing_model_info=_model_info
-                    ),
-                )
-                key = "provider_specific_model_info"
             if _model_info is None or key is None:
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
-
-            ## PROVIDER-SPECIFIC INFORMATION
-            if custom_llm_provider == "predibase":
-                _model_info["supports_response_schema"] = True
 
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
@@ -4355,6 +4370,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         model=model,
         custom_llm_provider=custom_llm_provider,
     )
+
+    verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
@@ -5564,22 +5581,6 @@ def get_logging_id(start_time, response_obj):
         return response_id
     except Exception:
         return None
-
-
-def _get_base_model_from_litellm_call_metadata(
-    metadata: Optional[dict],
-) -> Optional[str]:
-    if metadata is None:
-        return None
-
-    if metadata is not None:
-        model_info = metadata.get("model_info", {})
-
-        if model_info is not None:
-            base_model = model_info.get("base_model", None)
-            if base_model is not None:
-                return base_model
-    return None
 
 
 def _get_base_model_from_metadata(model_call_details=None):

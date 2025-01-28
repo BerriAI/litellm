@@ -98,6 +98,7 @@ class AnthropicConfig(BaseConfig):
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
     ) -> Optional[dict]:
+
         return type_to_response_format_param(
             response_format, ref_template="/$defs/{model}"
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755

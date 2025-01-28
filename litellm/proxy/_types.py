@@ -253,6 +253,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/team/available",
         "/user/info",
         "/model/info",
         "/v2/model/info",
@@ -284,6 +285,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/info",
         "/team/block",
         "/team/unblock",
+        "/team/available",
         # model
         "/model/new",
         "/model/update",
@@ -955,6 +957,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
+    guardrails: Optional[List[str]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -979,6 +982,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     models: Optional[list] = None
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
+    guardrails: Optional[List[str]] = None
     """
 
     team_id: str  # required
@@ -993,6 +997,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
+    guardrails: Optional[List[str]] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1088,6 +1093,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
+    created_at: Optional[datetime] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1479,7 +1485,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
                 # Check if the value is None and set the corresponding attribute
                 if getattr(self, attr_name, None) is None:
                     kwargs[attr_name] = value
-
+            if key == "end_user_id" and value is not None and isinstance(value, int):
+                kwargs[key] = str(value)
         # Initialize the superclass
         super().__init__(**kwargs)
 
@@ -1558,6 +1565,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
+    teams: List[str] = []
 
     @model_validator(mode="before")
     @classmethod
@@ -1566,6 +1574,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             values.update({"spend": 0.0})
         if values.get("models") is None:
             values.update({"models": []})
+        if values.get("teams") is None:
+            values.update({"teams": []})
         return values
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1982,6 +1992,8 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    key_model_access_denied = "key_model_access_denied"
+    team_model_access_denied = "team_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
@@ -2146,6 +2158,13 @@ class TeamListResponseObject(LiteLLM_TeamTable):
     keys: List  # list of keys that belong to the team
 
 
+class KeyListResponseObject(TypedDict, total=False):
+    keys: List[Union[str, UserAPIKeyAuth]]
+    total_count: Optional[int]
+    current_page: Optional[int]
+    total_pages: Optional[int]
+
+
 class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
@@ -2254,6 +2273,11 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "temp_budget_expiry",
 ]
 
+LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
+    "guardrails",
+    "tags",
+]
+
 
 class ProviderBudgetResponseObject(LiteLLMPydanticObjectBase):
     """
@@ -2288,7 +2312,6 @@ class ProxyStateVariables(TypedDict):
 UI_TEAM_ID = "litellm-dashboard"
 
 
-
 class JWTAuthBuilderResult(TypedDict):
     is_proxy_admin: bool
     team_object: Optional[LiteLLM_TeamTable]
@@ -2300,6 +2323,7 @@ class JWTAuthBuilderResult(TypedDict):
     user_id: Optional[str]
     end_user_id: Optional[str]
     org_id: Optional[str]
+
 
 class ClientSideFallbackModel(TypedDict, total=False):
     """

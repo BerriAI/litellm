@@ -32,12 +32,20 @@ def test_get_model_info_custom_llm_with_model_name():
     litellm.get_model_info(model)
 
 
-def test_get_model_info_custom_llm_with_same_name_vllm():
+def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
     """
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
+    litellm.register_model(
+        {
+            "openai/command-r-plus": {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+        }
+    )
     model_info = litellm.get_model_info(model, custom_llm_provider=provider)
     print("model_info", model_info)
     assert model_info["input_cost_per_token"] == 0.0

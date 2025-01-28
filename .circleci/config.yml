@@ -669,7 +669,7 @@ jobs:
           paths:
             - batches_coverage.xml
             - batches_coverage
-  secret_manager_testing:
+  litellm_utils_testing:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -697,13 +697,13 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/secret_manager_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml secret_manager_coverage.xml
-            mv .coverage secret_manager_coverage
+            mv coverage.xml litellm_utils_coverage.xml
+            mv .coverage litellm_utils_coverage
 
       # Store test results
       - store_test_results:
@@ -711,8 +711,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - secret_manager_coverage.xml
-            - secret_manager_coverage
+            - litellm_utils_coverage.xml
+            - litellm_utils_coverage
 
   pass_through_unit_testing:
     docker:
@@ -992,6 +992,7 @@ jobs:
       - run: ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/recursive_detector.py
       - run: python ./tests/code_coverage_tests/test_router_strategy_async.py
       - run: python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
       - run: python ./tests/documentation_tests/test_env_keys.py
@@ -2029,7 +2030,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - secret_manager_testing:
+      - litellm_utils_testing:
           filters:
             branches:
               only:
@@ -2057,7 +2058,7 @@ workflows:
           requires:
             - llm_translation_testing
             - batches_testing
-            - secret_manager_testing
+            - litellm_utils_testing
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
@@ -2113,7 +2114,7 @@ workflows:
             - test_bad_database_url
             - llm_translation_testing
             - batches_testing
-            - secret_manager_testing
+            - litellm_utils_testing
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing

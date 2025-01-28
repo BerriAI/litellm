@@ -1659,6 +1659,7 @@ def test_bedrock_completion_test_3():
     ]
 
 
+@pytest.mark.skip(reason="Skipping this test as Bedrock now supports this behavior.")
 @pytest.mark.parametrize("modify_params", [True, False])
 def test_bedrock_completion_test_4(modify_params):
     litellm.set_verbose = True
@@ -2056,7 +2057,7 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
         assert "tools" not in supported_openai_params
 
 
-class TestBedrockConverseChat(BaseLLMChatTest):
+class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2101,6 +2102,29 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         cost = completion_cost(response)
 
         assert cost > 0
+
+
+class TestBedrockConverseChatNormal(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    def test_multilingual_requests(self):
+        """
+        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass
 
 
 class TestBedrockRerank(BaseLLMRerankTest):
@@ -2429,3 +2453,33 @@ async def test_bedrock_image_url_sync_client():
         except Exception as e:
             print(e)
         mock_post.assert_called_once()
+
+
+def test_bedrock_error_handling_streaming():
+    from litellm.llms.bedrock.chat.invoke_handler import (
+        AWSEventStreamDecoder,
+        BedrockError,
+    )
+    from unittest.mock import patch, Mock
+
+    event = Mock()
+    event.to_response_dict = Mock(
+        return_value={
+            "status_code": 400,
+            "headers": {
+                ":exception-type": "serviceUnavailableException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            "body": b'{"message":"Bedrock is unable to process your request."}',
+        }
+    )
+
+    decoder = AWSEventStreamDecoder(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+    )
+    with pytest.raises(Exception) as e:
+        decoder._parse_message_from_event(event)
+    assert isinstance(e.value, BedrockError)
+    assert "Bedrock is unable to process your request." in e.value.message
+    assert e.value.status_code == 400

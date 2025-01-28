@@ -4063,3 +4063,20 @@ def test_mock_response_iterator_tool_use():
     response_chunk = completion_stream._chunk_parser(chunk_data=response)
 
     assert response_chunk["tool_use"] is not None
+
+
+def test_deepseek_reasoning_content_completion():
+    # litellm.set_verbose = True
+    resp = litellm.completion(
+        model="deepseek/deepseek-reasoner",
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+        stream=True,
+    )
+
+    reasoning_content_exists = False
+    for chunk in resp:
+        print(f"chunk: {chunk}")
+        if chunk.choices[0].delta.reasoning_content is not None:
+            reasoning_content_exists = True
+            break
+    assert reasoning_content_exists

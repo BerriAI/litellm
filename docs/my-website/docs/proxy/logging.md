@@ -2,10 +2,11 @@
 
 Log Proxy input, output, and exceptions using:
 
-- Lunary
 - Langfuse
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
+- Lunary
+- MLflow
 - Custom Callbacks
 - Langsmith
 - DataDog
@@ -183,55 +184,6 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 
 [👉 **Standard Logging Payload Specification**](./logging_spec)
 
-## Lunary
-### Step1: Install dependencies and set your environment variables 
-Install the dependencies
-```shell
-pip install litellm lunary
-```
-
-Get you Lunary public key from from https://app.lunary.ai/settings 
-```shell
-export LUNARY_PUBLIC_KEY="<your-public-key>"
-```
-
-### Step 2: Create a `config.yaml` and set `lunary` callbacks
-
-```yaml
-model_list:
-  - model_name: "*"
-    litellm_params:
-      model: "*"
-litellm_settings:
-  success_callback: ["lunary"]
-  failure_callback: ["lunary"]
-```
-
-### Step 3: Start the LiteLLM proxy
-```shell
-litellm --config config.yaml
-```
-
-### Step 4: Make a request
-
-```shell
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--d '{
-    "model": "gpt-4o",
-    "messages": [
-      {
-        "role": "system",
-        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
-      },
-      {
-        "role": "user",
-        "content": "how can I solve 8x + 7 = -23"
-      }
-    ]
-}'
-```
-
 ## Langfuse
 
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your environment
@@ -383,6 +335,108 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+### Custom Tags
+
+Set `tags` as part of your request body
+
+
+<Tabs>
+
+
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    user="palantir",
+    extra_body={
+        "metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{
+    "model": "llama3",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "user": "palantir",
+    "metadata": {
+        "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+    }
+}'
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-1234"
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model = "llama3",
+    user="palantir",
+    extra_body={
+        "metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
 
 
 ### LiteLLM Tags - `cache_hit`, `cache_key`
@@ -971,6 +1025,74 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
 
 
+
+## Google Cloud Storage - PubSub Topic
+
+Log LLM Logs/SpendLogs to [Google Cloud Storage PubSub Topic](https://cloud.google.com/pubsub/docs/reference/rest)
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LiteLLM `SpendLogs Table` to Google Cloud Storage PubSub Topic |
+
+When to use `gcs_pubsub`?
+
+- If your LiteLLM Database has crossed 1M+ spend logs and you want to send `SpendLogs` to a PubSub Topic that can be consumed by GCS BigQuery
+
+
+#### Usage
+
+1. Add `gcs_pubsub` to LiteLLM Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  callbacks: ["gcs_pubsub"] # 👈 KEY CHANGE # 👈 KEY CHANGE
+```
+
+2. Set required env variables
+
+```shell
+GCS_PUBSUB_TOPIC_ID="litellmDB"
+GCS_PUBSUB_PROJECT_ID="reliableKeys"
+```
+
+3. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+4. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+
 ## s3 Buckets
 
 We will use the `--config` to set 
@@ -1244,6 +1366,109 @@ LiteLLM supports customizing the following Datadog environment variables
 | `DD_VERSION` | Version tag for your logs | "unknown" | ❌ No |
 | `HOSTNAME` | Hostname tag for your logs | "" | ❌ No |
 | `POD_NAME` | Pod name tag (useful for Kubernetes deployments) | "unknown" | ❌ No |
+
+
+## Lunary
+#### Step1: Install dependencies and set your environment variables 
+Install the dependencies
+```shell
+pip install litellm lunary
+```
+
+Get you Lunary public key from from https://app.lunary.ai/settings 
+```shell
+export LUNARY_PUBLIC_KEY="<your-public-key>"
+```
+
+#### Step 2: Create a `config.yaml` and set `lunary` callbacks
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+litellm_settings:
+  success_callback: ["lunary"]
+  failure_callback: ["lunary"]
+```
+
+#### Step 3: Start the LiteLLM proxy
+```shell
+litellm --config config.yaml
+```
+
+#### Step 4: Make a request
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      {
+        "role": "user",
+        "content": "how can I solve 8x + 7 = -23"
+      }
+    ]
+}'
+```
+
+## MLflow
+
+
+#### Step1: Install dependencies
+Install the dependencies.
+
+```shell
+pip install litellm mlflow
+```
+
+#### Step 2: Create a `config.yaml` with `mlflow` callback
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+litellm_settings:
+  success_callback: ["mlflow"]
+  failure_callback: ["mlflow"]
+```
+
+#### Step 3: Start the LiteLLM proxy
+```shell
+litellm --config config.yaml
+```
+
+#### Step 4: Make a request
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ]
+}'
+```
+
+#### Step 5: Review traces
+
+Run the following command to start MLflow UI and review recorded traces.
+
+```shell
+mlflow ui
+```
+
+
 
 ## Custom Callback Class [Async]
 
