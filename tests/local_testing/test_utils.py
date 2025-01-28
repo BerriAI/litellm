@@ -1547,6 +1547,8 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setenv("OPENMETER_API_KEY", "wedlwe")
+    monkeypatch.setenv("OPENMETER_API_URL", "https://openmeter.dev")
 
     litellm.failure_callback = ["openmeter"]
 
