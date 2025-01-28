@@ -1677,11 +1677,6 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_call
     langfuse_logger = LangfusePromptManagement()
     litellm.callbacks.append(langfuse_logger)
 
-    # Get initial lengths
-    initial_success_callback_len = len(litellm.success_callback)
-    initial_async_success_callback_len = len(litellm._async_success_callback)
-    initial_callbacks_len = len(litellm.callbacks)
-
     # Make a completion call
     await litellm.acompletion(
         model="gpt-4o-mini",
@@ -1690,9 +1685,27 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_call
     )
 
     # Assert no new callbacks were added
-    assert len(litellm.success_callback) == initial_success_callback_len
-    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+    initial_callbacks_len = len(litellm.callbacks)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+    initial_success_callback_len = len(litellm.success_callback)
+    print(
+        f"Num callbacks before: litellm.callbacks: {len(litellm.callbacks)}, litellm._async_success_callback: {len(litellm._async_success_callback)}, litellm.success_callback: {len(litellm.success_callback)}"
+    )
+
+    for _ in range(10):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Testing duplicate callbacks",
+        )
+
     assert len(litellm.callbacks) == initial_callbacks_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+    assert len(litellm.success_callback) == initial_success_callback_len
+
+    print(
+        f"Num callbacks after 10 mock calls: litellm.callbacks: {len(litellm.callbacks)}, litellm._async_success_callback: {len(litellm._async_success_callback)}, litellm.success_callback: {len(litellm.success_callback)}"
+    )
 
 
 @pytest.mark.asyncio
