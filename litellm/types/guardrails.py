@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -7,15 +7,14 @@ from typing_extensions import Required, TypedDict
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
-litellm_settings:
-  guardrails:
-    - prompt_injection:
-        callbacks: [lakera_prompt_injection, prompt_injection_api_2]
-        default_on: true
-        enabled_roles: [system, user]
-    - detect_secrets:
-        callbacks: [hide_secrets]
-        default_on: true
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+      default_on: true
 """
 
 
@@ -26,6 +25,7 @@ class SupportedGuardrailIntegrations(Enum):
     LAKERA = "lakera"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
+    AIM = "aim"
 
 
 class Role(Enum):
@@ -103,11 +103,13 @@ class LitellmParams(TypedDict):
 
     # guardrails ai params
     guard_name: Optional[str]
+    default_on: Optional[bool]
 
 
-class Guardrail(TypedDict):
+class Guardrail(TypedDict, total=False):
     guardrail_name: str
     litellm_params: LitellmParams
+    guardrail_info: Optional[Dict]
 
 
 class guardrailConfig(TypedDict):
@@ -132,3 +134,16 @@ class BedrockContentItem(TypedDict, total=False):
 class BedrockRequest(TypedDict, total=False):
     source: Literal["INPUT", "OUTPUT"]
     content: List[BedrockContentItem]
+
+
+class DynamicGuardrailParams(TypedDict):
+    extra_body: Dict[str, Any]
+
+
+class GuardrailInfoResponse(BaseModel):
+    guardrail_name: Optional[str]
+    guardrail_info: Optional[Dict]  # This will contain all other fields
+
+
+class ListGuardrailsResponse(BaseModel):
+    guardrails: List[GuardrailInfoResponse]

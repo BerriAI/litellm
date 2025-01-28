@@ -344,10 +344,17 @@ async def test_get_remaining_model_group_usage():
         ]
     )
     for _ in range(2):
-        await router.acompletion(
+        resp = await router.acompletion(
             model="gemini/gemini-1.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
+        )
+        assert (
+            "x-ratelimit-remaining-tokens" in resp._hidden_params["additional_headers"]
+        )
+        assert (
+            "x-ratelimit-remaining-requests"
+            in resp._hidden_params["additional_headers"]
         )
         await asyncio.sleep(1)
 
@@ -357,3 +364,23 @@ async def test_get_remaining_model_group_usage():
     assert remaining_usage is not None
     assert "x-ratelimit-remaining-requests" in remaining_usage
     assert "x-ratelimit-remaining-tokens" in remaining_usage
+
+
+@pytest.mark.parametrize(
+    "potential_access_group, expected_result",
+    [("gemini-models", True), ("gemini-models-2", False), ("gemini/*", False)],
+)
+def test_router_get_model_access_groups(potential_access_group, expected_result):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": 1, "access_groups": ["gemini-models"]},
+            },
+        ]
+    )
+    access_groups = router._is_model_access_group_for_wildcard_route(
+        model_access_group=potential_access_group
+    )
+    assert access_groups == expected_result

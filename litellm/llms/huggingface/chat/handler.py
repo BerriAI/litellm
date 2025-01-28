@@ -203,7 +203,26 @@ class Huggingface(BaseLLM):
                     return self.async_streaming(logging_obj=logging_obj, api_base=completion_url, data=data, headers=headers, model_response=model_response, model=model, timeout=timeout, messages=messages)  # type: ignore
                 else:
                     ### ASYNC COMPLETION
-                    return self.acompletion(api_base=completion_url, data=data, headers=headers, model_response=model_response, task=task, encoding=encoding, model=model, optional_params=optional_params, timeout=timeout, litellm_params=litellm_params)  # type: ignore
+                    return self.acompletion(
+                        api_base=completion_url,
+                        data=data,
+                        headers=headers,
+                        model_response=model_response,
+                        encoding=encoding,
+                        model=model,
+                        optional_params=optional_params,
+                        timeout=timeout,
+                        litellm_params=litellm_params,
+                        logging_obj=logging_obj,
+                        api_key=api_key,
+                        messages=messages,
+                        client=(
+                            client
+                            if client is not None
+                            and isinstance(client, AsyncHTTPHandler)
+                            else None
+                        ),
+                    )
             if client is None or not isinstance(client, HTTPHandler):
                 client = _get_httpx_client()
             ### SYNC STREAMING
@@ -267,14 +286,16 @@ class Huggingface(BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: str,
         messages: List[AllMessageValues],
+        client: Optional[AsyncHTTPHandler] = None,
     ):
         response: Optional[httpx.Response] = None
         try:
-            http_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.HUGGINGFACE
-            )
+            if client is None:
+                client = get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.HUGGINGFACE
+                )
             ### ASYNC COMPLETION
-            http_response = await http_client.post(
+            http_response = await client.post(
                 url=api_base, headers=headers, data=json.dumps(data), timeout=timeout
             )
 
@@ -411,6 +432,7 @@ class Huggingface(BaseLLM):
         embed_url: str,
     ) -> dict:
         data: Dict = {}
+
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
             if len(input) == 0:
@@ -703,12 +725,14 @@ class Huggingface(BaseLLM):
                 token_logprob = token["logprob"]
 
                 # Add the token information to the 'token_info' list
-                _logprob.tokens.append(token_text)
-                _logprob.token_logprobs.append(token_logprob)
+                cast(List[str], _logprob.tokens).append(token_text)
+                cast(List[float], _logprob.token_logprobs).append(token_logprob)
 
                 # stub this to work with llm eval harness
                 top_alt_tokens = {"": -1.0, "": -2.0, "": -3.0}  # noqa: F601
-                _logprob.top_logprobs.append(top_alt_tokens)
+                cast(List[Dict[str, float]], _logprob.top_logprobs).append(
+                    top_alt_tokens
+                )
 
             # For each element in the 'tokens' list, extract the relevant information
             for i, token in enumerate(response_details["tokens"]):
@@ -730,13 +754,15 @@ class Huggingface(BaseLLM):
                     top_alt_tokens[text] = logprob
 
                 # Add the token information to the 'token_info' list
-                _logprob.tokens.append(token_text)
-                _logprob.token_logprobs.append(token_logprob)
-                _logprob.top_logprobs.append(top_alt_tokens)
+                cast(List[str], _logprob.tokens).append(token_text)
+                cast(List[float], _logprob.token_logprobs).append(token_logprob)
+                cast(List[Dict[str, float]], _logprob.top_logprobs).append(
+                    top_alt_tokens
+                )
 
                 # Add the text offset of the token
                 # This is computed as the sum of the lengths of all previous tokens
-                _logprob.text_offset.append(
+                cast(List[int], _logprob.text_offset).append(
                     sum(len(t["text"]) for t in response_details["tokens"][:i])
                 )
 

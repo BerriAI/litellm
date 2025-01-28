@@ -133,7 +133,7 @@ def test_completion_xai(stream):
             for chunk in response:
                 print(chunk)
                 assert chunk is not None
-                assert isinstance(chunk, litellm.ModelResponse)
+                assert isinstance(chunk, litellm.ModelResponseStream)
                 assert isinstance(chunk.choices[0], litellm.utils.StreamingChoices)
 
         else:

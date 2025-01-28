@@ -3,27 +3,26 @@ Common utilities used across bedrock chat/embedding/image generation
 """
 
 import os
+import re
 import types
 from enum import Enum
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import (
+    BaseConfig,
+    BaseLLMException,
+    LiteLLMLoggingObj,
+)
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 
-class BedrockError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://us-west-2.console.aws.amazon.com/bedrock"
-        )
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+class BedrockError(BaseLLMException):
+    pass
 
 
 class AmazonBedrockGlobalConfig:
@@ -43,15 +42,34 @@ class AmazonBedrockGlobalConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
+    def get_all_regions(self) -> List[str]:
+        return (
+            self.get_us_regions()
+            + self.get_eu_regions()
+            + self.get_ap_regions()
+            + self.get_ca_regions()
+            + self.get_sa_regions()
+        )
+
+    def get_ap_regions(self) -> List[str]:
+        return ["ap-northeast-1", "ap-northeast-2", "ap-northeast-3", "ap-south-1"]
+
+    def get_sa_regions(self) -> List[str]:
+        return ["sa-east-1"]
+
     def get_eu_regions(self) -> List[str]:
         """
         Source: https://www.aws-services.info/bedrock.html
         """
         return [
             "eu-west-1",
+            "eu-west-2",
             "eu-west-3",
             "eu-central-1",
         ]
+
+    def get_ca_regions(self) -> List[str]:
+        return ["ca-central-1"]
 
     def get_us_regions(self) -> List[str]:
         """
@@ -60,12 +78,71 @@ class AmazonBedrockGlobalConfig:
         return [
             "us-east-2",
             "us-east-1",
+            "us-west-1",
             "us-west-2",
             "us-gov-west-1",
         ]
 
 
-class AmazonTitanConfig:
+class AmazonInvokeMixin:
+    """
+    Base class for bedrock models going through invoke_handler.py
+    """
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return BedrockError(
+            message=error_message,
+            status_code=status_code,
+            headers=headers,
+        )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        raise NotImplementedError(
+            "transform_request not implemented for config. Done in invoke_handler.py"
+        )
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        raise NotImplementedError(
+            "transform_response not implemented for config. Done in invoke_handler.py"
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        raise NotImplementedError(
+            "validate_environment not implemented for config. Done in invoke_handler.py"
+        )
+
+
+class AmazonTitanConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-text-express-v1
 
@@ -100,6 +177,7 @@ class AmazonTitanConfig:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -111,6 +189,62 @@ class AmazonTitanConfig:
             )
             and v is not None
         }
+
+    def _map_and_modify_arg(
+        self,
+        supported_params: dict,
+        provider: str,
+        model: str,
+        stop: Union[List[str], str],
+    ):
+        """
+        filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
+        """
+        filtered_stop = None
+        if "stop" in supported_params and litellm.drop_params:
+            if provider == "bedrock" and "amazon" in model:
+                filtered_stop = []
+                if isinstance(stop, list):
+                    for s in stop:
+                        if re.match(r"^(\|+|User:)$", s):
+                            filtered_stop.append(s)
+        if filtered_stop is not None:
+            supported_params["stop"] = filtered_stop
+
+        return supported_params
+
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return [
+            "max_tokens",
+            "max_completion_tokens",
+            "stop",
+            "temperature",
+            "top_p",
+            "stream",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens" or k == "max_completion_tokens":
+                optional_params["maxTokenCount"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "stop":
+                filtered_stop = self._map_and_modify_arg(
+                    {"stop": v}, provider="bedrock", model=model, stop=v
+                )
+                optional_params["stopSequences"] = filtered_stop["stop"]
+            if k == "top_p":
+                optional_params["topP"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
 
 
 class AmazonAnthropicClaude3Config:
@@ -276,7 +410,7 @@ class AmazonAnthropicConfig:
         return optional_params
 
 
-class AmazonCohereConfig:
+class AmazonCohereConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=command
 
@@ -308,6 +442,7 @@ class AmazonCohereConfig:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -320,8 +455,31 @@ class AmazonCohereConfig:
             and v is not None
         }
 
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return [
+            "max_tokens",
+            "temperature",
+            "stream",
+        ]
 
-class AmazonAI21Config:
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "stream":
+                optional_params["stream"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "max_tokens":
+                optional_params["max_tokens"] = v
+        return optional_params
+
+
+class AmazonAI21Config(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
 
@@ -371,6 +529,7 @@ class AmazonAI21Config:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -383,13 +542,39 @@ class AmazonAI21Config:
             and v is not None
         }
 
+    def get_supported_openai_params(self, model: str) -> List:
+        return [
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stream",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["maxTokens"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "top_p":
+                optional_params["topP"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
+
 
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman: "
     AI_PROMPT = "\n\nAssistant: "
 
 
-class AmazonLlamaConfig:
+class AmazonLlamaConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=meta.llama2-13b-chat-v1
 
@@ -421,6 +606,7 @@ class AmazonLlamaConfig:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -433,8 +619,34 @@ class AmazonLlamaConfig:
             and v is not None
         }
 
+    def get_supported_openai_params(self, model: str) -> List:
+        return [
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stream",
+        ]
 
-class AmazonMistralConfig:
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["max_gen_len"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "top_p":
+                optional_params["top_p"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
+
+
+class AmazonMistralConfig(AmazonInvokeMixin, BaseConfig):
     """
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral.html
     Supported Params for the Amazon / Mistral models:
@@ -471,6 +683,7 @@ class AmazonMistralConfig:
             k: v
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
+            and not k.startswith("_abc")
             and not isinstance(
                 v,
                 (
@@ -482,6 +695,29 @@ class AmazonMistralConfig:
             )
             and v is not None
         }
+
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return ["max_tokens", "temperature", "top_p", "stop", "stream"]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        for k, v in non_default_params.items():
+            if k == "max_tokens":
+                optional_params["max_tokens"] = v
+            if k == "temperature":
+                optional_params["temperature"] = v
+            if k == "top_p":
+                optional_params["top_p"] = v
+            if k == "stop":
+                optional_params["stop"] = v
+            if k == "stream":
+                optional_params["stream"] = v
+        return optional_params
 
 
 def add_custom_header(headers):

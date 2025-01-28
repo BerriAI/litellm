@@ -317,7 +317,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
             _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
-
             if _model is not None:
 
                 if _tpm_limit_for_key_model:
@@ -325,6 +324,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
                 if _rpm_limit_for_key_model:
                     rpm_limit_for_model = _rpm_limit_for_key_model.get(_model)
+
             if current is None:
                 new_val = {
                     "current_requests": 1,
@@ -485,6 +485,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         )
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
+
             global_max_parallel_requests = kwargs["litellm_params"]["metadata"].get(
                 "global_max_parallel_requests", None
             )
@@ -494,6 +495,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
             user_api_key_team_id = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_team_id", None
+            )
+            user_api_key_model_max_budget = kwargs["litellm_params"]["metadata"].get(
+                "user_api_key_model_max_budget", None
             )
             user_api_key_end_user_id = kwargs.get("user")
 
@@ -568,6 +572,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 and (
                     "model_rpm_limit" in user_api_key_metadata
                     or "model_tpm_limit" in user_api_key_metadata
+                    or user_api_key_model_max_budget is not None
                 )
             ):
                 request_count_api_key = (

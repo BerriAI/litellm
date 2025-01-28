@@ -356,6 +356,7 @@ class HuggingfaceChatConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: Dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "content-type": "application/json",

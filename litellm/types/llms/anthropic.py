@@ -334,3 +334,13 @@ from .openai import ChatCompletionUsageBlock
 class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+
+
+ANTHROPIC_API_HEADERS = {
+    "anthropic-version",
+    "anthropic-beta",
+}
+
+ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
+    "anthropic-beta",
+}

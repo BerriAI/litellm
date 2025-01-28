@@ -135,7 +135,7 @@ class CompletionCustomHandler(
             ## END TIME
             assert isinstance(end_time, datetime)
             ## RESPONSE OBJECT
-            assert isinstance(response_obj, litellm.ModelResponse)
+            assert isinstance(response_obj, litellm.ModelResponseStream)
             ## KWARGS
             assert isinstance(kwargs["model"], str)
             assert isinstance(kwargs["messages"], list) and isinstance(
@@ -1264,7 +1264,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
-            assert "redacted-by-litellm" == slobject["response"]
+            assert {"text": "redacted-by-litellm"} == slobject["response"]
 
 
 @pytest.mark.parametrize(
@@ -1358,7 +1358,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
         if turn_off_message_logging:
             print("checks redacted-by-litellm")
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
-            assert "redacted-by-litellm" == slobject["response"]
+            assert {"text": "redacted-by-litellm"} == slobject["response"]
 
 
 @pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
@@ -1467,7 +1467,9 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
                 "redacted-by-litellm"
                 == standard_logging_object["messages"][0]["content"]
             )
-            assert "redacted-by-litellm" == standard_logging_object["response"]
+            assert {"text": "redacted-by-litellm"} == standard_logging_object[
+                "response"
+            ]
 
 
 def test_logging_standard_payload_failure_call():

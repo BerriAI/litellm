@@ -12,7 +12,7 @@ class AthinaLogger:
             "athina-api-key": self.athina_api_key,
             "Content-Type": "application/json",
         }
-        self.athina_logging_url = "https://log.athina.ai/api/v1/log/inference"
+        self.athina_logging_url = os.getenv("ATHINA_BASE_URL", "https://log.athina.ai") + "/api/v1/log/inference"
         self.additional_keys = [
             "environment",
             "prompt_slug",

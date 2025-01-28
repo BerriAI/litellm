@@ -351,6 +351,16 @@ class LangsmithLogger(CustomBatchLogger):
                 queue_objects=batch_group.queue_objects,
             )
 
+    def _add_endpoint_to_url(
+        self, url: str, endpoint: str, api_version: str = "/api/v1"
+    ) -> str:
+        if api_version not in url:
+            url = f"{url.rstrip('/')}{api_version}"
+
+        if url.endswith("/"):
+            return f"{url}{endpoint}"
+        return f"{url}/{endpoint}"
+
     async def _log_batch_on_langsmith(
         self,
         credentials: LangsmithCredentialsObject,
@@ -370,7 +380,7 @@ class LangsmithLogger(CustomBatchLogger):
         """
         langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
         langsmith_api_key = credentials["LANGSMITH_API_KEY"]
-        url = f"{langsmith_api_base}/runs/batch"
+        url = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
         headers = {"x-api-key": langsmith_api_key}
         elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 

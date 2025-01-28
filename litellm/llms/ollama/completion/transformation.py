@@ -347,10 +347,17 @@ class OllamaConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return headers
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         """
         OPTIONAL
 

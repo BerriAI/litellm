@@ -2185,12 +2185,7 @@ def get_image_details(image_url) -> Tuple[str, str]:
         # Convert the image content to base64 bytes
         base64_bytes = base64.b64encode(response.content).decode("utf-8")
 
-        # Get mime-type
-        mime_type = content_type.split("/")[
-            1
-        ]  # Extract mime-type from content-type header
-
-        return base64_bytes, mime_type
+        return base64_bytes, content_type
 
     except Exception as e:
         raise e
@@ -2216,48 +2211,35 @@ def _process_bedrock_converse_image_block(
             mime_type = "image/jpeg"
             image_format = "jpeg"
         _blob = BedrockSourceBlock(bytes=img_without_base_64)
-        supported_image_formats = (
-            litellm.AmazonConverseConfig().get_supported_image_types()
-        )
-        supported_document_types = (
-            litellm.AmazonConverseConfig().get_supported_document_types()
-        )
-        if image_format in supported_image_formats:
-            return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))  # type: ignore
-        elif image_format in supported_document_types:
-            return BedrockContentBlock(document=BedrockDocumentBlock(source=_blob, format=image_format, name="DocumentPDFmessages_{}".format(str(uuid.uuid4()))))  # type: ignore
-        else:
-            # Handle the case when the image format is not supported
-            raise ValueError(
-                "Unsupported image format: {}. Supported formats: {}".format(
-                    image_format, supported_image_formats
-                )
-            )
+
     elif "https:/" in image_url:
         # Case 2: Images with direct links
-        image_bytes, image_format = get_image_details(image_url)
+        image_bytes, mime_type = get_image_details(image_url)
+        image_format = mime_type.split("/")[1]
         _blob = BedrockSourceBlock(bytes=image_bytes)
-        supported_image_formats = (
-            litellm.AmazonConverseConfig().get_supported_image_types()
-        )
-        supported_document_types = (
-            litellm.AmazonConverseConfig().get_supported_document_types()
-        )
-        if image_format in supported_image_formats:
-            return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))  # type: ignore
-        elif image_format in supported_document_types:
-            return BedrockContentBlock(document=BedrockDocumentBlock(source=_blob, format=image_format, name="DocumentPDFmessages_{}".format(str(uuid.uuid4()))))  # type: ignore
-        else:
-            # Handle the case when the image format is not supported
-            raise ValueError(
-                "Unsupported image format: {}. Supported formats: {}".format(
-                    image_format, supported_image_formats
-                )
-            )
     else:
         raise ValueError(
             "Unsupported image type. Expected either image url or base64 encoded string - \
                 e.g. 'data:image/jpeg;base64,<base64-encoded-string>'"
+        )
+
+    supported_image_formats = litellm.AmazonConverseConfig().get_supported_image_types()
+
+    document_types = ["application", "text"]
+    is_document = any(
+        mime_type.startswith(document_type) for document_type in document_types
+    )
+
+    if image_format in supported_image_formats:
+        return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))  # type: ignore
+    elif is_document:
+        return BedrockContentBlock(document=BedrockDocumentBlock(source=_blob, format=image_format, name="DocumentPDFmessages_{}".format(str(uuid.uuid4()))))  # type: ignore
+    else:
+        # Handle the case when the image format is not supported
+        raise ValueError(
+            "Unsupported image format: {}. Supported formats: {}".format(
+                image_format, supported_image_formats
+            )
         )
 
 

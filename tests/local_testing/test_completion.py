@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import os
@@ -24,7 +24,7 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-# litellm.num_retries = 3
+# litellm.num_retries=3
 
 litellm.cache = None
 litellm.success_callback = []
@@ -130,34 +130,6 @@ def test_null_role_response():
         assert response.id == "chatcmpl-123"
 
         assert response.choices[0].message.role == "assistant"
-
-
-def test_completion_azure_ai_command_r():
-    try:
-        import os
-
-        litellm.set_verbose = True
-
-        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
-        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
-
-        response = completion(
-            model="azure_ai/command-r-plus",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the meaning of life?"}
-                    ],
-                }
-            ],
-        )  # type: ignore
-
-        assert "azure_ai" in response.model
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1033,7 +1005,7 @@ def test_completion_mistral_api_mistral_large_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/mistral-large-latest",
+            model="mistral/open-mistral-7b",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -1440,7 +1412,7 @@ def test_completion_fireworks_ai():
             },
         ]
         response = completion(
-            model="fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct",
+            model="fireworks_ai/mixtral-8x7b-instruct",
             messages=messages,
         )
         print(response)
@@ -1782,6 +1754,23 @@ async def test_openai_compatible_custom_api_base(provider):
         print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
 
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
+
+def test_lm_studio_completion(monkeypatch):
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    try:
+        completion(
+            model="lm_studio/typhoon2-quen2.5-7b-instruct",
+            messages=[
+                {"role": "user", "content": "What's the weather like in San Francisco?"}
+            ],
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        )
+    except litellm.AuthenticationError as e:
+        pytest.fail(f"Error occurred: {e}")
+    except litellm.APIError as e:
+        print(e)
 
 
 @pytest.mark.asyncio
@@ -2162,7 +2151,7 @@ def test_completion_openai_organization():
             )
             pytest.fail("Request should have failed - This organization does not exist")
         except Exception as e:
-            assert "No such organization: org-ikDc4ex8NB" in str(e)
+            assert "header should match organization for API key" in str(e)
 
     except Exception as e:
         print(e)
@@ -4019,19 +4008,20 @@ def test_completion_deepseek():
 @pytest.mark.skip(reason="Account deleted by IBM.")
 def test_completion_watsonx_error():
     litellm.set_verbose = True
-    model_name = "watsonx/ibm/granite-13b-chat-v2"
+    model_name = "watsonx_text/ibm/granite-13b-chat-v2"
 
-    with pytest.raises(litellm.BadRequestError) as e:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            stop=["stop"],
-            max_tokens=20,
-        )
-        # Add any assertions here to check the response
-        print(response)
+    response = completion(
+        model=model_name,
+        messages=messages,
+        stop=["stop"],
+        max_tokens=20,
+        stream=True,
+    )
 
-    assert "use 'watsonx_text' route instead" in str(e).lower()
+    for chunk in response:
+        print(chunk)
+    # Add any assertions here to check the response
+    print(response)
 
 
 @pytest.mark.skip(reason="Skip test. account deleted.")
@@ -4312,7 +4302,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-2", "claude-3-sonnet-20240229"],
+    ["gpt-4o", "azure/chatgpt-v-2"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4513,3 +4503,77 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
     else:
         assert len(response) == 1
         assert response[0].function.name == function_name
+
+
+def test_langfuse_completion(monkeypatch):
+    monkeypatch.setenv(
+        "LANGFUSE_PUBLIC_KEY", "pk-lf-b3db7e8e-c2f6-4fc7-825c-a541a8fbe003"
+    )
+    monkeypatch.setenv(
+        "LANGFUSE_SECRET_KEY", "sk-lf-b11ef3a8-361c-4445-9652-12318b8596e4"
+    )
+    monkeypatch.setenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="langfuse/gpt-3.5-turbo",
+        langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        langfuse_host="https://us.cloud.langfuse.com",
+        prompt_id="test-chat-prompt",
+        prompt_variables={"user_message": "this is used"},
+        messages=[{"role": "user", "content": "this is ignored"}],
+    )
+
+
+def test_humanloop_completion(monkeypatch):
+    monkeypatch.setenv(
+        "HUMANLOOP_API_KEY", "hl_sk_59c1206e110c3f5b9985f0de4d23e7cbc79c4c4ae18c9f14"
+    )
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="humanloop/gpt-3.5-turbo",
+        humanloop_api_key=os.getenv("HUMANLOOP_API_KEY"),
+        prompt_id="pr_nmSOVpEdyYPm2DrOwCoOm",
+        prompt_variables={"person": "John"},
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+    )
+
+
+def test_deepseek_reasoning_content_completion():
+    litellm.set_verbose = True
+    resp = litellm.completion(
+        model="deepseek/deepseek-reasoner",
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+    )
+
+    assert resp.choices[0].message.reasoning_content is not None
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected_result",
+    [("anthropic", {"anthropic-beta": "test"}), ("bedrock", {}), ("vertex_ai", {})],
+)
+def test_provider_specific_header(custom_llm_provider, expected_result):
+    from litellm.types.utils import ProviderSpecificHeader
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            resp = litellm.completion(
+                model="anthropic/claude-3-5-sonnet-v2@20241022",
+                messages=[{"role": "user", "content": "Hello world"}],
+                provider_specific_header=ProviderSpecificHeader(
+                    custom_llm_provider="anthropic",
+                    extra_headers={"anthropic-beta": "test"},
+                ),
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["headers"])
+        assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]

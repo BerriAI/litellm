@@ -8,6 +8,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ModelResponse
+from litellm.utils import supports_response_schema
 
 from ....exceptions import UnsupportedParamsError
 from ....types.llms.openai import (
@@ -105,6 +106,19 @@ class AzureOpenAIConfig(BaseConfig):
             "parallel_tool_calls",
         ]
 
+    def _is_response_format_supported_model(self, model: str) -> bool:
+        """
+        - all 4o models are supported
+        - check if 'supports_response_format' is True from get_model_info
+        - [TODO] support smart retries for 3.5 models (some supported, some not)
+        """
+        if "4o" in model:
+            return True
+        elif supports_response_schema(model):
+            return True
+
+        return False
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -176,10 +190,14 @@ class AzureOpenAIConfig(BaseConfig):
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
+                _is_response_format_supported_model = (
+                    self._is_response_format_supported_model(model)
+                )
                 if json_schema is not None and (
                     (api_version_year <= "2024" and api_version_month < "08")
-                    or "gpt-4o" not in model
-                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema' only for gpt-4o
+                    or not _is_response_format_supported_model
+                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema' only for gpt-4o/3.5 models
+
                     _tool_choice = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(
@@ -283,6 +301,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         raise NotImplementedError(
             "Azure OpenAI has custom logic for validating environment, as it uses the OpenAI SDK."

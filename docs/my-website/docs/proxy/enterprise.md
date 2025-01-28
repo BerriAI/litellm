@@ -17,6 +17,7 @@ Features:
     - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
     - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
@@ -29,6 +30,7 @@ Features:
 - **Spend Tracking & Data Exports**
     - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
     - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
+    - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
     - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
 - **Prometheus Metrics**

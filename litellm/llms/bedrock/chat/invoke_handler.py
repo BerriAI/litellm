@@ -9,7 +9,17 @@ import types
 import urllib.parse
 import uuid
 from functools import partial
-from typing import Any, AsyncIterator, Callable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx  # type: ignore
 
@@ -18,6 +28,7 @@ from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     construct_tool_use_system_prompt,
@@ -36,8 +47,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, get_secret
@@ -159,7 +172,7 @@ async def make_call(
     data: str,
     model: str,
     messages: list,
-    logging_obj,
+    logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
 ):
@@ -174,6 +187,7 @@ async def make_call(
             headers=headers,
             data=data,
             stream=not fake_stream,
+            logging_obj=logging_obj,
         )
 
         if response.status_code != 200:
@@ -565,7 +579,7 @@ class BedrockLLM(BaseAWSLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: Logging,
         optional_params: dict,
         acompletion: bool,
         timeout: Optional[Union[float, httpx.Timeout]],
@@ -791,7 +805,7 @@ class BedrockLLM(BaseAWSLLM):
             )
             raise BedrockError(
                 status_code=404,
-                message="Bedrock HTTPX: Unknown provider={}, model={}".format(
+                message="Bedrock Invoke HTTPX: Unknown provider={}, model={}. Try calling via converse route - `bedrock/converse/<model>`.".format(
                     provider, model
                 ),
             )
@@ -878,11 +892,12 @@ class BedrockLLM(BaseAWSLLM):
                 headers=prepped.headers,  # type: ignore
                 data=data,
                 stream=stream,
+                logging_obj=logging_obj,
             )
 
             if response.status_code != 200:
                 raise BedrockError(
-                    status_code=response.status_code, message=response.read()
+                    status_code=response.status_code, message=str(response.read())
                 )
 
             decoder = AWSEventStreamDecoder(model=model)
@@ -905,7 +920,12 @@ class BedrockLLM(BaseAWSLLM):
             return streaming_response
 
         try:
-            response = self.client.post(url=proxy_endpoint_url, headers=prepped.headers, data=data)  # type: ignore
+            response = self.client.post(
+                url=proxy_endpoint_url,
+                headers=dict(prepped.headers),
+                data=data,
+                logging_obj=logging_obj,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -937,7 +957,7 @@ class BedrockLLM(BaseAWSLLM):
         data: str,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
-        logging_obj,
+        logging_obj: Logging,
         stream,
         optional_params: dict,
         litellm_params=None,
@@ -956,7 +976,13 @@ class BedrockLLM(BaseAWSLLM):
             client = client  # type: ignore
 
         try:
-            response = await client.post(api_base, headers=headers, data=data)  # type: ignore
+            response = await client.post(
+                api_base,
+                headers=headers,
+                data=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -978,6 +1004,7 @@ class BedrockLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
+    @track_llm_api_timing()  # for streaming, we need to instrument the function calling the wrapper
     async def async_streaming(
         self,
         model: str,
@@ -988,7 +1015,7 @@ class BedrockLLM(BaseAWSLLM):
         data: str,
         timeout: Optional[Union[float, httpx.Timeout]],
         encoding,
-        logging_obj,
+        logging_obj: Logging,
         stream,
         optional_params: dict,
         litellm_params=None,
@@ -1235,7 +1262,23 @@ class AWSEventStreamDecoder:
         parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
 
         if response_dict["status_code"] != 200:
-            raise ValueError(f"Bad response code, expected 200: {response_dict}")
+            decoded_body = response_dict["body"].decode()
+            if isinstance(decoded_body, dict):
+                error_message = decoded_body.get("message")
+            elif isinstance(decoded_body, str):
+                error_message = decoded_body
+            else:
+                error_message = ""
+            exception_status = response_dict["headers"].get(":exception-type")
+            error_message = exception_status + " " + error_message
+            raise BedrockError(
+                status_code=response_dict["status_code"],
+                message=(
+                    json.dumps(error_message)
+                    if isinstance(error_message, dict)
+                    else error_message
+                ),
+            )
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
@@ -1294,10 +1337,24 @@ class MockResponseIterator:  # for returning ai21 streaming responses
             chunk_usage: Usage = getattr(chunk_data, "usage")
             text = chunk_data.choices[0].message.content or ""  # type: ignore
             tool_use = None
+            _model_response_tool_call = cast(
+                Optional[List[ChatCompletionMessageToolCall]],
+                cast(Choices, chunk_data.choices[0]).message.tool_calls,
+            )
             if self.json_mode is True:
                 text, tool_use = self._handle_json_mode_chunk(
                     text=text,
                     tool_calls=chunk_data.choices[0].message.tool_calls,  # type: ignore
+                )
+            elif _model_response_tool_call is not None:
+                tool_use = ChatCompletionToolCallChunk(
+                    id=_model_response_tool_call[0].id,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=_model_response_tool_call[0].function.name,
+                        arguments=_model_response_tool_call[0].function.arguments,
+                    ),
+                    index=0,
                 )
             processed_chunk = GChunk(
                 text=text,

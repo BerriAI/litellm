@@ -68,3 +68,12 @@ def test_configurable_clientside_parameters(
     )
     print(resp)
     assert resp == should_return_true
+
+
+def test_get_end_user_id_from_request_body_always_returns_str():
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
+    request_body = {"user": 123}
+    end_user_id = get_end_user_id_from_request_body(request_body)
+    assert end_user_id == "123"
+    assert isinstance(end_user_id, str)

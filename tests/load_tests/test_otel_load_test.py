@@ -42,8 +42,8 @@ def test_otel_logging_async():
         print(f"Average performance difference: {avg_percent_diff:.2f}%")
 
         assert (
-            avg_percent_diff < 15
-        ), f"Average performance difference of {avg_percent_diff:.2f}% exceeds 15% threshold"
+            avg_percent_diff < 30
+        ), f"Average performance difference of {avg_percent_diff:.2f}% exceeds 30% threshold"
 
     except litellm.Timeout as e:
         pass

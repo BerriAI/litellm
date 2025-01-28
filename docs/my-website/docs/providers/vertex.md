@@ -4,6 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # VertexAI [Anthropic, Gemini, Model Garden]
 
+## Overview
 
 | Property | Details |
 |-------|-------|
@@ -11,6 +12,8 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
 | Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
+
 
 <br />
 <br />
@@ -2477,7 +2480,7 @@ create_batch_response = oai_client.batches.create(
 
 ```json
 {
-    "id": "projects/633608382793/locations/us-central1/batchPredictionJobs/986266568679751680",
+    "id": "3814889423749775360",
     "completion_window": "24hrs",
     "created_at": 1733392026,
     "endpoint": "",
@@ -2499,6 +2502,147 @@ create_batch_response = oai_client.batches.create(
     "request_counts": null
 }
 ```
+
+#### 4. Retrieve a batch
+
+```python
+retrieved_batch = oai_client.batches.retrieve(
+    batch_id=create_batch_response.id,
+    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm to use `vertex_ai` for this batch request
+)
+```
+
+**Expected Response**
+
+```json
+{
+    "id": "3814889423749775360",
+    "completion_window": "24hrs",
+    "created_at": 1736500100,
+    "endpoint": "",
+    "input_file_id": "gs://example-bucket-1-litellm/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/7b2e47f5-3dd4-436d-920f-f9155bbdc952",
+    "object": "batch",
+    "status": "completed",
+    "cancelled_at": null,
+    "cancelling_at": null,
+    "completed_at": null,
+    "error_file_id": null,
+    "errors": null,
+    "expired_at": null,
+    "expires_at": null,
+    "failed_at": null,
+    "finalizing_at": null,
+    "in_progress_at": null,
+    "metadata": null,
+    "output_file_id": "gs://example-bucket-1-litellm/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001",
+    "request_counts": null
+}
+```
+
+
+## **Fine Tuning APIs**
+
+
+| Property | Details |
+|----------|---------|
+| Description | Create Fine Tuning Jobs in Vertex AI (`/tuningJobs`) using OpenAI Python SDK |
+| Vertex Fine Tuning Documentation | [Vertex Fine Tuning](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning#create-tuning) |
+
+### Usage
+
+#### 1. Add `finetune_settings` to your config.yaml
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+# 👇 Key change: For /fine_tuning/jobs endpoints
+finetune_settings:
+  - custom_llm_provider: "vertex_ai"
+    vertex_project: "adroit-crow-413218"
+    vertex_location: "us-central1"
+    vertex_credentials: "/Users/ishaanjaffer/Downloads/adroit-crow-413218-a956eef1a2a8.json"
+```
+
+#### 2. Create a Fine Tuning Job
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+ft_job = await client.fine_tuning.jobs.create(
+    model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
+    training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
+    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm proxy which provider to use
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/fine_tuning/jobs \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+    "custom_llm_provider": "vertex_ai",
+    "model": "gemini-1.0-pro-002",
+    "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
+    }'
+```
+</TabItem>
+
+</Tabs>
+
+
+**Advanced use case - Passing `adapter_size` to the Vertex AI API**
+
+Set hyper_parameters, such as `n_epochs`, `learning_rate_multiplier` and `adapter_size`. [See Vertex Advanced Hyperparameters](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/tuning#advanced_use_case)
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+```python
+
+ft_job = client.fine_tuning.jobs.create(
+    model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
+    training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
+    hyperparameters={
+        "n_epochs": 3,                      # epoch_count on Vertex
+        "learning_rate_multiplier": 0.1,    # learning_rate_multiplier on Vertex
+        "adapter_size": "ADAPTER_SIZE_ONE"  # type: ignore, vertex specific hyperparameter
+    },
+    extra_body={
+        "custom_llm_provider": "vertex_ai",
+    },
+)
+```
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```shell
+curl http://localhost:4000/v1/fine_tuning/jobs \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+    "custom_llm_provider": "vertex_ai",
+    "model": "gemini-1.0-pro-002",
+    "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
+    "hyperparameters": {
+        "n_epochs": 3,
+        "learning_rate_multiplier": 0.1,
+        "adapter_size": "ADAPTER_SIZE_ONE"
+    }
+    }'
+```
+</TabItem>
+
+</Tabs>
 
 
 ## Extra

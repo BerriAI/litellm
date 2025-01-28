@@ -60,6 +60,7 @@ class CloudflareChatConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(
@@ -72,7 +73,13 @@ class CloudflareChatConfig(BaseConfig):
         }
         return headers
 
-    def get_complete_url(self, api_base: str, model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
         return api_base + model
 
     def get_supported_openai_params(self, model: str) -> List[str]:

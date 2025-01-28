@@ -4,6 +4,8 @@ import os
 import sys
 import traceback
 
+from typing import List, Dict, Any
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -30,18 +32,23 @@ def test_get_model_info_custom_llm_with_model_name():
     litellm.get_model_info(model)
 
 
-def test_get_model_info_custom_llm_with_same_name_vllm():
+def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
     """
     model = "command-r-plus"
     provider = "openai"  # vllm is openai-compatible
-    try:
-        model_info = litellm.get_model_info(model, custom_llm_provider=provider)
-        print("model_info", model_info)
-        pytest.fail("Expected get model info to fail for an unmapped model/provider")
-    except Exception:
-        pass
+    litellm.register_model(
+        {
+            "openai/command-r-plus": {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+        }
+    )
+    model_info = litellm.get_model_info(model, custom_llm_provider=provider)
+    print("model_info", model_info)
+    assert model_info["input_cost_per_token"] == 0.0
 
 
 def test_get_model_info_shows_correct_supports_vision():
@@ -158,3 +165,214 @@ def test_get_model_info_ft_model_with_provider_prefix():
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
+
+
+def test_get_whitelisted_models():
+    """
+    Snapshot of all bedrock models as of 12/24/2024.
+
+    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
+
+    Create whitelist to prevent naming regressions for older litellm versions.
+    """
+    whitelisted_models = []
+    for model, info in litellm.model_cost.items():
+        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
+            whitelisted_models.append(model)
+
+        # Write to a local file
+    with open("whitelisted_bedrock_models.txt", "w") as file:
+        for model in whitelisted_models:
+            file.write(f"{model}\n")
+
+    print("whitelisted_models written to whitelisted_bedrock_models.txt")
+
+
+def _enforce_bedrock_converse_models(
+    model_cost: List[Dict[str, Any]], whitelist_models: List[str]
+):
+    """
+    Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
+    """
+    # Check for unwhitelisted models
+    for model, info in litellm.model_cost.items():
+        if (
+            info["litellm_provider"] == "bedrock"
+            and info["mode"] == "chat"
+            and model not in whitelist_models
+        ):
+            raise AssertionError(
+                f"New bedrock chat model detected: {model}. Please set `litellm_provider='bedrock_converse'` for this model."
+            )
+
+
+def test_model_info_bedrock_converse(monkeypatch):
+    """
+    Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
+
+    This ensures they are automatically routed to the converse endpoint.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
+    except FileNotFoundError:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
+
+    _enforce_bedrock_converse_models(
+        model_cost=litellm.model_cost, whitelist_models=whitelist_models
+    )
+
+
+@pytest.mark.flaky(retries=6, delay=2)
+def test_model_info_bedrock_converse_enforcement(monkeypatch):
+    """
+    Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Add a fake unwhitelisted model
+    litellm.model_cost["fake.bedrock-chat-model"] = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+    }
+
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
+
+        # Check for unwhitelisted models
+        with pytest.raises(AssertionError):
+            _enforce_bedrock_converse_models(
+                model_cost=litellm.model_cost, whitelist_models=whitelist_models
+            )
+    except FileNotFoundError as e:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
+
+
+def test_get_model_info_custom_provider():
+    # Custom provider example copied from https://docs.litellm.ai/docs/providers/custom_llm_server:
+    import litellm
+    from litellm import CustomLLM, completion, get_llm_provider
+
+    class MyCustomLLM(CustomLLM):
+        def completion(self, *args, **kwargs) -> litellm.ModelResponse:
+            return litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                mock_response="Hi!",
+            )  # type: ignore
+
+    my_custom_llm = MyCustomLLM()
+
+    litellm.custom_provider_map = [  # 👈 KEY STEP - REGISTER HANDLER
+        {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
+    ]
+
+    resp = completion(
+        model="my-custom-llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    assert resp.choices[0].message.content == "Hi!"
+
+    # Register model info
+    model_info = {"my-custom-llm/my-fake-model": {"max_tokens": 2048}}
+    litellm.register_model(model_info)
+
+    # Get registered model info
+    from litellm import get_model_info
+
+    get_model_info(
+        model="my-custom-llm/my-fake-model"
+    )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+
+
+def test_get_model_info_custom_model_router():
+    from litellm import Router
+    from litellm import get_model_info
+
+    litellm._turn_on_debug()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ma-summary",
+                "litellm_params": {
+                    "api_base": "http://ma-mix-llm-serving.cicero.svc.cluster.local/v1",
+                    "input_cost_per_token": 1,
+                    "output_cost_per_token": 1,
+                    "model": "openai/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "model_id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
+                },
+            }
+        ]
+    )
+    info = get_model_info("openai/meta-llama/Meta-Llama-3-8B-Instruct")
+    print("info", info)
+    assert info is not None
+
+
+def test_get_model_info_bedrock_models():
+    """
+    Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    """
+    from litellm import AmazonConverseConfig
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for k, v in litellm.model_cost.items():
+        if v["litellm_provider"] == "bedrock":
+            k = k.replace("*/", "")
+            potential_commitments = [
+                "1-month-commitment",
+                "3-month-commitment",
+                "6-month-commitment",
+            ]
+            if any(commitment in k for commitment in potential_commitments):
+                for commitment in potential_commitments:
+                    k = k.replace(f"{commitment}/", "")
+            base_model = AmazonConverseConfig()._get_base_model(k)
+            base_model_info = litellm.model_cost[base_model]
+            for base_model_key, base_model_value in base_model_info.items():
+                if base_model_key.startswith("supports_"):
+                    assert (
+                        base_model_key in v
+                    ), f"{base_model_key} is not in model cost map for {k}"
+                    assert (
+                        v[base_model_key] == base_model_value
+                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+
+
+def test_get_model_info_huggingface_models(monkeypatch):
+    from litellm import Router
+    from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
+                "litellm_params": {
+                    "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
+                    "api_base": "https://api-inference.huggingface.co/models/meta-llama/Llama-3.3-70B-Instruct",
+                    "api_key": os.environ["HUGGINGFACE_API_KEY"],
+                },
+            }
+        ]
+    )
+    info = litellm.get_model_info("huggingface/meta-llama/Meta-Llama-3-8B-Instruct")
+    print("info", info)
+    assert info is not None
+
+    ModelGroupInfo(
+        model_group="meta-llama/Meta-Llama-3-8B-Instruct",
+        providers=["huggingface"],
+        **info,
+    )

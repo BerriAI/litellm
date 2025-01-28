@@ -128,7 +128,7 @@ class PatternMatchRouter:
         if no pattern is found, return None
 
         Args:
-            request: Optional[str]
+            request: str - the received model name from the user (can be a wildcard route). If none, No deployments will be returned.
             filtered_model_names: Optional[List[str]] - if provided, only return deployments that match the filtered_model_names
         Returns:
             Optional[List[Deployment]]: llm deployments

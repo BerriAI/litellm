@@ -78,6 +78,10 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=SlackAlertingArgsEnum.max_outage_alert_list_size.value,
         description="Maximum number of errors to store in cache. For a given model/region. Prevents memory leaks.",
     )  # prevent memory leak
+    log_to_console: bool = Field(
+        default=False,
+        description="If true, the alerting payload will be printed to the console.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
