@@ -197,6 +197,7 @@ class WeightsBiasesLogger:
 
         try:
             print_verbose(f"W&B Logging - Enters logging function for model {kwargs}")
+            print_verbose("`WeightsBiasesLogger` is deprecated. Please use the new W&B `weave` integration instead.")
             run = wandb.init()
             print_verbose(response_obj)
 
