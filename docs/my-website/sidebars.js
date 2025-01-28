@@ -400,7 +400,7 @@ const sidebars = {
         "observability/helicone_integration",
         "observability/openmeter",
         "observability/promptlayer_integration",
-        "observability/wandb_integration",
+        "observability/weave_integration",
         "observability/slack_integration",
         "observability/athina_integration",
         "observability/greenscale_integration",
