@@ -1,13 +1,13 @@
 import json
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     GenericStreamingChunk,
+    ModelResponseStream,
 )
 
 
@@ -46,7 +46,9 @@ class ModelResponseIterator:
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
 
-    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(
+        self, chunk: dict
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
             # Initialize default values
             text = ""
@@ -85,7 +87,6 @@ class ModelResponseIterator:
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
-
 
     # Sync iterator
     def __iter__(self):
@@ -166,4 +167,3 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
-        
