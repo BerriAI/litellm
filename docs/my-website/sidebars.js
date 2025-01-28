@@ -66,6 +66,7 @@ const sidebars = {
             "proxy/user_keys",
             "proxy/clientside_auth",
             "proxy/response_headers",
+            "proxy/request_headers",
           ],
         },
         {
