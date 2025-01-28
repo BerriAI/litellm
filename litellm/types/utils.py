@@ -3,6 +3,7 @@ import time
 import uuid
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from packaging import version
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -18,6 +19,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
+import pydantic
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
@@ -30,6 +32,19 @@ from .llms.openai import (
 )
 from .rerank import RerankResponse
 
+if version.parse(pydantic.__version__) >= version.parse("2.0"):
+    from pydantic import field_validator
+
+    def pydantic_validator(*field_names, **kwargs):
+        # Map `pre=True` to `mode='before'` for v2
+        mode = 'before' if kwargs.pop('pre', False) else 'after'
+        return field_validator(*field_names, mode=mode, **kwargs)
+else:
+    from pydantic import validator
+
+    def pydantic_validator(*field_names, **kwargs):
+        # Pass `pre=True` directly for v1
+        return validator(*field_names, **kwargs)
 
 def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
@@ -431,9 +446,21 @@ Reference:
 ChatCompletionMessage(content='This is a test', role='assistant', function_call=None, tool_calls=None))
 """
 
+class TextContent(BaseModel):
+    type: Literal["text"]
+    text: str
+
+class URLContent(BaseModel):
+    url: str
+
+class ImageContent(BaseModel):
+    type: Literal["image_url"]
+    image_url: URLContent
+
+ContentItem = Union[TextContent, ImageContent]
 
 class Message(OpenAIObject):
-    content: Optional[str]
+    content: Optional[Union[str, List[ContentItem], List[Dict[str, Any]]]]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
@@ -442,48 +469,64 @@ class Message(OpenAIObject):
         default=None, exclude=True
     )
 
+    @pydantic_validator('content', pre=True)
+    def validate_content(cls, v):
+        if isinstance(v, list):
+            parsed_content = []
+            for item in v:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        parsed_item = TextContent(**item)
+                    elif item.get("type") == "image_url":
+                        parsed_item = ImageContent(**item)
+                    else:
+                        raise ValueError(f"Unsupported content type: {item.get('type')}")
+                    parsed_content.append(parsed_item)
+                elif isinstance(item, BaseModel):
+                    if not isinstance(item, (TextContent, ImageContent)):
+                        raise TypeError("Each item in content list must be a ContentItem")
+                    parsed_content.append(item)
+                else:
+                    raise TypeError("Each item in content list must be a dict or ContentItem instance")
+            return parsed_content
+        elif isinstance(v, str):
+            return v
+        else:
+            raise TypeError(f"content must be a string or list of dicts/ContentItems, got {type(v).__name__}")
+
     def __init__(
         self,
-        content: Optional[str] = None,
-        role: Literal["assistant"] = "assistant",
-        function_call=None,
-        tool_calls: Optional[list] = None,
+        content: Optional[Union[str, List[Dict[str, Any]], List[ContentItem]]] = None,
+        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
+        function_call: Optional[Union[FunctionCall, Dict[str, Any]]] = None,
+        tool_calls: Optional[List[Union[ChatCompletionMessageToolCall, Dict[str, Any]]]] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
-        init_values: Dict[str, Any] = {
-            "content": content,
-            "role": role or "assistant",  # handle null input
-            "function_call": (
-                FunctionCall(**function_call) if function_call is not None else None
-            ),
-            "tool_calls": (
-                [
-                    (
-                        ChatCompletionMessageToolCall(**tool_call)
-                        if isinstance(tool_call, dict)
-                        else tool_call
-                    )
-                    for tool_call in tool_calls
-                ]
-                if tool_calls is not None and len(tool_calls) > 0
-                else None
-            ),
-        }
+        # Convert function_call if it's a dict
+        if isinstance(function_call, dict):
+            function_call = FunctionCall(**function_call)  # type: ignore
 
-        if audio is not None:
-            init_values["audio"] = audio
+        # Convert tool_calls if they are dicts
+        if tool_calls:
+            tool_calls = [
+                ChatCompletionMessageToolCall(**tool_call) if isinstance(tool_call, dict) else tool_call
+                for tool_call in tool_calls
+            ]
 
-        super(Message, self).__init__(
-            **init_values,  # type: ignore
+        super().__init__(
+            content=content,
+            role=role,
+            function_call=function_call,
+            tool_calls=tool_calls,
+            audio=audio,
             **params,
         )
 
         if audio is None:
-            # delete audio from self
-            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            del self.audio
+            # Remove audio attribute if it's not provided
+            self.__dict__.pop('audio', None)
 
         if provider_specific_fields:  # set if provider_specific_fields is not empty
             self.provider_specific_fields = provider_specific_fields
@@ -509,6 +552,50 @@ class Message(OpenAIObject):
             # if using pydantic v1
             return self.dict()
 
+class HumanMessage(Message):
+    def __init__(self, content: Union[str, List[Dict[str, Any]], List[ContentItem]],
+        function_call=None,
+        tool_calls: Optional[list] = None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
+        **params,):
+
+        super().__init__(content, "user", function_call, tool_calls, audio, **params)
+
+class AIMessage(Message):
+    def __init__(self, content: Union[str, List[Dict[str, Any]], List[ContentItem]],
+        function_call=None,
+        tool_calls: Optional[list] = None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
+        **params,):
+
+        super().__init__(content, "assistant", function_call, tool_calls, audio, **params)
+
+class ToolMessage(Message):
+    def __init__(self, content: Union[str, List[Dict[str, Any]], List[ContentItem]],
+        function_call=None,
+        tool_calls: Optional[list] = None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
+        **params,):
+
+        super().__init__(content, "tool", function_call, tool_calls, audio, **params)
+
+class SystemMessage(Message):
+    def __init__(self, content: Union[str, List[Dict[str, Any]], List[ContentItem]],
+        function_call=None,
+        tool_calls: Optional[list] = None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
+        **params,):
+
+        super().__init__(content, "system", function_call, tool_calls, audio, **params)
+
+class FunctionMessage(Message):
+    def __init__(self, content: Union[str, List[Dict[str, Any]], List[ContentItem]],
+        function_call=None,
+        tool_calls: Optional[list] = None,
+        audio: Optional[ChatCompletionAudioResponse] = None,
+        **params,):
+
+        super().__init__(content, "function", function_call, tool_calls, audio, **params)
 
 class Delta(OpenAIObject):
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
