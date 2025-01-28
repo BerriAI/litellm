@@ -10,7 +10,7 @@ import litellm
 from litellm import transcription
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .base_llm_unit_tests import BaseLLMChatTest
-from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
+from .base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
 

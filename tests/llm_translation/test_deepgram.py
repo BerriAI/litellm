@@ -7,7 +7,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
+from .base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 
 class TestDeepgramAudioTranscription(BaseLLMAudioTranscriptionTest):
