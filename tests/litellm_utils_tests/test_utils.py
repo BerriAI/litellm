@@ -1529,6 +1529,172 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
     assert len(litellm.failure_callback) == curr_len_failure_callback
 
 
+@pytest.mark.parametrize(
+    "callback_list_name",
+    [
+        "callbacks",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "success_callback",
+        "failure_callback",
+    ],
+)
+def test_custom_logger_exists_in_litellm_callbacks(monkeypatch, callback_list_name):
+    """
+    Test _custom_logger_exists_in_litellm_callbacks helper function
+    Tests if logger is found in different callback lists
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import _custom_logger_exists_in_litellm_callbacks
+
+    # Create a mock CustomLogger class
+    class MockCustomLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    # Reset all callback lists
+    for list_name in [
+        "callbacks",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "success_callback",
+        "failure_callback",
+    ]:
+        monkeypatch.setattr(litellm, list_name, [])
+
+    mock_logger = MockCustomLogger()
+
+    # Test when logger doesn't exist in any callback list
+    assert _custom_logger_exists_in_litellm_callbacks(mock_logger) == False
+
+    # Add logger to specified callback list and test
+    getattr(litellm, callback_list_name).append(mock_logger)
+    assert _custom_logger_exists_in_litellm_callbacks(mock_logger) == True
+
+
+@pytest.mark.asyncio
+async def test_add_custom_logger_callback_to_specific_event_with_duplicates(
+    monkeypatch,
+):
+    """
+    Test that when a callback exists in both success_callback and _async_success_callback,
+    it's not added again
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Reset all callback lists
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    # Add logger to both success_callback and _async_success_callback
+    langfuse_logger = LangfusePromptManagement()
+    litellm.success_callback.append(langfuse_logger)
+    litellm._async_success_callback.append(langfuse_logger)
+
+    # Get initial lengths
+    initial_success_callback_len = len(litellm.success_callback)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+
+    # Make a completion call
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing duplicate callbacks",
+    )
+
+    # Assert no new callbacks were added
+    assert len(litellm.success_callback) == initial_success_callback_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+
+
+@pytest.mark.asyncio
+async def test_add_custom_logger_callback_to_specific_event_with_duplicates_success_callback(
+    monkeypatch,
+):
+    """
+    Test that when a callback exists in both success_callback and _async_success_callback,
+    it's not added again
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Reset all callback lists
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    # Add logger to both success_callback and _async_success_callback
+    langfuse_logger = LangfusePromptManagement()
+    litellm.success_callback.append(langfuse_logger)
+
+    # Get initial lengths
+    initial_success_callback_len = len(litellm.success_callback)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+
+    # Make a completion call
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing duplicate callbacks",
+    )
+
+    # Assert no new callbacks were added
+    assert len(litellm.success_callback) == initial_success_callback_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+
+
+@pytest.mark.asyncio
+async def test_add_custom_logger_callback_to_specific_event_with_duplicates_callbacks(
+    monkeypatch,
+):
+    """
+    Test that when a callback exists in both success_callback and _async_success_callback,
+    it's not added again
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Reset all callback lists
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    # Add logger to both success_callback and _async_success_callback
+    langfuse_logger = LangfusePromptManagement()
+    litellm.callbacks.append(langfuse_logger)
+
+    # Get initial lengths
+    initial_success_callback_len = len(litellm.success_callback)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+    initial_callbacks_len = len(litellm.callbacks)
+
+    # Make a completion call
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing duplicate callbacks",
+    )
+
+    # Assert no new callbacks were added
+    assert len(litellm.success_callback) == initial_success_callback_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+    assert len(litellm.callbacks) == initial_callbacks_len
+
+
 @pytest.mark.asyncio
 async def test_wrapper_kwargs_passthrough():
     from litellm.utils import client
