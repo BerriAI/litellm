@@ -4,13 +4,13 @@ This file contains the logic for dot notation indexing.
 Used by JWT Auth to get the user role from the token.
 """
 
-from typing import Any, Optional, TypeVar
+from typing import Any, Dict, Optional, TypeVar
 
 T = TypeVar("T")
 
 
 def get_nested_value(
-    data: dict[str, Any], key_path: str, default: Optional[T] = None
+    data: Dict[str, Any], key_path: str, default: Optional[T] = None
 ) -> Optional[T]:
     """
     Retrieves a value from a nested dictionary using dot notation.
