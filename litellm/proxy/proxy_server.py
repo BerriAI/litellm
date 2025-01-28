@@ -3322,6 +3322,7 @@ class ProxyStartupEvent:
 )  # if project requires model list
 async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    return_wildcard_routes: Optional[bool] = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -3354,6 +3355,7 @@ async def model_list(
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        return_wildcard_routes=return_wildcard_routes,
     )
     return dict(
         data=[
