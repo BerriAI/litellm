@@ -38,7 +38,7 @@ from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
-from base_llm_unit_tests import BaseLLMChatTest
+from .base_llm_unit_tests import BaseLLMChatTest
 
 
 def test_anthropic_completion_messages_translation():
@@ -1022,10 +1022,26 @@ def test_anthropic_json_mode_and_tool_call_response(
     [
         ("stop", ["stop"], True),  # basic string
         (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
-        ("   ", None, True),  # whitespace string should be dropped when drop_params is True
-        ("   ", ["   "], False),  # whitespace string should be kept when drop_params is False
-        (["stop1", "  ", "stop2"], ["stop1", "stop2"], True),  # list with whitespace that should be filtered
-        (["stop1", "  ", "stop2"], ["stop1", "  ", "stop2"], False),  # list with whitespace that should be kept
+        (
+            "   ",
+            None,
+            True,
+        ),  # whitespace string should be dropped when drop_params is True
+        (
+            "   ",
+            ["   "],
+            False,
+        ),  # whitespace string should be kept when drop_params is False
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "stop2"],
+            True,
+        ),  # list with whitespace that should be filtered
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "  ", "stop2"],
+            False,
+        ),  # list with whitespace that should be kept
         (None, None, True),  # None input
     ],
 )

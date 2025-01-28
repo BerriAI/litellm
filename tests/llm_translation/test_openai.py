@@ -15,7 +15,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
-from base_llm_unit_tests import BaseLLMChatTest
+from .base_llm_unit_tests import BaseLLMChatTest
 import asyncio
 
 

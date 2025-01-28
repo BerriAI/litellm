@@ -2,7 +2,7 @@
 Test TogetherAI LLM
 """
 
-from base_llm_unit_tests import BaseLLMChatTest
+from .base_llm_unit_tests import BaseLLMChatTest
 import json
 import os
 import sys
