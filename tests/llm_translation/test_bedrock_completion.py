@@ -34,9 +34,9 @@ from litellm import (
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
-from base_llm_unit_tests import BaseLLMChatTest
-from base_rerank_unit_tests import BaseLLMRerankTest
-from base_embedding_unit_tests import BaseLLMEmbeddingTest
+from .base_llm_unit_tests import BaseLLMChatTest
+from .base_rerank_unit_tests import BaseLLMRerankTest
+from .base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 # litellm.num_retries = 3
 litellm.cache = None

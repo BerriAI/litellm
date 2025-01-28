@@ -1206,7 +1206,6 @@ from litellm import completion
 response = completion(
     model="anthropic.claude-3-sonnet-20240229-v1:0",
     messages=[{"role": "user", "content": "What's AWS?"}],
-    client=client,
     extra_headers={"test": "hello world", "Authorization": "my-test-key"},
     api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
 )

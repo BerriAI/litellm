@@ -1,12 +1,4 @@
 model_list:
-  - model_name: openai/*
-    litellm_params:
-      model:  openai/*
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: text-embedding-ada-002
-    litellm_params:
-      model: openai/text-embedding-ada-002
-      api_key: os.environ/OPENAI_API_KEY
   - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
@@ -14,9 +6,10 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 
-litellm_settings:
-  callbacks: ["gcs_pubsub"]
 
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_initialize_budget_metrics: true
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
@@ -24,5 +17,3 @@ guardrails:
       mode: "during_call"
       guardrailIdentifier: gf3sc1mzinjw
       guardrailVersion: "DRAFT"
-      default_on: true
-

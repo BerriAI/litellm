@@ -4066,7 +4066,7 @@ def test_mock_response_iterator_tool_use():
 
 
 def test_deepseek_reasoning_content_completion():
-    litellm.set_verbose = True
+    # litellm.set_verbose = True
     resp = litellm.completion(
         model="deepseek/deepseek-reasoner",
         messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -4076,8 +4076,7 @@ def test_deepseek_reasoning_content_completion():
     reasoning_content_exists = False
     for chunk in resp:
         print(f"chunk: {chunk}")
-        if chunk.choices[0].delta.content is not None:
-            if "reasoning_content" in chunk.choices[0].delta.provider_specific_fields:
-                reasoning_content_exists = True
-                break
+        if chunk.choices[0].delta.reasoning_content is not None:
+            reasoning_content_exists = True
+            break
     assert reasoning_content_exists

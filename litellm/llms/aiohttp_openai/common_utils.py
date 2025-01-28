@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -8,9 +8,10 @@ from litellm.types.utils import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
     GenericStreamingChunk,
+    ModelResponseStream
 )
 
-
+        
 class AioHttpOpenAIError(BaseLLMException):
     def __init__(self, status_code, message):
         super().__init__(status_code=status_code, message=message)
@@ -36,7 +37,6 @@ def validate_environment(
     if api_key:
         headers["Authorization"] = f"bearer {api_key}"
     return headers
-
 
 class ModelResponseIterator:
     def __init__(
@@ -106,6 +106,7 @@ class ModelResponseIterator:
             )
         elif str_line.startswith("data:"):
             data_json = json.loads(str_line[5:])
+            print("Data from Common"+ str(data_json))
             return self.chunk_parser(chunk=data_json)
         else:
             return GenericStreamingChunk(
@@ -166,4 +167,4 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
-        
+       
