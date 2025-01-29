@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Dict, Optional
 
@@ -63,7 +64,7 @@ class VertexPassThroughRouter:
         Add the vertex credentials for the given project-id, location
         """
         from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-            default_vertex_config,
+            _set_default_vertex_config,
         )
 
         deployment_key = self._get_deployment_key(
@@ -83,9 +84,13 @@ class VertexPassThroughRouter:
         self.deployment_key_to_vertex_credentials[deployment_key] = (
             vertex_pass_through_credentials
         )
-
-        if default_vertex_config is None:
-            default_vertex_config = vertex_pass_through_credentials
+        verbose_proxy_logger.debug(
+            "self.deployment_key_to_vertex_credentials",
+            json.dumps(
+                self.deployment_key_to_vertex_credentials, indent=4, default=str
+            ),
+        )
+        _set_default_vertex_config(vertex_pass_through_credentials)
 
     def _get_deployment_key(
         self, project_id: Optional[str], location: Optional[str]
