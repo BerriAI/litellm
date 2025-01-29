@@ -1740,6 +1740,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 
+        verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
+
         return {
             "data": data,
             "total": total_records,
