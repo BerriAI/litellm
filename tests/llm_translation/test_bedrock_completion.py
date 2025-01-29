@@ -2405,18 +2405,6 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
-def test_process_bedrock_converse_image_block():
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        _process_bedrock_converse_image_block,
-    )
-
-    block = _process_bedrock_converse_image_block(
-        image_url="data:text/plain;base64,base64file"
-    )
-
-    assert block["document"] is not None
-
-
 @pytest.mark.asyncio
 async def test_bedrock_image_url_sync_client():
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -2483,3 +2471,38 @@ def test_bedrock_error_handling_streaming():
     assert isinstance(e.value, BedrockError)
     assert "Bedrock is unable to process your request." in e.value.message
     assert e.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
+        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
+        "http://www.krishdholakia.com/",
+        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
+        "https://raw.githubusercontent.com/mdn/content/main/README.md",
+    ],
+)
+@pytest.mark.flaky(retries=6, delay=2)
+@pytest.mark.asyncio
+async def test_bedrock_document_understanding(image_url):
+    from litellm import acompletion
+
+    litellm._turn_on_debug()
+    model = "bedrock/us.amazon.nova-pro-v1:0"
+
+    image_content = [
+        {"type": "text", "text": f"What's this file about?"},
+        {
+            "type": "image_url",
+            "image_url": image_url,
+        },
+    ]
+
+    response = await acompletion(
+        model=model,
+        messages=[{"role": "user", "content": image_content}],
+    )
+    assert response is not None
+    assert response.choices[0].message.content != ""

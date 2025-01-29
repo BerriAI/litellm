@@ -2766,12 +2766,64 @@ def test_add_known_models():
 def test_bedrock_cost_calc_with_region():
     from litellm import completion
 
-    response = completion(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        messages=[{"role": "user", "content": "Hello, how are you?"}],
-        aws_region_name="us-east-1",
-    )
-    assert response._hidden_params["response_cost"] > 0
+    from litellm import ModelResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    hidden_params = {
+        "custom_llm_provider": "bedrock",
+        "region_name": "us-east-1",
+        "optional_params": {},
+        "litellm_call_id": "cf371a5d-679b-410f-b862-8084676d6d59",
+        "model_id": None,
+        "api_base": None,
+        "response_cost": 0.0005639999999999999,
+        "additional_headers": {},
+    }
+
+    litellm.set_verbose = True
+
+    bedrock_models = litellm.bedrock_models + litellm.bedrock_converse_models
+
+    for model in bedrock_models:
+        if litellm.model_cost[model]["mode"] == "chat":
+            response = {
+                "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
+                            "refusal": None,
+                            "role": "assistant",
+                            "audio": None,
+                            "function_call": None,
+                            "tool_calls": [],
+                        },
+                    }
+                ],
+                "created": 1729243714,
+                "model": model,
+                "object": "chat.completion",
+                "service_tier": None,
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 32,
+                    "prompt_tokens": 16,
+                    "total_tokens": 48,
+                    "completion_tokens_details": None,
+                    "prompt_tokens_details": None,
+                },
+            }
+
+            model_response = ModelResponse(**response)
+            model_response._hidden_params = hidden_params
+            cost = completion_cost(model_response, custom_llm_provider="bedrock")
+
+            assert cost > 0
 
 
 # @pytest.mark.parametrize(

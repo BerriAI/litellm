@@ -1784,12 +1784,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     labelCol={{ span: 10 }}
                     labelAlign="left"
                   >
-
-                    <Select value={provider_map[selectedProvider as keyof typeof Providers]}>
+                    <Select value={selectedProvider as string}>
                       {Object.keys(Providers).map((providerKey) => (
                         <SelectItem
                           key={providerKey}
-                          value={provider_map[providerKey as keyof typeof Providers]}
+                          value={Providers[providerKey as keyof typeof Providers]}
                           onClick={() => {
                             setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
                             setSelectedProvider(Providers[providerKey as keyof typeof Providers]);

@@ -511,6 +511,11 @@ def function_setup(  # noqa: PLR0915
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_failure_callback.append(callback)
                     removed_async_items.append(index)
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
+                    _add_custom_logger_callback_to_specific_event(callback, "failure")
 
             # Pop the async items from failure_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
@@ -1422,30 +1427,33 @@ def _select_tokenizer(
 
 @lru_cache(maxsize=128)
 def _select_tokenizer_helper(model: str):
-    if model in litellm.cohere_models and "command-r" in model:
-        # cohere
-        cohere_tokenizer = Tokenizer.from_pretrained(
-            "Xenova/c4ai-command-r-v01-tokenizer"
-        )
-        return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
-    # anthropic
-    elif model in litellm.anthropic_models and "claude-3" not in model:
-        claude_tokenizer = Tokenizer.from_str(claude_json_str)
-        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
-    # llama2
-    elif "llama-2" in model.lower() or "replicate" in model.lower():
-        tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-    # llama3
-    elif "llama-3" in model.lower():
-        tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
-        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    try:
+        if model in litellm.cohere_models and "command-r" in model:
+            # cohere
+            cohere_tokenizer = Tokenizer.from_pretrained(
+                "Xenova/c4ai-command-r-v01-tokenizer"
+            )
+            return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
+        # anthropic
+        elif model in litellm.anthropic_models and "claude-3" not in model:
+            claude_tokenizer = Tokenizer.from_str(claude_json_str)
+            return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
+        # llama2
+        elif "llama-2" in model.lower() or "replicate" in model.lower():
+            tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        # llama3
+        elif "llama-3" in model.lower():
+            tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    except Exception as e:
+        verbose_logger.debug(f"Error selecting tokenizer: {e}")
+
     # default - tiktoken
-    else:
-        return {
-            "type": "openai_tokenizer",
-            "tokenizer": encoding,
-        }  # default to openai tokenizer
+    return {
+        "type": "openai_tokenizer",
+        "tokenizer": encoding,
+    }  # default to openai tokenizer
 
 
 def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
@@ -6235,3 +6243,21 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
     return non_default_params
+
+
+def add_openai_metadata(metadata: dict) -> dict:
+    """
+    Add metadata to openai optional parameters, excluding hidden params
+
+    Args:
+        params (dict): Dictionary of API parameters
+        metadata (dict, optional): Metadata to include in the request
+
+    Returns:
+        dict: Updated parameters dictionary with visible metadata only
+    """
+    if metadata is None:
+        return None
+    # Only include non-hidden parameters
+    visible_metadata = {k: v for k, v in metadata.items() if k != "hidden_params"}
+    return visible_metadata.copy()

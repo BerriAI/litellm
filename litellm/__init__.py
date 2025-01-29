@@ -434,7 +434,6 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
-    "meta.llama3-2-405b-instruct-v1:0",
 ]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
@@ -1254,7 +1253,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
-from .batch_completion.main import *
+from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
