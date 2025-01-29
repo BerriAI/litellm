@@ -122,7 +122,7 @@ class CustomGuardrail(CustomLogger):
         """
 
         if self.event_hook is None:
-            return False
+            return True
         if isinstance(self.event_hook, list):
             return event_type.value in self.event_hook
         return self.event_hook == event_type.value
