@@ -115,7 +115,7 @@ def test_no_unauthorized_callback_modifications():
 
     violations = scan_directory_for_callback_modifications(base_dir)
     if violations:
-        print("\nFound callback modification violations:")
+        print(f"\nFound {len(violations)} callback modification violations:")
         for violation in violations:
             print("\n" + violation)
         raise AssertionError(

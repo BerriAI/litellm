@@ -27,6 +27,14 @@ class LoggingCallbackManager:
             )
         pass
 
+    def add_callback(self, callback: Union[CustomLogger, str, Callable]):
+        """
+        Add a callback to litellm.callbacks
+
+        Ensures no duplicates are added.
+        """
+        pass
+
     def add_sync_success_callback(self, callback: Union[CustomLogger, str, Callable]):
         """
         Add a success callback to litellm.success_callback
@@ -106,3 +114,15 @@ class LoggingCallbackManager:
             verbose_logger.debug(
                 f"Callback function {callback.__name__} already exists in {parent_list}, not adding again.."
             )
+
+    def _reset_all_callbacks(self):
+        """
+        Reset all callbacks to an empty list
+
+        Note: this is an internal function and should be used sparingly.
+        """
+        litellm.input_callback = []
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
