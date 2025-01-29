@@ -18,3 +18,4 @@ class httpxSpecialProvider(str, Enum):
     Oauth2Check = "oauth2_check"
     SecretManager = "secret_manager"
     PassThroughEndpoint = "pass_through_endpoint"
+    PromptFactory = "prompt_factory"
