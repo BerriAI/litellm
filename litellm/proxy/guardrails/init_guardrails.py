@@ -15,6 +15,7 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
 )
+from litellm.utils import logging_callback_manager
 
 from .guardrail_registry import guardrail_registry
 
@@ -157,7 +158,7 @@ def init_guardrails_v2(
                 event_hook=litellm_params["mode"],
                 default_on=litellm_params["default_on"],
             )
-            litellm.callbacks.append(_guardrail_callback)  # type: ignore
+            logging_callback_manager.add_callback(_guardrail_callback)
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
