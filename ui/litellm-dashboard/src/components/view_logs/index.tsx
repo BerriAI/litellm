@@ -174,27 +174,6 @@ export default function SpendLogsTable({
     <div className="w-full p-6">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Request Logs</h1>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleRefresh}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-            title="Refresh data"
-          >
-            <svg
-              className={`w-5 h-5 ${logs.isFetching ? 'animate-spin' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-          </button>
-        </div>
       </div>
       
       <div className="bg-white rounded-lg shadow overflow-hidden">
@@ -362,13 +341,78 @@ export default function SpendLogsTable({
                 )}
               </div>
 
-              <div className="relative" ref={quickSelectRef}>
+              <div className="flex items-center gap-2">
+                <div className="relative" ref={quickSelectRef}>
+                  <button
+                    onClick={() => setQuickSelectOpen(!quickSelectOpen)}
+                    className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
+                    </svg>
+                    {getTimeRangeDisplay()}
+                  </button>
+
+                  {quickSelectOpen && (
+                    <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                      <div className="space-y-1">
+                        {[
+                          { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+                          { label: "Last Hour", value: 1, unit: "hours" },
+                          { label: "Last 4 Hours", value: 4, unit: "hours" },
+                          { label: "Last 24 Hours", value: 24, unit: "hours" },
+                          { label: "Last 7 Days", value: 7, unit: "days" },
+                        ].map((option) => (
+                          <button
+                            key={option.label}
+                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                              getTimeRangeDisplay() === option.label ? 'bg-blue-50 text-blue-600' : ''
+                            }`}
+                            onClick={() => {
+                              setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                              setStartTime(
+                                moment()
+                                  .subtract(option.value, option.unit as any)
+                                  .format("YYYY-MM-DDTHH:mm")
+                              );
+                              setQuickSelectOpen(false);
+                              setIsCustomDate(false);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                        <div className="border-t my-2" />
+                        <button
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                            isCustomDate ? 'bg-blue-50 text-blue-600' : ''
+                          }`}
+                          onClick={() => setIsCustomDate(!isCustomDate)}
+                        >
+                          Custom Range
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                
                 <button
-                  onClick={() => setQuickSelectOpen(!quickSelectOpen)}
+                  onClick={handleRefresh}
                   className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                  title="Refresh data"
                 >
                   <svg
-                    className="w-4 h-4"
+                    className={`w-4 h-4 ${logs.isFetching ? 'animate-spin' : ''}`}
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -377,53 +421,11 @@ export default function SpendLogsTable({
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={2}
-                      d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                     />
                   </svg>
-                  {getTimeRangeDisplay()}
+                  <span>Refresh</span>
                 </button>
-
-                {quickSelectOpen && (
-                  <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
-                    <div className="space-y-1">
-                      {[
-                        { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-                        { label: "Last Hour", value: 1, unit: "hours" },
-                        { label: "Last 4 Hours", value: 4, unit: "hours" },
-                        { label: "Last 24 Hours", value: 24, unit: "hours" },
-                        { label: "Last 7 Days", value: 7, unit: "days" },
-                      ].map((option) => (
-                        <button
-                          key={option.label}
-                          className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                            getTimeRangeDisplay() === option.label ? 'bg-blue-50 text-blue-600' : ''
-                          }`}
-                          onClick={() => {
-                            setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
-                            setStartTime(
-                              moment()
-                                .subtract(option.value, option.unit as any)
-                                .format("YYYY-MM-DDTHH:mm")
-                            );
-                            setQuickSelectOpen(false);
-                            setIsCustomDate(false);
-                          }}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                      <div className="border-t my-2" />
-                      <button
-                        className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                          isCustomDate ? 'bg-blue-50 text-blue-600' : ''
-                        }`}
-                        onClick={() => setIsCustomDate(!isCustomDate)}
-                      >
-                        Custom Range
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
 
               {isCustomDate && (
