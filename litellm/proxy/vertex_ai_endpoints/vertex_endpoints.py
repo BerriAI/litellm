@@ -62,7 +62,14 @@ def set_default_vertex_config(config: Optional[dict] = None):
             if isinstance(value, str) and value.startswith("os.environ/"):
                 config[key] = litellm.get_secret(value)
 
-    default_vertex_config = VertexPassThroughCredentials(**config)
+    _set_default_vertex_config(VertexPassThroughCredentials(**config))
+
+
+def _set_default_vertex_config(
+    vertex_pass_through_credentials: VertexPassThroughCredentials,
+):
+    global default_vertex_config
+    default_vertex_config = vertex_pass_through_credentials
 
 
 def exception_handler(e: Exception):
