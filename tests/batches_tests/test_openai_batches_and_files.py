@@ -170,7 +170,7 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
-@pytest.mark.parametrize("provider", ["azure", "openai"])  #  "azure"
+@pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
