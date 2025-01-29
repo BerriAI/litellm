@@ -408,6 +408,12 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 headers = {}
             response = raw_response.parse()
+            if type(response) != BaseModel:
+                raise OpenAIError(
+                    status_code=422,
+                    message="Could not parse response",
+                )
+
             return headers, response
         except openai.APITimeoutError as e:
             end_time = time.time()
@@ -441,6 +447,13 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 headers = {}
             response = raw_response.parse()
+
+            if type(response) != BaseModel:
+                raise OpenAIError(
+                    status_code=422,
+                    message="Could not parse response",
+                )
+
             return headers, response
         except Exception as e:
             if raw_response is not None:
