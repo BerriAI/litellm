@@ -183,6 +183,9 @@ async def test_vertex_passthrough_router_init():
 @pytest.mark.asyncio
 async def test_get_vertex_credentials_none():
     """Test get_vertex_credentials with various inputs"""
+    from litellm.proxy.vertex_ai_endpoints import vertex_endpoints
+
+    setattr(vertex_endpoints, "default_vertex_config", VertexPassThroughCredentials())
     router = VertexPassThroughRouter()
 
     # Test with None project_id and location - should return default config
