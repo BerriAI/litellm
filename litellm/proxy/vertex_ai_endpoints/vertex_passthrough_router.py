@@ -1,0 +1,87 @@
+from typing import Dict, Optional
+
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+    VertexPassThroughCredentials,
+    default_vertex_config,
+)
+
+
+class VertexPassThroughRouter:
+    """
+    Vertex Pass Through Router for Vertex AI pass-through endpoints
+
+
+    - if request specifies a project-id, location -> use credentials corresponding to the project-id, location
+    - if request does not specify a project-id, location -> use credentials corresponding to the DEFAULT_VERTEXAI_PROJECT, DEFAULT_VERTEXAI_LOCATION
+    """
+
+    def __init__(self):
+        """
+        Initialize the VertexPassThroughRouter
+        Stores the vertex credentials for each deployment key
+        ```
+        {
+            "project_id-location": VertexPassThroughCredentials,
+            "adroit-crow-us-central1": VertexPassThroughCredentials,
+        }
+        ```
+        """
+        self.deployment_key_to_vertex_credentials: Dict[
+            str, VertexPassThroughCredentials
+        ] = {}
+        pass
+
+    def get_vertex_credentials(
+        self, project_id: Optional[str], location: Optional[str]
+    ) -> VertexPassThroughCredentials:
+        """
+        Get the vertex credentials for the given project-id, location
+        """
+        deployment_key = self._get_deployment_key(
+            project_id=project_id,
+            location=location,
+        )
+        if deployment_key is None:
+            return default_vertex_config
+        if deployment_key in self.deployment_key_to_vertex_credentials:
+            return self.deployment_key_to_vertex_credentials[deployment_key]
+        else:
+            return default_vertex_config
+
+    def add_vertex_credentials(
+        self,
+        project_id: str,
+        location: str,
+        vertex_credentials: VertexPassThroughCredentials,
+    ):
+        """
+        Add the vertex credentials for the given project-id, location
+        """
+        from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+            default_vertex_config,
+        )
+
+        deployment_key = self._get_deployment_key(
+            project_id=project_id,
+            location=location,
+        )
+        if deployment_key is None:
+            verbose_proxy_logger.debug(
+                "No deployment key found for project-id, location"
+            )
+            return
+
+        self.deployment_key_to_vertex_credentials[deployment_key] = vertex_credentials
+        if default_vertex_config is None:
+            default_vertex_config = vertex_credentials
+
+    def _get_deployment_key(
+        self, project_id: Optional[str], location: Optional[str]
+    ) -> Optional[str]:
+        """
+        Get the deployment key for the given project-id, location
+        """
+        if project_id is None or location is None:
+            return None
+        return f"{project_id}-{location}"
