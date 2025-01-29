@@ -1813,35 +1813,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Select>
                   </Form.Item>
 
-                  {/* Provider-specific fields */}
-                  {dynamicProviderForm !== undefined &&
-                    dynamicProviderForm.fields.length > 0 && (
-                      <DynamicFields
-                        fields={dynamicProviderForm.fields}
-                        selectedProvider={dynamicProviderForm.name}
-                      />
-                  )}
-
-                  {/* Rest of the advanced form fields */}
-                  <Form.Item
-                    label="Public Model Name"
-                    name="model_name"
-                    tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
-                    className="mb-0"
-                    rules={[{ required: false }]}
-                  >
-                    <TextInput />
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Model name your users will pass in.
-                      </Text>
-                    </Col>
-                  </Row>
-                  
-
                   <Form.Item
                     label="LiteLLM Model Name(s)"
                     tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
@@ -1889,27 +1860,56 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     
                   </Form.Item>
                   <Row>
-                <Col span={10}></Col>
-                <Col span={10}>
-                  <Text className="mb-3 mt-1">
-                    Actual model name used for making{" "}
-                    <Link
-                      href="https://docs.litellm.ai/docs/providers"
-                      target="_blank"
-                    >
-                      litellm.completion() call
-                    </Link>
-                    . We&apos;ll{" "}
-                    <Link
-                      href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
-                      target="_blank"
-                    >
-                      loadbalance
-                    </Link>{" "}
-                    models with the same &apos;public name&apos;
-                  </Text>
-                </Col>
-              </Row>
+                    <Col span={10}></Col>
+                    <Col span={10}>
+                      <Text className="mb-3 mt-1">
+                        Actual model name used for making{" "}
+                        <Link
+                          href="https://docs.litellm.ai/docs/providers"
+                          target="_blank"
+                        >
+                          litellm.completion() call
+                        </Link>
+                        . We&apos;ll{" "}
+                        <Link
+                          href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
+                          target="_blank"
+                        >
+                          loadbalance
+                        </Link>{" "}
+                        models with the same &apos;public name&apos;
+                      </Text>
+                    </Col>
+                  </Row>
+
+                  {/* Provider-specific fields */}
+                  {dynamicProviderForm !== undefined &&
+                    dynamicProviderForm.fields.length > 0 && (
+                      <DynamicFields
+                        fields={dynamicProviderForm.fields}
+                        selectedProvider={dynamicProviderForm.name}
+                      />
+                  )}
+
+                  {/* Rest of the advanced form fields */}
+                  <Form.Item
+                    label="Public Model Name"
+                    name="model_name"
+                    tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
+                    className="mb-0"
+                    rules={[{ required: false }]}
+                  >
+                    <TextInput />
+                  </Form.Item>
+                  <Row>
+                    <Col span={10}></Col>
+                    <Col span={10}>
+                      <Text className="mb-3 mt-1">
+                        Model name your users will pass in.
+                      </Text>
+                    </Col>
+                  </Row>
+                  
                                               {/* All the provider-specific fields */}
                                               {dynamicProviderForm !== undefined &&
                     dynamicProviderForm.fields.length > 0 && (
