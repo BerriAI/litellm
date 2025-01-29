@@ -51,7 +51,7 @@ class BaseLLMAIOHTTPHandler:
 
     async def _make_common_async_call(
         self,
-        async_client_session: Optional[AsyncHTTPHandler],
+        async_client_session: Optional[ClientSession],
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
@@ -272,7 +272,7 @@ class BaseLLMAIOHTTPHandler:
                     fake_stream=fake_stream,
                     client=(
                         client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
+                        if client is not None and isinstance(client, ClientSession)
                         else None
                     ),
                     litellm_params=litellm_params,
@@ -368,7 +368,7 @@ class BaseLLMAIOHTTPHandler:
         data: dict,
         litellm_params: dict,
         fake_stream: bool = False,
-        client: Optional[AsyncHTTPHandler] = None,
+        client: Optional[ClientSession] = None,
     ):
         completion_stream, _response_headers = await self.make_async_call(
             custom_llm_provider=custom_llm_provider,
@@ -404,20 +404,17 @@ class BaseLLMAIOHTTPHandler:
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
         fake_stream: bool = False,
-        client: Optional[AsyncHTTPHandler] = None,
+        client: Optional[Union[AsyncHTTPHandler, ClientSession]] = None,
     ) -> Tuple[Any, httpx.Headers]:
-        if client is None or not isinstance(client, HTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
-            )
-        else:
-            async_httpx_client = client
+        if client is None or not isinstance(client, ClientSession):
+            async_client_session = self._get_async_client_session()
+            
         stream = True
         if fake_stream is True:
             stream = False
 
         response = await self._make_common_async_call(
-            async_client_session=async_httpx_client,
+            async_client_session=async_client_session,
             provider_config=provider_config,
             api_base=api_base,
             headers=headers,
@@ -445,7 +442,6 @@ class BaseLLMAIOHTTPHandler:
         )
 
         return completion_stream, response.headers
-    
     
     def make_sync_call(
         self,
