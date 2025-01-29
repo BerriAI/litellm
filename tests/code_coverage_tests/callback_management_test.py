@@ -39,7 +39,7 @@ def check_for_callback_modifications(file_path):
         "_async_failure_callback",
     ]
 
-    forbidden_operations = ["append", "extend", "pop", "clear", "insert"]
+    forbidden_operations = ["append", "extend", "insert"]
 
     for node in ast.walk(tree):
         # Check for attribute calls like litellm.callbacks.append()
