@@ -34,6 +34,7 @@ from litellm._logging import verbose_logger
 from litellm.types.caching import *
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import all_litellm_params
+from litellm.utils import logging_callback_manager
 
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
@@ -204,12 +205,8 @@ class Cache:
             )
         elif type == LiteLLMCacheType.DISK:
             self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
-        if "cache" not in litellm.input_callback:
-            litellm.input_callback.append("cache")
-        if "cache" not in litellm.success_callback:
-            litellm.success_callback.append("cache")
-        if "cache" not in litellm._async_success_callback:
-            litellm._async_success_callback.append("cache")
+        logging_callback_manager.add_input_callback("cache")
+        logging_callback_manager.add_success_callback_sync_and_async("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
@@ -771,13 +768,8 @@ def enable_cache(
         None
     """
     print_verbose("LiteLLM: Enabling Cache")
-    if "cache" not in litellm.input_callback:
-        litellm.input_callback.append("cache")
-    if "cache" not in litellm.success_callback:
-        litellm.success_callback.append("cache")
-    if "cache" not in litellm._async_success_callback:
-        litellm._async_success_callback.append("cache")
-
+    logging_callback_manager.add_input_callback("cache")
+    logging_callback_manager.add_success_callback_sync_and_async("cache")
     if litellm.cache is None:
         litellm.cache = Cache(
             type=type,

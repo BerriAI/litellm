@@ -65,7 +65,7 @@ class LoggingCallbackManager:
                 callback=callback, parent_list=litellm._async_failure_callback
             )
 
-    def _add_success_callback_sync_and_async(self, callback: Union[CustomLogger, str]):
+    def add_success_callback_sync_and_async(self, callback: Union[CustomLogger, str]):
         """
         Add a success callback to litellm.success_callback and litellm._async_success_callback
         """
@@ -73,7 +73,7 @@ class LoggingCallbackManager:
         self.add_async_success_callback(callback)
         pass
 
-    def _add_failure_callback_sync_and_async(self, callback: Union[CustomLogger, str]):
+    def add_failure_callback_sync_and_async(self, callback: Union[CustomLogger, str]):
         """
         Add a failure callback to litellm.failure_callback and litellm._async_failure_callback
         """
