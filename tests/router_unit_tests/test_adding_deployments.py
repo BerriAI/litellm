@@ -30,20 +30,31 @@ def test_add_vertex_pass_through_deployment():
         ),
     )
 
-    # Mock the _set_vertex_pass_through_env_vars function
-    with patch(
-        "litellm.proxy.vertex_ai_endpoints.vertex_endpoints._set_vertex_pass_through_env_vars"
-    ) as mock_set_vars:
-        # Add the deployment
-        router._add_deployment(deployment)
+    # Add deployment to router
+    router.add_deployment(deployment)
 
-        # Verify _set_vertex_pass_through_env_vars was called with correct arguments
-        mock_set_vars.assert_called_once()
-        args = mock_set_vars.call_args[1]
-        vertex_creds = args["vertex_pass_through_credentials"]
+    # Get the vertex credentials from the router
+    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+        vertex_pass_through_router,
+    )
 
-        assert vertex_creds.vertex_project == "test-project"
-        assert vertex_creds.vertex_location == "us-central1"
-        assert vertex_creds.vertex_credentials == json.dumps(
-            {"type": "service_account", "project_id": "test"}
+    # current state of pass-through vertex router
+    print("\n vertex_pass_through_router.deployment_key_to_vertex_credentials\n\n")
+    print(
+        json.dumps(
+            vertex_pass_through_router.deployment_key_to_vertex_credentials,
+            indent=4,
+            default=str,
         )
+    )
+
+    vertex_creds = vertex_pass_through_router.get_vertex_credentials(
+        project_id="test-project", location="us-central1"
+    )
+
+    # Verify the credentials were properly set
+    assert vertex_creds.vertex_project == "test-project"
+    assert vertex_creds.vertex_location == "us-central1"
+    assert vertex_creds.vertex_credentials == json.dumps(
+        {"type": "service_account", "project_id": "test"}
+    )

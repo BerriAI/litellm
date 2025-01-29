@@ -4152,7 +4152,6 @@ class Router:
         if deployment.litellm_params.use_in_pass_through is True:
             if custom_llm_provider == "vertex_ai":
                 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-                    VertexPassThroughCredentials,
                     vertex_pass_through_router,
                 )
 

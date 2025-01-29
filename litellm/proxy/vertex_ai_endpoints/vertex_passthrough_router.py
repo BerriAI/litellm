@@ -4,7 +4,6 @@ from typing import Dict, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
     VertexPassThroughCredentials,
-    default_vertex_config,
 )
 
 
@@ -39,6 +38,10 @@ class VertexPassThroughRouter:
         """
         Get the vertex credentials for the given project-id, location
         """
+        from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
+            default_vertex_config,
+        )
+
         deployment_key = self._get_deployment_key(
             project_id=project_id,
             location=location,
