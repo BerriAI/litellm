@@ -117,21 +117,20 @@ class LoggingCallbackManager:
         """
         if custom_logger is None:
             return
-        if isinstance(custom_logger, CustomLogger):
 
-            # success
-            self.add_sync_success_callback(custom_logger)
-            self.add_async_success_callback(custom_logger)
+        # success
+        self.add_sync_success_callback(custom_logger)
+        self.add_async_success_callback(custom_logger)
 
-            # failure
-            self.add_sync_failure_callback(custom_logger)
-            self.add_async_failure_callback(custom_logger)
+        # failure
+        self.add_sync_failure_callback(custom_logger)
+        self.add_async_failure_callback(custom_logger)
 
-            # input
-            self.add_input_callback(custom_logger)
+        # input
+        self.add_input_callback(custom_logger)
 
-            # service
-            self.add_service_callback(custom_logger)
+        # service
+        self.add_service_callback(custom_logger)
 
     def _safe_add_callback_to_list(
         self,
