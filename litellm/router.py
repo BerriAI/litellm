@@ -127,6 +127,7 @@ from litellm.utils import (
     get_secret,
     get_utc_datetime,
     is_region_allowed,
+    logging_callback_manager,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -482,27 +483,23 @@ class Router:
         )
         self.access_groups = None
         ## USAGE TRACKING ##
-        if isinstance(litellm._async_success_callback, list):
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
-        else:
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
-        if isinstance(litellm.success_callback, list):
-            litellm.success_callback.append(self.sync_deployment_callback_on_success)
-        else:
-            litellm.success_callback = [self.sync_deployment_callback_on_success]
-        if isinstance(litellm._async_failure_callback, list):
-            litellm._async_failure_callback.append(
-                self.async_deployment_callback_on_failure
-            )
-        else:
-            litellm._async_failure_callback = [
-                self.async_deployment_callback_on_failure
-            ]
-        ## COOLDOWNS ##
-        if isinstance(litellm.failure_callback, list):
-            litellm.failure_callback.append(self.deployment_callback_on_failure)
-        else:
-            litellm.failure_callback = [self.deployment_callback_on_failure]
+
+        # Add success callbacks
+        logging_callback_manager.add_async_success_callback(
+            self.deployment_callback_on_success
+        )
+        logging_callback_manager.add_sync_success_callback(
+            self.sync_deployment_callback_on_success
+        )
+
+        # Add failure callbacks
+        logging_callback_manager.add_async_failure_callback(
+            self.async_deployment_callback_on_failure
+        )
+        logging_callback_manager.add_sync_failure_callback(
+            self.deployment_callback_on_failure
+        )
+
         verbose_router_logger.debug(
             f"Intialized router with Routing strategy: {self.routing_strategy}\n\n"
             f"Routing enable_pre_call_checks: {self.enable_pre_call_checks}\n\n"
