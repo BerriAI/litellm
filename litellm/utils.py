@@ -348,13 +348,9 @@ def _add_custom_logger_callback_to_specific_event(
     )
 
     if callback_class:
-        if (
-            logging_event == "success"
-            and _custom_logger_class_exists_in_success_callbacks(callback_class)
-            is False
-        ):
-            litellm.success_callback.append(callback_class)
-            litellm._async_success_callback.append(callback_class)
+        if logging_event == "success":
+            logging_callback_manager.add_sync_success_callback(callback_class)
+            logging_callback_manager.add_async_success_callback(callback_class)
             if callback in litellm.success_callback:
                 litellm.success_callback.remove(
                     callback
@@ -363,13 +359,9 @@ def _add_custom_logger_callback_to_specific_event(
                 litellm._async_success_callback.remove(
                     callback
                 )  # remove the string from the callback list
-        elif (
-            logging_event == "failure"
-            and _custom_logger_class_exists_in_failure_callbacks(callback_class)
-            is False
-        ):
-            litellm.failure_callback.append(callback_class)
-            litellm._async_failure_callback.append(callback_class)
+        elif logging_event == "failure":
+            logging_callback_manager.add_sync_failure_callback(callback_class)
+            logging_callback_manager.add_async_failure_callback(callback_class)
             if callback in litellm.failure_callback:
                 litellm.failure_callback.remove(
                     callback
@@ -378,38 +370,6 @@ def _add_custom_logger_callback_to_specific_event(
                 litellm._async_failure_callback.remove(
                     callback
                 )  # remove the string from the callback list
-
-
-def _custom_logger_class_exists_in_success_callbacks(
-    callback_class: CustomLogger,
-) -> bool:
-    """
-    Returns True if an instance of the custom logger exists in litellm.success_callback or litellm._async_success_callback
-
-    e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.success_callback or litellm._async_success_callback
-
-    Prevents double adding a custom logger callback to the litellm callbacks
-    """
-    return any(
-        isinstance(cb, type(callback_class))
-        for cb in litellm.success_callback + litellm._async_success_callback
-    )
-
-
-def _custom_logger_class_exists_in_failure_callbacks(
-    callback_class: CustomLogger,
-) -> bool:
-    """
-    Returns True if an instance of the custom logger exists in litellm.failure_callback or litellm._async_failure_callback
-
-    e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.failure_callback or litellm._async_failure_callback
-
-    Prevents double adding a custom logger callback to the litellm callbacks
-    """
-    return any(
-        isinstance(cb, type(callback_class))
-        for cb in litellm.failure_callback + litellm._async_failure_callback
-    )
 
 
 def function_setup(  # noqa: PLR0915
@@ -482,12 +442,12 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    litellm._async_success_callback.append(callback)
+                    logging_callback_manager.add_async_success_callback(callback)
                     removed_async_items.append(index)
                 elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    litellm._async_success_callback.append(callback)
+                    logging_callback_manager.add_async_success_callback(callback)
                     removed_async_items.append(index)
                 elif (
                     callback in litellm._known_custom_logger_compatible_callbacks
@@ -503,7 +463,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    litellm._async_failure_callback.append(callback)
+                    logging_callback_manager.add_async_failure_callback(callback)
                     removed_async_items.append(index)
 
             # Pop the async items from failure_callback in reverse order to avoid index issues
