@@ -85,10 +85,7 @@ class VertexPassThroughRouter:
             vertex_pass_through_credentials
         )
         verbose_proxy_logger.debug(
-            "self.deployment_key_to_vertex_credentials",
-            json.dumps(
-                self.deployment_key_to_vertex_credentials, indent=4, default=str
-            ),
+            f"self.deployment_key_to_vertex_credentials: {json.dumps(self.deployment_key_to_vertex_credentials, indent=4, default=str)}"
         )
         _set_default_vertex_config(vertex_pass_through_credentials)
 
