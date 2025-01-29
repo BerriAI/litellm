@@ -445,6 +445,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_id_jwt_field: Optional[str] = None
     user_email_jwt_field: Optional[str] = None
     user_allowed_email_domain: Optional[str] = None
+    user_roles_jwt_field: Optional[str] = None
+    user_allowed_roles: Optional[List[str]] = None
     user_id_upsert: bool = Field(
         default=False, description="If user doesn't exist, upsert them into the db."
     )
@@ -458,10 +460,18 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         allowed_keys = self.__annotations__.keys()
 
         invalid_keys = set(kwargs.keys()) - allowed_keys
+        user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
+        user_allowed_roles = kwargs.get("user_allowed_roles")
 
         if invalid_keys:
             raise ValueError(
                 f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
+            )
+        if (user_roles_jwt_field is not None and user_allowed_roles is None) or (
+            user_roles_jwt_field is None and user_allowed_roles is not None
+        ):
+            raise ValueError(
+                "user_allowed_roles must be provided if user_roles_jwt_field is set."
             )
 
         super().__init__(**kwargs)
@@ -2336,3 +2346,15 @@ class ClientSideFallbackModel(TypedDict, total=False):
 
 
 ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+
+
+RBAC_ROLES = Literal[
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.TEAM,
+    LitellmUserRoles.INTERNAL_USER,
+]
+
+
+class RoleBasedPermissions(TypedDict):
+    role: Required[RBAC_ROLES]
+    models: Required[List[str]]

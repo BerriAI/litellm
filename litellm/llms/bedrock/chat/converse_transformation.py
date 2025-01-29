@@ -10,10 +10,10 @@ from typing import List, Literal, Optional, Tuple, Union, overload
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
@@ -153,6 +153,9 @@ class AmazonConverseConfig:
 
     def get_supported_document_types(self) -> List[str]:
         return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+
+    def get_all_supported_content_types(self) -> List[str]:
+        return self.get_supported_image_types() + self.get_supported_document_types()
 
     def _create_json_tool_call_for_response_format(
         self,
@@ -426,13 +429,22 @@ class AmazonConverseConfig:
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
         ## TRANSFORMATION ##
-        bedrock_messages: List[MessageBlock] = await asyncify(
-            _bedrock_converse_messages_pt
-        )(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        # bedrock_messages: List[MessageBlock] = await asyncify(
+        #     _bedrock_converse_messages_pt
+        # )(
+        #     messages=messages,
+        #     model=model,
+        #     llm_provider="bedrock_converse",
+        #     user_continue_message=litellm_params.pop("user_continue_message", None),
+        # )
+
+        bedrock_messages = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages,
+                model=model,
+                llm_provider="bedrock_converse",
+                user_continue_message=litellm_params.pop("user_continue_message", None),
+            )
         )
 
         _data: CommonRequestObject = self._transform_request_helper(
