@@ -115,3 +115,5 @@ curl http://0.0.0.0:4000/rerank \
 | Together AI|   [Usage](../docs/providers/togetherai)                 |  
 | Azure AI|   [Usage](../docs/providers/azure_ai)                 |  
 | Jina AI|   [Usage](../docs/providers/jina_ai)                 |  
+| AWS Bedrock|   [Usage](../docs/providers/bedrock#rerank-api)                 |  
+| Infinity|   [Usage](../docs/providers/infinity)                 |  

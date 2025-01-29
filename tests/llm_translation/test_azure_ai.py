@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm import completion
 
 
 @pytest.mark.parametrize(
@@ -51,18 +52,13 @@ async def test_azure_ai_with_image_url():
 
     Test that Azure AI studio can handle image_url passed when content is a list containing both text and image_url
     """
-    from openai import AsyncOpenAI
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     litellm.set_verbose = True
 
-    client = AsyncOpenAI(
-        api_key="fake-api-key",
-        base_url="https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com",
-    )
+    client = AsyncHTTPHandler()
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 model="azure_ai/Phi-3-5-vision-instruct-dcvov",
@@ -94,8 +90,9 @@ async def test_azure_ai_with_image_url():
         # Verify the request was made
         mock_client.assert_called_once()
 
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
         # Check the request body
-        request_body = mock_client.call_args.kwargs
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
         assert request_body["model"] == "Phi-3-5-vision-instruct-dcvov"
         assert request_body["messages"] == [
             {
@@ -111,3 +108,79 @@ async def test_azure_ai_with_image_url():
                 ],
             }
         ]
+
+
+@pytest.mark.parametrize(
+    "api_base, expected_url",
+    [
+        (
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+        ),
+        (
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+        ),
+        (
+            "https://litellm8397336933.services.ai.azure.com/models",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+        ),
+        (
+            "https://litellm8397336933.services.ai.azure.com",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+        ),
+    ],
+)
+def test_azure_ai_services_handler(api_base, expected_url):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm.set_verbose = True
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = litellm.completion(
+                model="azure_ai/Meta-Llama-3.1-70B-Instruct",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                api_key="my-fake-api-key",
+                api_base=api_base,
+                client=client,
+            )
+
+            print(response)
+
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
+        assert mock_client.call_args.kwargs["url"] == expected_url
+
+
+def test_completion_azure_ai_command_r():
+    try:
+        import os
+
+        litellm.set_verbose = True
+
+        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
+        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
+
+        response = completion(
+            model="azure_ai/command-r-plus",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is the meaning of life?"}
+                    ],
+                }
+            ],
+        )  # type: ignore
+
+        assert "azure_ai" in response.model
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

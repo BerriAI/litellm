@@ -1,10 +1,9 @@
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
-from openai.types.image import Image
 from pydantic import BaseModel
 
 import litellm
@@ -16,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import ImageResponse
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 
 if TYPE_CHECKING:
@@ -159,10 +158,8 @@ class BedrockImageGeneration(BaseAWSLLM):
             body (bytes): The request body
         """
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(

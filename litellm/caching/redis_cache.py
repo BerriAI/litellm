@@ -13,7 +13,6 @@ import asyncio
 import inspect
 import json
 import time
-import traceback
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
@@ -21,8 +20,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
-from litellm.types.utils import all_litellm_params
+from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
 
@@ -53,7 +51,6 @@ class RedisCache(BaseCache):
         startup_nodes: Optional[List] = None,  # for redis-cluster
         **kwargs,
     ):
-        import redis
 
         from litellm._service_logger import ServiceLogging
 
@@ -980,3 +977,26 @@ class RedisCache(BaseCache):
                 str(e),
             )
             raise e
+
+    async def async_get_ttl(self, key: str) -> Optional[int]:
+        """
+        Get the remaining TTL of a key in Redis
+
+        Args:
+            key (str): The key to get TTL for
+
+        Returns:
+            Optional[int]: The remaining TTL in seconds, or None if key doesn't exist
+
+        Redis ref: https://redis.io/docs/latest/commands/ttl/
+        """
+        try:
+            _redis_client = await self.init_async_client()
+            async with _redis_client as redis_client:
+                ttl = await redis_client.ttl(key)
+                if ttl <= -1:  # -1 means the key does not exist, -2 key does not exist
+                    return None
+                return ttl
+        except Exception as e:
+            verbose_logger.debug(f"Redis TTL Error: {e}")
+            return None

@@ -1,7 +1,6 @@
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from functools import wraps
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
@@ -10,10 +9,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
-    EmbeddingResponse,
     Function,
-    ImageResponse,
-    ModelResponse,
     StandardLoggingPayload,
 )
 
@@ -74,7 +70,7 @@ class OpenTelemetryConfig:
             endpoint=os.getenv("OTEL_ENDPOINT"),
             headers=os.getenv(
                 "OTEL_HEADERS"
-            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96VGdFisfJVme1H"
+            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         )
 
 
@@ -88,6 +84,7 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.trace import SpanKind
 
         if config is None:
             config = OpenTelemetryConfig.from_env()
@@ -102,6 +99,8 @@ class OpenTelemetry(CustomLogger):
 
         trace.set_tracer_provider(provider)
         self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
+
+        self.span_kind = SpanKind
 
         _debug_otel = str(os.getenv("DEBUG_OTEL", "False")).lower()
 
@@ -118,6 +117,21 @@ class OpenTelemetry(CustomLogger):
 
         # init CustomLogger params
         super().__init__(**kwargs)
+        self._init_otel_logger_on_litellm_proxy()
+
+    def _init_otel_logger_on_litellm_proxy(self):
+        """
+        Initializes OpenTelemetry for litellm proxy server
+
+        - Adds Otel as a service callback
+        - Sets `proxy_server.open_telemetry_logger` to self
+        """
+        from litellm.proxy import proxy_server
+
+        # Add Otel as a service callback
+        if "otel" not in litellm.service_callback:
+            litellm.service_callback.append("otel")
+        setattr(proxy_server, "open_telemetry_logger", self)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_sucess(kwargs, response_obj, start_time, end_time)
@@ -139,7 +153,6 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[datetime, float]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -201,7 +214,6 @@ class OpenTelemetry(CustomLogger):
         end_time: Optional[Union[float, datetime]] = None,
         event_metadata: Optional[dict] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -476,6 +488,13 @@ class OpenTelemetry(CustomLogger):
                     value=kwargs.get("model"),
                 )
 
+            # The LLM request type
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.LLM_REQUEST_TYPE,
+                value=standard_logging_payload["call_type"],
+            )
+
             # The Generative AI Provider: Azure, OpenAI, etc.
             self.safe_set_attribute(
                 span=span,
@@ -659,7 +678,6 @@ class OpenTelemetry(CustomLogger):
         span.set_attribute(key, primitive_value)
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
-        from litellm.proxy._types import SpanAttributes
 
         kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -827,7 +845,6 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
@@ -882,7 +899,6 @@ class OpenTelemetry(CustomLogger):
         logging_payload: ManagementEndpointLoggingPayload,
         parent_otel_span: Optional[Span] = None,
     ):
-        from datetime import datetime
 
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode

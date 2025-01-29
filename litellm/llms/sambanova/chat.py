@@ -4,11 +4,12 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-import types
 from typing import Optional
 
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
-class SambanovaConfig:
+
+class SambanovaConfig(OpenAIGPTConfig):
     """
     Reference: https://community.sambanova.ai/t/create-chat-completion-api/
 
@@ -18,9 +19,7 @@ class SambanovaConfig:
     max_tokens: Optional[int] = None
     response_format: Optional[dict] = None
     seed: Optional[int] = None
-    stop: Optional[str] = None
     stream: Optional[bool] = None
-    temperature: Optional[float] = None
     top_p: Optional[int] = None
     tool_choice: Optional[str] = None
     tools: Optional[list] = None
@@ -46,21 +45,7 @@ class SambanovaConfig:
 
     @classmethod
     def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+        return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -80,12 +65,3 @@ class SambanovaConfig:
             "tools",
             "user",
         ]
-
-    def map_openai_params(
-        self, model: str, non_default_params: dict, optional_params: dict
-    ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
-        for param, value in non_default_params.items():
-            if param in supported_openai_params:
-                optional_params[param] = value
-        return optional_params

@@ -44,14 +44,14 @@ const sidebars = {
             "proxy/model_management",
             "proxy/health",
             "proxy/debugging",
-            "proxy/pass_through",
-          ],
+            "proxy/spending_monitoring",
+        ],
         },
         "proxy/demo",
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "router_architecture"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch"],
         },
         {
           type: "link",
@@ -64,13 +64,9 @@ const sidebars = {
           label: "Making LLM Requests",
           items: [
             "proxy/user_keys",
+            "proxy/clientside_auth",
             "proxy/response_headers",
-            "pass_through/vertex_ai",
-            "pass_through/google_ai_studio",
-            "pass_through/cohere",
-            "pass_through/anthropic_completion",
-            "pass_through/bedrock",
-            "pass_through/langfuse"
+            "proxy/request_headers",
           ],
         },
         {
@@ -88,6 +84,14 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "Model Access",
+          items: [
+            "proxy/model_access",
+            "proxy/team_model_add"
+          ]
+        },
+        {
+          type: "category",
           label: "Admin UI",
           items: [
             "proxy/ui",
@@ -97,8 +101,13 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Spend Tracking + Budgets",
-          items: ["proxy/cost_tracking", "proxy/users", "proxy/custom_pricing", "proxy/team_budgets", "proxy/billing", "proxy/customers"],
+          label: "Spend Tracking",
+          items: ["proxy/cost_tracking", "proxy/custom_pricing", "proxy/billing",],
+        },
+        {
+          type: "category",
+          label: "Budgets + Rate Limits",
+          items: ["proxy/users", "proxy/temporary_budget_increase", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/customers"],
         },
         {
           type: "link",
@@ -108,17 +117,24 @@ const sidebars = {
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
-          items: ["proxy/logging", "proxy/team_logging", "proxy/alerting", "proxy/prometheus",],
+          items: [
+            "proxy/logging",
+            "proxy/logging_spec",
+            "proxy/team_logging",
+            "proxy/prometheus",
+            "proxy/alerting",
+            "proxy/pagerduty"],
         },
         {
           type: "category",
           label: "[Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start",
+            "proxy/guardrails/aim_security",
             "proxy/guardrails/aporia_api",
+            "proxy/guardrails/bedrock",
             "proxy/guardrails/guardrails_ai",
             "proxy/guardrails/lakera_ai",
-            "proxy/guardrails/bedrock",
             "proxy/guardrails/pii_masking_v2",
             "proxy/guardrails/secret_detection",
             "proxy/guardrails/custom_guardrail",
@@ -133,9 +149,16 @@ const sidebars = {
             "oidc"
           ]
         },
+        {
+          type: "category",
+          label: "Create Custom Plugins",
+          description: "Modify requests, responses, and more",
+          items: [
+            "proxy/call_hooks",
+            "proxy/rules",
+          ]
+        },
         "proxy/caching",
-        "proxy/call_hooks",
-        "proxy/rules",
       ]
     },
     {
@@ -154,7 +177,6 @@ const sidebars = {
         "providers/openai_compatible",
         "providers/azure",
         "providers/azure_ai",
-        "providers/aiml",
         "providers/vertex",
         "providers/gemini",
         "providers/anthropic",
@@ -167,6 +189,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/huggingface",
         "providers/databricks",
+        "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
         "providers/nvidia_nim",
@@ -185,6 +208,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/vllm",
+        "providers/infinity",
         "providers/xinference",
         "providers/cloudflare_workers",
         "providers/deepinfra",
@@ -197,11 +221,9 @@ const sidebars = {
         "providers/aleph_alpha",
         "providers/baseten",
         "providers/openrouter",
-        "providers/palm",
         "providers/sambanova",
         "providers/custom_llm_server",
         "providers/petals",
-
       ],
     },
     {
@@ -227,6 +249,7 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
+        'tutorials/litellm_proxy_aporia',
 
       ]
     },
@@ -260,17 +283,27 @@ const sidebars = {
             "text_to_speech",
           ]
         },
+        {
+          type: "category",
+          label: "Pass-through Endpoints (Anthropic SDK, etc.)",
+          items: [
+            "pass_through/intro",
+            "pass_through/vertex_ai",
+            "pass_through/google_ai_studio",
+            "pass_through/cohere",
+            "pass_through/anthropic_completion",
+            "pass_through/bedrock",
+            "pass_through/langfuse",
+            "proxy/pass_through",
+          ],
+        },
         "rerank",
         "assistants",
+        "files_endpoints",
         "batches",
         "realtime",
         "fine_tuning",
         "moderation",
-        {
-          type: "link",
-          label: "Use LiteLLM Proxy with Vertex, Bedrock SDK",
-          href: "/docs/pass_through/vertex_ai",
-        },
       ],
     },
     {
@@ -282,7 +315,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/tag_routing", "proxy/provider_budget_routing", "proxy/team_based_routing", "proxy/customer_routing", "wildcard_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing",  "wildcard_routing"],
     },
     {
       type: "category",
@@ -301,14 +334,34 @@ const sidebars = {
           label: "LangChain, LlamaIndex, Instructor Integration",
           items: ["langchain/langchain", "tutorials/instructor"],
         },
+        {
+          type: "category",
+          label: "Tutorials",
+          items: [
+
+            'tutorials/azure_openai',
+            'tutorials/instructor',
+            "tutorials/gradio_integration",
+            "tutorials/huggingface_codellama",
+            "tutorials/huggingface_tutorial",
+            "tutorials/TogetherAI_liteLLM",
+            "tutorials/finetuned_chat_gpt",
+            "tutorials/text_completion",
+            "tutorials/first_playground",
+            "tutorials/model_fallbacks",
+          ],
+        },
       ],
+    },
+    {
+      type: "doc",
+      id: "proxy/prompt_management"
     },
     {
       type: "category",
       label: "Load Testing",
       items: [
         "benchmarks",
-        "load_test",
         "load_test_advanced",
         "load_test_sdk",
         "load_test_rpm",
@@ -316,8 +369,17 @@ const sidebars = {
     },
     {
       type: "category",
+      label: "Adding Providers",
+      items: [
+        "adding_provider/directory_structure",
+        "adding_provider/new_rerank_provider"],
+    },
+    {
+      type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/lunary_integration",
+        "observability/mlflow",
         "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",
@@ -329,6 +391,7 @@ const sidebars = {
         "debugging/local_debugging",
         "observability/raw_request_response",
         "observability/custom_callback",
+        "observability/humanloop",
         "observability/scrub_data",
         "observability/braintrust",
         "observability/sentry",
@@ -339,42 +402,21 @@ const sidebars = {
         "observability/wandb_integration",
         "observability/slack_integration",
         "observability/athina_integration",
-        "observability/lunary_integration",
         "observability/greenscale_integration",
         "observability/supabase_integration",
         `observability/telemetry`,
         "observability/opik_integration",
       ],
     },
-    {
-      type: "category",
-      label: "Tutorials",
-      items: [
-        'tutorials/litellm_proxy_aporia',
-        'tutorials/azure_openai',
-        'tutorials/instructor',
-        "tutorials/gradio_integration",
-        "tutorials/huggingface_codellama",
-        "tutorials/huggingface_tutorial",
-        "tutorials/TogetherAI_liteLLM",
-        "tutorials/finetuned_chat_gpt",
-        "tutorials/text_completion",
-        "tutorials/first_playground",
-        "tutorials/model_fallbacks",
-      ],
-    },
+
     {
       type: "category",
       label: "Extras",
       items: [
         "extras/contributing",
         "data_security",
+        "data_retention",
         "migration_policy",
-        "contributing",
-        "proxy/pii_masking",
-        "extras/code_quality",
-        "rules",
-        "proxy_server",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -386,6 +428,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
+            "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
             "projects/dbally",
@@ -403,6 +446,13 @@ const sidebars = {
             "projects/llm_cord",
           ],
         },
+        "contributing",
+        "proxy/pii_masking",
+        "extras/code_quality",
+        "rules",
+        "proxy/team_based_routing",
+        "proxy/customer_routing",
+        "proxy_server",
       ],
     },
     "troubleshoot",

@@ -10,26 +10,27 @@
 
 import asyncio
 import json
-import traceback
 import uuid
 from typing import Any, List, Optional, Tuple, Union
 
 import aiohttp
-from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
     StreamingChoices,
-    get_formatted_prompt,
 )
 
 
@@ -54,8 +55,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_anonymizer_api_base: Optional[str] = None,
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
+        logging_only: Optional[bool] = None,
         **kwargs,
     ):
+        if logging_only is True:
+            self.logging_only = True
+            kwargs["event_hook"] = GuardrailEventHooks.logging_only
+        super().__init__(**kwargs)
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
@@ -83,8 +89,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_analyzer_api_base=presidio_analyzer_api_base,
             presidio_anonymizer_api_base=presidio_anonymizer_api_base,
         )
-
-        super().__init__(**kwargs)
 
     def validate_environment(
         self,
@@ -131,6 +135,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         output_parse_pii: bool,
         presidio_config: Optional[PresidioPerRequestConfig],
+        request_data: dict,
     ) -> str:
         """
         [TODO] make this more performant for high-throughput scenario
@@ -149,7 +154,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if self.ad_hoc_recognizers is not None:
                         analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
                     # End of constructing Request 1
-
+                    analyze_payload.update(
+                        self.get_guardrail_dynamic_request_body_params(
+                            request_data=request_data
+                        )
+                    )
                     redacted_text = None
                     verbose_proxy_logger.debug(
                         "Making request to: %s with payload: %s",
@@ -199,6 +208,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             raise e
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -234,6 +244,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 text=m["content"],
                                 output_parse_pii=self.output_parse_pii,
                                 presidio_config=presidio_config,
+                                request_data=data,
                             )
                         )
                 responses = await asyncio.gather(*tasks)
@@ -245,10 +256,45 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 verbose_proxy_logger.info(
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
+                data["messages"] = messages
             return data
         except Exception as e:
             raise e
 
+    @log_guardrail_information
+    def logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_in_new_loop():
+            """Run the coroutine in a new event loop within this thread."""
+            new_loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(new_loop)
+                return new_loop.run_until_complete(
+                    self.async_logging_hook(
+                        kwargs=kwargs, result=result, call_type=call_type
+                    )
+                )
+            finally:
+                new_loop.close()
+                asyncio.set_event_loop(None)
+
+        try:
+            # First, try to get the current event loop
+            _ = asyncio.get_running_loop()
+            # If we're already in an event loop, run in a separate thread
+            # to avoid nested event loop issues
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result()
+
+        except RuntimeError:
+            # No running event loop, we can safely run in this thread
+            return run_in_new_loop()
+
+    @log_guardrail_information
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
@@ -277,6 +323,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             text=text_str,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
+                            request_data=kwargs,
                         )
                     )  # need to pass separately b/c presidio has context window limits
             responses = await asyncio.gather(*tasks)
@@ -292,6 +339,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return kwargs, result
 
+    @log_guardrail_information
     async def async_post_call_success_hook(  # type: ignore
         self,
         data: dict,
@@ -304,7 +352,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         verbose_proxy_logger.debug(
             f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
         )
-        if self.output_parse_pii is False:
+
+        if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
         if isinstance(response, ModelResponse) and not isinstance(

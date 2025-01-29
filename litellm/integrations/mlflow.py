@@ -36,6 +36,7 @@ class MlflowLogger(CustomLogger):
             else:
                 span = self._start_span_or_trace(kwargs, start_time)
                 end_time_ns = int(end_time.timestamp() * 1e9)
+                self._extract_and_set_chat_attributes(span, kwargs, response_obj)
                 self._end_span_or_trace(
                     span=span,
                     outputs=response_obj,
@@ -44,6 +45,21 @@ class MlflowLogger(CustomLogger):
                 )
         except Exception:
             verbose_logger.debug("MLflow Logging Error", stack_info=True)
+
+    def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
+        try:
+            from mlflow.tracing.utils import set_span_chat_messages, set_span_chat_tools
+        except ImportError:
+            return
+
+        inputs = self._construct_input(kwargs)
+        input_messages = inputs.get("messages", [])
+        output_messages = [c.message.model_dump(exclude_none=True)
+                           for c in getattr(response_obj, "choices", [])]
+        if messages := [*input_messages, *output_messages]:
+            set_span_chat_messages(span, messages)
+        if tools := inputs.get("tools"):
+            set_span_chat_tools(span, tools)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
@@ -65,8 +81,9 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                span.add_event(SpanEvent.from_exception(exception))
+                span.add_event(SpanEvent.from_exception(exception))  # type: ignore
 
+            self._extract_and_set_chat_attributes(span, kwargs, response_obj)
             self._end_span_or_trace(
                 span=span,
                 outputs=response_obj,
@@ -107,6 +124,8 @@ class MlflowLogger(CustomLogger):
         # has complete_streaming_response that gathers the full response.
         if final_response := kwargs.get("complete_streaming_response"):
             end_time_ns = int(end_time.timestamp() * 1e9)
+
+            self._extract_and_set_chat_attributes(span, kwargs, final_response)
             self._end_span_or_trace(
                 span=span,
                 outputs=final_response,
@@ -135,6 +154,9 @@ class MlflowLogger(CustomLogger):
     def _construct_input(self, kwargs):
         """Construct span inputs with optional parameters"""
         inputs = {"messages": kwargs.get("messages")}
+        if tools := kwargs.get("tools"):
+            inputs["tools"] = tools
+
         for key in ["functions", "tools", "stream", "tool_choice", "user"]:
             if value := kwargs.get("optional_params", {}).pop(key, None):
                 inputs[key] = value

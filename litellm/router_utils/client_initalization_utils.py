@@ -1,6 +1,5 @@
 import asyncio
 import os
-import traceback
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx
@@ -9,7 +8,11 @@ import openai
 import litellm
 from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_router_logger
-from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
+from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
+from litellm.llms.azure.common_utils import (
+    get_azure_ad_token_from_entrata_id,
+    get_azure_ad_token_from_username_password,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -196,12 +199,18 @@ class InitalizeOpenAISDKClient:
                 verbose_router_logger.debug(
                     "Using Azure AD Token Provider for Azure Auth"
                 )
-                azure_ad_token_provider = (
-                    InitalizeOpenAISDKClient.get_azure_ad_token_from_entrata_id(
-                        tenant_id=litellm_params.get("tenant_id"),
-                        client_id=litellm_params.get("client_id"),
-                        client_secret=litellm_params.get("client_secret"),
-                    )
+                azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
+                    tenant_id=litellm_params.get("tenant_id"),
+                    client_id=litellm_params.get("client_id"),
+                    client_secret=litellm_params.get("client_secret"),
+                )
+            if litellm_params.get("azure_username") and litellm_params.get(
+                "azure_password"
+            ):
+                azure_ad_token_provider = get_azure_ad_token_from_username_password(
+                    azure_username=litellm_params.get("azure_username"),
+                    azure_password=litellm_params.get("azure_password"),
+                    client_id=litellm_params.get("client_id"),
                 )
 
             if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
@@ -359,7 +368,7 @@ class InitalizeOpenAISDKClient:
                         azure_client_params["azure_ad_token_provider"] = (
                             azure_ad_token_provider
                         )
-                    from litellm.llms.AzureOpenAI.azure import (
+                    from litellm.llms.azure.azure import (
                         select_azure_base_url_or_endpoint,
                     )
 
@@ -550,50 +559,3 @@ class InitalizeOpenAISDKClient:
                         ttl=client_ttl,
                         local_only=True,
                     )  # cache for 1 hr
-
-    @staticmethod
-    def get_azure_ad_token_from_entrata_id(
-        tenant_id: str, client_id: str, client_secret: str
-    ) -> Callable[[], str]:
-        from azure.identity import (
-            ClientSecretCredential,
-            DefaultAzureCredential,
-            get_bearer_token_provider,
-        )
-
-        verbose_router_logger.debug("Getting Azure AD Token from Entrata ID")
-
-        if tenant_id.startswith("os.environ/"):
-            _tenant_id = get_secret_str(tenant_id)
-        else:
-            _tenant_id = tenant_id
-
-        if client_id.startswith("os.environ/"):
-            _client_id = get_secret_str(client_id)
-        else:
-            _client_id = client_id
-
-        if client_secret.startswith("os.environ/"):
-            _client_secret = get_secret_str(client_secret)
-        else:
-            _client_secret = client_secret
-
-        verbose_router_logger.debug(
-            "tenant_id %s, client_id %s, client_secret %s",
-            _tenant_id,
-            _client_id,
-            _client_secret,
-        )
-        if _tenant_id is None or _client_id is None or _client_secret is None:
-            raise ValueError("tenant_id, client_id, and client_secret must be provided")
-        credential = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
-
-        verbose_router_logger.debug("credential %s", credential)
-
-        token_provider = get_bearer_token_provider(
-            credential, "https://cognitiveservices.azure.com/.default"
-        )
-
-        verbose_router_logger.debug("token_provider %s", token_provider)
-
-        return token_provider

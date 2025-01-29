@@ -1,12 +1,9 @@
 import json
-import os
 import time
-from enum import Enum
 from typing import Callable
 
-import requests  # type: ignore
-
-from litellm.utils import ModelResponse, Usage
+import litellm
+from litellm.types.utils import ModelResponse, Usage
 
 
 class BasetenError(Exception):
@@ -71,7 +68,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    response = requests.post(
+    response = litellm.module_level_client.post(
         completion_url_fragment_1 + model + completion_url_fragment_2,
         headers=headers,
         data=json.dumps(data),

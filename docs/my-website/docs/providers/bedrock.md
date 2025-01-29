@@ -792,6 +792,16 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 LiteLLM supports Document Understanding for Bedrock models - [AWS Bedrock Docs](https://docs.aws.amazon.com/nova/latest/userguide/modalities-document.html).
 
+:::info
+
+LiteLLM supports ALL Bedrock document types - 
+
+E.g.: "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+
+You can also pass these as either `image_url` or `base64`
+
+:::
+
 ### url 
 
 <Tabs>
@@ -1070,11 +1080,25 @@ response = completion(
 )
 ```
 
-### STS based Auth
+### STS (Role-based Auth)
 
-- Set `aws_role_name` and `aws_session_name` in completion() / embedding() function
+- Set `aws_role_name` and `aws_session_name`
+
+
+| LiteLLM Parameter | Boto3 Parameter | Description | Boto3 Documentation |
+|------------------|-----------------|-------------|-------------------|
+| `aws_access_key_id` | `aws_access_key_id` | AWS access key associated with an IAM user or role | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_secret_access_key` | `aws_secret_access_key` | AWS secret key associated with the access key | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_role_name` | `RoleArn` | The Amazon Resource Name (ARN) of the role to assume | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+| `aws_session_name` | `RoleSessionName` | An identifier for the assumed role session | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+
+
 
 Make the bedrock completion call
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import completion
 
@@ -1105,6 +1129,25 @@ response = completion(
             aws_session_name="my-test-session",
         )
 ```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      aws_role_name: arn:aws:iam::888602223428:role/iam_local_role # AWS RoleArn
+      aws_session_name: "bedrock-session" # AWS RoleSessionName
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID # [OPTIONAL - not required if using role]
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY # [OPTIONAL - not required if using role]
+```
+
+
+</TabItem>
+
+</Tabs>
 
 
 ### Passing an external BedrockRuntime.Client as a parameter - Completion()
@@ -1158,7 +1201,73 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
+## Calling via Proxy
 
+Here's how to call bedrock via your internal proxy.
+
+This example uses Cloudflare's AI Gateway.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "What's AWS?"}],
+    extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+    api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      litellm_params:
+        model: anthropic.claude-3-sonnet-20240229-v1:0
+        api_base: https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "anthropic-claude",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      { "content": "Hello, how are you?", "role": "user" }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Output URL**
+
+```bash
+https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse
+```
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
@@ -1296,3 +1405,82 @@ print(f"response: {response}")
 | Stable Diffusion 3 - v0 | `embedding(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
 | Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
 | Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
+
+
+## Rerank API 
+
+Use Bedrock's Rerank API in the Cohere `/rerank` format. 
+
+Supported Cohere Rerank Params
+- `model` - the foundation model ARN
+- `query` - the query to rerank against
+- `documents` - the list of documents to rerank
+- `top_n` - the number of results to return
+
+<Tabs>
+<TabItem label="SDK" value="sdk">
+
+```python
+from litellm import rerank
+import os 
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = rerank(
+    model="bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0", # provide the model ARN - get this here https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock/client/list_foundation_models.html
+    query="hello",
+    documents=["hello", "world"],
+    top_n=2,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem label="PROXY" value="proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: bedrock-rerank
+      litellm_params:
+        model: bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0
+        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+        aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bedrock-rerank",
+    "query": "What is the capital of the United States?",
+    "documents": [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country."
+    ],
+    "top_n": 3
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
