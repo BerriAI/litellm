@@ -6206,3 +6206,21 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
     return non_default_params
+
+
+def add_openai_metadata(metadata: dict) -> dict:
+    """
+    Add metadata to openai optional parameters, excluding hidden params
+
+    Args:
+        params (dict): Dictionary of API parameters
+        metadata (dict, optional): Metadata to include in the request
+
+    Returns:
+        dict: Updated parameters dictionary with visible metadata only
+    """
+    if metadata is None:
+        return None
+    # Only include non-hidden parameters
+    visible_metadata = {k: v for k, v in metadata.items() if k != "hidden_params"}
+    return visible_metadata.copy()
