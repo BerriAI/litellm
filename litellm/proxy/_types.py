@@ -2194,6 +2194,7 @@ class SpecialHeaders(enum.Enum):
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
+    timeout: Optional[float]
 
 
 class JWTKeyItem(TypedDict, total=False):

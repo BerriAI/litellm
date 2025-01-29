@@ -2190,3 +2190,19 @@ async def test_get_ui_settings_spend_logs_threshold():
 
     # Clean up
     proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+
+def test_get_timeout_from_request():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    headers = {
+        "x-litellm-timeout": "90",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90
+
+    headers = {
+        "x-litellm-timeout": "90.5",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90.5

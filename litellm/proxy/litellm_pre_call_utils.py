@@ -182,6 +182,31 @@ def clean_headers(
 
 class LiteLLMProxyRequestSetup:
     @staticmethod
+    def _get_timeout_from_request(headers: dict) -> Optional[float]:
+        """
+        Workaround for client request from Vercel's AI SDK.
+
+        Allow's user to set a timeout in the request headers.
+
+        Example:
+
+        ```js
+        const openaiProvider = createOpenAI({
+            baseURL: liteLLM.baseURL,
+            apiKey: liteLLM.apiKey,
+            compatibility: "compatible",
+            headers: {
+                "x-litellm-timeout": "90"
+            },
+        });
+        ```
+        """
+        timeout_header = headers.get("x-litellm-timeout", None)
+        if timeout_header is not None:
+            return float(timeout_header)
+        return None
+
+    @staticmethod
     def _get_forwardable_headers(
         headers: Union[Headers, dict],
     ):
@@ -267,6 +292,11 @@ class LiteLLMProxyRequestSetup:
         )
         if _organization is not None:
             data["organization"] = _organization
+
+        timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+        if timeout is not None:
+            data["timeout"] = timeout
+
         return data
 
     @staticmethod
