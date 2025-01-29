@@ -346,11 +346,12 @@ def _add_custom_logger_callback_to_specific_event(
         llm_router=None,
     )
 
-    # don't double add a callback
-    if callback_class is not None and not any(
-        isinstance(cb, type(callback_class)) for cb in litellm.callbacks  # type: ignore
-    ):
-        if logging_event == "success":
+    if callback_class:
+        if (
+            logging_event == "success"
+            and _custom_logger_class_exists_in_success_callbacks(callback_class)
+            is False
+        ):
             litellm.success_callback.append(callback_class)
             litellm._async_success_callback.append(callback_class)
             if callback in litellm.success_callback:
@@ -361,7 +362,11 @@ def _add_custom_logger_callback_to_specific_event(
                 litellm._async_success_callback.remove(
                     callback
                 )  # remove the string from the callback list
-        elif logging_event == "failure":
+        elif (
+            logging_event == "failure"
+            and _custom_logger_class_exists_in_failure_callbacks(callback_class)
+            is False
+        ):
             litellm.failure_callback.append(callback_class)
             litellm._async_failure_callback.append(callback_class)
             if callback in litellm.failure_callback:
@@ -372,6 +377,38 @@ def _add_custom_logger_callback_to_specific_event(
                 litellm._async_failure_callback.remove(
                     callback
                 )  # remove the string from the callback list
+
+
+def _custom_logger_class_exists_in_success_callbacks(
+    callback_class: CustomLogger,
+) -> bool:
+    """
+    Returns True if an instance of the custom logger exists in litellm.success_callback or litellm._async_success_callback
+
+    e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.success_callback or litellm._async_success_callback
+
+    Prevents double adding a custom logger callback to the litellm callbacks
+    """
+    return any(
+        isinstance(cb, type(callback_class))
+        for cb in litellm.success_callback + litellm._async_success_callback
+    )
+
+
+def _custom_logger_class_exists_in_failure_callbacks(
+    callback_class: CustomLogger,
+) -> bool:
+    """
+    Returns True if an instance of the custom logger exists in litellm.failure_callback or litellm._async_failure_callback
+
+    e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.failure_callback or litellm._async_failure_callback
+
+    Prevents double adding a custom logger callback to the litellm callbacks
+    """
+    return any(
+        isinstance(cb, type(callback_class))
+        for cb in litellm.failure_callback + litellm._async_failure_callback
+    )
 
 
 def function_setup(  # noqa: PLR0915
