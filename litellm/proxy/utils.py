@@ -67,7 +67,6 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
-from litellm.utils import logging_callback_manager
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -324,8 +323,10 @@ class ProxyLogging:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
                 if "daily_reports" in self.alert_types:
-                    logging_callback_manager.add_callback(self.slack_alerting_instance)
-                logging_callback_manager.add_sync_success_callback(
+                    litellm.logging_callback_manager.add_callback(
+                        self.slack_alerting_instance
+                    )
+                litellm.logging_callback_manager.add_sync_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
                 )
 
@@ -333,10 +334,10 @@ class ProxyLogging:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
-        logging_callback_manager.add_callback(self.max_parallel_request_limiter)
-        logging_callback_manager.add_callback(self.max_budget_limiter)
-        logging_callback_manager.add_callback(self.cache_control_check)
-        logging_callback_manager.add_callback(self.service_logging_obj)
+        litellm.logging_callback_manager.add_callback(self.max_parallel_request_limiter)
+        litellm.logging_callback_manager.add_callback(self.max_budget_limiter)
+        litellm.logging_callback_manager.add_callback(self.cache_control_check)
+        litellm.logging_callback_manager.add_callback(self.service_logging_obj)
 
         for callback in litellm.callbacks:
             if isinstance(callback, str):
@@ -348,7 +349,9 @@ class ProxyLogging:
                 if callback is None:
                     continue
 
-            logging_callback_manager._add_custom_logger_to_all_callback_lists(callback)
+            litellm.logging_callback_manager._add_custom_logger_to_all_callback_lists(
+                callback
+            )
 
         if (
             len(litellm.input_callback) > 0

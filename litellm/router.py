@@ -127,7 +127,6 @@ from litellm.utils import (
     get_secret,
     get_utc_datetime,
     is_region_allowed,
-    logging_callback_manager,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -485,18 +484,18 @@ class Router:
         ## USAGE TRACKING ##
 
         # Add success callbacks
-        logging_callback_manager.add_async_success_callback(
+        litellm.logging_callback_manager.add_async_success_callback(
             self.deployment_callback_on_success
         )
-        logging_callback_manager.add_sync_success_callback(
+        litellm.logging_callback_manager.add_sync_success_callback(
             self.sync_deployment_callback_on_success
         )
 
         # Add failure callbacks
-        logging_callback_manager.add_async_failure_callback(
+        litellm.logging_callback_manager.add_async_failure_callback(
             self.async_deployment_callback_on_failure
         )
-        logging_callback_manager.add_sync_failure_callback(
+        litellm.logging_callback_manager.add_sync_failure_callback(
             self.deployment_callback_on_failure
         )
 
@@ -603,7 +602,7 @@ class Router:
                         model_list=self.model_list,
                     )
                 if _callback is not None:
-                    logging_callback_manager.add_callback(_callback)
+                    litellm.logging_callback_manager.add_callback(_callback)
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -617,8 +616,8 @@ class Router:
                 router_cache=self.cache, model_list=self.model_list
             )
             ## add callback
-            logging_callback_manager.add_input_callback(self.leastbusy_logger)
-            logging_callback_manager.add_callback(self.leastbusy_logger)
+            litellm.logging_callback_manager.add_input_callback(self.leastbusy_logger)
+            litellm.logging_callback_manager.add_callback(self.leastbusy_logger)
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
@@ -628,7 +627,7 @@ class Router:
                 model_list=self.model_list,
                 routing_args=routing_strategy_args,
             )
-            logging_callback_manager.add_callback(self.lowesttpm_logger)
+            litellm.logging_callback_manager.add_callback(self.lowesttpm_logger)
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2
@@ -638,7 +637,7 @@ class Router:
                 model_list=self.model_list,
                 routing_args=routing_strategy_args,
             )
-            logging_callback_manager.add_callback(self.lowesttpm_logger_v2)
+            litellm.logging_callback_manager.add_callback(self.lowesttpm_logger_v2)
         elif (
             routing_strategy == RoutingStrategy.LATENCY_BASED.value
             or routing_strategy == RoutingStrategy.LATENCY_BASED
@@ -648,7 +647,7 @@ class Router:
                 model_list=self.model_list,
                 routing_args=routing_strategy_args,
             )
-            logging_callback_manager.add_callback(self.lowestlatency_logger)
+            litellm.logging_callback_manager.add_callback(self.lowestlatency_logger)
         elif (
             routing_strategy == RoutingStrategy.COST_BASED.value
             or routing_strategy == RoutingStrategy.COST_BASED
@@ -658,7 +657,7 @@ class Router:
                 model_list=self.model_list,
                 routing_args={},
             )
-            logging_callback_manager.add_callback(self.lowestcost_logger)
+            litellm.logging_callback_manager.add_callback(self.lowestcost_logger)
         else:
             pass
 
@@ -5784,8 +5783,8 @@ class Router:
 
         self.slack_alerting_logger = _slack_alerting_logger
 
-        logging_callback_manager.add_callback(_slack_alerting_logger)
-        logging_callback_manager.add_async_success_callback(
+        litellm.logging_callback_manager.add_callback(_slack_alerting_logger)
+        litellm.logging_callback_manager.add_async_success_callback(
             _slack_alerting_logger.response_taking_too_long_callback
         )
         verbose_router_logger.info(
@@ -5821,6 +5820,6 @@ class Router:
 
     def reset(self):
         ## clean up on close
-        logging_callback_manager._reset_all_callbacks()
+        litellm.logging_callback_manager._reset_all_callbacks()
         self.retry_policy = None
         self.flush_cache()

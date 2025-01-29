@@ -100,7 +100,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
 )
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -236,7 +235,6 @@ from .types.router import LiteLLM_Params
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
 MAX_THREADS = 100
-logging_callback_manager = LoggingCallbackManager()
 # Create a ThreadPoolExecutor
 executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 sentry_sdk_instance = None
@@ -349,8 +347,8 @@ def _add_custom_logger_callback_to_specific_event(
 
     if callback_class:
         if logging_event == "success":
-            logging_callback_manager.add_sync_success_callback(callback_class)
-            logging_callback_manager.add_async_success_callback(callback_class)
+            litellm.logging_callback_manager.add_sync_success_callback(callback_class)
+            litellm.logging_callback_manager.add_async_success_callback(callback_class)
             if callback in litellm.success_callback:
                 litellm.success_callback.remove(
                     callback
@@ -360,8 +358,8 @@ def _add_custom_logger_callback_to_specific_event(
                     callback
                 )  # remove the string from the callback list
         elif logging_event == "failure":
-            logging_callback_manager.add_sync_failure_callback(callback_class)
-            logging_callback_manager.add_async_failure_callback(callback_class)
+            litellm.logging_callback_manager.add_sync_failure_callback(callback_class)
+            litellm.logging_callback_manager.add_async_failure_callback(callback_class)
             if callback in litellm.failure_callback:
                 litellm.failure_callback.remove(
                     callback
@@ -405,7 +403,7 @@ def function_setup(  # noqa: PLR0915
                         for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
-                logging_callback_manager._add_custom_logger_to_all_callback_lists(
+                litellm.logging_callback_manager._add_custom_logger_to_all_callback_lists(
                     callback
                 )
             print_verbose(
@@ -442,12 +440,16 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    logging_callback_manager.add_async_success_callback(callback)
+                    litellm.logging_callback_manager.add_async_success_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    logging_callback_manager.add_async_success_callback(callback)
+                    litellm.logging_callback_manager.add_async_success_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif (
                     callback in litellm._known_custom_logger_compatible_callbacks
@@ -463,7 +465,9 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    logging_callback_manager.add_async_failure_callback(callback)
+                    litellm.logging_callback_manager.add_async_failure_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
 
             # Pop the async items from failure_callback in reverse order to avoid index issues

@@ -280,10 +280,7 @@ from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import (
-    _add_custom_logger_callback_to_specific_event,
-    logging_callback_manager,
-)
+from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
     from litellm._version import version
@@ -739,7 +736,7 @@ user_api_key_cache = DualCache(
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
-logging_callback_manager.add_callback(model_max_budget_limiter)
+litellm.logging_callback_manager.add_callback(model_max_budget_limiter)
 redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
 )
@@ -935,14 +932,18 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         verbose_proxy_logger.debug("setting litellm success callback to track cost")
-        logging_callback_manager.add_async_success_callback(_PROXY_track_cost_callback)
+        litellm.logging_callback_manager.add_async_success_callback(
+            _PROXY_track_cost_callback
+        )
 
 
 def error_tracking():
     global prisma_client
     if prisma_client is not None:
         verbose_proxy_logger.debug("setting litellm failure callback to track cost")
-        logging_callback_manager.add_async_failure_callback(_PROXY_failure_handler)
+        litellm.logging_callback_manager.add_async_failure_callback(
+            _PROXY_failure_handler
+        )
 
 
 def _set_spend_logs_payload(
@@ -1889,12 +1890,14 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
-                            logging_callback_manager.add_sync_success_callback(
+                            litellm.logging_callback_manager.add_sync_success_callback(
                                 get_instance_fn(value=callback)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            logging_callback_manager.add_sync_success_callback(callback)
+                            litellm.logging_callback_manager.add_sync_success_callback(
+                                callback
+                            )
                             if "prometheus" in callback:
                                 if not premium_user:
                                     raise Exception(
@@ -1918,12 +1921,14 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
-                            logging_callback_manager.add_sync_failure_callback(
+                            litellm.logging_callback_manager.add_sync_failure_callback(
                                 get_instance_fn(value=callback)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            logging_callback_manager.add_sync_failure_callback(callback)
+                            litellm.logging_callback_manager.add_sync_failure_callback(
+                                callback
+                            )
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
@@ -2214,7 +2219,7 @@ class ProxyConfig:
                         },
                     )
                     if _logger is not None:
-                        logging_callback_manager.add_callback(_logger)
+                        litellm.logging_callback_manager.add_callback(_logger)
         pass
 
     def initialize_secret_manager(self, key_management_system: Optional[str]):
@@ -2496,7 +2501,9 @@ class ProxyConfig:
                         success_callback, "success"
                     )
                 elif success_callback not in litellm.success_callback:
-                    logging_callback_manager.add_sync_success_callback(success_callback)
+                    litellm.logging_callback_manager.add_sync_success_callback(
+                        success_callback
+                    )
 
         # Add failure callbacks from DB to litellm
         if failure_callbacks is not None and isinstance(failure_callbacks, list):
@@ -2509,7 +2516,9 @@ class ProxyConfig:
                         failure_callback, "failure"
                     )
                 elif failure_callback not in litellm.failure_callback:
-                    logging_callback_manager.add_sync_failure_callback(failure_callback)
+                    litellm.logging_callback_manager.add_sync_failure_callback(
+                        failure_callback
+                    )
 
     def _add_environment_variables_from_db_config(self, config_data: dict) -> None:
         """

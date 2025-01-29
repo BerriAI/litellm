@@ -37,7 +37,6 @@ from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErro
 from litellm.types.utils import BudgetConfig
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
-from litellm.utils import logging_callback_manager
 
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
@@ -64,7 +63,7 @@ class RouterBudgetLimiting(CustomLogger):
         self._init_tag_budgets()
 
         # Add self to litellm callbacks if it's a list
-        logging_callback_manager.add_callback(self)
+        litellm.logging_callback_manager.add_callback(self)
 
     async def async_filter_deployments(
         self,
