@@ -1567,3 +1567,49 @@ async def test_wrapper_kwargs_passthrough():
         litellm_logging_obj.model_call_details["litellm_params"]["base_model"]
         == "gpt-4o-mini"
     )
+
+
+def test_dict_to_response_format_helper():
+    from litellm.llms.base_llm.base_utils import _dict_to_response_format_helper
+
+    args = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "schema": {
+                    "$defs": {
+                        "CalendarEvent": {
+                            "properties": {
+                                "name": {"title": "Name", "type": "string"},
+                                "date": {"title": "Date", "type": "string"},
+                                "participants": {
+                                    "items": {"type": "string"},
+                                    "title": "Participants",
+                                    "type": "array",
+                                },
+                            },
+                            "required": ["name", "date", "participants"],
+                            "title": "CalendarEvent",
+                            "type": "object",
+                            "additionalProperties": False,
+                        }
+                    },
+                    "properties": {
+                        "events": {
+                            "items": {"$ref": "#/$defs/CalendarEvent"},
+                            "title": "Events",
+                            "type": "array",
+                        }
+                    },
+                    "required": ["events"],
+                    "title": "EventsList",
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+                "name": "EventsList",
+                "strict": True,
+            },
+        },
+        "ref_template": "/$defs/{model}",
+    }
+    _dict_to_response_format_helper(**args)
