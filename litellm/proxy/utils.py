@@ -325,7 +325,7 @@ class ProxyLogging:
                 # We should NOT add callbacks when alerting is off
                 if "daily_reports" in self.alert_types:
                     logging_callback_manager.add_callback(self.slack_alerting_instance)
-                litellm.success_callback.append(
+                logging_callback_manager.add_sync_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
                 )
 
@@ -347,18 +347,8 @@ class ProxyLogging:
                 )
                 if callback is None:
                     continue
-            if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)  # type: ignore
-            if callback not in litellm.success_callback:
-                litellm.success_callback.append(callback)  # type: ignore
-            if callback not in litellm.failure_callback:
-                litellm.failure_callback.append(callback)  # type: ignore
-            if callback not in litellm._async_success_callback:
-                litellm._async_success_callback.append(callback)  # type: ignore
-            if callback not in litellm._async_failure_callback:
-                litellm._async_failure_callback.append(callback)  # type: ignore
-            if callback not in litellm.service_callback:
-                litellm.service_callback.append(callback)  # type: ignore
+
+            logging_callback_manager._add_custom_logger_to_all_callback_lists(callback)
 
         if (
             len(litellm.input_callback) > 0

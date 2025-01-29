@@ -27,6 +27,13 @@ class LoggingCallbackManager:
             )
         pass
 
+    def add_service_callback(self, callback: Union[CustomLogger, str, Callable]):
+        """
+        Add a service callback to litellm.service_callback
+        """
+
+        pass
+
     def add_callback(self, callback: Union[CustomLogger, str, Callable]):
         """
         Add a callback to litellm.callbacks
@@ -111,6 +118,7 @@ class LoggingCallbackManager:
         - `litellm.failure_callback`
         - `litellm._async_failure_callback`
         - `litellm.input_callback`
+        - `litellm.service_callback`
         """
         if custom_logger is None:
             return
@@ -126,6 +134,9 @@ class LoggingCallbackManager:
 
             # input
             self.add_input_callback(custom_logger)
+
+            # service
+            self.add_service_callback(custom_logger)
 
     def _add_callback_function_to_list(
         self, callback: Callable, parent_list: List[Union[CustomLogger, Callable, str]]
