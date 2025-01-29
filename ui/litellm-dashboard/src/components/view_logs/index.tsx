@@ -147,8 +147,8 @@ export default function SpendLogsTable({
 
 
   return (
-    <div className="w-full">
-      <h1 className="text-xl font-semibold mb-4">Traces</h1>
+    <div className="w-full p-6">
+      <h1 className="text-xl font-semibold mb-4">Request Logs</h1>
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
