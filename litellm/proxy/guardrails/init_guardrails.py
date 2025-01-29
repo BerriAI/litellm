@@ -168,4 +168,4 @@ def init_guardrails_v2(
 
         guardrail_list.append(parsed_guardrail)
 
-    print(f"\nGuardrail List:{guardrail_list}\n")  # noqa
+    verbose_proxy_logger.info(f"\nGuardrail List:{guardrail_list}\n")

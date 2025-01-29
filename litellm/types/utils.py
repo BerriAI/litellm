@@ -1544,7 +1544,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
-    guardrail_mode: Optional[GuardrailEventHooks]
+    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
     guardrail_response: Optional[Union[dict, str]]
     guardrail_status: Literal["success", "failure"]
 
