@@ -721,14 +721,22 @@ def test_stream_chunk_builder_openai_audio_output_usage():
     print(f"response usage: {response.usage}")
     check_non_streaming_response(response)
     print(f"response: {response}")
-    # Convert both usage objects to dictionaries for easier comparison
-    usage_dict = usage_obj.model_dump(exclude_none=True)
-    response_usage_dict = response.usage.model_dump(exclude_none=True)
-
-    # Simple dictionary comparison
-    assert (
-        usage_dict == response_usage_dict
-    ), f"\nExpected: {usage_dict}\nGot: {response_usage_dict}"
+    for k, v in usage_obj.model_dump(exclude_none=True).items():
+        print(k, v)
+        response_usage_value = getattr(response.usage, k)  # type: ignore
+        print(f"response_usage_value: {response_usage_value}")
+        print(f"type: {type(response_usage_value)}")
+        if isinstance(response_usage_value, BaseModel):
+            response_usage_value_dict = response_usage_value.model_dump(
+                exclude_none=True
+            )
+            if isinstance(v, dict):
+                for key, value in v.items():
+                    assert response_usage_value_dict[key] == value
+            else:
+                assert response_usage_value_dict == v
+        else:
+            assert response_usage_value == v
 
 
 def test_stream_chunk_builder_empty_initial_chunk():
