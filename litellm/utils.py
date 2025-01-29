@@ -100,6 +100,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
 )
+from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
@@ -235,7 +236,7 @@ from .types.router import LiteLLM_Params
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
 MAX_THREADS = 100
-
+logging_callback_manager = LoggingCallbackManager()
 # Create a ThreadPoolExecutor
 executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 sentry_sdk_instance = None
