@@ -4066,18 +4066,21 @@ def test_mock_response_iterator_tool_use():
 
 
 def test_deepseek_reasoning_content_completion():
-    litellm.set_verbose = True
-    resp = litellm.completion(
-        model="deepseek/deepseek-reasoner",
-        messages=[{"role": "user", "content": "Tell me a joke."}],
-        stream=True,
-    )
+    # litellm.set_verbose = True
+    try:
+        resp = litellm.completion(
+            model="deepseek/deepseek-reasoner",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            timeout=5,
+        )
 
-    reasoning_content_exists = False
-    for chunk in resp:
-        print(f"chunk: {chunk}")
-        if chunk.choices[0].delta.content is not None:
-            if "reasoning_content" in chunk.choices[0].delta.provider_specific_fields:
+        reasoning_content_exists = False
+        for chunk in resp:
+            print(f"chunk: {chunk}")
+            if chunk.choices[0].delta.reasoning_content is not None:
                 reasoning_content_exists = True
                 break
-    assert reasoning_content_exists
+        assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")

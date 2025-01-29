@@ -43,7 +43,6 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
         setAvailableTeams(response);
       } catch (error) {
         console.error('Error fetching available teams:', error);
-        message.error('Failed to load available teams');
       }
     };
 

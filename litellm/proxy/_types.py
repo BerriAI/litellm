@@ -1992,6 +1992,8 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    key_model_access_denied = "key_model_access_denied"
+    team_model_access_denied = "team_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
@@ -2154,6 +2156,13 @@ class TeamInfoResponseObject(TypedDict):
 class TeamListResponseObject(LiteLLM_TeamTable):
     team_memberships: List[LiteLLM_TeamMembership]
     keys: List  # list of keys that belong to the team
+
+
+class KeyListResponseObject(TypedDict, total=False):
+    keys: List[Union[str, UserAPIKeyAuth]]
+    total_count: Optional[int]
+    current_page: Optional[int]
+    total_pages: Optional[int]
 
 
 class CurrentItemRateLimit(TypedDict):
