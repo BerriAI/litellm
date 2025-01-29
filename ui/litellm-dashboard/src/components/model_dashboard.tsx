@@ -94,7 +94,7 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder } from "./provider_info_helpers";
+import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, reverse_lookup_provider_map } from "./provider_info_helpers";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -1045,13 +1045,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const setProviderModelsFn = (provider: string) => {
     console.log(`received provider string: ${provider}`);
-    const providerKey = Object.keys(Providers).find(
-      (key) => (Providers as { [index: string]: any })[key] === provider
-    );
-
+    let providerKey = provider;
     if (providerKey) {
-      const mappingResult = provider_map[providerKey]; // Get the corresponding value from the mapping
-      console.log(`mappingResult: ${mappingResult}`);
       let _providerModels: Array<string> = [];
       if (typeof modelMap === "object") {
         Object.entries(modelMap).forEach(([key, value]) => {
@@ -1059,8 +1054,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             value !== null &&
             typeof value === "object" &&
             "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === mappingResult ||
-              (value as any)["litellm_provider"].includes(mappingResult))
+            ((value as any)["litellm_provider"] === providerKey ||
+              (value as any)["litellm_provider"].includes(providerKey))
           ) {
             _providerModels.push(key);
           }
