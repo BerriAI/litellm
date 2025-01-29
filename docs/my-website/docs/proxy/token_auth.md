@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# JWT-based Auth 
+# SSO - JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 
@@ -182,6 +182,24 @@ Expected Scope in JWT:
   "scope": "litellm_proxy_endpoints_access"
 }
 ```
+
+### Control Model Access 
+
+```yaml
+general_settings:
+  enable_jwt_auth: True 
+  litellm_jwtauth:
+    user_roles_jwt_field: "resource_access.litellm-test-client-id.roles"
+    user_allowed_roles: ["basic_user"] # roles that map to an 'internal_user' role on LiteLLM 
+    enforce_rbac: true # if true, will check if the user has the correct role to access the model + endpoint
+  
+  role_permissions: # control what models + endpointsare allowed for each role
+    - role: internal_user
+      models: ["anthropic-claude"]
+```
+
+
+**[Architecture Diagram (Control Model Access)](./jwt_auth_arch)**
 
 ## Advanced - Allowed Routes 
 

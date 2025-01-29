@@ -508,3 +508,43 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model():
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.proxy._types import ProxyException
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/anthropic-claude"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-api-key"},
+            },
+        ]
+    )
+
+    args = {
+        "model": "anthropic-claude",
+        "llm_router": router,
+        "user_object": LiteLLM_UserTable(
+            user_id="testuser21@mycompany.com",
+            max_budget=None,
+            spend=0.0042295,
+            model_max_budget={},
+            model_spend={},
+            user_email="testuser@mycompany.com",
+            models=["gpt-3.5-turbo"],
+        ),
+    }
+
+    with pytest.raises(ProxyException) as e:
+        await can_user_call_model(**args)
+
+    args["model"] = "gpt-3.5-turbo"
+    await can_user_call_model(**args)
