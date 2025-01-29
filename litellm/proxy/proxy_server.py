@@ -280,7 +280,10 @@ from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import _add_custom_logger_callback_to_specific_event
+from litellm.utils import (
+    _add_custom_logger_callback_to_specific_event,
+    logging_callback_manager,
+)
 
 try:
     from litellm._version import version
@@ -931,19 +934,15 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
-        if isinstance(litellm._async_success_callback, list):
-            verbose_proxy_logger.debug("setting litellm success callback to track cost")
-            if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
-                litellm._async_success_callback.append(_PROXY_track_cost_callback)  # type: ignore
+        verbose_proxy_logger.debug("setting litellm success callback to track cost")
+        logging_callback_manager.add_async_success_callback(_PROXY_track_cost_callback)
 
 
 def error_tracking():
     global prisma_client
     if prisma_client is not None:
-        if isinstance(litellm.failure_callback, list):
-            verbose_proxy_logger.debug("setting litellm failure callback to track cost")
-            if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
-                litellm.failure_callback.append(_PROXY_failure_handler)  # type: ignore
+        verbose_proxy_logger.debug("setting litellm failure callback to track cost")
+        logging_callback_manager.add_async_failure_callback(_PROXY_failure_handler)
 
 
 def _set_spend_logs_payload(
