@@ -1,4 +1,4 @@
-from typing import Callable, List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -101,9 +101,7 @@ class LoggingCallbackManager:
                 f"Callback {callback} already exists in {parent_list}, not adding again.."
             )
 
-    def _add_custom_logger_to_all_callback_lists(
-        self, custom_logger: Optional[CustomLogger]
-    ):
+    def _add_custom_logger_to_all_callback_lists(self, custom_logger: Optional[Any]):
         """
         Add a custom logger to all callback lists
 

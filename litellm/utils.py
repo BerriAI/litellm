@@ -446,7 +446,7 @@ def function_setup(  # noqa: PLR0915
                     ):  # don't double add a callback
                         continue
                 logging_callback_manager._add_custom_logger_to_all_callback_lists(
-                    callback  # type: ignore
+                    callback
                 )
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
