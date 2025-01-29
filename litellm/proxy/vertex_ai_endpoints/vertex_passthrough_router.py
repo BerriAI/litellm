@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
@@ -53,7 +54,7 @@ class VertexPassThroughRouter:
         self,
         project_id: str,
         location: str,
-        vertex_credentials: VertexPassThroughCredentials,
+        vertex_credentials: str,
     ):
         """
         Add the vertex credentials for the given project-id, location
@@ -71,10 +72,17 @@ class VertexPassThroughRouter:
                 "No deployment key found for project-id, location"
             )
             return
+        vertex_pass_through_credentials = VertexPassThroughCredentials(
+            vertex_project=project_id,
+            vertex_location=location,
+            vertex_credentials=vertex_credentials,
+        )
+        self.deployment_key_to_vertex_credentials[deployment_key] = (
+            vertex_pass_through_credentials
+        )
 
-        self.deployment_key_to_vertex_credentials[deployment_key] = vertex_credentials
         if default_vertex_config is None:
-            default_vertex_config = vertex_credentials
+            default_vertex_config = vertex_pass_through_credentials
 
     def _get_deployment_key(
         self, project_id: Optional[str], location: Optional[str]
@@ -85,3 +93,23 @@ class VertexPassThroughRouter:
         if project_id is None or location is None:
             return None
         return f"{project_id}-{location}"
+
+    @staticmethod
+    def _get_vertex_project_id_from_url(url: str) -> Optional[str]:
+        """
+        Get the vertex project id from the url
+
+        `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+        """
+        match = re.search(r"/projects/([^/]+)", url)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _get_vertex_location_from_url(url: str) -> Optional[str]:
+        """
+        Get the vertex location from the url
+
+        `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+        """
+        match = re.search(r"/locations/([^/]+)", url)
+        return match.group(1) if match else None
