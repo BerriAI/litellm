@@ -158,9 +158,12 @@ export default function SpendLogsTable({
     
     const now = moment();
     const start = moment(startTime);
-    const diffHours = now.diff(start, 'hours');
+    const diffMinutes = now.diff(start, 'minutes');
     
-    if (diffHours <= 1) return 'Last Hour';
+    if (diffMinutes <= 15) return 'Last 15 Minutes';
+    if (diffMinutes <= 60) return 'Last Hour';
+    
+    const diffHours = now.diff(start, 'hours');
     if (diffHours <= 4) return 'Last 4 Hours';
     if (diffHours <= 24) return 'Last 24 Hours';
     if (diffHours <= 168) return 'Last 7 Days';
