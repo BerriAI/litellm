@@ -106,13 +106,15 @@ export default function SpendLogsTable({
       }
 
       const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
-      const formattedEndTime = moment(endTime).format("YYYY-MM-DD HH:mm:ss");
+      const formattedEndTime = isCustomDate 
+        ? moment(endTime).format("YYYY-MM-DD HH:mm:ss")
+        : moment().format("YYYY-MM-DD HH:mm:ss");
 
       return await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
         selectedTeamId || undefined,
-        undefined,  // This parameter might be setting a default min_spend
+        undefined,
         formattedStartTime,
         formattedEndTime,
         currentPage,
@@ -120,6 +122,8 @@ export default function SpendLogsTable({
       );
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
   });
 
   if (!accessToken || !token || !userRole || !userID) {
