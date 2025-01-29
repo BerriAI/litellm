@@ -2064,7 +2064,9 @@
         "input_cost_per_token": 0.00000059,
         "output_cost_per_token": 0.00000079,
         "litellm_provider": "groq",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true
     },
     "groq/llama-3.3-70b-specdec": {
         "max_tokens": 8192,
@@ -4605,6 +4607,20 @@
         "output_cost_per_token": 0.000001,
         "litellm_provider": "replicate",
         "mode": "chat"
+    },
+    "openrouter/deepseek/deepseek-r1": {
+        "max_tokens": 8192,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000055,
+        "input_cost_per_token_cache_hit": 0.00000014,
+        "output_cost_per_token": 0.00000219,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true, 
+        "supports_assistant_prefill": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-chat": {
         "max_tokens": 8192,

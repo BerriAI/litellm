@@ -253,6 +253,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/team/available",
         "/user/info",
         "/model/info",
         "/v2/model/info",
@@ -284,6 +285,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/info",
         "/team/block",
         "/team/unblock",
+        "/team/available",
         # model
         "/model/new",
         "/model/update",
@@ -1563,6 +1565,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
+    teams: List[str] = []
 
     @model_validator(mode="before")
     @classmethod
@@ -1571,6 +1574,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             values.update({"spend": 0.0})
         if values.get("models") is None:
             values.update({"models": []})
+        if values.get("teams") is None:
+            values.update({"teams": []})
         return values
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1987,6 +1992,8 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    key_model_access_denied = "key_model_access_denied"
+    team_model_access_denied = "team_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
@@ -2149,6 +2156,13 @@ class TeamInfoResponseObject(TypedDict):
 class TeamListResponseObject(LiteLLM_TeamTable):
     team_memberships: List[LiteLLM_TeamMembership]
     keys: List  # list of keys that belong to the team
+
+
+class KeyListResponseObject(TypedDict, total=False):
+    keys: List[Union[str, UserAPIKeyAuth]]
+    total_count: Optional[int]
+    current_page: Optional[int]
+    total_pages: Optional[int]
 
 
 class CurrentItemRateLimit(TypedDict):

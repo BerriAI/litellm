@@ -14,12 +14,14 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
+from fastapi import status
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CallInfo,
@@ -31,6 +33,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -874,6 +878,11 @@ async def can_key_call_model(
 
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
+    if _model_matches_any_wildcard_pattern_in_list(
+        model=model, allowed_model_list=filtered_models
+    ):
+        return True
+
     all_model_access: bool = False
 
     if (
@@ -882,8 +891,11 @@ async def can_key_call_model(
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:
-        raise ValueError(
-            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+        raise ProxyException(
+            message=f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
         )
     valid_token.models = filtered_models
     verbose_proxy_logger.debug(
@@ -1037,7 +1049,7 @@ async def _team_max_budget_check(
         raise litellm.BudgetExceededError(
             current_cost=team_object.spend,
             max_budget=team_object.max_budget,
-            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
+            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
 
 
@@ -1059,11 +1071,7 @@ def _team_model_access_check(
         and model not in team_object.models
     ):
         # this means the team has access to all models on the proxy
-        if (
-            "all-proxy-models" in team_object.models
-            or "*" in team_object.models
-            or "openai/*" in team_object.models
-        ):
+        if "all-proxy-models" in team_object.models or "*" in team_object.models:
             # this means the team has access to all models on the proxy
             pass
         # check if the team model is an access_group
@@ -1076,14 +1084,16 @@ def _team_model_access_check(
             pass
         elif model and "*" in model:
             pass
-        elif any(
-            is_model_allowed_by_pattern(model=model, allowed_model_pattern=team_model)
-            for team_model in team_object.models
+        elif _model_matches_any_wildcard_pattern_in_list(
+            model=model, allowed_model_list=team_object.models
         ):
             pass
         else:
-            raise Exception(
-                f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}"
+            raise ProxyException(
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={model}. Allowed team models = {team_object.models}",
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=status.HTTP_401_UNAUTHORIZED,
             )
 
 
@@ -1104,3 +1114,64 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         return bool(re.match(pattern, model))
 
     return False
+
+
+def _model_matches_any_wildcard_pattern_in_list(
+    model: str, allowed_model_list: list
+) -> bool:
+    """
+    Returns True if a model matches any wildcard pattern in a list.
+
+    eg.
+    - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns True
+    - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/us.*` returns True
+    - model=`bedrockzzzz/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns False
+    """
+
+    if any(
+        _is_wildcard_pattern(allowed_model_pattern)
+        and is_model_allowed_by_pattern(
+            model=model, allowed_model_pattern=allowed_model_pattern
+        )
+        for allowed_model_pattern in allowed_model_list
+    ):
+        return True
+
+    if any(
+        _is_wildcard_pattern(allowed_model_pattern)
+        and _model_custom_llm_provider_matches_wildcard_pattern(
+            model=model, allowed_model_pattern=allowed_model_pattern
+        )
+        for allowed_model_pattern in allowed_model_list
+    ):
+        return True
+
+    return False
+
+
+def _model_custom_llm_provider_matches_wildcard_pattern(
+    model: str, allowed_model_pattern: str
+) -> bool:
+    """
+    Returns True for this scenario:
+    - `model=gpt-4o`
+    - `allowed_model_pattern=openai/*`
+
+    or
+    - `model=claude-3-5-sonnet-20240620`
+    - `allowed_model_pattern=anthropic/*`
+    """
+    model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+    return is_model_allowed_by_pattern(
+        model=f"{custom_llm_provider}/{model}",
+        allowed_model_pattern=allowed_model_pattern,
+    )
+
+
+def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
+    """
+    Returns True if the pattern is a wildcard pattern.
+
+    Checks if `*` is in the pattern.
+    """
+    return "*" in allowed_model_pattern

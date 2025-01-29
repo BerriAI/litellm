@@ -7,6 +7,7 @@ import {
   InformationCircleIcon,
   PencilAltIcon,
   PencilIcon,
+  RefreshIcon,
   StatusOnlineIcon,
   TrashIcon,
 } from "@heroicons/react/outline";
@@ -20,6 +21,7 @@ import {
   message,
   Tooltip
 } from "antd";
+import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
@@ -42,8 +44,14 @@ import {
   Accordion,
   AccordionHeader,
   AccordionBody,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Tab
 } from "@tremor/react";
 import { CogIcon } from "@heroicons/react/outline";
+import AvailableTeamsPanel from "@/components/team/available_teams";
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -83,26 +91,36 @@ const Team: React.FC<TeamProps> = ({
   userID,
   userRole,
 }) => {
+  const [lastRefreshed, setLastRefreshed] = useState("");
 
+  const fetchTeams = async (accessToken: string, userID: string | null, userRole: string | null) => {
+    let givenTeams;
+    if (userRole != "Admin" && userRole != "Admin Viewer") {
+      givenTeams = await teamListCall(accessToken, userID)
+    } else {
+      givenTeams = await teamListCall(accessToken)
+    }
+    
+    console.log(`givenTeams: ${givenTeams}`)
+
+    setTeams(givenTeams)
+  }
   useEffect(() => {
     console.log(`inside useeffect - ${teams}`)
     if (teams === null && accessToken) {
       // Call your function here
-      const fetchData = async () => {
-        let givenTeams;
-        if (userRole != "Admin" && userRole != "Admin Viewer") {
-          givenTeams = await teamListCall(accessToken, userID)
-        } else {
-          givenTeams = await teamListCall(accessToken)
-        }
-        
-        console.log(`givenTeams: ${givenTeams}`)
-
-        setTeams(givenTeams)
-      }
-      fetchData()
+      fetchTeams(accessToken, userID, userRole)
     }
   }, [teams]);
+  
+  useEffect(() => {
+    console.log(`inside useeffect - ${lastRefreshed}`)
+    if (accessToken) {
+      // Call your function here
+      fetchTeams(accessToken, userID, userRole)
+    }
+    handleRefreshClick()
+  }, [lastRefreshed]);
 
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -117,10 +135,11 @@ const Team: React.FC<TeamProps> = ({
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
-  const [userModels, setUserModels] = useState([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
   const [selectedEditMember, setSelectedEditMember] = useState<null | TeamMember>(null);
+  
 
 
   const [perTeamInfo, setPerTeamInfo] = useState<Record<string, any>>({});
@@ -218,7 +237,7 @@ const Team: React.FC<TeamProps> = ({
                 {userModels &&
                   userModels.map((model) => (
                     <Select2.Option key={model} value={model}>
-                      {model}
+                      {getModelDisplayName(model)}
                     </Select2.Option>
                   ))}
               </Select2>
@@ -387,21 +406,12 @@ const Team: React.FC<TeamProps> = ({
   useEffect(() => {
     const fetchUserModels = async () => {
       try {
-        if (userID === null || userRole === null) {
+        if (userID === null || userRole === null || accessToken === null) {
           return;
         }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
+        const models = await fetchAvailableModelsForTeamOrKey(userID, userRole, accessToken);
+        if (models) {
+          setUserModels(models);
         }
       } catch (error) {
         console.error("Error fetching user models:", error);
@@ -552,6 +562,12 @@ const Team: React.FC<TeamProps> = ({
     }
   }
 
+  const handleRefreshClick = () => {
+    // Update the 'lastRefreshed' state to the current date and time
+    const currentDate = new Date();
+    setLastRefreshed(currentDate.toLocaleString());
+  };
+
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     _common_member_update_call(formValues, "add");
   };
@@ -561,9 +577,27 @@ const Team: React.FC<TeamProps> = ({
   }
   return (
     <div className="w-full mx-4">
-      <Grid numItems={1} className="gap-2 p-8 h-[75vh] w-full mt-2">
+      <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
+      <TabList className="flex justify-between mt-2 w-full items-center">
+        <div className="flex">
+          <Tab>Your Teams</Tab>
+          <Tab>Available Teams</Tab>
+          </div>
+          <div className="flex items-center space-x-2">
+            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+            <Icon
+              icon={RefreshIcon} // Modify as necessary for correct icon name
+              variant="shadow"
+              size="xs"
+              className="self-center"
+              onClick={handleRefreshClick}
+            />
+          </div>
+      </TabList>
+      <TabPanels>
+      <TabPanel>
+      <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <Title level={4}>All Teams</Title>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
             <Table>
               <TableHead>
@@ -673,8 +707,8 @@ const Team: React.FC<TeamProps> = ({
                                       >
                                         <Text>
                                           {model.length > 30
-                                            ? `${model.slice(0, 30)}...`
-                                            : model}
+                                            ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                            : getModelDisplayName(model)}
                                         </Text>
                                       </Badge>
                                     )
@@ -833,7 +867,7 @@ const Team: React.FC<TeamProps> = ({
                     </Select2.Option>
                     {userModels.map((model) => (
                       <Select2.Option key={model} value={model}>
-                        {model}
+                        {getModelDisplayName(model)}
                       </Select2.Option>
                     ))}
                   </Select2>
@@ -1080,6 +1114,16 @@ const Team: React.FC<TeamProps> = ({
           </Modal>
         </Col>
       </Grid>
+      </TabPanel>
+      <TabPanel>  
+        <AvailableTeamsPanel
+          accessToken={accessToken}
+          userID={userID}
+        />
+      </TabPanel>
+      </TabPanels>
+
+    </TabGroup>
     </div>
   );
 };

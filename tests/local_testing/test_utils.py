@@ -1527,3 +1527,89 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
+
+
+@pytest.mark.asyncio
+async def test_wrapper_kwargs_passthrough():
+    from litellm.utils import client
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObject,
+    )
+
+    # Create mock original function
+    mock_original = AsyncMock()
+
+    # Apply decorator
+    @client
+    async def test_function(**kwargs):
+        return await mock_original(**kwargs)
+
+    # Test kwargs
+    test_kwargs = {"base_model": "gpt-4o-mini"}
+
+    # Call decorated function
+    await test_function(**test_kwargs)
+
+    mock_original.assert_called_once()
+
+    # get litellm logging object
+    litellm_logging_obj: LiteLLMLoggingObject = mock_original.call_args.kwargs.get(
+        "litellm_logging_obj"
+    )
+    assert litellm_logging_obj is not None
+
+    print(
+        f"litellm_logging_obj.model_call_details: {litellm_logging_obj.model_call_details}"
+    )
+
+    # get base model
+    assert (
+        litellm_logging_obj.model_call_details["litellm_params"]["base_model"]
+        == "gpt-4o-mini"
+    )
+
+
+def test_dict_to_response_format_helper():
+    from litellm.llms.base_llm.base_utils import _dict_to_response_format_helper
+
+    args = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "schema": {
+                    "$defs": {
+                        "CalendarEvent": {
+                            "properties": {
+                                "name": {"title": "Name", "type": "string"},
+                                "date": {"title": "Date", "type": "string"},
+                                "participants": {
+                                    "items": {"type": "string"},
+                                    "title": "Participants",
+                                    "type": "array",
+                                },
+                            },
+                            "required": ["name", "date", "participants"],
+                            "title": "CalendarEvent",
+                            "type": "object",
+                            "additionalProperties": False,
+                        }
+                    },
+                    "properties": {
+                        "events": {
+                            "items": {"$ref": "#/$defs/CalendarEvent"},
+                            "title": "Events",
+                            "type": "array",
+                        }
+                    },
+                    "required": ["events"],
+                    "title": "EventsList",
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+                "name": "EventsList",
+                "strict": True,
+            },
+        },
+        "ref_template": "/$defs/{model}",
+    }
+    _dict_to_response_format_helper(**args)

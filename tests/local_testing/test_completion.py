@@ -4540,16 +4540,18 @@ def test_humanloop_completion(monkeypatch):
 
 
 def test_deepseek_reasoning_content_completion():
-    litellm.set_verbose = True
-    resp = litellm.completion(
-        model="deepseek/deepseek-reasoner",
-        messages=[{"role": "user", "content": "Tell me a joke."}],
-    )
+    try:
+        litellm.set_verbose = True
+        litellm._turn_on_debug()
+        resp = litellm.completion(
+            timeout=5,
+            model="deepseek/deepseek-reasoner",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+        )
 
-    assert (
-        resp.choices[0].message.provider_specific_fields["reasoning_content"]
-        is not None
-    )
+        assert resp.choices[0].message.reasoning_content is not None
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
 
 
 @pytest.mark.parametrize(
