@@ -7,6 +7,7 @@ import { CountryCell } from "./country_cell";
 export type LogEntry = {
   request_id: string;
   api_key: string;
+  team_id: string;
   model: string;
   api_base?: string;
   call_type: string;
@@ -154,11 +155,6 @@ export const columns: ColumnDef<LogEntry>[] = [
         </div>
       );
     },
-  },
-  {
-    header: "Country",
-    accessorKey: "requester_ip_address",
-    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
 ];
 
