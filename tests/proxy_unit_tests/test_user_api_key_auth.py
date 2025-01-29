@@ -862,3 +862,18 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
             await _jwt_auth_user_api_key_auth_builder(**args)
     else:
         await _jwt_auth_user_api_key_auth_builder(**args)
+
+
+def test_user_api_key_auth_end_user_str():
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    user_api_key_args = {
+        "api_key": "sk-1234",
+        "parent_otel_span": None,
+        "user_role": LitellmUserRoles.PROXY_ADMIN,
+        "end_user_id": "1",
+        "user_id": "default_user_id",
+    }
+
+    user_api_key_auth = UserAPIKeyAuth(**user_api_key_args)
+    assert user_api_key_auth.end_user_id == "1"

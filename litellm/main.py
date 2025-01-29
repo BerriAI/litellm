@@ -383,6 +383,10 @@ async def acompletion(
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
     fallbacks = kwargs.get("fallbacks", None)
+    mock_timeout = kwargs.get("mock_timeout", None)
+
+    if mock_timeout is True:
+        await _handle_mock_timeout_async(mock_timeout, timeout, model)
 
     loop = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
@@ -565,17 +569,44 @@ def _handle_mock_timeout(
     model: str,
 ):
     if mock_timeout is True and timeout is not None:
-        if isinstance(timeout, float):
-            time.sleep(timeout)
-        elif isinstance(timeout, str):
-            time.sleep(float(timeout))
-        elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
-            time.sleep(timeout.connect)
+        _sleep_for_timeout(timeout)
         raise litellm.Timeout(
             message="This is a mock timeout error",
             llm_provider="openai",
             model=model,
         )
+
+
+async def _handle_mock_timeout_async(
+    mock_timeout: Optional[bool],
+    timeout: Optional[Union[float, str, httpx.Timeout]],
+    model: str,
+):
+    if mock_timeout is True and timeout is not None:
+        await _sleep_for_timeout_async(timeout)
+        raise litellm.Timeout(
+            message="This is a mock timeout error",
+            llm_provider="openai",
+            model=model,
+        )
+
+
+def _sleep_for_timeout(timeout: Union[float, str, httpx.Timeout]):
+    if isinstance(timeout, float):
+        time.sleep(timeout)
+    elif isinstance(timeout, str):
+        time.sleep(float(timeout))
+    elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+        time.sleep(timeout.connect)
+
+
+async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
+    if isinstance(timeout, float):
+        await asyncio.sleep(timeout)
+    elif isinstance(timeout, str):
+        await asyncio.sleep(float(timeout))
+    elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
+        await asyncio.sleep(timeout.connect)
 
 
 def mock_completion(
@@ -837,6 +868,7 @@ def completion(  # type: ignore # noqa: PLR0915
         Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
     )
     headers = kwargs.get("headers", None) or extra_headers
+
     ensure_alternating_roles: Optional[bool] = kwargs.get(
         "ensure_alternating_roles", None
     )
@@ -848,6 +880,8 @@ def completion(  # type: ignore # noqa: PLR0915
     )
     if headers is None:
         headers = {}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -855,6 +889,8 @@ def completion(  # type: ignore # noqa: PLR0915
     cooldown_time = kwargs.get("cooldown_time", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
     organization = kwargs.get("organization", None)
+    ### VERIFY SSL ###
+    ssl_verify = kwargs.get("ssl_verify", None)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -1050,7 +1086,6 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
-            extra_headers=extra_headers,
             **non_default_params,
         )
 
@@ -1098,6 +1133,7 @@ def completion(  # type: ignore # noqa: PLR0915
             drop_params=kwargs.get("drop_params"),
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
+            ssl_verify=ssl_verify,
         )
         logging.update_environment_variables(
             model=model,
@@ -3228,8 +3264,6 @@ def embedding(  # noqa: PLR0915
         **non_default_params,
     )
 
-    if mock_response is not None:
-        return mock_embedding(model=model, mock_response=mock_response)
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if input_cost_per_token is not None and output_cost_per_token is not None:
         litellm.register_model(
@@ -3252,28 +3286,22 @@ def embedding(  # noqa: PLR0915
                 }
             }
         )
+    litellm_params_dict = get_litellm_params(**kwargs)
+
+    logging: Logging = litellm_logging_obj  # type: ignore
+    logging.update_environment_variables(
+        model=model,
+        user=user,
+        optional_params=optional_params,
+        litellm_params=litellm_params_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    if mock_response is not None:
+        return mock_embedding(model=model, mock_response=mock_response)
     try:
         response: Optional[EmbeddingResponse] = None
-        logging: Logging = litellm_logging_obj  # type: ignore
-        logging.update_environment_variables(
-            model=model,
-            user=user,
-            optional_params=optional_params,
-            litellm_params={
-                "timeout": timeout,
-                "azure": azure,
-                "litellm_call_id": litellm_call_id,
-                "logger_fn": logger_fn,
-                "proxy_server_request": proxy_server_request,
-                "model_info": model_info,
-                "metadata": metadata,
-                "aembedding": aembedding,
-                "preset_cache_key": None,
-                "stream_response": {},
-                "cooldown_time": cooldown_time,
-            },
-            custom_llm_provider=custom_llm_provider,
-        )
+
         if azure is True or custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret_str("AZURE_API_TYPE") or "azure"

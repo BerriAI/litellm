@@ -170,6 +170,12 @@ def test_spend_logs_payload(model_id: Optional[str]):
             "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
             "cache_hit": None,
             "response_cost": 2.4999999999999998e-05,
+            "standard_logging_object": {
+                "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+                "metadata": {
+                    "user_api_key_end_user_id": "test-user",
+                },
+            },
         },
         "response_obj": litellm.ModelResponse(
             id=model_id,
@@ -192,7 +198,6 @@ def test_spend_logs_payload(model_id: Optional[str]):
         ),
         "start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 308604),
         "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
-        "end_user_id": None,
     }
 
     payload: SpendLogsPayload = get_logging_payload(**input_args)
@@ -229,6 +234,7 @@ def test_spend_logs_payload_whisper():
             "metadata": {
                 "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
                 "user_api_key_alias": None,
+                "user_api_key_end_user_id": "test-user",
                 "user_api_end_user_max_budget": None,
                 "litellm_api_version": "1.40.19",
                 "global_max_parallel_requests": None,
@@ -293,7 +299,6 @@ def test_spend_logs_payload_whisper():
         response_obj=response,
         start_time=datetime.datetime.now(),
         end_time=datetime.datetime.now(),
-        end_user_id="test-user",
     )
 
     print("payload: ", payload)
@@ -335,13 +340,16 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
         ),
         "start_time": datetime.datetime.now(),
         "end_time": datetime.datetime.now(),
-        "end_user_id": "user123",
     }
 
     # Create a standard logging payload
     standard_logging_payload = {
         "messages": [{"role": "user", "content": "Hello!"}],
         "response": {"role": "assistant", "content": "Hi there!"},
+        "metadata": {
+            "user_api_key_end_user_id": "test-user",
+        },
+        "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
     }
     input_args["kwargs"]["standard_logging_object"] = standard_logging_payload
 

@@ -32,6 +32,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -77,6 +78,7 @@ from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+from ..integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.humanloop import HumanloopLogger
@@ -256,10 +258,19 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
 
+        # INITIAL LITELLM_PARAMS
+        litellm_params = {}
+        if kwargs is not None:
+            litellm_params = get_litellm_params(**kwargs)
+            litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
+
+        self.litellm_params = litellm_params
+
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
             "input": _input,
+            "litellm_params": litellm_params,
         }
 
     def process_dynamic_callbacks(self):
@@ -358,7 +369,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
-        self.litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
+        self.litellm_params = {
+            **self.litellm_params,
+            **scrub_sensitive_keys_in_metadata(litellm_params),
+        }
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
@@ -784,6 +798,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
@@ -832,6 +847,7 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
+            verbose_logger.debug(f"response_cost: {response_cost}")
             return response_cost
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -2571,6 +2587,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger  # type: ignore
+        elif logging_integration == "gcs_pubsub":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GcsPubSubLogger):
+                    return callback
+            _gcs_pubsub_logger = GcsPubSubLogger()
+            _in_memory_loggers.append(_gcs_pubsub_logger)
+            return _gcs_pubsub_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -2703,6 +2726,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
+                    return callback
+        elif logging_integration == "gcs_pubsub":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GcsPubSubLogger):
                     return callback
 
         return None

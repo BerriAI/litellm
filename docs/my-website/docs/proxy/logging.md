@@ -1025,6 +1025,74 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 6. Save the JSON file and add the path to `GCS_PATH_SERVICE_ACCOUNT`
 
 
+
+## Google Cloud Storage - PubSub Topic
+
+Log LLM Logs/SpendLogs to [Google Cloud Storage PubSub Topic](https://cloud.google.com/pubsub/docs/reference/rest)
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+
+:::
+
+
+| Property | Details |
+|----------|---------|
+| Description | Log LiteLLM `SpendLogs Table` to Google Cloud Storage PubSub Topic |
+
+When to use `gcs_pubsub`?
+
+- If your LiteLLM Database has crossed 1M+ spend logs and you want to send `SpendLogs` to a PubSub Topic that can be consumed by GCS BigQuery
+
+
+#### Usage
+
+1. Add `gcs_pubsub` to LiteLLM Config.yaml
+```yaml
+model_list:
+- litellm_params:
+    api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    api_key: my-fake-key
+    model: openai/my-fake-model
+  model_name: fake-openai-endpoint
+
+litellm_settings:
+  callbacks: ["gcs_pubsub"] # 👈 KEY CHANGE # 👈 KEY CHANGE
+```
+
+2. Set required env variables
+
+```shell
+GCS_PUBSUB_TOPIC_ID="litellmDB"
+GCS_PUBSUB_PROJECT_ID="reliableKeys"
+```
+
+3. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+4. Test it! 
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "fake-openai-endpoint",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+
+
 ## s3 Buckets
 
 We will use the `--config` to set 
@@ -1301,7 +1369,7 @@ LiteLLM supports customizing the following Datadog environment variables
 
 
 ## Lunary
-### Step1: Install dependencies and set your environment variables 
+#### Step1: Install dependencies and set your environment variables 
 Install the dependencies
 ```shell
 pip install litellm lunary
@@ -1312,7 +1380,7 @@ Get you Lunary public key from from https://app.lunary.ai/settings
 export LUNARY_PUBLIC_KEY="<your-public-key>"
 ```
 
-### Step 2: Create a `config.yaml` and set `lunary` callbacks
+#### Step 2: Create a `config.yaml` and set `lunary` callbacks
 
 ```yaml
 model_list:
@@ -1324,12 +1392,12 @@ litellm_settings:
   failure_callback: ["lunary"]
 ```
 
-### Step 3: Start the LiteLLM proxy
+#### Step 3: Start the LiteLLM proxy
 ```shell
 litellm --config config.yaml
 ```
 
-### Step 4: Make a request
+#### Step 4: Make a request
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -1352,14 +1420,14 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ## MLflow
 
 
-### Step1: Install dependencies
+#### Step1: Install dependencies
 Install the dependencies.
 
 ```shell
 pip install litellm mlflow
 ```
 
-### Step 2: Create a `config.yaml` with `mlflow` callback
+#### Step 2: Create a `config.yaml` with `mlflow` callback
 
 ```yaml
 model_list:
@@ -1371,12 +1439,12 @@ litellm_settings:
   failure_callback: ["mlflow"]
 ```
 
-### Step 3: Start the LiteLLM proxy
+#### Step 3: Start the LiteLLM proxy
 ```shell
 litellm --config config.yaml
 ```
 
-### Step 4: Make a request
+#### Step 4: Make a request
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -1392,7 +1460,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-### Step 5: Review traces
+#### Step 5: Review traces
 
 Run the following command to start MLflow UI and review recorded traces.
 
