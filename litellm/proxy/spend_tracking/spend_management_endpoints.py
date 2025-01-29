@@ -1627,7 +1627,19 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
     request_id: Optional[str] = fastapi.Query(
         default=None,
-        description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
+        description="request_id to get spend logs for specific request_id",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter spend logs by team_id",
+    ),
+    min_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend greater than or equal to this value",
+    ),
+    max_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend less than or equal to this value",
     ),
     start_date: Optional[str] = fastapi.Query(
         default=None,
@@ -1674,46 +1686,70 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             param="None",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    # Convert the date strings to datetime objects
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
 
-    # Convert to ISO format strings for Prisma
-    start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
-    end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+    try:
+        # Convert the date strings to datetime objects
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
 
-    # Calculate skip value for pagination
-    skip = (page - 1) * page_size
+        # Convert to ISO format strings for Prisma
+        start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+        end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
 
-    # Get total count of records
-    total_records = await prisma_client.db.litellm_spendlogs.count(
-        where={
+        # Build where conditions
+        where_conditions: dict[str, Any] = {
             "startTime": {"gte": start_date_iso, "lte": end_date_iso},
         }
-    )
 
-    # Get paginated data
-    data = await prisma_client.db.litellm_spendlogs.find_many(
-        where={
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
-        },
-        order={
-            "startTime": "desc",
-        },
-        skip=skip,
-        take=page_size,
-    )
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
 
-    # Calculate total pages
-    total_pages = (total_records + page_size - 1) // page_size
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
 
-    return {
-        "data": data,
-        "total": total_records,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-    }
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if min_spend is not None or max_spend is not None:
+            where_conditions["spend"] = {}
+            if min_spend is not None:
+                where_conditions["spend"]["gte"] = min_spend
+            if max_spend is not None:
+                where_conditions["spend"]["lte"] = max_spend
+        # Calculate skip value for pagination
+        skip = (page - 1) * page_size
+
+        # Get total count of records
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions,
+        )
+
+        # Get paginated data
+        data = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions,
+            order={
+                "startTime": "desc",
+            },
+            skip=skip,
+            take=page_size,
+        )
+
+        # Calculate total pages
+        total_pages = (total_records + page_size - 1) // page_size
+
+        return {
+            "data": data,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
