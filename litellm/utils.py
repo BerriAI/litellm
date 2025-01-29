@@ -445,16 +445,9 @@ def function_setup(  # noqa: PLR0915
                         for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)  # type: ignore
-                if callback not in litellm.success_callback:
-                    litellm.success_callback.append(callback)  # type: ignore
-                if callback not in litellm.failure_callback:
-                    litellm.failure_callback.append(callback)  # type: ignore
-                if callback not in litellm._async_success_callback:
-                    litellm._async_success_callback.append(callback)  # type: ignore
-                if callback not in litellm._async_failure_callback:
-                    litellm._async_failure_callback.append(callback)  # type: ignore
+                logging_callback_manager._add_custom_logger_to_all_callback_lists(
+                    callback  # type: ignore
+                )
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )

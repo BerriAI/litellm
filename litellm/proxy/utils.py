@@ -67,6 +67,7 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.utils import CallTypes, LoggedLiteLLMParams
+from litellm.utils import logging_callback_manager
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -323,7 +324,7 @@ class ProxyLogging:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
                 if "daily_reports" in self.alert_types:
-                    litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
+                    logging_callback_manager.add_callback(self.slack_alerting_instance)
                 litellm.success_callback.append(
                     self.slack_alerting_instance.response_taking_too_long_callback
                 )
@@ -332,10 +333,11 @@ class ProxyLogging:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
-        litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
-        litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
-        litellm.callbacks.append(self.cache_control_check)  # type: ignore
-        litellm.callbacks.append(self.service_logging_obj)  # type: ignore
+        logging_callback_manager.add_callback(self.max_parallel_request_limiter)
+        logging_callback_manager.add_callback(self.max_budget_limiter)
+        logging_callback_manager.add_callback(self.cache_control_check)
+        logging_callback_manager.add_callback(self.service_logging_obj)
+
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore

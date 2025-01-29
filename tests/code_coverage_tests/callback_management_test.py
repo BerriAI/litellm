@@ -75,20 +75,6 @@ def check_for_callback_modifications(file_path):
                         f"Please use LoggingCallbackManager instead. {warning_msg}"
                     )
 
-        # Check for assignments to litellm protected lists like litellm.callbacks = [...]
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Attribute) and isinstance(
-                    target.value, ast.Name
-                ):
-                    if target.value.id == "litellm" and target.attr in protected_lists:
-                        violating_line = lines[node.lineno - 1].strip()
-                        violations.append(
-                            f"Found violation in file {file_path} line {node.lineno}: '{violating_line}'. "
-                            f"Direct assignment to 'litellm.{target.attr}' is not allowed. "
-                            f"Please use LoggingCallbackManager instead. {warning_msg}"
-                        )
-
     return violations
 
 

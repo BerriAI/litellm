@@ -1,4 +1,4 @@
-from typing import Callable, List, Union
+from typing import Callable, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -37,13 +37,13 @@ class LoggingCallbackManager:
 
     def add_sync_success_callback(self, callback: Union[CustomLogger, str, Callable]):
         """
-        Add a success callback to litellm.success_callback
+        Add a success callback to `litellm.success_callback`
         """
         pass
 
     def add_sync_failure_callback(self, callback: Union[CustomLogger, str, Callable]):
         """
-        Add a failure callback to litellm.failure_callback
+        Add a failure callback to `litellm.failure_callback`
         """
         pass
 
@@ -100,6 +100,34 @@ class LoggingCallbackManager:
             verbose_logger.debug(
                 f"Callback {callback} already exists in {parent_list}, not adding again.."
             )
+
+    def _add_custom_logger_to_all_callback_lists(
+        self, custom_logger: Optional[CustomLogger]
+    ):
+        """
+        Add a custom logger to all callback lists
+
+        When a `litellm.callback` is set, it needs to be added to all callback lists.
+        - `litellm.success_callback`
+        - `litellm._async_success_callback`
+        - `litellm.failure_callback`
+        - `litellm._async_failure_callback`
+        - `litellm.input_callback`
+        """
+        if custom_logger is None:
+            return
+        if isinstance(custom_logger, CustomLogger):
+
+            # success
+            self.add_sync_success_callback(custom_logger)
+            self.add_async_success_callback(custom_logger)
+
+            # failure
+            self.add_sync_failure_callback(custom_logger)
+            self.add_async_failure_callback(custom_logger)
+
+            # input
+            self.add_input_callback(custom_logger)
 
     def _add_callback_function_to_list(
         self, callback: Callable, parent_list: List[Union[CustomLogger, Callable, str]]
