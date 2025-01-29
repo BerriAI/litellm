@@ -408,7 +408,8 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 headers = {}
             response = raw_response.parse()
-            if type(response) != BaseModel:
+
+            if isinstance(response, str):
                 raise OpenAIError(
                     status_code=422,
                     message="Could not parse response",
@@ -448,7 +449,7 @@ class OpenAIChatCompletion(BaseLLM):
                 headers = {}
             response = raw_response.parse()
 
-            if type(response) != BaseModel:
+            if isinstance(response, str):
                 raise OpenAIError(
                     status_code=422,
                     message="Could not parse response",
