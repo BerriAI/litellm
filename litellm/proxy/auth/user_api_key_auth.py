@@ -33,6 +33,7 @@ from litellm.proxy.auth.auth_checks import (
     get_end_user_object,
     get_key_object,
     get_org_object,
+    get_role_based_models,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -281,9 +282,34 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
+def can_rbac_role_call_model(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+    model: Optional[str],
+) -> Literal[True]:
+    """
+    Checks if user is allowed to access the model, based on their role.
+    """
+    role_based_models = get_role_based_models(
+        rbac_role=rbac_role, general_settings=general_settings
+    )
+    if role_based_models is None or model is None:
+        return True
+
+    if model not in role_based_models:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+        )
+
+    return True
+
+
 async def _jwt_auth_user_api_key_auth_builder(
     api_key: str,
     jwt_handler: JWTHandler,
+    request_data: dict,
+    general_settings: dict,
     route: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
@@ -295,14 +321,20 @@ async def _jwt_auth_user_api_key_auth_builder(
     jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
     # check if unmatched token and enforce_rbac is true
-    if (
-        jwt_handler.litellm_jwtauth.enforce_rbac is True
-        and jwt_handler.get_rbac_role(token=jwt_valid_token) is None
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Unmatched token passed in. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user. See how to set roles in config here: https://docs.litellm.ai/docs/proxy/token_auth#advanced---spend-tracking-end-users--internal-users--team--org",
-        )
+    if jwt_handler.litellm_jwtauth.enforce_rbac is True:
+        rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
+        if rbac_role is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Unmatched token passed in. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user. See how to set roles in config here: https://docs.litellm.ai/docs/proxy/token_auth#advanced---spend-tracking-end-users--internal-users--team--org",
+            )
+        else:
+            # run rbac validation checks
+            can_rbac_role_call_model(
+                rbac_role=rbac_role,
+                general_settings=general_settings,
+                model=request_data.get("model"),
+            )
     # get scopes
     scopes = jwt_handler.get_scopes(token=jwt_valid_token)
 
@@ -431,18 +463,18 @@ async def _jwt_auth_user_api_key_auth_builder(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    return {
-        "is_proxy_admin": False,
-        "team_id": team_id,
-        "team_object": team_object,
-        "user_id": user_id,
-        "user_object": user_object,
-        "org_id": org_id,
-        "org_object": org_object,
-        "end_user_id": end_user_id,
-        "end_user_object": end_user_object,
-        "token": api_key,
-    }
+    return JWTAuthBuilderResult(
+        is_proxy_admin=False,
+        team_id=team_id,
+        team_object=team_object,
+        user_id=user_id,
+        user_object=user_object,
+        org_id=org_id,
+        org_object=org_object,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+        token=api_key,
+    )
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915
@@ -581,6 +613,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
                 result = await _jwt_auth_user_api_key_auth_builder(
+                    request_data=request_data,
+                    general_settings=general_settings,
                     api_key=api_key,
                     jwt_handler=jwt_handler,
                     route=route,

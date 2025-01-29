@@ -51,7 +51,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch"],
         },
         {
           type: "link",
@@ -66,6 +66,7 @@ const sidebars = {
             "proxy/user_keys",
             "proxy/clientside_auth",
             "proxy/response_headers",
+            "proxy/request_headers",
           ],
         },
         {
