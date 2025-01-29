@@ -145,10 +145,55 @@ export default function SpendLogsTable({
       return matchesSearch;
     }) || [];
 
+  // Add this function to handle manual refresh
+  const handleRefresh = () => {
+    logs.refetch();
+  };
+
+  // Add this function to format the time range display
+  const getTimeRangeDisplay = () => {
+    if (isCustomDate) {
+      return `${moment(startTime).format('MMM D, h:mm A')} - ${moment(endTime).format('MMM D, h:mm A')}`;
+    }
+    
+    const now = moment();
+    const start = moment(startTime);
+    const diffHours = now.diff(start, 'hours');
+    
+    if (diffHours <= 1) return 'Last Hour';
+    if (diffHours <= 4) return 'Last 4 Hours';
+    if (diffHours <= 24) return 'Last 24 Hours';
+    if (diffHours <= 168) return 'Last 7 Days';
+    return `${start.format('MMM D')} - ${now.format('MMM D')}`;
+  };
 
   return (
     <div className="w-full p-6">
-      <h1 className="text-xl font-semibold mb-4">Request Logs</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold">Request Logs</h1>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleRefresh}
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            title="Refresh data"
+          >
+            <svg
+              className={`w-5 h-5 ${logs.isFetching ? 'animate-spin' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
@@ -332,11 +377,11 @@ export default function SpendLogsTable({
                       d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                     />
                   </svg>
-                  Time Range
+                  {getTimeRangeDisplay()}
                 </button>
 
                 {quickSelectOpen && (
-                  <div className="absolute left-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                  <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                     <div className="space-y-1">
                       {[
                         { label: "Last 15 Minutes", value: 15, unit: "minutes" },
@@ -347,7 +392,9 @@ export default function SpendLogsTable({
                       ].map((option) => (
                         <button
                           key={option.label}
-                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md"
+                          className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                            getTimeRangeDisplay() === option.label ? 'bg-blue-50 text-blue-600' : ''
+                          }`}
                           onClick={() => {
                             setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                             setStartTime(
@@ -364,7 +411,9 @@ export default function SpendLogsTable({
                       ))}
                       <div className="border-t my-2" />
                       <button
-                        className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md"
+                        className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                          isCustomDate ? 'bg-blue-50 text-blue-600' : ''
+                        }`}
                         onClick={() => setIsCustomDate(!isCustomDate)}
                       >
                         Custom Range
