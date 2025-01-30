@@ -1822,20 +1822,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Select>
                   </Form.Item>
 
-                  {/* Conditionally Render "Public Model Name" */}
-                  <Form.Item
-                    shouldUpdate={(prevValues, currentValues) => 
-                      prevValues.model !== currentValues.model || 
-                      prevValues.custom_llm_provider !== currentValues.custom_llm_provider
-                    }
-                  >
-                    {({ getFieldValue }) => {
-                      const selectedModels = getFieldValue('model') || [];
-                      const showPublicModelName = !selectedModels.includes('all-wildcard');
-
-                      return <ConditionalPublicModelName show={showPublicModelName} />;
-                    }}
-                  </Form.Item>
                   <Form.Item
                     label="LiteLLM Model Name(s)"
                     tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
@@ -1916,6 +1902,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Text>
                     </Col>
                   </Row>
+
+                  {/* Conditionally Render "Public Model Name" */}
+                  <Form.Item
+                    shouldUpdate={(prevValues, currentValues) => 
+                      prevValues.model !== currentValues.model || 
+                      prevValues.custom_llm_provider !== currentValues.custom_llm_provider
+                    }
+                  >
+                    {({ getFieldValue }) => {
+                      const selectedModels = getFieldValue('model') || [];
+                      const showPublicModelName = !selectedModels.includes('all-wildcard');
+
+                      return <ConditionalPublicModelName show={showPublicModelName} />;
+                    }}
+                  </Form.Item>
 
                   {/* Provider-specific fields */}
                   {dynamicProviderForm !== undefined &&
