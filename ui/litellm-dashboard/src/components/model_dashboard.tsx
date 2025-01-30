@@ -16,6 +16,9 @@ import {
   AccordionHeader,
   AccordionBody,
 } from "@tremor/react";
+import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
+import LiteLLMModelNameField from "./add_model/litellm_model_name";
+import AdvancedSettings from "./add_model/advanced_settings";
 import {
   TabPanel,
   TabPanels,
@@ -156,14 +159,10 @@ export const handleSubmit = async (
 ) => {
   try {
     // If model_name is not provided, use provider.toLowerCase() + "/*"
-    if (!formValues["model_name"]) {
+    if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
       formValues["model_name"] = formValues["custom_llm_provider"].toLowerCase() + "/*";
     }
-
-    // If model is not provided, use provider.toLowerCase() + "/*"
-    if (!formValues["model"]) {
       formValues["model"] = [formValues["custom_llm_provider"].toLowerCase() + "/*"];
-    }
 
     /**
      * For multiple litellm model names - create a separate deployment for each
@@ -284,7 +283,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-
+  
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter((key) =>
@@ -1761,580 +1760,242 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           </TabPanel>
           <TabPanel className="h-full">
             <Title2 level={2}>Add new model</Title2>
-            <TabGroup>
-              <TabList>
-                <Tab>Basic Setup</Tab>
-                <Tab>Wildcard Setup (All Models)</Tab>
-              </TabList>
-              <TabPanels>
-                {/* Advanced Setup Tab - Now First */}
-                <TabPanel>
-                  <Card>
-                    <Form
-                      form={form}
-                      onFinish={handleOk}
-                      labelCol={{ span: 10 }}
-                      wrapperCol={{ span: 16 }}
-                      labelAlign="left"
+            <Card>
+              <Form
+                form={form}
+                onFinish={handleOk}
+                labelCol={{ span: 10 }}
+                wrapperCol={{ span: 16 }}
+                labelAlign="left"
+              >
+                <>
+                  {/* Provider Selection */}
+                  <Form.Item
+                    rules={[{ required: true, message: "Required" }]}
+                    label="Provider:"
+                    name="custom_llm_provider"
+                    tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
+                    labelCol={{ span: 10 }}
+                    labelAlign="left"
+                  >
+                    <Select
+                      value={selectedProvider as string}
+                      onChange={(value) => {
+                        // Set the selected provider
+                        setSelectedProvider(value as unknown as string);
+                        // Update provider-specific models
+                        setProviderModelsFn(provider_map[value as unknown as string]);
+                        // Reset the 'model' field
+                        form.setFieldsValue({ model: [] });
+                        // Reset the 'model_name' field
+                        form.setFieldsValue({ model_name: undefined });
+                      }}
                     >
-                      <>
-                        {/* Provider selection and advanced fields content */}
-                        <Form.Item
-                          rules={[{ required: true, message: "Required" }]}
-                          label="Provider:"
-                          name="custom_llm_provider"
-                          tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
-                          labelCol={{ span: 10 }}
-                          labelAlign="left"
+                      {Object.keys(Providers).map((providerKey) => (
+                        <SelectItem
+                          key={providerKey}
+                          value={Providers[providerKey as keyof typeof Providers]}
+                          onClick={() => {
+                            setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
+                            setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
+                          }}
                         >
-                          <Select value={selectedProvider as string}>
-                            {Object.keys(Providers).map((providerKey) => (
-                              <SelectItem
-                                key={providerKey}
-                                value={Providers[providerKey as keyof typeof Providers]}
-                                onClick={() => {
-                                  setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
-                                  setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
-                                }}
-                              >
-                                <div className="flex items-center space-x-2">
-                                  <img
-                                    src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
-                                    alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
-                                    className="w-5 h-5"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                        fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
-                                  />
-                                  <span>{Providers[providerKey as keyof typeof Providers]}</span>
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </Select>
-                        </Form.Item>
-
-                        {/* Provider-specific fields */}
-                        {dynamicProviderForm !== undefined &&
-                          dynamicProviderForm.fields.length > 0 && (
-                            <DynamicFields
-                              fields={dynamicProviderForm.fields}
-                              selectedProvider={dynamicProviderForm.name}
+                          <div className="flex items-center space-x-2">
+                            <img
+                              src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
+                              alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
+                              className="w-5 h-5"
+                              onError={(e) => {
+                                // Create a div with provider initial as fallback
+                                const target = e.target as HTMLImageElement;
+                                const parent = target.parentElement;
+                                if (parent) {
+                                  const fallbackDiv = document.createElement('div');
+                                  fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                  fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
+                                  parent.replaceChild(fallbackDiv, target);
+                                }
+                              }}
                             />
-                          )}
+                            <span>{Providers[providerKey as keyof typeof Providers]}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                  <LiteLLMModelNameField
+                      selectedProvider={selectedProvider as string}
+                      providerModels={providerModels}
+                      getPlaceholder={getPlaceholder}
+                    />
+                  
+                  {/* Conditionally Render "Public Model Name" */}
+                  <ConditionalPublicModelName  />
 
-                        {/* Advanced fields */}
-                        <Form.Item
-                          label="Public Model Name"
-                          name="model_name"
-                          tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
-                          className="mb-0"
-                          rules={[{ required: false }]}
-                        >
-                          <TextInput />
-                        </Form.Item>
-                        <Row>
-                          <Col span={10}></Col>
-                          <Col span={10}>
-                            <Text className="mb-3 mt-1">
-                              Model name your users will pass in.
-                            </Text>
-                          </Col>
-                        </Row>
-                        
+                  {/* Provider-specific fields */}
+                  {dynamicProviderForm !== undefined &&
+                    dynamicProviderForm.fields.length > 0 && (
+                      <DynamicFields
+                        fields={dynamicProviderForm.fields}
+                        selectedProvider={dynamicProviderForm.name}
+                      />
+                  )}
 
-                        <Form.Item
-                          label="LiteLLM Model Name(s)"
-                          tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
-                          className="mb-0"
-                        >
-                          <Form.Item
-                            name="model"
-                            rules={[{ required: false }]}
-                            noStyle
-                          >
-                            {(selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
-                              <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                            ) : providerModels.length > 0 ? (
-                              <MultiSelect>
-                                <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
-                                {providerModels.map((model, index) => (
-                                  <MultiSelectItem key={index} value={model}>
-                                    {model}
-                                  </MultiSelectItem>
-                                ))}
-                              </MultiSelect>
-                            ) : (
-                              <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                            )}
-                          
-                          </Form.Item>
-
-                          <Form.Item
-                            noStyle
-                            shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
-                          >
-                            {({ getFieldValue }) => {
-                              const selectedModels = getFieldValue('model') || [];
-                              return selectedModels.includes('custom') && (
-                                <Form.Item
-                                  name="custom_model_name"
-                                  rules={[{ required: true, message: "Please enter a custom model name" }]}
-                                  className="mt-2"
-                                >
-                                  <TextInput placeholder="Enter custom model name" />
-                                </Form.Item>
-                              )
-                            }}
-                          </Form.Item>
-                          
-                        </Form.Item>
-                        <Row>
+                  {selectedProvider != Providers.Bedrock &&
+                    selectedProvider != Providers.Vertex_AI &&
+                    selectedProvider != Providers.Ollama &&
+                    (dynamicProviderForm === undefined ||
+                      dynamicProviderForm.fields.length == 0) && (
+                      <Form.Item
+                        rules={[{ required: true, message: "Required" }]}
+                        label="API Key"
+                        name="api_key"
+                        tooltip="LLM API Credentials"
+                      >
+                        <TextInput placeholder="sk-" type="password" />
+                      </Form.Item>
+                    )}
+                  {selectedProvider == Providers.OpenAI && (
+                    <Form.Item label="Organization ID" name="organization">
+                      <TextInput placeholder="[OPTIONAL] my-unique-org" />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Vertex_AI && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="Vertex Project"
+                      name="vertex_project"
+                    >
+                      <TextInput placeholder="adroit-cadet-1234.." />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Vertex_AI && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="Vertex Location"
+                      name="vertex_location"
+                    >
+                      <TextInput placeholder="us-east-1" />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Vertex_AI && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="Vertex Credentials"
+                      name="vertex_credentials"
+                      className="mb-0"
+                    >
+                      <Upload {...props}>
+                        <Button2 icon={<UploadOutlined />}>
+                          Click to Upload
+                        </Button2>
+                      </Upload>
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Vertex_AI && (
+                    <Row>
                       <Col span={10}></Col>
                       <Col span={10}>
                         <Text className="mb-3 mt-1">
-                          Actual model name used for making{" "}
-                          <Link
-                            href="https://docs.litellm.ai/docs/providers"
-                            target="_blank"
-                          >
-                            litellm.completion() call
-                          </Link>
-                          . We&apos;ll{" "}
-                          <Link
-                            href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
-                            target="_blank"
-                          >
-                            loadbalance
-                          </Link>{" "}
-                          models with the same &apos;public name&apos;
+                          Give litellm a gcp service account(.json file), so it
+                          can make the relevant calls
                         </Text>
                       </Col>
                     </Row>
-                                            {/* All the provider-specific fields */}
-                                            {dynamicProviderForm !== undefined &&
-                          dynamicProviderForm.fields.length > 0 && (
-                            <DynamicFields
-                              fields={dynamicProviderForm.fields}
-                              selectedProvider={dynamicProviderForm.name}
-                            />
-                          )}
-                        
-                        {selectedProvider != Providers.Bedrock &&
-                          selectedProvider != Providers.Vertex_AI &&
-                          selectedProvider != Providers.Ollama &&
-                          (dynamicProviderForm === undefined ||
-                            dynamicProviderForm.fields.length == 0) && (
-                            <Form.Item
-                              rules={[{ required: true, message: "Required" }]}
-                              label="API Key"
-                              name="api_key"
-                              tooltip="LLM API Credentials"
-                            >
-                              <TextInput placeholder="sk-" type="password" />
-                            </Form.Item>
-                          )}
-                        {selectedProvider == Providers.OpenAI && (
-                          <Form.Item label="Organization ID" name="organization">
-                            <TextInput placeholder="[OPTIONAL] my-unique-org" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="Vertex Project"
-                            name="vertex_project"
-                          >
-                            <TextInput placeholder="adroit-cadet-1234.." />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="Vertex Location"
-                            name="vertex_location"
-                          >
-                            <TextInput placeholder="us-east-1" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="Vertex Credentials"
-                            name="vertex_credentials"
-                            className="mb-0"
-                          >
-                            <Upload {...props}>
-                              <Button2 icon={<UploadOutlined />}>
-                                Click to Upload
-                              </Button2>
-                            </Upload>
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Row>
-                            <Col span={10}></Col>
-                            <Col span={10}>
-                              <Text className="mb-3 mt-1">
-                                Give litellm a gcp service account(.json file), so it
-                                can make the relevant calls
-                              </Text>
-                            </Col>
-                          </Row>
-                        )}
-                        {(selectedProvider == Providers.Azure ||
-                          selectedProvider == Providers.OpenAI_Compatible) && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="API Base"
-                            name="api_base"
-                          >
-                            <TextInput placeholder="https://..." />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Azure && (
-                          <Form.Item
-                            label="API Version"
-                            name="api_version"
-                            tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
-                          >
-                            <TextInput placeholder="2023-07-01-preview" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Azure && (
-                          <div>
-                            <Form.Item
-                              label="Base Model"
-                              name="base_model"
-                              className="mb-0"
-                            >
-                              <TextInput placeholder="azure/gpt-3.5-turbo" />
-                            </Form.Item>
-                            <Row>
-                              <Col span={10}></Col>
-                              <Col span={10}>
-                                <Text className="mb-2">
-                                  The actual model your azure deployment uses. Used
-                                  for accurate cost tracking. Select name from{" "}
-                                  <Link
-                                    href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                                    target="_blank"
-                                  >
-                                    here
-                                  </Link>
-                                </Text>
-                              </Col>
-                            </Row>
-                          </div>
-                        )}
-                        {selectedProvider == Providers.Bedrock && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="AWS Access Key ID"
-                            name="aws_access_key_id"
-                            tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                          >
-                            <TextInput placeholder="" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Bedrock && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="AWS Secret Access Key"
-                            name="aws_secret_access_key"
-                            tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                          >
-                            <TextInput placeholder="" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Bedrock && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="AWS Region Name"
-                            name="aws_region_name"
-                            tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                          >
-                            <TextInput placeholder="us-east-1" />
-                          </Form.Item>
-                        )}
-                        <Form.Item
-                          label="LiteLLM Params"
-                          name="litellm_extra_params"
-                          tooltip="Optional litellm params used for making a litellm.completion() call."
-                          className="mb-0"
-                        >
-                          <TextArea
-                            rows={4}
-                            placeholder='{
-                          "rpm": 100,
-                          "timeout": 0,
-                          "stream_timeout": 0
-                        }'
-                          />
-                        </Form.Item>
-                        <Row>
-                          <Col span={10}></Col>
-                          <Col span={10}>
-                            <Text className="mb-3 mt-1">
-                              Pass JSON of litellm supported params{" "}
-                              <Link
-                                href="https://docs.litellm.ai/docs/completion/input"
-                                target="_blank"
-                              >
-                                litellm.completion() call
-                              </Link>
-                            </Text>
-                          </Col>
-                        </Row>
-                        <Form.Item
-                          label="Model Info"
-                          name="model_info_params"
-                          tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
-                          className="mb-0"
-                        >
-                          <TextArea
-                            rows={4}
-                            placeholder='{
-                          "mode": "chat"
-                        }'
-                          />
-                        </Form.Item>
-
-                        <div className="flex justify-between items-center mb-4">
-                          <Tooltip title="Get help on our github">
-                            <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                              Need Help?
-                            </Typography.Link>
-                          </Tooltip>
-                          <Button2 htmlType="submit">Add Model</Button2>
-                        </div>
-                      </>
-                    </Form>
-                  </Card>
-                </TabPanel>
-
-                {/* Basic Setup Tab - Now Second */}
-                <TabPanel>
-                  <Card>
-                    <Form
-                      form={form}
-                      onFinish={handleOk}
-                      labelCol={{ span: 10 }}
-                      wrapperCol={{ span: 16 }}
-                      labelAlign="left"
+                  )}
+                  {(selectedProvider == Providers.Azure ||
+                    selectedProvider == Providers.OpenAI_Compatible) && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="API Base"
+                      name="api_base"
                     >
-                      <>
-                        {/* Basic setup content */}
-                        <Form.Item
-                          rules={[{ required: true, message: "Required" }]}
-                          label="Provider:"
-                          name="custom_llm_provider"
-                          tooltip="E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc."
-                          labelCol={{ span: 10 }}
-                          labelAlign="left"
-                        >
-                          <Select value={selectedProvider as string}>
-                            {Object.keys(Providers).map((providerKey) => (
-                              <SelectItem
-                                key={providerKey}
-                                value={Providers[providerKey as keyof typeof Providers]}
-                                onClick={() => {
-                                  setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
-                                  setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
-                                }}
-                              >
-                                <div className="flex items-center space-x-2">
-                                  <img
-                                    src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
-                                    alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
-                                    className="w-5 h-5"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement('div');
-                                        fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                        fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
-                                  />
-                                  <span>{Providers[providerKey as keyof typeof Providers]}</span>
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </Select>
-                        </Form.Item>
-
-                        {/* All the provider-specific fields */}
-                        {dynamicProviderForm !== undefined &&
-                          dynamicProviderForm.fields.length > 0 && (
-                            <DynamicFields
-                              fields={dynamicProviderForm.fields}
-                              selectedProvider={dynamicProviderForm.name}
-                            />
-                          )}
-                        
-                        {selectedProvider != Providers.Bedrock &&
-                          selectedProvider != Providers.Vertex_AI &&
-                          selectedProvider != Providers.Ollama &&
-                          (dynamicProviderForm === undefined ||
-                            dynamicProviderForm.fields.length == 0) && (
-                            <Form.Item
-                              rules={[{ required: true, message: "Required" }]}
-                              label="API Key"
-                              name="api_key"
-                              tooltip="LLM API Credentials"
+                      <TextInput placeholder="https://..." />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Azure && (
+                    <Form.Item
+                      label="API Version"
+                      name="api_version"
+                      tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
+                    >
+                      <TextInput placeholder="2023-07-01-preview" />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Azure && (
+                    <div>
+                      <Form.Item
+                        label="Base Model"
+                        name="base_model"
+                        className="mb-0"
+                      >
+                        <TextInput placeholder="azure/gpt-3.5-turbo" />
+                      </Form.Item>
+                      <Row>
+                        <Col span={10}></Col>
+                        <Col span={10}>
+                          <Text className="mb-2">
+                            The actual model your azure deployment uses. Used
+                            for accurate cost tracking. Select name from{" "}
+                            <Link
+                              href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                              target="_blank"
                             >
-                              <TextInput placeholder="sk-" type="password" />
-                            </Form.Item>
-                          )}
-                        {selectedProvider == Providers.OpenAI && (
-                          <Form.Item label="Organization ID" name="organization">
-                            <TextInput placeholder="[OPTIONAL] my-unique-org" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="Vertex Project"
-                            name="vertex_project"
-                          >
-                            <TextInput placeholder="adroit-cadet-1234.." />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="Vertex Location"
-                            name="vertex_location"
-                          >
-                            <TextInput placeholder="us-east-1" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="Vertex Credentials"
-                            name="vertex_credentials"
-                            className="mb-0"
-                          >
-                            <Upload {...props}>
-                              <Button2 icon={<UploadOutlined />}>
-                                Click to Upload
-                              </Button2>
-                            </Upload>
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Vertex_AI && (
-                          <Row>
-                            <Col span={10}></Col>
-                            <Col span={10}>
-                              <Text className="mb-3 mt-1">
-                                Give litellm a gcp service account(.json file), so it
-                                can make the relevant calls
-                              </Text>
-                            </Col>
-                          </Row>
-                        )}
-                        {(selectedProvider == Providers.Azure ||
-                          selectedProvider == Providers.OpenAI_Compatible) && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="API Base"
-                            name="api_base"
-                          >
-                            <TextInput placeholder="https://..." />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Azure && (
-                          <Form.Item
-                            label="API Version"
-                            name="api_version"
-                            tooltip="By default litellm will use the latest version. If you want to use a different version, you can specify it here"
-                          >
-                            <TextInput placeholder="2023-07-01-preview" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Azure && (
-                          <div>
-                            <Form.Item
-                              label="Base Model"
-                              name="base_model"
-                              className="mb-0"
-                            >
-                              <TextInput placeholder="azure/gpt-3.5-turbo" />
-                            </Form.Item>
-                            <Row>
-                              <Col span={10}></Col>
-                              <Col span={10}>
-                                <Text className="mb-2">
-                                  The actual model your azure deployment uses. Used
-                                  for accurate cost tracking. Select name from{" "}
-                                  <Link
-                                    href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                                    target="_blank"
-                                  >
-                                    here
-                                  </Link>
-                                </Text>
-                              </Col>
-                            </Row>
-                          </div>
-                        )}
-                        {selectedProvider == Providers.Bedrock && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="AWS Access Key ID"
-                            name="aws_access_key_id"
-                            tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                          >
-                            <TextInput placeholder="" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Bedrock && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="AWS Secret Access Key"
-                            name="aws_secret_access_key"
-                            tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                          >
-                            <TextInput placeholder="" />
-                          </Form.Item>
-                        )}
-                        {selectedProvider == Providers.Bedrock && (
-                          <Form.Item
-                            rules={[{ required: true, message: "Required" }]}
-                            label="AWS Region Name"
-                            name="aws_region_name"
-                            tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
-                          >
-                            <TextInput placeholder="us-east-1" />
-                          </Form.Item>
-                        )}
+                              here
+                            </Link>
+                          </Text>
+                        </Col>
+                      </Row>
+                    </div>
+                  )}
+                  {selectedProvider == Providers.Bedrock && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="AWS Access Key ID"
+                      name="aws_access_key_id"
+                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+                    >
+                      <TextInput placeholder="" />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Bedrock && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="AWS Secret Access Key"
+                      name="aws_secret_access_key"
+                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+                    >
+                      <TextInput placeholder="" />
+                    </Form.Item>
+                  )}
+                  {selectedProvider == Providers.Bedrock && (
+                    <Form.Item
+                      rules={[{ required: true, message: "Required" }]}
+                      label="AWS Region Name"
+                      name="aws_region_name"
+                      tooltip="You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+                    >
+                      <TextInput placeholder="us-east-1" />
+                    </Form.Item>
+                  )}
 
-                        <div className="flex justify-between items-center mb-4">
-                          <Tooltip title="Get help on our github">
-                            <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                              Need Help?
-                            </Typography.Link>
-                          </Tooltip>
-                          <Button2 htmlType="submit">Add Model</Button2>
-                        </div>
-                      </>
-                    </Form>
-                  </Card>
-                </TabPanel>
-              </TabPanels>
-            </TabGroup>
+                  <AdvancedSettings 
+                    showAdvancedSettings={showAdvancedSettings}
+                    setShowAdvancedSettings={setShowAdvancedSettings}
+                  />
+                  
+
+                  <div className="flex justify-between items-center mb-4">
+                    <Tooltip title="Get help on our github">
+                      <Typography.Link href="https://github.com/BerriAI/litellm/issues">
+                        Need Help?
+                      </Typography.Link>
+                    </Tooltip>
+                    <Button2 htmlType="submit">Add Model</Button2>
+                  </div>
+                </>
+              </Form>
+            </Card>
           </TabPanel>
           <TabPanel>
             <Card>
