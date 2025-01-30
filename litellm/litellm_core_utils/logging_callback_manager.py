@@ -112,14 +112,14 @@ class LoggingCallbackManager:
             self._add_string_callback_to_list(
                 callback=callback, parent_list=parent_list
             )
-        elif isinstance(callback, Callable):
-            self._add_callback_function_to_list(
-                callback=callback, parent_list=parent_list
-            )
         elif isinstance(callback, CustomLogger):
             self._add_custom_logger_to_list(
                 custom_logger=callback,
                 parent_list=parent_list,
+            )
+        elif callable(callback):
+            self._add_callback_function_to_list(
+                callback=callback, parent_list=parent_list
             )
 
     def _add_callback_function_to_list(
