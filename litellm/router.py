@@ -610,7 +610,7 @@ class Router:
                         model_list=self.model_list,
                     )
                 if _callback is not None:
-                    litellm.callbacks.append(_callback)
+                    litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def routing_strategy_init(
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
@@ -629,7 +629,7 @@ class Router:
             else:
                 litellm.input_callback = [self.leastbusy_logger]  # type: ignore
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.leastbusy_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.leastbusy_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
@@ -640,7 +640,7 @@ class Router:
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2
@@ -651,7 +651,7 @@ class Router:
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowesttpm_logger_v2)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger_v2)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.LATENCY_BASED.value
             or routing_strategy == RoutingStrategy.LATENCY_BASED
@@ -662,7 +662,7 @@ class Router:
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowestlatency_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowestlatency_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.COST_BASED.value
             or routing_strategy == RoutingStrategy.COST_BASED
@@ -673,7 +673,7 @@ class Router:
                 routing_args={},
             )
             if isinstance(litellm.callbacks, list):
-                litellm.callbacks.append(self.lowestcost_logger)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
         else:
             pass
 
@@ -5839,7 +5839,7 @@ class Router:
 
         self.slack_alerting_logger = _slack_alerting_logger
 
-        litellm.callbacks.append(_slack_alerting_logger)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_slack_alerting_logger)  # type: ignore
         litellm.logging_callback_manager.add_litellm_success_callback(
             _slack_alerting_logger.response_taking_too_long_callback
         )

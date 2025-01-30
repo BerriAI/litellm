@@ -736,7 +736,7 @@ user_api_key_cache = DualCache(
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
-litellm.callbacks.append(model_max_budget_limiter)
+litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
 )
@@ -2219,7 +2219,7 @@ class ProxyConfig:
                         },
                     )
                     if _logger is not None:
-                        litellm.callbacks.append(_logger)
+                        litellm.logging_callback_manager.add_litellm_callback(_logger)
         pass
 
     def initialize_secret_manager(self, key_management_system: Optional[str]):
