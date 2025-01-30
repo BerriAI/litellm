@@ -156,14 +156,10 @@ export const handleSubmit = async (
 ) => {
   try {
     // If model_name is not provided, use provider.toLowerCase() + "/*"
-    if (!formValues["model_name"]) {
+    if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
       formValues["model_name"] = formValues["custom_llm_provider"].toLowerCase() + "/*";
     }
-
-    // If model is not provided, use provider.toLowerCase() + "/*"
-    if (!formValues["model"]) {
       formValues["model"] = [formValues["custom_llm_provider"].toLowerCase() + "/*"];
-    }
 
     /**
      * For multiple litellm model names - create a separate deployment for each
@@ -1770,7 +1766,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 labelAlign="left"
               >
                 <>
-                  {/* Provider selection and advanced fields content */}
+                  {/* Provider Selection */}
                   <Form.Item
                     rules={[{ required: true, message: "Required" }]}
                     label="Provider:"
@@ -1779,7 +1775,19 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     labelCol={{ span: 10 }}
                     labelAlign="left"
                   >
-                    <Select value={selectedProvider as string}>
+                    <Select
+                      value={selectedProvider as string}
+                      onChange={(value) => {
+                        // Set the selected provider
+                        setSelectedProvider(value);
+                        // Update provider-specific models
+                        setProviderModelsFn(provider_map[value]);
+                        // Reset the 'model' field
+                        form.setFieldsValue({ model: [] });
+                        // Reset the 'model_name' field
+                        form.setFieldsValue({ model_name: undefined });
+                      }}
+                    >
                       {Object.keys(Providers).map((providerKey) => (
                         <SelectItem
                           key={providerKey}
@@ -1813,6 +1821,51 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Select>
                   </Form.Item>
 
+                  {/* Conditionally Render "Public Model Name" */}
+                  <Form.Item
+                    shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model || prevValues.custom_llm_provider !== currentValues.custom_llm_provider}
+                  >
+                    {({ getFieldValue }) => {
+                      const selectedModels = getFieldValue('model') || [];
+                      const showPublicModelName = !selectedModels.includes('all-wildcard');
+
+                      return (
+                        <>
+                          {showPublicModelName && (
+                            <>
+                              <Form.Item
+                                label="Public Model Name"
+                                name="model_name"
+                                tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
+                                className="mb-0"
+                                rules={[
+                                  ({ getFieldValue }) => ({
+                                    validator(_, value) {
+                                      const selectedModels = getFieldValue('model') || [];
+                                      if (!selectedModels.includes('all-wildcard') || value) {
+                                        return Promise.resolve();
+                                      }
+                                      return Promise.reject(new Error('Public Model Name is required unless "All Models" is selected.'));
+                                    },
+                                  }),
+                                ]}
+                              >
+                                <TextInput />
+                              </Form.Item>
+                              <Row>
+                                <Col span={10}></Col>
+                                <Col span={14}>
+                                  <Text className="mb-3 mt-1">
+                                    Model name your users will pass in.
+                                  </Text>
+                                </Col>
+                              </Row>
+                            </>
+                          )}
+                        </>
+                      );
+                    }}
+                  </Form.Item>
                   <Form.Item
                     label="LiteLLM Model Name(s)"
                     tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
@@ -1820,26 +1873,37 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   >
                     <Form.Item
                       name="model"
-                      rules={[{ required: false }]}
+                      rules={[{ required: true, message: "Please select at least one model." }]}
                       noStyle
                     >
                       {(selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
                         <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                       ) : providerModels.length > 0 ? (
-                        <MultiSelect>
-                          <MultiSelectItem value="custom">Custom Model Name (Enter below)</MultiSelectItem>
+                        <MultiSelect
+                          onValueChange={(selected) => {
+                            if (selected.includes("all-wildcard")) {
+                              form.setFieldsValue({ model_name: undefined });
+                            }
+                          }}
+                        >
+                          <MultiSelectItem value="all-wildcard">
+                            All {selectedProvider} Models (Wildcard)
+                          </MultiSelectItem>
                           {providerModels.map((model, index) => (
                             <MultiSelectItem key={index} value={model}>
                               {model}
                             </MultiSelectItem>
                           ))}
+                          <MultiSelectItem value="custom">
+                            Custom Model Name (Enter below)
+                          </MultiSelectItem>
                         </MultiSelect>
                       ) : (
                         <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
                       )}
-                    
                     </Form.Item>
 
+                    {/* Conditionally render Custom Model Name field */}
                     <Form.Item
                       noStyle
                       shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
@@ -1849,14 +1913,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         return selectedModels.includes('custom') && (
                           <Form.Item
                             name="custom_model_name"
-                            rules={[{ required: true, message: "Please enter a custom model name" }]}
+                            rules={[{ required: true, message: "Please enter a custom model name." }]}
                             className="mt-2"
                           >
                             <TextInput placeholder="Enter custom model name" />
                           </Form.Item>
-                        )
+                        );
                       }}
                     </Form.Item>
+
                     
                   </Form.Item>
                   <Row>
@@ -1891,34 +1956,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       />
                   )}
 
-                  {/* Rest of the advanced form fields */}
-                  <Form.Item
-                    label="Public Model Name"
-                    name="model_name"
-                    tooltip="Model name your users will pass in. Also used for load-balancing, LiteLLM will load balance between all models with this public name."
-                    className="mb-0"
-                    rules={[{ required: false }]}
-                  >
-                    <TextInput />
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Model name your users will pass in.
-                      </Text>
-                    </Col>
-                  </Row>
-                  
-                                              {/* All the provider-specific fields */}
-                                              {dynamicProviderForm !== undefined &&
-                    dynamicProviderForm.fields.length > 0 && (
-                      <DynamicFields
-                        fields={dynamicProviderForm.fields}
-                        selectedProvider={dynamicProviderForm.name}
-                      />
-                    )}
-                  
                   {selectedProvider != Providers.Bedrock &&
                     selectedProvider != Providers.Vertex_AI &&
                     selectedProvider != Providers.Ollama &&
