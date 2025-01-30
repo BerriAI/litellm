@@ -431,6 +431,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               rules={[
                 {
                   validator: (rule, value) => {
+                    if (keyTeam.team_alias === "Default Team") {
+                      return Promise.resolve();
+                    }
+
                     const errorModels = value.filter(
                       (model: string) =>
                         !keyTeam.models.includes(model) &&
@@ -441,7 +445,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     console.log(`errorModels: ${errorModels}`);
                     if (errorModels.length > 0) {
                       return Promise.reject(
-                        `Some models are not part of the new team\'s models - ${errorModels}Team models: ${keyTeam.models}`
+                        `Some models are not part of the new team's models - ${errorModels} Team models: ${keyTeam.models}`
                       );
                     } else {
                       return Promise.resolve();
@@ -458,22 +462,15 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
-                {keyTeam && keyTeam.models ?
-                  keyTeam.models.includes("all-proxy-models") ?
-                    userModels
-                      .filter((model) => model !== "all-proxy-models")
-                      .map((model: string) => (
-                        <Option key={model} value={model}>
-                          {getModelDisplayName(model)}
-                        </Option>
-                      ))
-                  : keyTeam.models.map((model: string) => (
+                {keyTeam.team_alias === "Default Team" ?
+                  userModels
+                    .filter((model) => model !== "all-proxy-models")
+                    .map((model: string) => (
                       <Option key={model} value={model}>
                         {getModelDisplayName(model)}
                       </Option>
                     ))
-
-                : userModels.map((model: string) => (
+                : keyTeam.models.map((model: string) => (
                     <Option key={model} value={model}>
                       {getModelDisplayName(model)}
                     </Option>
