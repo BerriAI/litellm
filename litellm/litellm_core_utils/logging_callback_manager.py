@@ -158,3 +158,4 @@ class LoggingCallbackManager:
         litellm.failure_callback = []
         litellm._async_success_callback = []
         litellm._async_failure_callback = []
+        litellm.callbacks = []
