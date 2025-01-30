@@ -374,7 +374,9 @@ def _add_custom_logger_callback_to_specific_event(
             litellm.logging_callback_manager.add_litellm_failure_callback(
                 callback_class
             )
-            litellm._async_failure_callback.append(callback_class)
+            litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                callback_class
+            )
             if callback in litellm.failure_callback:
                 litellm.failure_callback.remove(
                     callback
@@ -459,7 +461,7 @@ def function_setup(  # noqa: PLR0915
                 if callback not in litellm._async_success_callback:
                     litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
                 if callback not in litellm._async_failure_callback:
-                    litellm._async_failure_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )
@@ -519,7 +521,9 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    litellm._async_failure_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif (
                     callback in litellm._known_custom_logger_compatible_callbacks

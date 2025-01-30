@@ -497,7 +497,7 @@ class Router:
         else:
             litellm.success_callback = [self.sync_deployment_callback_on_success]
         if isinstance(litellm._async_failure_callback, list):
-            litellm._async_failure_callback.append(
+            litellm.logging_callback_manager.add_litellm_async_failure_callback(
                 self.async_deployment_callback_on_failure
             )
         else:
