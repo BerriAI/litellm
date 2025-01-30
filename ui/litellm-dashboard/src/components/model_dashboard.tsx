@@ -1782,9 +1782,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       value={selectedProvider as string}
                       onChange={(value) => {
                         // Set the selected provider
-                        setSelectedProvider(value);
+                        setSelectedProvider(value as unknown as string);
                         // Update provider-specific models
-                        setProviderModelsFn(provider_map[value]);
+                        setProviderModelsFn(provider_map[value as unknown as string]);
                         // Reset the 'model' field
                         form.setFieldsValue({ model: [] });
                         // Reset the 'model_name' field
