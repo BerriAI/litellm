@@ -158,7 +158,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
 
     try:
-        await db.query_raw("""SELECT 1 FROM DailyTagSpend LIMIT 1""")
+        await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
         print("DailyTagSpend Exists!")  # noqa
     except Exception:
         sql_query = """
