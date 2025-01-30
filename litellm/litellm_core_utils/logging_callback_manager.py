@@ -15,7 +15,7 @@ class LoggingCallbackManager:
     """
 
     # healthy maximum number of callbacks - unlikely someone needs more than 20
-    MAX_CALLBACKS = 20
+    MAX_CALLBACKS = 30
 
     def add_litellm_input_callback(self, callback: Union[CustomLogger, str]):
         """
@@ -98,6 +98,20 @@ class LoggingCallbackManager:
                 f"Callback {callback} already exists in {parent_list}, not adding again.."
             )
 
+    def _check_callback_list_size(
+        self, parent_list: List[Union[CustomLogger, Callable, str]]
+    ) -> bool:
+        """
+        Check if adding another callback would exceed MAX_CALLBACKS
+        Returns True if safe to add, False if would exceed limit
+        """
+        if len(parent_list) >= self.MAX_CALLBACKS:
+            verbose_logger.warning(
+                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {self.MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
+            )
+            return False
+        return True
+
     def _safe_add_callback_to_list(
         self,
         callback: Union[CustomLogger, Callable, str],
@@ -108,6 +122,10 @@ class LoggingCallbackManager:
 
         Ensures no duplicates are added for `str`, `Callable`, and `CustomLogger` callbacks.
         """
+        # Check max callbacks limit first
+        if not self._check_callback_list_size(parent_list):
+            return
+
         if isinstance(callback, str):
             self._add_string_callback_to_list(
                 callback=callback, parent_list=parent_list
