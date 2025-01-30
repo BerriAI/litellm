@@ -17,6 +17,7 @@ import {
   AccordionBody,
 } from "@tremor/react";
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
+import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import {
   TabPanel,
   TabPanels,
@@ -1821,88 +1822,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       ))}
                     </Select>
                   </Form.Item>
-
-                  <Form.Item
-                    label="LiteLLM Model Name(s)"
-                    tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
-                    className="mb-0"
-                  >
-                    <Form.Item
-                      name="model"
-                      rules={[{ required: true, message: "Please select at least one model." }]}
-                      noStyle
-                    >
-                      {(selectedProvider === Providers.Azure) || (selectedProvider === Providers.OpenAI_Compatible) || (selectedProvider === Providers.Ollama) ? (
-                        <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                      ) : providerModels.length > 0 ? (
-                        <MultiSelect
-                          onValueChange={(selected) => {
-                            if (selected.includes("all-wildcard")) {
-                              form.setFieldsValue({ model_name: undefined });
-                            }
-                          }}
-                        >
-                          <MultiSelectItem value="all-wildcard">
-                            All {selectedProvider} Models (Wildcard)
-                          </MultiSelectItem>
-                          {providerModels.map((model, index) => (
-                            <MultiSelectItem key={index} value={model}>
-                              {model}
-                            </MultiSelectItem>
-                          ))}
-                          <MultiSelectItem value="custom">
-                            Custom Model Name (Enter below)
-                          </MultiSelectItem>
-                        </MultiSelect>
-                      ) : (
-                        <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
-                      )}
-                    </Form.Item>
-
-                    {/* Conditionally render Custom Model Name field */}
-                    <Form.Item
-                      noStyle
-                      shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}
-                    >
-                      {({ getFieldValue }) => {
-                        const selectedModels = getFieldValue('model') || [];
-                        return selectedModels.includes('custom') && (
-                          <Form.Item
-                            name="custom_model_name"
-                            rules={[{ required: true, message: "Please enter a custom model name." }]}
-                            className="mt-2"
-                          >
-                            <TextInput placeholder="Enter custom model name" />
-                          </Form.Item>
-                        );
-                      }}
-                    </Form.Item>
-
-                    
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Actual model name used for making{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/providers"
-                          target="_blank"
-                        >
-                          litellm.completion() call
-                        </Link>
-                        . We&apos;ll{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/proxy/reliability#step-1---set-deployments-on-config"
-                          target="_blank"
-                        >
-                          loadbalance
-                        </Link>{" "}
-                        models with the same &apos;public name&apos;
-                      </Text>
-                    </Col>
-                  </Row>
-
+                  <LiteLLMModelNameField
+                      selectedProvider={selectedProvider as string}
+                      providerModels={providerModels}
+                      getPlaceholder={getPlaceholder}
+                    />
+                  
                   {/* Conditionally Render "Public Model Name" */}
                   <ConditionalPublicModelName  />
 
