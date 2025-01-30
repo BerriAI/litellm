@@ -510,6 +510,11 @@ def function_setup(  # noqa: PLR0915
                 if inspect.iscoroutinefunction(callback):
                     litellm._async_failure_callback.append(callback)
                     removed_async_items.append(index)
+                elif (
+                    callback in litellm._known_custom_logger_compatible_callbacks
+                    and isinstance(callback, str)
+                ):
+                    _add_custom_logger_callback_to_specific_event(callback, "failure")
 
             # Pop the async items from failure_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):
