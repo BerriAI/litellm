@@ -9,15 +9,20 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 from typing import Optional, Union
+import litellm
+from litellm.secret_managers.main import get_secret, get_secret_str
+import json
+import requests
+import os
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.nvidia.statics import determine_model, MODEL_TABLE
 
-
-class NvidiaNimConfig(OpenAIGPTConfig):
+class NvidiaConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-    The class `NvidiaNimConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
+    The class `NvidiaConfig` provides configuration for the Nvidia NIM's Chat Completions API interface. Below are the parameters:
     """
 
     temperature: Optional[int] = None
@@ -40,10 +45,23 @@ class NvidiaNimConfig(OpenAIGPTConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+        
+        dynamic_api_key = get_secret_str("NVIDIA_API_KEY") or get_secret_str("NVIDIA_NIM_API_KEY")
+        self.dynamic_api_key = dynamic_api_key
+
+        litellm.nvidia_models = self.available_models()
+        litellm.model_list += litellm.nvidia_models
 
     @classmethod
     def get_config(cls):
         return super().get_config()
+    
+    def available_models(self) -> list:
+        '''Get Available NVIDIA models.'''
+        return list(MODEL_TABLE.keys())
+        
+
+
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -52,15 +70,21 @@ class NvidiaNimConfig(OpenAIGPTConfig):
 
         Updated on July 5th, 2024 - based on https://docs.api.nvidia.com/nim/reference
         """
+        parms = []
+        if model_cls := determine_model(model):
+            if model_cls.supports_tools:
+                parms += ["tools", "tool_choice"]
+            if model_cls.supports_structured_output:
+                parms += ["response_format"]
         if model in [
             "google/recurrentgemma-2b",
             "google/gemma-2-27b-it",
             "google/gemma-2-9b-it",
             "gemma-2-9b-it",
         ]:
-            return ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
+            parms += ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
         elif model == "nvidia/nemotron-4-340b-instruct":
-            return [
+            parms += [
                 "stream",
                 "temperature",
                 "top_p",
@@ -68,12 +92,12 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "max_completion_tokens",
             ]
         elif model == "nvidia/nemotron-4-340b-reward":
-            return [
+            parms += [
                 "stream",
             ]
         elif model in ["google/codegemma-1.1-7b"]:
             # most params - but no 'seed' :(
-            return [
+            parms += [
                 "stream",
                 "temperature",
                 "top_p",
@@ -106,7 +130,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
             # "meta/llama3-8b-instruct",
             # "meta/llama2-70b",
             # "meta/codellama-70b",
-            return [
+            parms += [
                 "stream",
                 "temperature",
                 "top_p",
@@ -117,6 +141,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "stop",
                 "seed",
             ]
+        return parms
 
     def map_openai_params(
         self,
