@@ -15,7 +15,7 @@ import httpx
 
 def get_model_cost_map(url: str):
     if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
+        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
         or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
     ):
         import importlib.resources
