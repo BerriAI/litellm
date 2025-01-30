@@ -145,10 +145,14 @@ class LoggingCallbackManager:
         Add a custom logger to a list, if another instance of the same custom logger exists in the list, do not add it again.
         """
         # Check if an instance of the same class already exists in the list
+        custom_logger_type_name = type(custom_logger).__name__
         for existing_logger in parent_list:
-            if isinstance(existing_logger, type(custom_logger)):
+            if (
+                isinstance(existing_logger, CustomLogger)
+                and type(existing_logger).__name__ == custom_logger_type_name
+            ):
                 verbose_logger.debug(
-                    f"Custom logger of type {type(custom_logger).__name__} already exists in {parent_list}, not adding again.."
+                    f"Custom logger of type {custom_logger_type_name} already exists in {parent_list}, not adding again.."
                 )
                 return
         parent_list.append(custom_logger)
