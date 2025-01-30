@@ -20,11 +20,24 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
     const currentParams = form.getFieldValue('litellm_extra_params');
     try {
       let paramsObj = currentParams ? JSON.parse(currentParams) : {};
-      paramsObj.use_in_pass_through = checked;
-      form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+      if (checked) {
+        paramsObj.use_in_pass_through = true;
+      } else {
+        delete paramsObj.use_in_pass_through;
+      }
+      // Only set the field value if there are remaining parameters
+      if (Object.keys(paramsObj).length > 0) {
+        form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+      } else {
+        form.setFieldValue('litellm_extra_params', '');
+      }
     } catch (error) {
-      // If JSON parsing fails, create new object with just the use_in_pass_through
-      form.setFieldValue('litellm_extra_params', JSON.stringify({ use_in_pass_through: checked }, null, 2));
+      // If JSON parsing fails, only create new object if checked is true
+      if (checked) {
+        form.setFieldValue('litellm_extra_params', JSON.stringify({ use_in_pass_through: true }, null, 2));
+      } else {
+        form.setFieldValue('litellm_extra_params', '');
+      }
     }
   };
 
