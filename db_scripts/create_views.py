@@ -172,7 +172,7 @@ async def check_view_exists():  # noqa: PLR0915
         print("DailyTagSpend Exists!")  # noqa
     except Exception:
         sql_query = """
-        CREATE OR REPLACE VIEW DailyTagSpend AS
+        CREATE OR REPLACE VIEW "DailyTagSpend" AS
         SELECT
             jsonb_array_elements_text(request_tags) AS individual_request_tag,
             DATE(s."startTime") AS spend_date,
