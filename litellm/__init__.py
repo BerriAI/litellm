@@ -9,7 +9,12 @@ from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
-from litellm.types.utils import ImageObject, BudgetConfig
+from litellm.types.utils import (
+    ImageObject,
+    BudgetConfig,
+    all_litellm_params,
+    all_litellm_params as _litellm_completion_params,
+)  # maintain backwards compatibility for root param
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -244,45 +249,7 @@ _openai_completion_params = [
     "tool_choice",
     "max_retries",
 ]
-_litellm_completion_params = [
-    "metadata",
-    "acompletion",
-    "caching",
-    "mock_response",
-    "api_key",
-    "api_version",
-    "api_base",
-    "force_timeout",
-    "logger_fn",
-    "verbose",
-    "custom_llm_provider",
-    "litellm_logging_obj",
-    "litellm_call_id",
-    "use_client",
-    "id",
-    "fallbacks",
-    "azure",
-    "headers",
-    "model_list",
-    "num_retries",
-    "context_window_fallback_dict",
-    "roles",
-    "final_prompt_value",
-    "bos_token",
-    "eos_token",
-    "request_timeout",
-    "complete_response",
-    "self",
-    "client",
-    "rpm",
-    "tpm",
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "hf_model_name",
-    "model_info",
-    "proxy_server_request",
-    "preset_cache_key",
-]
+
 _current_cost = 0.0  # private variable, used if max budget is set
 error_logs: Dict = {}
 add_function_to_prompt: bool = (
