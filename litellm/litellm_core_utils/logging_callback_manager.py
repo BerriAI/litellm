@@ -145,17 +145,35 @@ class LoggingCallbackManager:
         Add a custom logger to a list, if another instance of the same custom logger exists in the list, do not add it again.
         """
         # Check if an instance of the same class already exists in the list
+        custom_logger_key = self._get_custom_logger_key(custom_logger)
         custom_logger_type_name = type(custom_logger).__name__
         for existing_logger in parent_list:
             if (
                 isinstance(existing_logger, CustomLogger)
-                and type(existing_logger).__name__ == custom_logger_type_name
+                and self._get_custom_logger_key(existing_logger) == custom_logger_key
             ):
                 verbose_logger.debug(
-                    f"Custom logger of type {custom_logger_type_name} already exists in {parent_list}, not adding again.."
+                    f"Custom logger of type {custom_logger_type_name}, key: {custom_logger_key} already exists in {parent_list}, not adding again.."
                 )
                 return
         parent_list.append(custom_logger)
+
+    def _get_custom_logger_key(self, custom_logger: CustomLogger):
+        """
+        Get a unique key for a custom logger that considers only fundamental instance variables
+
+        Returns:
+            str: A unique key combining the class name and fundamental instance variables (str, bool, int)
+        """
+        key_parts = [type(custom_logger).__name__]
+
+        # Add only fundamental type instance variables to the key
+        for attr_name, attr_value in vars(custom_logger).items():
+            if not attr_name.startswith("_"):  # Skip private attributes
+                if isinstance(attr_value, (str, bool, int)):
+                    key_parts.append(f"{attr_name}={attr_value}")
+
+        return "-".join(key_parts)
 
     def _reset_all_callbacks(self):
         """
