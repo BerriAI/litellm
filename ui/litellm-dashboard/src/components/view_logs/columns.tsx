@@ -20,6 +20,7 @@ export type LogEntry = {
   startTime: string;
   endTime: string;
   user?: string;
+  end_user?: string;
   custom_llm_provider?: string;
   metadata?: Record<string, any>;
   cache_hit: string;
@@ -152,8 +153,13 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
   {
-    header: "User",
+    header: "Internal User",
     accessorKey: "user",
+    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+  },
+  {
+    header: "End User",
+    accessorKey: "end_user",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
   },
   {
