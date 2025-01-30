@@ -18,7 +18,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -1470,13 +1470,13 @@ class AdapterCompletionStreamWrapper:
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
-    user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
-    user_api_key_alias: Optional[str]
-    user_api_key_org_id: Optional[str]
-    user_api_key_team_id: Optional[str]
-    user_api_key_user_id: Optional[str]
-    user_api_key_team_alias: Optional[str]
-    user_api_key_end_user_id: Optional[str]
+    user_api_key_hash: Optional[SecretStr]  # hash of the litellm virtual key used
+    user_api_key_alias: Optional[SecretStr]
+    user_api_key_org_id: Optional[SecretStr]
+    user_api_key_team_id: Optional[SecretStr]
+    user_api_key_user_id: Optional[SecretStr]
+    user_api_key_team_alias: Optional[SecretStr]
+    user_api_key_end_user_id: Optional[SecretStr]
 
 
 class StandardLoggingPromptManagementMetadata(TypedDict):
