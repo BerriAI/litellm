@@ -4146,7 +4146,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_prompt_caching=None,
                 supports_pdf_input=None,
             )
-        elif custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
+        elif (custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat") and "*" not in model:
             return litellm.OllamaConfig().get_model_info(model)
         else:
             """
