@@ -1,5 +1,5 @@
 import React from "react";
-import { Form } from "antd";
+import { Form, Switch } from "antd";
 import { Text, Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Row, Col, Typography, Card } from "antd";
 import TextArea from "antd/es/input/TextArea";
@@ -14,6 +14,20 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
 }) => {
+  const [form] = Form.useForm();
+
+  const handlePassThroughChange = (checked: boolean) => {
+    const currentParams = form.getFieldValue('litellm_extra_params');
+    try {
+      let paramsObj = currentParams ? JSON.parse(currentParams) : {};
+      paramsObj.use_in_pass_through = checked;
+      form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+    } catch (error) {
+      // If JSON parsing fails, create new object with just the use_in_pass_through
+      form.setFieldValue('litellm_extra_params', JSON.stringify({ use_in_pass_through: checked }, null, 2));
+    }
+  };
+
   return (
     <>
 
@@ -24,6 +38,15 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
           </AccordionHeader>
           <AccordionBody>
             <div className="bg-white rounded-lg">
+              <Form.Item
+                label="Use in pass through routes"
+                name="use_in_pass_through"
+                valuePropName="checked"
+                className="mb-4"
+                tooltip="Enable this model for pass through routes"
+              >
+                <Switch onChange={handlePassThroughChange} />
+              </Form.Item>
               <Form.Item
                 label="LiteLLM Params"
                 name="litellm_extra_params"
