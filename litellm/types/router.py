@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
 
 from ..exceptions import RateLimitError

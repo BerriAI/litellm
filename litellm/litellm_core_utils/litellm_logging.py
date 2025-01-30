@@ -15,7 +15,7 @@ from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 import litellm
 from litellm import (
@@ -607,7 +607,7 @@ class Logging(LiteLLMLoggingBaseClass):
             if json_logs:
                 masked_headers = self._get_masked_headers(headers)
                 verbose_logger.debug(
-                    "POST Request Sent from LiteLLM",
+                    "POST Request Sent from LiteLLM via JSON",
                     extra={"api_base": {api_base}, **masked_headers},
                 )
             else:
@@ -638,6 +638,15 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> str:
         curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
         curl_command += "curl -X POST \\\n"
+        
+        # Mask the API key in the api_base URL if it exists
+        if 'key=' in api_base:
+            base_url, key_part = api_base.split('key=', 1)
+            masked_key = '*' * len(key_part.split('&')[0])  # Mask only the key value
+            api_base = f"{base_url}key={masked_key}"
+            if '&' in key_part:
+                api_base += key_part[key_part.index('&'):]  # Append any remaining parts of the URL
+
         curl_command += f"{api_base} \\\n"
         masked_headers = self._get_masked_headers(headers)
         formatted_headers = " ".join(
@@ -2883,9 +2892,9 @@ class StandardLoggingPayloadSetup:
 
             if metadata.get("user_api_key") is not None:
                 if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                    clean_metadata["user_api_key_hash"] = metadata.get(
+                    clean_metadata["user_api_key_hash"] = SecretStr(metadata.get(
                         "user_api_key"
-                    )  # this is the hash
+                    ))  # this is the hash
             _potential_requester_metadata = metadata.get(
                 "metadata", None
             )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
@@ -3379,16 +3388,16 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
     )
 
     metadata = StandardLoggingMetadata(  # type: ignore
-        user_api_key_hash=str("test_hash"),
-        user_api_key_alias=str("test_alias"),
-        user_api_key_team_id=str("test_team"),
-        user_api_key_user_id=str("test_user"),
-        user_api_key_team_alias=str("test_team_alias"),
+        user_api_key_hash=SecretStr("test_hash"),
+        user_api_key_alias=SecretStr("test_alias"),
+        user_api_key_team_id=SecretStr("test_team"),
+        user_api_key_user_id=SecretStr("test_user"),
+        user_api_key_team_alias=SecretStr("test_team_alias"),
         user_api_key_org_id=None,
         spend_logs_metadata=None,
         requester_ip_address=str("127.0.0.1"),
         requester_metadata=None,
-        user_api_key_end_user_id=str("test_end_user"),
+        user_api_key_end_user_id=SecretStr("test_end_user"),
     )
 
     hidden_params = StandardLoggingHiddenParams(
