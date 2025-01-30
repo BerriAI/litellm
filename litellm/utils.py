@@ -6021,8 +6021,11 @@ class ProviderConfigManager:
             return litellm.PetalsConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             base_model = litellm.AmazonConverseConfig()._get_base_model(model)
-            if base_model in litellm.bedrock_converse_models:
-                pass
+            if (
+                base_model in litellm.bedrock_converse_models
+                or "converse_like" in model
+            ):
+                return litellm.AmazonConverseConfig()
             elif "amazon" in model:  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif "meta" in model:  # amazon / meta llms
