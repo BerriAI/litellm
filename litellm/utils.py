@@ -355,7 +355,9 @@ def _add_custom_logger_callback_to_specific_event(
             litellm.logging_callback_manager.add_litellm_success_callback(
                 callback_class
             )
-            litellm._async_success_callback.append(callback_class)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                callback_class
+            )
             if callback in litellm.success_callback:
                 litellm.success_callback.remove(
                     callback
@@ -455,7 +457,7 @@ def function_setup(  # noqa: PLR0915
                 if callback not in litellm.failure_callback:
                     litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
                 if callback not in litellm._async_success_callback:
-                    litellm._async_success_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
                 if callback not in litellm._async_failure_callback:
                     litellm._async_failure_callback.append(callback)  # type: ignore
             print_verbose(
@@ -492,12 +494,16 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    litellm._async_success_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    litellm._async_success_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif (
                     callback in litellm._known_custom_logger_compatible_callbacks

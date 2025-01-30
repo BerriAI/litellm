@@ -209,7 +209,7 @@ class Cache:
         if "cache" not in litellm.success_callback:
             litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
-            litellm._async_success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
@@ -776,7 +776,7 @@ def enable_cache(
     if "cache" not in litellm.success_callback:
         litellm.logging_callback_manager.add_litellm_success_callback("cache")
     if "cache" not in litellm._async_success_callback:
-        litellm._async_success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
 
     if litellm.cache is None:
         litellm.cache = Cache(

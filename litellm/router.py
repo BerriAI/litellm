@@ -483,9 +483,13 @@ class Router:
         self.access_groups = None
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                self.deployment_callback_on_success
+            )
         else:
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                self.deployment_callback_on_success
+            )
         if isinstance(litellm.success_callback, list):
             litellm.logging_callback_manager.add_litellm_success_callback(
                 self.sync_deployment_callback_on_success
