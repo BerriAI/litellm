@@ -42,7 +42,6 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             <TextInput placeholder={getPlaceholder(selectedProvider.toString())} />
           ) : providerModels.length > 0 ? (
             <AntSelect
-              mode="multiple"
               allowClear
               showSearch
               placeholder="Select models"
