@@ -1890,12 +1890,14 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
-                            litellm.success_callback.append(
+                            litellm.logging_callback_manager.add_litellm_success_callback(
                                 get_instance_fn(value=callback)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.success_callback.append(callback)
+                            litellm.logging_callback_manager.add_litellm_success_callback(
+                                callback
+                            )
                             if "prometheus" in callback:
                                 if not premium_user:
                                     raise Exception(
@@ -2497,7 +2499,9 @@ class ProxyConfig:
                         success_callback, "success"
                     )
                 elif success_callback not in litellm.success_callback:
-                    litellm.success_callback.append(success_callback)
+                    litellm.logging_callback_manager.add_litellm_success_callback(
+                        success_callback
+                    )
 
         # Add failure callbacks from DB to litellm
         if failure_callbacks is not None and isinstance(failure_callbacks, list):

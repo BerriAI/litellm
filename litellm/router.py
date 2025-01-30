@@ -487,7 +487,9 @@ class Router:
         else:
             litellm._async_success_callback.append(self.deployment_callback_on_success)
         if isinstance(litellm.success_callback, list):
-            litellm.success_callback.append(self.sync_deployment_callback_on_success)
+            litellm.logging_callback_manager.add_litellm_success_callback(
+                self.sync_deployment_callback_on_success
+            )
         else:
             litellm.success_callback = [self.sync_deployment_callback_on_success]
         if isinstance(litellm._async_failure_callback, list):
@@ -5836,7 +5838,7 @@ class Router:
         self.slack_alerting_logger = _slack_alerting_logger
 
         litellm.callbacks.append(_slack_alerting_logger)  # type: ignore
-        litellm.success_callback.append(
+        litellm.logging_callback_manager.add_litellm_success_callback(
             _slack_alerting_logger.response_taking_too_long_callback
         )
         verbose_router_logger.info(
