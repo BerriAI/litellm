@@ -41,7 +41,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             # Return empty dict if body is empty or None
             if not body:
                 parsed_body = {}
-            parsed_body = orjson.loads(body)
+            else:
+                parsed_body = orjson.loads(body)
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)

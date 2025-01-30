@@ -47,9 +47,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -165,9 +165,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -264,9 +264,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -367,7 +367,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-      
+
       - persist_to_workspace:
           root: .
           paths:
@@ -375,10 +375,10 @@ jobs:
             - auth_ui_unit_tests_coverage
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
-        - image: cimg/python:3.11
-          auth:
-            username: ${DOCKERHUB_USERNAME}
-            password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -417,10 +417,10 @@ jobs:
             - litellm_router_coverage
   litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
     docker:
-        - image: cimg/python:3.11
-          auth:
-            username: ${DOCKERHUB_USERNAME}
-            password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
     steps:
       - checkout
@@ -458,9 +458,9 @@ jobs:
             pip install opentelemetry-api==1.25.0
             pip install opentelemetry-sdk==1.25.0
             pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.54.0 
-            pip install prisma==0.11.0   
-            pip install "detect_secrets==1.5.0"         
+            pip install openai==1.54.0
+            pip install prisma==0.11.0
+            pip install "detect_secrets==1.5.0"
             pip install "httpx==0.24.1"
             pip install "respx==0.21.1"
             pip install fastapi
@@ -514,10 +514,10 @@ jobs:
             - litellm_proxy_unit_tests_coverage
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-        - image: cimg/python:3.11
-          auth:
-            username: ${DOCKERHUB_USERNAME}
-            password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
 
     steps:
@@ -616,7 +616,7 @@ jobs:
           command: |
             mv coverage.xml llm_translation_coverage.xml
             mv .coverage llm_translation_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -660,7 +660,7 @@ jobs:
           command: |
             mv coverage.xml batches_coverage.xml
             mv .coverage batches_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -669,7 +669,7 @@ jobs:
           paths:
             - batches_coverage.xml
             - batches_coverage
-  secret_manager_testing:
+  litellm_utils_testing:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -691,28 +691,29 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install numpydoc
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/secret_manager_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml secret_manager_coverage.xml
-            mv .coverage secret_manager_coverage
-        
+            mv coverage.xml litellm_utils_coverage.xml
+            mv .coverage litellm_utils_coverage
+
       # Store test results
       - store_test_results:
           path: test-results
       - persist_to_workspace:
           root: .
           paths:
-            - secret_manager_coverage.xml
-            - secret_manager_coverage
+            - litellm_utils_coverage.xml
+            - litellm_utils_coverage
 
   pass_through_unit_testing:
     docker:
@@ -747,7 +748,7 @@ jobs:
           command: |
             mv coverage.xml pass_through_unit_tests_coverage.xml
             mv .coverage pass_through_unit_tests_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -789,7 +790,7 @@ jobs:
           command: |
             mv coverage.xml image_gen_coverage.xml
             mv .coverage image_gen_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -835,7 +836,7 @@ jobs:
           command: |
             mv coverage.xml logging_coverage.xml
             mv .coverage logging_coverage
-        
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -875,7 +876,7 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing/test_basic_python_version.py
-  
+
   installing_litellm_on_python_3_13:
     docker:
       - image: cimg/python:3.13.1
@@ -902,6 +903,72 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/local_testing/test_basic_python_version.py
+  helm_chart_testing:
+    machine:
+      image: ubuntu-2204:2023.10.1  # Use machine executor instead of docker
+    resource_class: medium
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      # Install Helm
+      - run:
+          name: Install Helm
+          command: |
+            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      
+      # Install kind
+      - run:
+          name: Install Kind
+          command: |
+            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            chmod +x ./kind
+            sudo mv ./kind /usr/local/bin/kind
+      
+      # Install kubectl
+      - run:
+          name: Install kubectl
+          command: |
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+      
+      # Create kind cluster
+      - run:
+          name: Create Kind Cluster
+          command: |
+            kind create cluster --name litellm-test
+      
+      # Run helm lint
+      - run:
+          name: Run helm lint
+          command: |
+            helm lint ./deploy/charts/litellm-helm
+      
+      # Run helm tests
+      - run:
+          name: Run helm tests
+          command: |
+            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml
+            # Wait for pod to be ready
+            echo "Waiting 30 seconds for pod to be ready..."
+            sleep 30
+            
+            # Print pod logs before running tests
+            echo "Printing pod logs..."
+            kubectl logs $(kubectl get pods -l app.kubernetes.io/name=litellm -o jsonpath="{.items[0].metadata.name}")
+            
+            # Run the helm tests
+            helm test litellm --logs
+            helm test litellm --logs
+      
+      # Cleanup
+      - run:
+          name: Cleanup
+          command: |
+            kind delete cluster --name litellm-test
+          when: always  # This ensures cleanup runs even if previous steps fail
+
 
   check_code_and_doc_quality:
     docker:
@@ -920,14 +987,17 @@ jobs:
             pip install ruff
             pip install pylint
             pip install pyright
+            pip install beautifulsoup4
             pip install .
             curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
       - run: ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/recursive_detector.py
       - run: python ./tests/code_coverage_tests/test_router_strategy_async.py
       - run: python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
+      - run: python ./tests/code_coverage_tests/bedrock_pricing.py
       - run: python ./tests/documentation_tests/test_env_keys.py
       - run: python ./tests/documentation_tests/test_router_settings.py
       - run: python ./tests/documentation_tests/test_api_docs.py
@@ -973,7 +1043,7 @@ jobs:
               cat docker_output.log
               exit 1
             fi
-            
+
   build_and_test:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -1019,9 +1089,9 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -1029,7 +1099,22 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "openai==1.54.0 "
-            # Run pytest and generate JUnit XML report
+      - run:
+          name: Install Grype
+          command: |
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+      - run:
+          name: Build and Scan Docker Images
+          command: |
+            # Build and scan Dockerfile.database
+            echo "Building and scanning Dockerfile.database..."
+            docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
+            grype litellm-database:latest --fail-on high
+
+            # Build and scan main Dockerfile
+            echo "Building and scanning main Dockerfile..."
+            docker build -t litellm:latest .
+            grype litellm:latest --fail-on high
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -1054,6 +1139,9 @@ jobs:
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
@@ -1137,9 +1225,9 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -1173,6 +1261,9 @@ jobs:
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e AUTO_INFER_REGION=True \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LANGFUSE_PROJECT1_PUBLIC=$LANGFUSE_PROJECT1_PUBLIC \
@@ -1256,9 +1347,9 @@ jobs:
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
@@ -1289,6 +1380,9 @@ jobs:
               -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
@@ -1321,8 +1415,9 @@ jobs:
             pwd
             ls
             python -m pytest -vv tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
-           # Clean up first container
+          no_output_timeout:
+            120m
+            # Clean up first container
       - run:
           name: Stop and remove first container
           command: |
@@ -1369,26 +1464,23 @@ jobs:
       - store_test_results:
           path: test-results
   proxy_build_from_pip_tests:
+    # Change from docker to machine executor
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
+      # Remove Docker CLI installation since it's already available in machine executor
       - run:
-          name: Install Docker CLI (In case it's not already installed)
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
-      - run:
-          name: Install Python 3.9
+          name: Install Python 3.13
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
       - run:
@@ -1432,6 +1524,9 @@ jobs:
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e APORIA_API_KEY_1=$APORIA_API_KEY_1 \
               -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
               --name my-app \
               -v $(pwd)/litellm_config.yaml:/app/config.yaml \
@@ -1458,8 +1553,9 @@ jobs:
           name: Run tests
           command: |
             python -m pytest -vv tests/basic_proxy_startup_tests -x --junitxml=test-results/junit-2.xml --durations=5
-          no_output_timeout: 120m
-           # Clean up first container
+          no_output_timeout:
+            120m
+            # Clean up first container
       - run:
           name: Stop and remove first container
           command: |
@@ -1506,9 +1602,9 @@ jobs:
             pip install mypy
             pip install pyarrow
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
@@ -1529,6 +1625,9 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
@@ -1610,7 +1709,6 @@ jobs:
       - codecov/upload:
           file: ./coverage.xml
 
-
   publish_to_pypi:
     docker:
       - image: cimg/python:3.8
@@ -1636,7 +1734,6 @@ jobs:
               echo "No changes to litellm, tests, or pyproject.toml. Skipping PyPI publish."
               circleci step halt
             fi
-
 
       - run:
           name: Checkout code
@@ -1726,9 +1823,9 @@ jobs:
             pip install mypy
             pip install pyarrow
             pip install numpydoc
-            pip install prisma            
-            pip install fastapi            
-            pip install jsonschema   
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
@@ -1778,6 +1875,28 @@ jobs:
           no_output_timeout: 120m
       - store_test_results:
           path: test-results
+
+  test_nonroot_image:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t non_root_image:latest . -f ./docker/Dockerfile.non_root
+      - run:
+          name: Install Container Structure Test
+          command: |
+            curl -LO https://github.com/GoogleContainerTools/container-structure-test/releases/download/v1.19.3/container-structure-test-linux-amd64
+            chmod +x container-structure-test-linux-amd64
+            sudo mv container-structure-test-linux-amd64 /usr/local/bin/container-structure-test
+      - run:
+          name: Run Container Structure Test
+          command: |
+            container-structure-test test --image non_root_image:latest --config docker/tests/nonroot.yaml
 
   test_bad_database_url:
     machine:
@@ -1844,10 +1963,10 @@ workflows:
                 - /litellm_.*/
       - litellm_assistants_api_testing:
           filters:
-              branches:
-                only:
-                  - main
-                  - /litellm_.*/
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_router_testing:
           filters:
             branches:
@@ -1914,7 +2033,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - secret_manager_testing:
+      - litellm_utils_testing:
           filters:
             branches:
               only:
@@ -1942,7 +2061,7 @@ workflows:
           requires:
             - llm_translation_testing
             - batches_testing
-            - secret_manager_testing
+            - litellm_utils_testing
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
@@ -1971,6 +2090,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - helm_chart_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - load_testing:
           filters:
             branches:
@@ -1992,7 +2117,7 @@ workflows:
             - test_bad_database_url
             - llm_translation_testing
             - batches_testing
-            - secret_manager_testing
+            - litellm_utils_testing
             - pass_through_unit_testing
             - image_gen_testing
             - logging_testing
@@ -2014,4 +2139,3 @@ workflows:
             branches:
               only:
                 - main
-      

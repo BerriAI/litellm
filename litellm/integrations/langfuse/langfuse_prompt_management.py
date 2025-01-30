@@ -11,6 +11,7 @@ from typing_extensions import TypeAlias
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
@@ -80,7 +81,6 @@ def langfuse_client_init(
 
     langfuse_release = os.getenv("LANGFUSE_RELEASE")
     langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-    langfuse_flush_interval = os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
 
     parameters = {
         "public_key": public_key,
@@ -88,7 +88,9 @@ def langfuse_client_init(
         "host": langfuse_host,
         "release": langfuse_release,
         "debug": langfuse_debug,
-        "flush_interval": langfuse_flush_interval,  # flush interval in seconds
+        "flush_interval": LangFuseLogger._get_langfuse_flush_interval(
+            flush_interval
+        ),  # flush interval in seconds
     }
 
     if Version(langfuse.version.__version__) >= Version("2.6.0"):
@@ -107,6 +109,9 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         langfuse_host=None,
         flush_interval=1,
     ):
+        import langfuse
+
+        self.langfuse_sdk_version = langfuse.version.__version__
         self.Langfuse = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,
@@ -226,6 +231,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             prompt_template_model=template_model,
             prompt_template_optional_params=template_optional_params,
             completed_messages=None,
+        )
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        return run_async_function(
+            self.async_log_success_event, kwargs, response_obj, start_time, end_time
         )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):

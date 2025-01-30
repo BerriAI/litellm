@@ -12,6 +12,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime as dt_object
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from pydantic import BaseModel
@@ -31,6 +32,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.pagerduty.pagerduty import PagerDutyAlerting
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -76,6 +78,7 @@ from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+from ..integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.humanloop import HumanloopLogger
@@ -255,10 +258,19 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time: Optional[datetime.datetime] = None
         self._llm_caching_handler: Optional[LLMCachingHandler] = None
 
+        # INITIAL LITELLM_PARAMS
+        litellm_params = {}
+        if kwargs is not None:
+            litellm_params = get_litellm_params(**kwargs)
+            litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
+
+        self.litellm_params = litellm_params
+
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
             "litellm_call_id": litellm_call_id,
             "input": _input,
+            "litellm_params": litellm_params,
         }
 
     def process_dynamic_callbacks(self):
@@ -357,7 +369,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
-        self.litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
+        self.litellm_params = {
+            **self.litellm_params,
+            **scrub_sensitive_keys_in_metadata(litellm_params),
+        }
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
@@ -610,10 +625,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     masked_api_base = api_base
                 self.model_call_details["litellm_params"]["api_base"] = masked_api_base
 
-                verbose_logger.debug(
-                    "PRE-API-CALL ADDITIONAL ARGS: %s", additional_args
-                )
-
                 curl_command = self._get_request_curl_command(
                     api_base=api_base,
                     headers=headers,
@@ -783,6 +794,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
@@ -831,11 +843,12 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(
                 **response_cost_calculator_kwargs
             )
+            verbose_logger.debug(f"response_cost: {response_cost}")
             return response_cost
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str=_get_traceback_str_for_error(str(e)),
                 model=response_cost_calculator_kwargs["model"],
                 cache_hit=response_cost_calculator_kwargs["cache_hit"],
                 custom_llm_provider=response_cost_calculator_kwargs[
@@ -2570,6 +2583,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger  # type: ignore
+        elif logging_integration == "gcs_pubsub":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GcsPubSubLogger):
+                    return callback
+            _gcs_pubsub_logger = GcsPubSubLogger()
+            _in_memory_loggers.append(_gcs_pubsub_logger)
+            return _gcs_pubsub_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -2702,6 +2722,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
+                    return callback
+        elif logging_integration == "gcs_pubsub":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GcsPubSubLogger):
                     return callback
 
         return None
@@ -2997,6 +3021,7 @@ class StandardLoggingPayloadSetup:
             api_base=None,
             response_cost=None,
             additional_headers=None,
+            litellm_overhead_time_ms=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -3068,8 +3093,7 @@ def get_standard_logging_object_payload(
     original_exception: Optional[Exception] = None,
 ) -> Optional[StandardLoggingPayload]:
     try:
-        if kwargs is None:
-            kwargs = {}
+        kwargs = kwargs or {}
 
         hidden_params: Optional[dict] = None
         if init_response_obj is None:
@@ -3094,13 +3118,14 @@ def get_standard_logging_object_payload(
                         cache_key=None,
                         api_base=None,
                         response_cost=None,
+                        litellm_overhead_time_ms=None,
                     )
                 )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {})
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
-        end_user_id = proxy_server_request.get("body", {}).get("user", None)
+
         metadata: dict = (
             litellm_params.get("litellm_metadata")
             or litellm_params.get("metadata", None)
@@ -3147,6 +3172,11 @@ def get_standard_logging_object_payload(
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
         )
+
+        _request_body = proxy_server_request.get("body", {})
+        end_user_id = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
+            "user", None
+        )  # maintain backwards compatibility with old request body check
 
         saved_cache_cost: float = 0.0
         if cache_hit is True:
@@ -3233,12 +3263,18 @@ def get_standard_logging_object_payload(
             ),
         )
 
+        emit_standard_logging_payload(payload)
         return payload
     except Exception as e:
         verbose_logger.exception(
             "Error creating standard logging object - {}".format(str(e))
         )
         return None
+
+
+def emit_standard_logging_payload(payload: StandardLoggingPayload):
+    if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
+        verbose_logger.info(json.dumps(payload, indent=4))
 
 
 def get_standard_logging_metadata(
@@ -3320,3 +3356,93 @@ def modify_integration(integration_name, integration_params):
     if integration_name == "supabase":
         if "table_name" in integration_params:
             Supabase.supabase_table_name = integration_params["table_name"]
+
+
+@lru_cache(maxsize=16)
+def _get_traceback_str_for_error(error_str: str) -> str:
+    """
+    function wrapped with lru_cache to limit the number of times `traceback.format_exc()` is called
+    """
+    return traceback.format_exc()
+
+
+from decimal import Decimal
+
+# used for unit testing
+from typing import Any, Dict, List, Optional, Union
+
+
+def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
+    # First create the nested objects with proper typing
+    model_info = StandardLoggingModelInformation(
+        model_map_key="gpt-3.5-turbo", model_map_value=None
+    )
+
+    metadata = StandardLoggingMetadata(  # type: ignore
+        user_api_key_hash=str("test_hash"),
+        user_api_key_alias=str("test_alias"),
+        user_api_key_team_id=str("test_team"),
+        user_api_key_user_id=str("test_user"),
+        user_api_key_team_alias=str("test_team_alias"),
+        user_api_key_org_id=None,
+        spend_logs_metadata=None,
+        requester_ip_address=str("127.0.0.1"),
+        requester_metadata=None,
+        user_api_key_end_user_id=str("test_end_user"),
+    )
+
+    hidden_params = StandardLoggingHiddenParams(
+        model_id=None,
+        cache_key=None,
+        api_base=None,
+        response_cost=None,
+        additional_headers=None,
+        litellm_overhead_time_ms=None,
+    )
+
+    # Convert numeric values to appropriate types
+    response_cost = Decimal("0.1")
+    start_time = Decimal("1234567890.0")
+    end_time = Decimal("1234567891.0")
+    completion_start_time = Decimal("1234567890.5")
+    saved_cache_cost = Decimal("0.0")
+
+    # Create messages and response with proper typing
+    messages: List[Dict[str, str]] = [{"role": "user", "content": "Hello, world!"}]
+    response: Dict[str, List[Dict[str, Dict[str, str]]]] = {
+        "choices": [{"message": {"content": "Hi there!"}}]
+    }
+
+    # Main payload initialization
+    return StandardLoggingPayload(  # type: ignore
+        id=str("test_id"),
+        call_type=str("completion"),
+        stream=bool(False),
+        response_cost=response_cost,
+        response_cost_failure_debug_info=None,
+        status=str("success"),
+        total_tokens=int(30),
+        prompt_tokens=int(20),
+        completion_tokens=int(10),
+        startTime=start_time,
+        endTime=end_time,
+        completionStartTime=completion_start_time,
+        model_map_information=model_info,
+        model=str("gpt-3.5-turbo"),
+        model_id=str("model-123"),
+        model_group=str("openai-gpt"),
+        custom_llm_provider=str("openai"),
+        api_base=str("https://api.openai.com"),
+        metadata=metadata,
+        cache_hit=bool(False),
+        cache_key=None,
+        saved_cache_cost=saved_cache_cost,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=str("127.0.0.1"),
+        messages=messages,
+        response=response,
+        error_str=None,
+        model_parameters={"stream": True},
+        hidden_params=hidden_params,
+    )

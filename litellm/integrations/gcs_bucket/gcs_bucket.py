@@ -65,7 +65,6 @@ class GCSBucketLogger(GCSBucketBase):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-            self.truncate_standard_logging_payload_content(logging_payload)
             # Add to logging queue - this will be flushed periodically
             self.log_queue.append(
                 GCSLogQueueItem(
@@ -89,7 +88,6 @@ class GCSBucketLogger(GCSBucketBase):
             )
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
-            self.truncate_standard_logging_payload_content(logging_payload)
             # Add to logging queue - this will be flushed periodically
             self.log_queue.append(
                 GCSLogQueueItem(

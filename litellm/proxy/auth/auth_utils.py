@@ -464,6 +464,7 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     if premium_user is not True:
+
         return False
 
     # premium use has opted into using client credentials
@@ -493,3 +494,17 @@ def _has_user_setup_sso():
     )
 
     return sso_setup
+
+
+def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
+    # openai - check 'user'
+    if "user" in request_body and request_body["user"] is not None:
+        return str(request_body["user"])
+    # anthropic - check 'litellm_metadata'
+    end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
+    if end_user_id:
+        return str(end_user_id)
+    metadata = request_body.get("metadata")
+    if metadata and "user_id" in metadata and metadata["user_id"] is not None:
+        return str(metadata["user_id"])
+    return None
