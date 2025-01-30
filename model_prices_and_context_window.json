@@ -2051,6 +2051,84 @@
         "supports_function_calling": true,
         "supports_vision": true
     },
+    "xai/grok-2-vision-1212": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000002,
+        "input_cost_per_image": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "xai/grok-2-vision-latest": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000002,
+        "input_cost_per_image": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "xai/grok-2-vision": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.000002,
+        "input_cost_per_image": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "xai/grok-vision-beta": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.000005,
+        "input_cost_per_image": 0.000005,
+        "output_cost_per_token": 0.000015,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "xai/grok-2-1212": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "xai/grok-2": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "xai/grok-2-latest": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.00001,
+        "litellm_provider": "xai",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
     "deepseek/deepseek-coder": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
