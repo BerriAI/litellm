@@ -40,7 +40,7 @@ async def async_completion_with_fallbacks(**kwargs):
 
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
-                model = fallback.get("model", original_model)
+                model = fallback.pop("model", original_model)
                 completion_kwargs.update(fallback)
             else:
                 model = fallback

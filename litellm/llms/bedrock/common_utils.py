@@ -42,15 +42,34 @@ class AmazonBedrockGlobalConfig:
                 optional_params[mapped_params[param]] = value
         return optional_params
 
+    def get_all_regions(self) -> List[str]:
+        return (
+            self.get_us_regions()
+            + self.get_eu_regions()
+            + self.get_ap_regions()
+            + self.get_ca_regions()
+            + self.get_sa_regions()
+        )
+
+    def get_ap_regions(self) -> List[str]:
+        return ["ap-northeast-1", "ap-northeast-2", "ap-northeast-3", "ap-south-1"]
+
+    def get_sa_regions(self) -> List[str]:
+        return ["sa-east-1"]
+
     def get_eu_regions(self) -> List[str]:
         """
         Source: https://www.aws-services.info/bedrock.html
         """
         return [
             "eu-west-1",
+            "eu-west-2",
             "eu-west-3",
             "eu-central-1",
         ]
+
+    def get_ca_regions(self) -> List[str]:
+        return ["ca-central-1"]
 
     def get_us_regions(self) -> List[str]:
         """
@@ -59,6 +78,7 @@ class AmazonBedrockGlobalConfig:
         return [
             "us-east-2",
             "us-east-1",
+            "us-west-1",
             "us-west-2",
             "us-gov-west-1",
         ]

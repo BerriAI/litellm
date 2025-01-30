@@ -80,13 +80,13 @@ except OpenAIError as e:
 
 ## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 
-LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+LiteLLM exposes pre defined callbacks to send data to MLflow, Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 
 ```python
 from litellm import completion
 
-## set env variables for logging tools
-os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
+## set env variables for logging tools (API key set up is not required when using MLflow)
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key" # get your public key at https://app.lunary.ai/settings
 os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
@@ -94,7 +94,7 @@ os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse", "helicone"] # log input/output to langfuse, lunary, supabase, helicone
+litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to MLflow, langfuse, lunary, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])

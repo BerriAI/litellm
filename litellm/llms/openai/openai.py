@@ -1,4 +1,5 @@
 import hashlib
+import time
 import types
 from typing import (
     Any,
@@ -26,6 +27,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
@@ -358,6 +360,7 @@ class OpenAIChatCompletion(BaseLLM):
                     organization=organization,
                 )
             else:
+
                 _new_client = OpenAI(
                     api_key=api_key,
                     base_url=api_base,
@@ -378,23 +381,27 @@ class OpenAIChatCompletion(BaseLLM):
         else:
             return client
 
+    @track_llm_api_timing()
     async def make_openai_chat_completion_request(
         self,
         openai_aclient: AsyncOpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[dict, BaseModel]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        start_time = time.time()
         try:
             raw_response = (
                 await openai_aclient.chat.completions.with_raw_response.create(
                     **data, timeout=timeout
                 )
             )
+            end_time = time.time()
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)
@@ -402,14 +409,21 @@ class OpenAIChatCompletion(BaseLLM):
                 headers = {}
             response = raw_response.parse()
             return headers, response
+        except openai.APITimeoutError as e:
+            end_time = time.time()
+            time_delta = round(end_time - start_time, 2)
+            e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
+            raise e
         except Exception as e:
             raise e
 
+    @track_llm_api_timing()
     def make_sync_openai_chat_completion_request(
         self,
         openai_client: OpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[dict, BaseModel]:
         """
         Helper to:
@@ -520,6 +534,7 @@ class OpenAIChatCompletion(BaseLLM):
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
+
                 if provider_config is not None:
                     data = provider_config.transform_request(
                         model=model,
@@ -620,6 +635,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 openai_client=openai_client,
                                 data=data,
                                 timeout=timeout,
+                                logging_obj=logging_obj,
                             )
                         )
 
@@ -724,6 +740,7 @@ class OpenAIChatCompletion(BaseLLM):
         for _ in range(
             2
         ):  # if call fails due to alternating messages, retry with reformatted message
+
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                     is_async=True,
@@ -751,7 +768,10 @@ class OpenAIChatCompletion(BaseLLM):
                 )
 
                 headers, response = await self.make_openai_chat_completion_request(
-                    openai_aclient=openai_aclient, data=data, timeout=timeout
+                    openai_aclient=openai_aclient,
+                    data=data,
+                    timeout=timeout,
+                    logging_obj=logging_obj,
                 )
                 stringified_response = response.model_dump()
 
@@ -791,9 +811,10 @@ class OpenAIChatCompletion(BaseLLM):
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
                     error_headers = getattr(exception_response, "headers", None)
+                message = getattr(e, "message", str(e))
 
                 raise OpenAIError(
-                    status_code=status_code, message=str(e), headers=error_headers
+                    status_code=status_code, message=message, headers=error_headers
                 )
 
     def streaming(
@@ -840,6 +861,7 @@ class OpenAIChatCompletion(BaseLLM):
             openai_client=openai_client,
             data=data,
             timeout=timeout,
+            logging_obj=logging_obj,
         )
 
         logging_obj.model_call_details["response_headers"] = headers
@@ -898,7 +920,10 @@ class OpenAIChatCompletion(BaseLLM):
                 )
 
                 headers, response = await self.make_openai_chat_completion_request(
-                    openai_aclient=openai_aclient, data=data, timeout=timeout
+                    openai_aclient=openai_aclient,
+                    data=data,
+                    timeout=timeout,
+                    logging_obj=logging_obj,
                 )
                 logging_obj.model_call_details["response_headers"] = headers
                 streamwrapper = CustomStreamWrapper(
@@ -953,11 +978,13 @@ class OpenAIChatCompletion(BaseLLM):
                         )
 
     # Embedding
+    @track_llm_api_timing()
     async def make_openai_embedding_request(
         self,
         openai_aclient: AsyncOpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -974,11 +1001,13 @@ class OpenAIChatCompletion(BaseLLM):
         except Exception as e:
             raise e
 
+    @track_llm_api_timing()
     def make_sync_openai_embedding_request(
         self,
         openai_client: OpenAI,
         data: dict,
         timeout: Union[float, httpx.Timeout],
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -1018,7 +1047,10 @@ class OpenAIChatCompletion(BaseLLM):
                 client=client,
             )
             headers, response = await self.make_openai_embedding_request(
-                openai_aclient=openai_aclient, data=data, timeout=timeout
+                openai_aclient=openai_aclient,
+                data=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
             )
             logging_obj.model_call_details["response_headers"] = headers
             stringified_response = response.model_dump()
@@ -1116,7 +1148,10 @@ class OpenAIChatCompletion(BaseLLM):
             ## embedding CALL
             headers: Optional[Dict] = None
             headers, sync_embedding_response = self.make_sync_openai_embedding_request(
-                openai_client=openai_client, data=data, timeout=timeout
+                openai_client=openai_client,
+                data=data,
+                timeout=timeout,
+                logging_obj=logging_obj,
             )  # type: ignore
 
             ## LOGGING

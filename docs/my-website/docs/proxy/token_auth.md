@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# JWT-based Auth 
+# SSO - JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 
@@ -114,7 +114,7 @@ general_settings:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-## Advanced - Spend Tracking (End-Users / Internal Users / Team / Org)
+## Tracking End-Users / Internal Users / Team / Org
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
@@ -155,6 +155,51 @@ scope: ["litellm-proxy-admin",...]
 ```
 scope: "litellm-proxy-admin ..."
 ```
+
+## Enforce Role-Based Access Control (RBAC)
+
+Reject a JWT token if it's valid but doesn't have the required scopes / fields.
+
+Only tokens which with valid Admin (`admin_jwt_scope`), User (`user_id_jwt_field`), Team (`team_id_jwt_field`) are allowed.
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    admin_jwt_scope: "litellm_proxy_endpoints_access"
+    admin_allowed_routes:
+      - openai_routes
+      - info_routes
+    public_key_ttl: 600
+    enforce_rbac: true # 👈 Enforce RBAC
+```
+
+Expected Scope in JWT: 
+
+```
+{
+  "scope": "litellm_proxy_endpoints_access"
+}
+```
+
+### Control Model Access 
+
+```yaml
+general_settings:
+  enable_jwt_auth: True 
+  litellm_jwtauth:
+    user_roles_jwt_field: "resource_access.litellm-test-client-id.roles"
+    user_allowed_roles: ["basic_user"] # roles that map to an 'internal_user' role on LiteLLM 
+    enforce_rbac: true # if true, will check if the user has the correct role to access the model + endpoint
+  
+  role_permissions: # control what models + endpointsare allowed for each role
+    - role: internal_user
+      models: ["anthropic-claude"]
+```
+
+
+**[Architecture Diagram (Control Model Access)](./jwt_auth_arch)**
 
 ## Advanced - Allowed Routes 
 

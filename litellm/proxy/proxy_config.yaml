@@ -1,15 +1,13 @@
 model_list:
-  - model_name: "gpt-4"
+  - model_name: fake-openai-endpoint
     litellm_params:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-general_settings:    
-    alerting: ["slack"]
-    alert_to_webhook_url: {
-      "budget_alerts": ["https://hooks.slack.com/services/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"]
-    }
-    alerting_args:
-       budget_alert_ttl: 10
-       log_to_console: true
+litellm_settings:
+  callbacks: ["datadog"]
+
+general_settings:
+  store_prompts_in_spend_logs: true
+

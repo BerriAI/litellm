@@ -1005,7 +1005,7 @@ def test_completion_mistral_api_mistral_large_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/mistral-large-latest",
+            model="mistral/open-mistral-7b",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -1754,6 +1754,23 @@ async def test_openai_compatible_custom_api_base(provider):
         print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
 
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
+
+
+def test_lm_studio_completion(monkeypatch):
+    monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    try:
+        completion(
+            model="lm_studio/typhoon2-quen2.5-7b-instruct",
+            messages=[
+                {"role": "user", "content": "What's the weather like in San Francisco?"}
+            ],
+            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+        )
+    except litellm.AuthenticationError as e:
+        pytest.fail(f"Error occurred: {e}")
+    except litellm.APIError as e:
+        print(e)
 
 
 @pytest.mark.asyncio
@@ -4520,3 +4537,82 @@ def test_humanloop_completion(monkeypatch):
         prompt_variables={"person": "John"},
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
+
+
+def test_deepseek_reasoning_content_completion():
+    try:
+        litellm.set_verbose = True
+        litellm._turn_on_debug()
+        resp = litellm.completion(
+            timeout=5,
+            model="deepseek/deepseek-reasoner",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+        )
+
+        assert resp.choices[0].message.reasoning_content is not None
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected_result",
+    [("anthropic", {"anthropic-beta": "test"}), ("bedrock", {}), ("vertex_ai", {})],
+)
+def test_provider_specific_header(custom_llm_provider, expected_result):
+    from litellm.types.utils import ProviderSpecificHeader
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from unittest.mock import patch
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            resp = litellm.completion(
+                model="anthropic/claude-3-5-sonnet-v2@20241022",
+                messages=[{"role": "user", "content": "Hello world"}],
+                provider_specific_header=ProviderSpecificHeader(
+                    custom_llm_provider="anthropic",
+                    extra_headers={"anthropic-beta": "test"},
+                ),
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["headers"])
+        assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]
+
+
+@pytest.mark.parametrize(
+    "enable_preview_features",
+    [True, False],
+)
+def test_completion_openai_metadata(monkeypatch, enable_preview_features):
+    from openai import OpenAI
+
+    client = OpenAI()
+
+    litellm.set_verbose = True
+
+    monkeypatch.setattr(litellm, "enable_preview_features", enable_preview_features)
+    with patch.object(
+        client.chat.completions.with_raw_response, "create", return_value=MagicMock()
+    ) as mock_completion:
+        try:
+            resp = litellm.completion(
+                model="openai/gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                metadata={"my-test-key": "my-test-value"},
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_completion.assert_called_once()
+        if enable_preview_features:
+            assert mock_completion.call_args.kwargs["metadata"] == {
+                "my-test-key": "my-test-value"
+            }
+        else:
+            assert "metadata" not in mock_completion.call_args.kwargs

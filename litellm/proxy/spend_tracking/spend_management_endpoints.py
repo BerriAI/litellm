@@ -1608,6 +1608,153 @@ async def calculate_spend(request: SpendCalculateRequest):
 
 
 @router.get(
+    "/spend/logs/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_spend_logs(  # noqa: PLR0915
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on api key",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on user_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="request_id to get spend logs for specific request_id",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter spend logs by team_id",
+    ),
+    min_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend greater than or equal to this value",
+    ),
+    max_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend less than or equal to this value",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Number of items per page", ge=1, le=100
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    View spend logs for UI with pagination support
+
+    Returns:
+        {
+            "data": List[LiteLLM_SpendLogs],  # Paginated spend logs
+            "total": int,                      # Total number of records
+            "page": int,                       # Current page number
+            "page_size": int,                  # Number of items per page
+            "total_pages": int                 # Total number of pages
+        }
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Convert the date strings to datetime objects
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+
+        # Convert to ISO format strings for Prisma
+        start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+        end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+
+        # Build where conditions
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
+
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
+
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if min_spend is not None or max_spend is not None:
+            where_conditions["spend"] = {}
+            if min_spend is not None:
+                where_conditions["spend"]["gte"] = min_spend
+            if max_spend is not None:
+                where_conditions["spend"]["lte"] = max_spend
+        # Calculate skip value for pagination
+        skip = (page - 1) * page_size
+
+        # Get total count of records
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions,
+        )
+
+        # Get paginated data
+        data = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions,
+            order={
+                "startTime": "desc",
+            },
+            skip=skip,
+            take=page_size,
+        )
+
+        # Calculate total pages
+        total_pages = (total_records + page_size - 1) // page_size
+
+        verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
+
+        return {
+            "data": data,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
     "/spend/logs",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
