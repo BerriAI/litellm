@@ -54,7 +54,6 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     GenericStreamingChunk,
-    LiteLLMChatCompletionTokenLogprob,
     PromptTokensDetailsWrapper,
     TopLogprob,
     Usage,
@@ -491,7 +490,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return None
         if "chosenCandidates" not in logprobs_result:
             return None
-        logprobs_list: List[LiteLLMChatCompletionTokenLogprob] = []
+        logprobs_list: List[ChatCompletionTokenLogprob] = []
         for index, candidate in enumerate(logprobs_result["chosenCandidates"]):
             top_logprobs: List[TopLogprob] = []
             if "topCandidates" in logprobs_result and index < len(
@@ -508,7 +507,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         )
                     )
             logprobs_list.append(
-                LiteLLMChatCompletionTokenLogprob(
+                ChatCompletionTokenLogprob(
                     token=candidate["token"],
                     logprob=candidate["logProbability"],
                     top_logprobs=top_logprobs,

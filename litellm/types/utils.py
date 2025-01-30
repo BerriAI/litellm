@@ -259,8 +259,6 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     returned.
     """
 
-
-class LiteLLMChatCompletionTokenLogprob(ChatCompletionTokenLogprob):
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -275,7 +273,7 @@ class LiteLLMChatCompletionTokenLogprob(ChatCompletionTokenLogprob):
 
 
 class ChoiceLogprobs(OpenAIObject):
-    content: Optional[List[LiteLLMChatCompletionTokenLogprob]] = None
+    content: Optional[List[ChatCompletionTokenLogprob]] = None
     """A list of message content tokens with log probability information."""
 
     def __contains__(self, key):
