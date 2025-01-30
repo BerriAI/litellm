@@ -14,6 +14,11 @@ DEFAULT_IMAGE_TOKEN_COUNT = 250
 DEFAULT_IMAGE_WIDTH = 300
 DEFAULT_IMAGE_HEIGHT = 300
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = 1000  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+#### RELIABILITY ####
+REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
+#### Networking settings ####
+request_timeout: float = 6000  # time in seconds
+
 LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
@@ -312,6 +317,22 @@ baseten_models: List = [
     "q841o8w",
     "31dxrj3",
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
+
+
+open_ai_embedding_models: List = ["text-embedding-ada-002"]
+cohere_embedding_models: List = [
+    "embed-english-v3.0",
+    "embed-english-light-v3.0",
+    "embed-multilingual-v3.0",
+    "embed-english-v2.0",
+    "embed-english-light-v2.0",
+    "embed-multilingual-v2.0",
+]
+bedrock_embedding_models: List = [
+    "amazon.titan-embed-text-v1",
+    "cohere.embed-english-v3",
+    "cohere.embed-multilingual-v3",
+]
 
 
 OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null"]

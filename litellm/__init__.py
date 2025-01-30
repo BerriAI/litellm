@@ -47,6 +47,11 @@ from litellm.constants import (
     empower_models,
     together_ai_models,
     baseten_models,
+    REPEATED_STREAMING_CHUNK_LIMIT,
+    request_timeout,
+    open_ai_embedding_models,
+    cohere_embedding_models,
+    bedrock_embedding_models,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -266,11 +271,8 @@ disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 #### REQUEST PRIORITIZATION ####
 priority_reservation: Optional[Dict[str, float]] = None
-#### RELIABILITY ####
-REPEATED_STREAMING_CHUNK_LIMIT = 100  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 
-#### Networking settings ####
-request_timeout: float = 6000  # time in seconds
+
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
@@ -300,39 +302,7 @@ _key_management_settings: KeyManagementSettings = KeyManagementSettings()
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-
-
-def get_model_cost_map(url: str):
-    if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == True
-        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
-    ):
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
-
-    try:
-        response = httpx.get(
-            url, timeout=5
-        )  # set a 5 second timeout for the get request
-        response.raise_for_status()  # Raise an exception if the request is unsuccessful
-        content = response.json()
-        return content
-    except Exception:
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
-
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict: Dict[str, dict] = {}
@@ -734,20 +704,6 @@ longer_context_model_fallback_dict: dict = {
 }
 
 ####### EMBEDDING MODELS ###################
-open_ai_embedding_models: List = ["text-embedding-ada-002"]
-cohere_embedding_models: List = [
-    "embed-english-v3.0",
-    "embed-english-light-v3.0",
-    "embed-multilingual-v3.0",
-    "embed-english-v2.0",
-    "embed-english-light-v2.0",
-    "embed-multilingual-v2.0",
-]
-bedrock_embedding_models: List = [
-    "amazon.titan-embed-text-v1",
-    "cohere.embed-english-v3",
-    "cohere.embed-multilingual-v3",
-]
 
 all_embedding_models = (
     open_ai_embedding_models
