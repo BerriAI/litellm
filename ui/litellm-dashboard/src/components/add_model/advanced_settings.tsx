@@ -55,16 +55,26 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 label="Use in pass through routes"
                 name="use_in_pass_through"
                 valuePropName="checked"
-                className="mb-4"
-                tooltip="Enable this model for pass through routes"
+                className="mb-4 mt-4"
+                tooltip={
+                  <span>
+                    Allow using these credentials in pass through routes.{" "}
+                    <Link href="https://docs.litellm.ai/docs/pass_through/vertex_ai" target="_blank">
+                      Learn more
+                    </Link>
+                  </span>
+                }
               >
-                <Switch onChange={handlePassThroughChange} />
+                <Switch 
+                  onChange={handlePassThroughChange} 
+                  className="bg-gray-600" 
+                />
               </Form.Item>
               <Form.Item
                 label="LiteLLM Params"
                 name="litellm_extra_params"
                 tooltip="Optional litellm params used for making a litellm.completion() call."
-                className="mb-4"
+                className="mb-4 mt-4"
               >
                 <TextArea
                   rows={4}
