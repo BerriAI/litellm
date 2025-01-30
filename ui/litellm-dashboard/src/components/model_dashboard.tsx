@@ -19,6 +19,7 @@ import {
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
+import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
 import {
   TabPanel,
   TabPanels,
@@ -1193,7 +1194,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
       .validateFields()
       .then((values) => {
-        handleSubmit(values, accessToken, form);
+        handleAddModelSubmit(values, accessToken, form);
         // form.resetFields();
       })
       .catch((error) => {

@@ -3,7 +3,7 @@ import { provider_map } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
 
 
-export const handleSubmit = async (
+export const handleAddModelSubmit = async (
     formValues: Record<string, any>,
     accessToken: string,
     form: any
