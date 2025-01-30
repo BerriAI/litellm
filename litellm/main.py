@@ -2470,7 +2470,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or optional_params.pop("api_base", None)
                 or optional_params.pop("base_url", None)
                 or litellm.api_base
-                or "https://codestral.mistral.ai/v1/fim/completions"
+                or "https://api.mistral.ai/v1/fim/completions"
             )
 
             api_key = api_key or litellm.api_key or get_secret("CODESTRAL_API_KEY")
