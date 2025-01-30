@@ -2506,3 +2506,26 @@ async def test_bedrock_document_understanding(image_url):
     )
     assert response is not None
     assert response.choices[0].message.content != ""
+
+
+def test_bedrock_custom_proxy():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+                messages=[{"content": "Tell me a joke", "role": "user"}],
+                api_key="Bearer Token",
+                client=client,
+                aws_bedrock_runtime_endpoint="https://some-api-url/models",
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://some-api-url/models/claude-3-5-sonnet-20241022/chat/completions"
+        )

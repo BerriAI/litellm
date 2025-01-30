@@ -429,14 +429,6 @@ class AmazonConverseConfig:
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
         ## TRANSFORMATION ##
-        # bedrock_messages: List[MessageBlock] = await asyncify(
-        #     _bedrock_converse_messages_pt
-        # )(
-        #     messages=messages,
-        #     model=model,
-        #     llm_provider="bedrock_converse",
-        #     user_continue_message=litellm_params.pop("user_continue_message", None),
-        # )
 
         bedrock_messages = (
             await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
