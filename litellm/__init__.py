@@ -483,6 +483,7 @@ azure_models: List = []
 azure_text_models: List = []
 anyscale_models: List = []
 cerebras_models: List = []
+nvidia_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
 
@@ -630,6 +631,8 @@ def add_known_models():
             anyscale_models.append(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.append(key)
+        elif value.get("litellm_provider") == "nvidia":
+            nvidia_models.append(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova_models":
@@ -661,6 +664,7 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "groq",
+    "nvidia",
     "nvidia_nim",
     "cerebras",
     "sambanova",
@@ -899,7 +903,74 @@ model_list = (
     + galadriel_models
     + sambanova_models
     + azure_text_models
+    + nvidia_models
 )
+
+
+class LlmProviders(str, Enum):
+    OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"  # embedding only
+    JINA_AI = "jina_ai"
+    XAI = "xai"
+    CUSTOM_OPENAI = "custom_openai"
+    TEXT_COMPLETION_OPENAI = "text-completion-openai"
+    COHERE = "cohere"
+    COHERE_CHAT = "cohere_chat"
+    CLARIFAI = "clarifai"
+    ANTHROPIC = "anthropic"
+    REPLICATE = "replicate"
+    HUGGINGFACE = "huggingface"
+    TOGETHER_AI = "together_ai"
+    OPENROUTER = "openrouter"
+    VERTEX_AI = "vertex_ai"
+    VERTEX_AI_BETA = "vertex_ai_beta"
+    PALM = "palm"
+    GEMINI = "gemini"
+    AI21 = "ai21"
+    BASETEN = "baseten"
+    AZURE = "azure"
+    AZURE_TEXT = "azure_text"
+    AZURE_AI = "azure_ai"
+    SAGEMAKER = "sagemaker"
+    SAGEMAKER_CHAT = "sagemaker_chat"
+    BEDROCK = "bedrock"
+    VLLM = "vllm"
+    NLP_CLOUD = "nlp_cloud"
+    PETALS = "petals"
+    OOBABOOGA = "oobabooga"
+    OLLAMA = "ollama"
+    OLLAMA_CHAT = "ollama_chat"
+    DEEPINFRA = "deepinfra"
+    PERPLEXITY = "perplexity"
+    ANYSCALE = "anyscale"
+    MISTRAL = "mistral"
+    GROQ = "groq"
+    NVIDIA = "nvidia"
+    NVIDIA_NIM = "nvidia_nim"
+    CEREBRAS = "cerebras"
+    AI21_CHAT = "ai21_chat"
+    VOLCENGINE = "volcengine"
+    CODESTRAL = "codestral"
+    TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DEEPSEEK = "deepseek"
+    SAMBANOVA = "sambanova"
+    MARITALK = "maritalk"
+    VOYAGE = "voyage"
+    CLOUDFLARE = "cloudflare"
+    XINFERENCE = "xinference"
+    FIREWORKS_AI = "fireworks_ai"
+    FRIENDLIAI = "friendliai"
+    WATSONX = "watsonx"
+    WATSONX_TEXT = "watsonx_text"
+    TRITON = "triton"
+    PREDIBASE = "predibase"
+    DATABRICKS = "databricks"
+    EMPOWER = "empower"
+    GITHUB = "github"
+    CUSTOM = "custom"
+    LITELLM_PROXY = "litellm_proxy"
+    HOSTED_VLLM = "hosted_vllm"
+    LM_STUDIO = "lm_studio"
 
 model_list_set = set(model_list)
 
@@ -950,6 +1021,7 @@ models_by_provider: dict = {
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
+    "nvidia": nvidia_models,
     "galadriel": galadriel_models,
     "sambanova": sambanova_models,
 }
@@ -1184,11 +1256,11 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 
-from .llms.nvidia_nim.chat import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+from .llms.nvidia.chat import NvidiaConfig
+from .llms.nvidia.embed import NvidiaEmbeddingConfig
 
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+nvidiaConfig = NvidiaConfig()
+nvidiaEmbeddingConfig = NvidiaEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig

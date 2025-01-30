@@ -13,7 +13,7 @@ https://docs.api.nvidia.com/nim/reference/
 ## API Key
 ```python
 # env variable
-os.environ['NVIDIA_NIM_API_KEY']
+os.environ['NVIDIA_API_KEY']
 ```
 
 ## Sample Usage
@@ -21,7 +21,7 @@ os.environ['NVIDIA_NIM_API_KEY']
 from litellm import completion
 import os
 
-os.environ['NVIDIA_NIM_API_KEY'] = ""
+os.environ['NVIDIA_API_KEY'] = ""
 response = completion(
     model="nvidia_nim/meta/llama3-70b-instruct",
     messages=[
@@ -45,7 +45,7 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['NVIDIA_NIM_API_KEY'] = ""
+os.environ['NVIDIA_API_KEY'] = ""
 response = completion(
     model="nvidia_nim/meta/llama3-70b-instruct",
     messages=[
