@@ -4,6 +4,15 @@ import TabItem from '@theme/TabItem';
 # AWS Bedrock
 ALL Bedrock models (Anthropic, Meta, Mistral, Amazon, etc.) are Supported
 
+| Property | Details |
+|-------|-------|
+| Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy) |
+| Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
+| Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
+
+
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
 pip install boto3>=1.28.57
@@ -792,6 +801,16 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 LiteLLM supports Document Understanding for Bedrock models - [AWS Bedrock Docs](https://docs.aws.amazon.com/nova/latest/userguide/modalities-document.html).
 
+:::info
+
+LiteLLM supports ALL Bedrock document types - 
+
+E.g.: "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+
+You can also pass these as either `image_url` or `base64`
+
+:::
+
 ### url 
 
 <Tabs>
@@ -1191,7 +1210,72 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
+## Calling via Internal Proxy
 
+Use the `bedrock/converse_like/model` endpoint to call bedrock converse model via your internal proxy.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/converse_like/some-model",
+    messages=[{"role": "user", "content": "What's AWS?"}],
+    api_key="sk-1234",
+    api_base="https://some-api-url/models",
+    extra_headers={"test": "hello world"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      litellm_params:
+        model: bedrock/converse_like/some-model
+        api_base: https://some-api-url/models
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "anthropic-claude",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      { "content": "Hello, how are you?", "role": "user" }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Output URL**
+
+```bash
+https://some-api-url/models
+```
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
@@ -1406,3 +1490,5 @@ curl http://0.0.0.0:4000/rerank \
 
 </TabItem>
 </Tabs>
+
+

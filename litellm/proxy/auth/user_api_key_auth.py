@@ -25,6 +25,7 @@ from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _handle_failed_db_connection_for_get_key_object,
     _virtual_key_max_budget_check,
+    _virtual_key_soft_budget_check,
     allowed_routes_check,
     can_key_call_model,
     common_checks,
@@ -32,6 +33,7 @@ from litellm.proxy.auth.auth_checks import (
     get_end_user_object,
     get_key_object,
     get_org_object,
+    get_role_based_models,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -280,9 +282,34 @@ def get_rbac_role(jwt_handler: JWTHandler, scopes: List[str]) -> str:
         return LitellmUserRoles.TEAM
 
 
+def can_rbac_role_call_model(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+    model: Optional[str],
+) -> Literal[True]:
+    """
+    Checks if user is allowed to access the model, based on their role.
+    """
+    role_based_models = get_role_based_models(
+        rbac_role=rbac_role, general_settings=general_settings
+    )
+    if role_based_models is None or model is None:
+        return True
+
+    if model not in role_based_models:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+        )
+
+    return True
+
+
 async def _jwt_auth_user_api_key_auth_builder(
     api_key: str,
     jwt_handler: JWTHandler,
+    request_data: dict,
+    general_settings: dict,
     route: str,
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
@@ -294,14 +321,20 @@ async def _jwt_auth_user_api_key_auth_builder(
     jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
     # check if unmatched token and enforce_rbac is true
-    if (
-        jwt_handler.litellm_jwtauth.enforce_rbac is True
-        and jwt_handler.get_rbac_role(token=jwt_valid_token) is None
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Unmatched token passed in. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user. See how to set roles in config here: https://docs.litellm.ai/docs/proxy/token_auth#advanced---spend-tracking-end-users--internal-users--team--org",
-        )
+    if jwt_handler.litellm_jwtauth.enforce_rbac is True:
+        rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
+        if rbac_role is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Unmatched token passed in. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user. See how to set roles in config here: https://docs.litellm.ai/docs/proxy/token_auth#advanced---spend-tracking-end-users--internal-users--team--org",
+            )
+        else:
+            # run rbac validation checks
+            can_rbac_role_call_model(
+                rbac_role=rbac_role,
+                general_settings=general_settings,
+                model=request_data.get("model"),
+            )
     # get scopes
     scopes = jwt_handler.get_scopes(token=jwt_valid_token)
 
@@ -430,18 +463,18 @@ async def _jwt_auth_user_api_key_auth_builder(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    return {
-        "is_proxy_admin": False,
-        "team_id": team_id,
-        "team_object": team_object,
-        "user_id": user_id,
-        "user_object": user_object,
-        "org_id": org_id,
-        "org_object": org_object,
-        "end_user_id": end_user_id,
-        "end_user_object": end_user_object,
-        "token": api_key,
-    }
+    return JWTAuthBuilderResult(
+        is_proxy_admin=False,
+        team_id=team_id,
+        team_object=team_object,
+        user_id=user_id,
+        user_object=user_object,
+        org_id=org_id,
+        org_object=org_object,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+        token=api_key,
+    )
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915
@@ -580,6 +613,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
                 result = await _jwt_auth_user_api_key_auth_builder(
+                    request_data=request_data,
+                    general_settings=general_settings,
                     api_key=api_key,
                     jwt_handler=jwt_handler,
                     route=route,
@@ -613,7 +648,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         parent_otel_span=parent_otel_span,
                     )
                 # run through common checks
-                _ = common_checks(
+                _ = await common_checks(
                     request_body=request_data,
                     team_object=team_object,
                     user_object=user_object,
@@ -622,6 +657,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     global_proxy_spend=global_proxy_spend,
                     route=route,
                     llm_router=llm_router,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=None,
                 )
 
                 # return UserAPIKeyAuth object
@@ -1099,30 +1136,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 user_obj=user_obj,
             )
 
-            if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
-                verbose_proxy_logger.debug(
-                    "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
-                    valid_token.token,
-                    valid_token.spend,
-                    valid_token.soft_budget,
-                )
-                call_info = CallInfo(
-                    token=valid_token.token,
-                    spend=valid_token.spend,
-                    max_budget=valid_token.max_budget,
-                    soft_budget=valid_token.soft_budget,
-                    user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    team_alias=valid_token.team_alias,
-                    user_email=None,
-                    key_alias=valid_token.key_alias,
-                )
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="soft_budget",
-                        user_info=call_info,
-                    )
-                )
+            # Check 5. Soft Budget Check
+            await _virtual_key_soft_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
             # Check 5. Token Model Spend is under Model budget
             max_budget_per_model = valid_token.model_max_budget
@@ -1141,35 +1159,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_dict=valid_token,
                     model=current_model,
                 )
-            # Check 6. Team spend is under Team budget
-            if (
-                hasattr(valid_token, "team_spend")
-                and valid_token.team_spend is not None
-                and hasattr(valid_token, "team_max_budget")
-                and valid_token.team_max_budget is not None
-            ):
-                call_info = CallInfo(
-                    token=valid_token.token,
-                    spend=valid_token.team_spend,
-                    max_budget=valid_token.team_max_budget,
-                    user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    team_alias=valid_token.team_alias,
-                )
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="team_budget",
-                        user_info=call_info,
-                    )
-                )
 
-                if valid_token.team_spend >= valid_token.team_max_budget:
-                    raise litellm.BudgetExceededError(
-                        current_cost=valid_token.team_spend,
-                        max_budget=valid_token.team_max_budget,
-                    )
-
-            # Check 8: Additional Common Checks across jwt + key auth
+            # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
                     team_id=valid_token.team_id,
@@ -1184,7 +1175,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             else:
                 _team_obj = None
 
-            # Check 9: Check if key is a service account key
+            # Check 7: Check if key is a service account key
             await service_account_checks(
                 valid_token=valid_token,
                 request_data=request_data,
@@ -1228,7 +1219,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             user_info=call_info,
                         )
                     )
-            _ = common_checks(
+            _ = await common_checks(
                 request_body=request_data,
                 team_object=_team_obj,
                 user_object=user_obj,
@@ -1237,6 +1228,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 global_proxy_spend=global_proxy_spend,
                 route=route,
                 llm_router=llm_router,
+                proxy_logging_obj=proxy_logging_obj,
+                valid_token=valid_token,
             )
             # Token passed all checks
             if valid_token is None:

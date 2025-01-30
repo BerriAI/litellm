@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailInfoResponse, ListGuardrailsResponse
 
@@ -40,7 +39,6 @@ def _get_guardrails_list_response(
 )
 async def list_guardrails():
     """
-    ✨ Enterprise Feature
     List the guardrails that are available on the proxy server
 
     👉 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
@@ -74,15 +72,7 @@ async def list_guardrails():
     }
     ```
     """
-    from litellm.proxy.proxy_server import premium_user, proxy_config
-
-    if not premium_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": CommonProxyErrors.not_premium_user.value,
-            },
-        )
+    from litellm.proxy.proxy_server import proxy_config
 
     config = proxy_config.config
 

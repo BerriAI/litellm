@@ -17,8 +17,10 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    ProviderSpecificHeader,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
@@ -180,6 +182,31 @@ def clean_headers(
 
 class LiteLLMProxyRequestSetup:
     @staticmethod
+    def _get_timeout_from_request(headers: dict) -> Optional[float]:
+        """
+        Workaround for client request from Vercel's AI SDK.
+
+        Allow's user to set a timeout in the request headers.
+
+        Example:
+
+        ```js
+        const openaiProvider = createOpenAI({
+            baseURL: liteLLM.baseURL,
+            apiKey: liteLLM.apiKey,
+            compatibility: "compatible",
+            headers: {
+                "x-litellm-timeout": "90"
+            },
+        });
+        ```
+        """
+        timeout_header = headers.get("x-litellm-timeout", None)
+        if timeout_header is not None:
+            return float(timeout_header)
+        return None
+
+    @staticmethod
     def _get_forwardable_headers(
         headers: Union[Headers, dict],
     ):
@@ -265,6 +292,11 @@ class LiteLLMProxyRequestSetup:
         )
         if _organization is not None:
             data["organization"] = _organization
+
+        timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+        if timeout is not None:
+            data["timeout"] = timeout
+
         return data
 
     @staticmethod
@@ -396,6 +428,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         dict: The modified data dictionary.
 
     """
+
     from litellm.proxy.proxy_server import llm_router, premium_user
 
     safe_add_api_version_from_query_params(data, request)
@@ -626,6 +659,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
     )
+
     return data
 
 
@@ -687,32 +721,54 @@ def _enforced_params_check(
     return True
 
 
+def _add_guardrails_from_key_or_team_metadata(
+    key_metadata: Optional[dict],
+    team_metadata: Optional[dict],
+    data: dict,
+    metadata_variable_name: str,
+) -> None:
+    """
+    Helper add guardrails from key or team metadata to request data
+
+    Args:
+        key_metadata: The key metadata dictionary to check for guardrails
+        team_metadata: The team metadata dictionary to check for guardrails
+        data: The request data to update
+        metadata_variable_name: The name of the metadata field in data
+
+    """
+    from litellm.proxy.utils import _premium_user_check
+
+    for _management_object_metadata in [key_metadata, team_metadata]:
+        if _management_object_metadata and "guardrails" in _management_object_metadata:
+            if len(_management_object_metadata["guardrails"]) > 0:
+                _premium_user_check()
+
+            data[metadata_variable_name]["guardrails"] = _management_object_metadata[
+                "guardrails"
+            ]
+
+
 def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ):
     """
-    Heper to add guardrails from request to metadata
+    Helper to add guardrails from request to metadata
 
     - If guardrails set on API Key metadata then sets guardrails on request metadata
     - If guardrails not set on API key, then checks request metadata
-
     """
-    if user_api_key_dict.metadata:
-        if "guardrails" in user_api_key_dict.metadata:
-            from litellm.proxy.proxy_server import premium_user
+    # Check key-level guardrails
+    _add_guardrails_from_key_or_team_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
+    )
 
-            if premium_user is not True:
-                raise ValueError(
-                    f"Using Guardrails on API Key {CommonProxyErrors.not_premium_user}"
-                )
-
-            data[_metadata_variable_name]["guardrails"] = user_api_key_dict.metadata[
-                "guardrails"
-            ]
-            return
-
+    # Check request-level guardrails
     if "guardrails" in data:
         data[_metadata_variable_name]["guardrails"] = data["guardrails"]
         del data["guardrails"]
@@ -726,23 +782,20 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
-    ANTHROPIC_API_HEADERS = [
-        "anthropic-version",
-        "anthropic-beta",
-    ]
-
-    extra_headers = data.get("extra_headers", {}) or {}
-
+    anthropic_headers = {}
     # boolean to indicate if a header was added
     added_header = False
     for header in ANTHROPIC_API_HEADERS:
         if header in headers:
             header_value = headers[header]
-            extra_headers.update({header: header_value})
+            anthropic_headers[header] = header_value
             added_header = True
 
     if added_header is True:
-        data["extra_headers"] = extra_headers
+        data["provider_specific_header"] = ProviderSpecificHeader(
+            custom_llm_provider="anthropic",
+            extra_headers=anthropic_headers,
+        )
 
     return
 

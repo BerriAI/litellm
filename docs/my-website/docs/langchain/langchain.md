@@ -111,6 +111,30 @@ chat.invoke(messages)
 </TabItem>
 </Tabs>
 
+## Use Langchain ChatLiteLLM with MLflow
+
+MLflow provides open-source observability solution for ChatLiteLLM.
+
+To enable the integration, simply call `mlflow.litellm.autolog()` before in your code. No other setup is necessary.
+
+```python
+import mlflow
+
+mlflow.litellm.autolog()
+```
+
+Once the auto-tracing is enabled, you can invoke `ChatLiteLLM` and see recorded traces in MLflow.
+
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+
+os.environ['OPENAI_API_KEY']="sk-..."
+
+chat = ChatLiteLLM(model="gpt-4o-mini")
+chat.invoke("Hi!")
+```
+
 ## Use Langchain ChatLiteLLM with Lunary
 ```python
 import os

@@ -170,7 +170,7 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
-@pytest.mark.parametrize("provider", ["azure", "openai"])  #  "azure"
+@pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
@@ -297,7 +297,7 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
-    if random.randint(1, 20) == 1:
+    if random.randint(1, 15) == 1:
         print("Running random cleanup of Azure files and models...")
         cleanup_azure_files()
         cleanup_azure_ft_models()

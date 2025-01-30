@@ -206,15 +206,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            
+            setKeys(response["keys"]); // Assuming this is the correct path to your data
             const teamsArray = [...response["teams"]];
             if (teamsArray.length > 0) {
               console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
               setSelectedTeam(teamsArray[0]);
-              setKeys(teamsArray[0]["keys"]); // Assuming this is the correct path to your data
             } else {
               setSelectedTeam(defaultTeam);
-              setKeys(response["keys"]); // Assuming this is the correct path to your data
+              
             }
             sessionStorage.setItem(
               "userData" + userID,
