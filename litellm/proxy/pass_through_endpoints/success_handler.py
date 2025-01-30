@@ -1,22 +1,11 @@
 import json
-import re
-import threading
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional
 
 import httpx
 
-import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
-)
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexLLM,
-)
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import StandardPassThroughResponseObject
 from litellm.utils import executor as thread_pool_executor
 
@@ -96,12 +85,11 @@ class PassThroughEndpointLogging:
             )
         thread_pool_executor.submit(
             logging_obj.success_handler,
-            args=(
-                standard_logging_response_object,
-                start_time,
-                end_time,
-                cache_hit,
-            ),
+            standard_logging_response_object,  # Positional argument 1
+            start_time,  # Positional argument 2
+            end_time,  # Positional argument 3
+            cache_hit,  # Positional argument 4
+            **kwargs,  # Unpacked keyword arguments
         )
 
         await logging_obj.async_success_handler(

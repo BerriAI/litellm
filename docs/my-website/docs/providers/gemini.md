@@ -10,7 +10,8 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `gemini/` |
 | Provider Doc | [Google AI Studio ↗](https://ai.google.dev/aistudio) |
 | API Endpoint for Provider | https://generativelanguage.googleapis.com |
-| Supported Endpoints | `/chat/completions`, `/embeddings` |
+| Supported OpenAI Endpoints | `/chat/completions`, [`/embeddings`](../embedding/supported_embedding#gemini-ai-embedding-models), `/completions` |
+| Pass-through Endpoint | [Supported](../pass_through/google_ai_studio.md) |
 
 <br />
 
@@ -116,7 +117,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -187,7 +188,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -337,7 +338,7 @@ $ litellm --config /path/to/config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gemini-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
@@ -552,175 +553,6 @@ content = response.get('choices', [{}])[0].get('message', {}).get('content')
 print(content)
 ```
 
-## Context Caching
-
-Use Google AI Studio context caching is supported by
-
-```bash
-{
-    ...,
-    "cache_control": {"type": "ephemeral"}
-}
-```
-
-in your message content block.
-
-:::note
-
-Gemini Context Caching only allows 1 block of continuous messages to be cached. 
-
-The raw request to Gemini looks like this: 
-```bash
-curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=$GOOGLE_API_KEY" \
--H 'Content-Type: application/json' \
--d '{
-      "contents": [
-        {
-          "parts":[{
-            "text": "Please summarize this transcript"
-          }],
-          "role": "user"
-        },
-      ],
-      "cachedContent": "'$CACHE_NAME'"
-    }'
-
-```
-
-:::
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion 
-
-for _ in range(2): 
-    resp = completion(
-        model="gemini/gemini-1.5-pro",
-        messages=[
-        # System Message
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Here is the full text of a complex legal agreement" * 4000,
-                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
-                    }
-                ],
-            },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "What are the key terms and conditions in this agreement?",
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-            }]
-    )
-
-    print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-    - model_name: gemini-1.5-pro
-      litellm_params:
-        model: gemini/gemini-1.5-pro
-        api_key: os.environ/GEMINI_API_KEY
-```
-
-2. Start proxy 
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it! 
-
-[**See Langchain, OpenAI JS, Llamaindex, etc. examples**](../proxy/user_keys.md#request-format)
-
-<Tabs>
-<TabItem value="curl" label="Curl">
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gemini-1.5-pro",
-    "messages": [
-        # System Message
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Here is the full text of a complex legal agreement" * 4000,
-                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
-                    }
-                ],
-            },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "What are the key terms and conditions in this agreement?",
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-            }],
-}'
-```
-</TabItem>
-<TabItem value="openai-python" label="OpenAI Python SDK">
-
-```python 
-import openai
-client = openai.AsyncOpenAI(
-    api_key="anything",            # litellm proxy api key
-    base_url="http://0.0.0.0:4000" # litellm proxy base url
-)
-
-
-response = await client.chat.completions.create(
-    model="gemini-1.5-pro",
-    messages=[
-        {
-            "role": "system",
-            "content": [
-                    {
-                        "type": "text",
-                        "text": "Here is the full text of a complex legal agreement" * 4000,
-                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
-                    }
-            ],
-        },
-        {
-            "role": "user",
-            "content": "what are the key terms and conditions in this agreement?",
-        },
-    ]
-)
-
-```
-
-</TabItem>
-</Tabs>
-
-</TabItem>
-</Tabs>
-
 ## Usage - PDF / Videos / etc. Files
 
 ### Inline Data (e.g. audio stream)
@@ -857,3 +689,191 @@ response = litellm.completion(
 | gemini-pro            | `completion(model='gemini/gemini-pro', messages)`            | `os.environ['GEMINI_API_KEY']` |
 | gemini-1.5-pro-latest | `completion(model='gemini/gemini-1.5-pro-latest', messages)` | `os.environ['GEMINI_API_KEY']` |
 | gemini-pro-vision     | `completion(model='gemini/gemini-pro-vision', messages)`     | `os.environ['GEMINI_API_KEY']` |
+
+
+
+## Context Caching
+
+Use Google AI Studio context caching is supported by
+
+```bash
+{
+    {
+        "role": "system",
+        "content": ...,
+        "cache_control": {"type": "ephemeral"} # 👈 KEY CHANGE
+    },
+    ...
+}
+```
+
+in your message content block.
+
+### Architecture Diagram
+
+<Image img={require('../../img/gemini_context_caching.png')} />
+
+
+
+**Notes:**
+
+- [Relevant code](https://github.com/BerriAI/litellm/blob/main/litellm/llms/vertex_ai/context_caching/vertex_ai_context_caching.py#L255)
+
+- Gemini Context Caching only allows 1 block of continuous messages to be cached. 
+
+- If multiple non-continuous blocks contain `cache_control` - the first continuous block will be used. (sent to `/cachedContent` in the [Gemini format](https://ai.google.dev/api/caching#cache_create-SHELL))
+
+
+- The raw request to Gemini's `/generateContent` endpoint looks like this: 
+
+```bash
+curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=$GOOGLE_API_KEY" \
+-H 'Content-Type: application/json' \
+-d '{
+      "contents": [
+        {
+          "parts":[{
+            "text": "Please summarize this transcript"
+          }],
+          "role": "user"
+        },
+      ],
+      "cachedContent": "'$CACHE_NAME'"
+    }'
+
+```
+
+
+### Example Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+
+for _ in range(2): 
+    resp = completion(
+        model="gemini/gemini-1.5-pro",
+        messages=[
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }]
+    )
+
+    print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: gemini-1.5-pro
+      litellm_params:
+        model: gemini/gemini-1.5-pro
+        api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+[**See Langchain, OpenAI JS, Llamaindex, etc. examples**](../proxy/user_keys.md#request-format)
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gemini-1.5-pro",
+    "messages": [
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }],
+}'
+```
+</TabItem>
+<TabItem value="openai-python" label="OpenAI Python SDK">
+
+```python 
+import openai
+client = openai.AsyncOpenAI(
+    api_key="anything",            # litellm proxy api key
+    base_url="http://0.0.0.0:4000" # litellm proxy base url
+)
+
+
+response = await client.chat.completions.create(
+    model="gemini-1.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "what are the key terms and conditions in this agreement?",
+        },
+    ]
+)
+
+```
+
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>

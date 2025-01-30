@@ -1,12 +1,12 @@
 """
 Custom Logger that handles batching logic 
 
-Use this if you want your logs to be stored in memory and flushed periodically
+Use this if you want your logs to be stored in memory and flushed periodically.
 """
 
 import asyncio
 import time
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 import litellm
 from litellm._logging import verbose_logger

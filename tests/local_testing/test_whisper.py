@@ -115,3 +115,22 @@ async def test_transcription_caching():
     assert response_3.text != response_2.text
 
     litellm.cache = None
+
+
+@pytest.mark.asyncio
+async def test_whisper_log_pre_call():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from datetime import datetime
+    from unittest.mock import patch, MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    custom_logger = CustomLogger()
+
+    litellm.callbacks = [custom_logger]
+
+    with patch.object(custom_logger, "log_pre_api_call") as mock_log_pre_call:
+        await litellm.atranscription(
+            model="whisper-1",
+            file=audio_file,
+        )
+        mock_log_pre_call.assert_called_once()

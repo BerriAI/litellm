@@ -27,7 +27,7 @@ from respx import MockRouter
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.router import Router
 
 
@@ -74,6 +74,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
         created=int(datetime.now().timestamp()),
     )
     litellm.set_verbose = True
+
     mock_request = respx_mock.post(url__regex=r".*/chat/completions.*").mock(
         return_value=httpx.Response(200, json=obj.model_dump(mode="json"))
     )

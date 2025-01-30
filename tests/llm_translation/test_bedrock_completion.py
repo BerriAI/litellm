@@ -33,9 +33,10 @@ from litellm import (
 )
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import _bedrock_tools_pt
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 from base_llm_unit_tests import BaseLLMChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 # litellm.num_retries = 3
 litellm.cache = None
@@ -1262,7 +1263,9 @@ def test_bedrock_get_base_model(model, expected_base_model):
     assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
 
 
-from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+)
 
 
 def test_bedrock_converse_translation_tool_message():
@@ -1320,7 +1323,7 @@ def test_base_aws_llm_get_credentials():
 
     import boto3
 
-    from litellm.llms.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     start_time = time.time()
     session = boto3.Session(
@@ -1603,7 +1606,9 @@ def test_bedrock_completion_test_3():
     Check if content in tool result is formatted correctly
     """
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
-    from litellm.llms.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
 
     messages = [
         {
@@ -1625,7 +1630,7 @@ def test_bedrock_completion_test_3():
                 )
             ],
             function_call=None,
-        ),
+        ).model_dump(),
         {
             "tool_call_id": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
             "role": "tool",
@@ -1654,6 +1659,7 @@ def test_bedrock_completion_test_3():
     ]
 
 
+@pytest.mark.skip(reason="Skipping this test as Bedrock now supports this behavior.")
 @pytest.mark.parametrize("modify_params", [True, False])
 def test_bedrock_completion_test_4(modify_params):
     litellm.set_verbose = True
@@ -2030,13 +2036,34 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         assert "cachePoint" not in json.dumps(transformed_messages)
 
 
-class TestBedrockConverseChat(BaseLLMChatTest):
+@pytest.mark.parametrize(
+    "model, expected_supports_tool_call",
+    [
+        ("bedrock/us.amazon.nova-pro-v1:0", True),
+        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
+        ("bedrock/meta.llama3-1-8b-instruct:0", True),
+        ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/amazon.titan-embed-text-v1:0", False),
+    ],
+)
+def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
+    supported_openai_params = (
+        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    )
+    if expected_supports_tool_call:
+        assert "tools" in supported_openai_params
+    else:
+        assert "tools" not in supported_openai_params
+
+
+class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -2057,6 +2084,48 @@ class TestBedrockConverseChat(BaseLLMChatTest):
         """
         pass
 
+    def test_completion_cost(self):
+        """
+        Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
+        """
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        litellm.model_cost.pop(bedrock_model, None)
+        model = f"bedrock/{bedrock_model}"
+
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+        )
+        cost = completion_cost(response)
+
+        assert cost > 0
+
+
+class TestBedrockConverseChatNormal(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+    def test_multilingual_requests(self):
+        """
+        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
+
+        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
+        """
+        pass
+
 
 class TestBedrockRerank(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
@@ -2066,3 +2135,374 @@ class TestBedrockRerank(BaseLLMRerankTest):
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         }
+
+
+@pytest.mark.parametrize(
+    "messages, continue_message_index",
+    [
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": ""}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Hello!"}]},
+            ],
+            0,
+        ),
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+            ],
+            1,
+        ),
+    ],
+)
+def test_bedrock_empty_content_handling(messages, continue_message_index):
+    """
+    Test that empty content in messages is handled correctly with default messages
+    """
+    # Test with default behavior (modify_params=True)
+    litellm.modify_params = True
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+    print(formatted_messages)
+    # Verify assistant message with default text was inserted
+    assert formatted_messages[0]["role"] == "user"
+    assert formatted_messages[1]["role"] == "assistant"
+    assert (
+        formatted_messages[continue_message_index]["content"][0]["text"]
+        == "Please continue."
+    )
+
+
+def test_bedrock_custom_continue_message():
+    """
+    Test that custom continue messages are used when provided
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+    ]
+
+    custom_continue = {
+        "role": "assistant",
+        "content": [{"text": "Custom continue message", "type": "text"}],
+    }
+
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+        assistant_continue_message=custom_continue,
+    )
+
+    # Verify custom message was used
+    assert formatted_messages[1]["role"] == "assistant"
+    assert formatted_messages[1]["content"][0]["text"] == "Custom continue message"
+
+
+def test_bedrock_no_default_message():
+    """
+    Test that empty content is handled correctly when modify_params=False
+    """
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Hi again"},
+        {"role": "assistant", "content": "Valid response"},
+    ]
+
+    litellm.modify_params = False
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+
+    # Verify empty message is present and valid message remains
+    assistant_messages = [
+        msg for msg in formatted_messages if msg["role"] == "assistant"
+    ]
+    assert len(assistant_messages) == 2  # Both empty and valid messages present
+    assert assistant_messages[0]["content"][0]["text"] == ""  # First message is empty
+    assert (
+        assistant_messages[1]["content"][0]["text"] == "Valid response"
+    )  # Second message is valid
+
+
+@pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
+def test_bedrock_nova_topk(top_k_param):
+    litellm.set_verbose = True
+    data = {
+        "model": "bedrock/us.amazon.nova-pro-v1:0",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        top_k_param: 10,
+    }
+    original_transform = litellm.AmazonConverseConfig()._transform_request
+    captured_data = None
+
+    def mock_transform(*args, **kwargs):
+        nonlocal captured_data
+        result = original_transform(*args, **kwargs)
+        captured_data = result
+        return result
+
+    with patch(
+        "litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform
+    ):
+        litellm.completion(**data)
+
+        # Assert that additionalRequestParameters exists and contains topK
+        assert "additionalModelRequestFields" in captured_data
+        assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
+        assert (
+            captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"]
+            == 10
+        )
+
+
+def test_bedrock_cross_region_inference(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+
+    litellm.set_verbose = True
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="bedrock/us.meta.llama3-3-70b-instruct-v1:0",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1:0/converse"
+        )
+
+
+def test_bedrock_empty_content_real_call():
+    completion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "",
+                    },
+                    {"type": "text", "text": "Hey, how's it going?"},
+                ],
+            }
+        ],
+    )
+
+
+def test_bedrock_process_empty_text_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        process_empty_text_blocks,
+    )
+
+    message = {
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+        "assistant_continue_message": None,
+    }
+    modified_message = process_empty_text_blocks(**message)
+    assert modified_message["content"][0]["text"] == "Please continue."
+
+
+def test_nova_optional_params_tool_choice():
+    litellm.drop_params = True
+    litellm.set_verbose = True
+    litellm.completion(
+        messages=[
+            {"role": "user", "content": "A WWII competitive game for 4-8 players"}
+        ],
+        model="bedrock/us.amazon.nova-pro-v1:0",
+        temperature=0.3,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "GameDefinition",
+                    "description": "Correctly extracted `GameDefinition` with all the required parameters with correct types",
+                    "parameters": {
+                        "$defs": {
+                            "TurnDurationEnum": {
+                                "enum": ["action", "encounter", "battle", "operation"],
+                                "title": "TurnDurationEnum",
+                                "type": "string",
+                            }
+                        },
+                        "properties": {
+                            "id": {
+                                "anyOf": [{"type": "integer"}, {"type": "null"}],
+                                "default": None,
+                                "title": "Id",
+                            },
+                            "prompt": {"title": "Prompt", "type": "string"},
+                            "name": {"title": "Name", "type": "string"},
+                            "description": {"title": "Description", "type": "string"},
+                            "competitve": {"title": "Competitve", "type": "boolean"},
+                            "players_min": {"title": "Players Min", "type": "integer"},
+                            "players_max": {"title": "Players Max", "type": "integer"},
+                            "turn_duration": {
+                                "$ref": "#/$defs/TurnDurationEnum",
+                                "description": "how long the passing of a turn should represent for a game at this scale",
+                            },
+                        },
+                        "required": [
+                            "competitve",
+                            "description",
+                            "name",
+                            "players_max",
+                            "players_min",
+                            "prompt",
+                            "turn_duration",
+                        ],
+                        "type": "object",
+                    },
+                },
+            }
+        ],
+        tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
+    )
+
+
+class TestBedrockEmbedding(BaseLLMEmbeddingTest):
+    def get_base_embedding_call_args(self) -> dict:
+        return {
+            "model": "bedrock/amazon.titan-embed-image-v1",
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def test_bedrock_image_embedding_transformation(self):
+        from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+            AmazonTitanMultimodalEmbeddingG1Config,
+        )
+
+        args = {
+            "input": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII=",
+            "inference_params": {},
+        }
+
+        transformed_request = (
+            AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
+        )
+        transformed_request[
+            "inputImage"
+        ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+
+
+@pytest.mark.asyncio
+async def test_bedrock_image_url_sync_client():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    import logging
+    from litellm import verbose_logger
+
+    verbose_logger.setLevel(level=logging.DEBUG)
+
+    litellm._turn_on_debug()
+    client = AsyncHTTPHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                    },
+                },
+            ],
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            await litellm.acompletion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=messages,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()
+
+
+def test_bedrock_error_handling_streaming():
+    from litellm.llms.bedrock.chat.invoke_handler import (
+        AWSEventStreamDecoder,
+        BedrockError,
+    )
+    from unittest.mock import patch, Mock
+
+    event = Mock()
+    event.to_response_dict = Mock(
+        return_value={
+            "status_code": 400,
+            "headers": {
+                ":exception-type": "serviceUnavailableException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            "body": b'{"message":"Bedrock is unable to process your request."}',
+        }
+    )
+
+    decoder = AWSEventStreamDecoder(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+    )
+    with pytest.raises(Exception) as e:
+        decoder._parse_message_from_event(event)
+    assert isinstance(e.value, BedrockError)
+    assert "Bedrock is unable to process your request." in e.value.message
+    assert e.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
+        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
+        "http://www.krishdholakia.com/",
+        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
+        "https://raw.githubusercontent.com/mdn/content/main/README.md",
+    ],
+)
+@pytest.mark.flaky(retries=6, delay=2)
+@pytest.mark.asyncio
+async def test_bedrock_document_understanding(image_url):
+    from litellm import acompletion
+
+    litellm._turn_on_debug()
+    model = "bedrock/us.amazon.nova-pro-v1:0"
+
+    image_content = [
+        {"type": "text", "text": f"What's this file about?"},
+        {
+            "type": "image_url",
+            "image_url": image_url,
+        },
+    ]
+
+    response = await acompletion(
+        model=model,
+        messages=[{"role": "user", "content": image_content}],
+    )
+    assert response is not None
+    assert response.choices[0].message.content != ""

@@ -158,6 +158,7 @@ class LangFuseHandler:
         Returns:
             bool: True if the dynamic langfuse credentials are passed, False otherwise
         """
+
         if (
             standard_callback_dynamic_params.get("langfuse_host") is not None
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None

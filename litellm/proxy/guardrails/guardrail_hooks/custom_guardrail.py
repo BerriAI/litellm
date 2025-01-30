@@ -1,12 +1,13 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
-from litellm.types.guardrails import GuardrailEventHooks
 
 
 class myCustomGuardrail(CustomGuardrail):
@@ -19,6 +20,7 @@ class myCustomGuardrail(CustomGuardrail):
 
         super().__init__(**kwargs)
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -57,6 +59,7 @@ class myCustomGuardrail(CustomGuardrail):
 
         return data
 
+    @log_guardrail_information
     async def async_moderation_hook(
         self,
         data: dict,
@@ -86,6 +89,7 @@ class myCustomGuardrail(CustomGuardrail):
                     if "litellm" in _content.lower():
                         raise ValueError("Guardrail failed words - `litellm` detected")
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,

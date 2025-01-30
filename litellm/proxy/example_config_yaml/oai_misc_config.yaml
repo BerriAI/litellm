@@ -1,0 +1,62 @@
+model_list:
+  - model_name: gpt-3.5-turbo-end-user-test
+    litellm_params:
+      model: gpt-3.5-turbo
+      region_name: "eu"
+    model_info:
+      id: "1"
+  - model_name: "*"
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+  # provider specific wildcard routing
+  - model_name: "anthropic/*"
+    litellm_params:
+      model: "anthropic/*"
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: "groq/*"
+    litellm_params:
+      model: "groq/*"
+      api_key: os.environ/GROQ_API_KEY
+litellm_settings:
+  # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
+  drop_params: True
+  # max_budget: 100 
+  # budget_duration: 30d
+  num_retries: 5
+  request_timeout: 600
+  telemetry: False
+  context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
+  default_team_settings: 
+    - team_id: team-1
+      success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PROJECT1_PUBLIC # Project 1
+      langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET # Project 1
+    - team_id: team-2
+      success_callback: ["langfuse"]
+      failure_callback: ["langfuse"]
+      langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
+      langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
+      langfuse_host: https://us.cloud.langfuse.com
+
+# For /fine_tuning/jobs endpoints
+finetune_settings:
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2024-05-01-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+# for /files endpoints
+files_settings:
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2024-05-01-preview"
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys

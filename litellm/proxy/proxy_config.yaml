@@ -1,14 +1,19 @@
 model_list:
-  - model_name: gpt-4o
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/fake
+      api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: anthropic/*
-    litellm_params:
-      model: anthropic/fake
-      api_base: https://exampleanthropicendpoint-production.up.railway.app/
 
 
 
 litellm_settings:
-  callbacks: ["datadog"] 
+  callbacks: ["prometheus"]
+  prometheus_initialize_budget_metrics: true
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: gf3sc1mzinjw
+      guardrailVersion: "DRAFT"

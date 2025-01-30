@@ -4,8 +4,6 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from pydantic.main import Model
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
@@ -17,7 +15,7 @@ import asyncio
 import logging
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from litellm._logging import verbose_logger
-
+from litellm.proxy._types import SpanAttributes
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -257,9 +255,11 @@ def validate_redacted_message_span_attributes(span):
         "gen_ai.request.model",
         "gen_ai.system",
         "llm.is_streaming",
+        "llm.request.type",
         "gen_ai.response.id",
         "gen_ai.response.model",
         "llm.usage.total_tokens",
+        "metadata.prompt_management_metadata",
         "gen_ai.usage.completion_tokens",
         "gen_ai.usage.prompt_tokens",
         "metadata.user_api_key_hash",
@@ -271,10 +271,19 @@ def validate_redacted_message_span_attributes(span):
         "metadata.user_api_key_alias",
         "metadata.user_api_key_user_id",
         "metadata.user_api_key_org_id",
+        "metadata.user_api_key_end_user_id",
     ]
 
-    _all_attributes = set([name for name in span.attributes.keys()])
+    _all_attributes = set(
+        [
+            name.value if isinstance(name, SpanAttributes) else name
+            for name in span.attributes.keys()
+        ]
+    )
     print("all_attributes", _all_attributes)
+
+    for attr in _all_attributes:
+        print(f"attr: {attr}, type: {type(attr)}")
 
     assert _all_attributes == set(expected_attributes)
 

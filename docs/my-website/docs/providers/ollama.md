@@ -147,6 +147,7 @@ model_list:
   - model_name: "llama3.1"             
     litellm_params:
       model: "ollama_chat/llama3.1"
+      keep_alive: "8m" # Optional: Overrides default keep_alive, use -1 for Forever
     model_info:
       supports_function_calling: true
 ```
@@ -355,8 +356,6 @@ for chunk in response:
 }
 ```
 
-## Support / talk with founders
-- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
-- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
+## Calling Docker Container (host.docker.internal)
+
+[Follow these instructions](https://github.com/BerriAI/litellm/issues/1517#issuecomment-1922022209/)

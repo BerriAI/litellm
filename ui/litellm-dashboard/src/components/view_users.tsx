@@ -94,6 +94,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   >({});
   const defaultPageSize = 25;
 
+  // check if window is not undefined
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", function () {
+      // Clear session storage
+      sessionStorage.clear();
+    });
+  }
+
   const handleDelete = (userId: string) => {
     setUserToDelete(userId);
     setIsDeleteModalOpen(true);
@@ -158,23 +166,42 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        // Replace with your actual API call for model data
-        const userDataResponse = await userInfoCall(
-          accessToken,
-          null,
-          userRole,
-          true,
-          currentPage,
-          defaultPageSize
-        );
+        // Check session storage first
+        const cachedUserData = sessionStorage.getItem(`userList_${currentPage}`);
+        if (cachedUserData) {
+          const parsedData = JSON.parse(cachedUserData);
+          setUserListResponse(parsedData);
+          setUserData(parsedData.users || []);
+        } else {
+          // Fetch from API if not in cache
+          const userDataResponse = await userInfoCall(
+            accessToken,
+            null,
+            userRole,
+            true,
+            currentPage,
+            defaultPageSize
+          );
 
-        setUserListResponse(userDataResponse);
+          // Store in session storage
+          sessionStorage.setItem(
+            `userList_${currentPage}`,
+            JSON.stringify(userDataResponse)
+          );
 
-        console.log("user data response:", userDataResponse);
-        setUserData(userDataResponse.users || []);
+          setUserListResponse(userDataResponse);
+          setUserData(userDataResponse.users || []);
+        }
 
-        const availableUserRoles = await getPossibleUserRoles(accessToken);
-        setPossibleUIRoles(availableUserRoles);
+        // Fetch roles if not cached
+        const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+        if (cachedRoles) {
+          setPossibleUIRoles(JSON.parse(cachedRoles));
+        } else {
+          const availableUserRoles = await getPossibleUserRoles(accessToken);
+          sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+          setPossibleUIRoles(availableUserRoles);
+        }
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -183,6 +210,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     if (accessToken && token && userRole && userID) {
       fetchData();
     }
+
   }, [accessToken, token, userRole, userID, currentPage]);
 
   if (!userData) {

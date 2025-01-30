@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Select, SelectItem, Text, Title } from "@tremor/react";
 import { ProxySettings, UserInfo } from "./user_dashboard";
-import { getProxyBaseUrlAndLogoutUrl } from "./networking"
+import { getProxyUISettings } from "./networking"
 
 interface DashboardTeamProps {
   teams: Object[] | null;
@@ -11,6 +11,7 @@ interface DashboardTeamProps {
   setProxySettings: React.Dispatch<React.SetStateAction<ProxySettings | null>>;
   userInfo: UserInfo | null;
   accessToken: string | null;
+  setKeys: React.Dispatch<React.SetStateAction<any | null>>;
 }
 
 type TeamInterface = {
@@ -27,7 +28,8 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
   proxySettings,
   setProxySettings,
   userInfo,
-  accessToken
+  accessToken,
+  setKeys
 }) => {
   console.log(`userInfo: ${JSON.stringify(userInfo)}`)
   const defaultTeam: TeamInterface = {
@@ -39,7 +41,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
 
   const getProxySettings = async () => {
     if (proxySettings === null && accessToken) {
-      const proxy_settings: ProxySettings = await getProxyBaseUrlAndLogoutUrl(accessToken);
+      const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
       setProxySettings(proxy_settings);
     }
   };
@@ -80,7 +82,10 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
             <SelectItem
               key={index}
               value={String(index)}
-              onClick={() => setSelectedTeam(team)}
+              onClick={() => {
+                setSelectedTeam(team);
+                // setKeys(team["keys"]);
+              }}
             >
               {team["team_alias"]}
             </SelectItem>

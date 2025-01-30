@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import traceback
 from datetime import datetime
 from logging import Formatter
 
@@ -103,3 +102,12 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa
     except Exception:
         pass
+
+
+def _is_debugging_on() -> bool:
+    """
+    Returns True if debugging is on
+    """
+    if verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True:
+        return True
+    return False

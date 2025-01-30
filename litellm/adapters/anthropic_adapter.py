@@ -1,24 +1,13 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
-import json
-import os
 import traceback
-import uuid
-from typing import Any, Literal, Optional
-
-import dotenv
-import httpx
-from pydantic import BaseModel
+from typing import Any, Optional
 
 import litellm
 from litellm import ChatCompletionRequest, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.anthropic import (
-    AnthropicMessagesRequest,
-    AnthropicResponse,
-    ContentBlockDelta,
-)
-from litellm.types.utils import AdapterCompletionStreamWrapper
+from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicResponse
+from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 
 
 class AnthropicAdapter(CustomLogger):
@@ -41,7 +30,7 @@ class AnthropicAdapter(CustomLogger):
         return translated_body
 
     def translate_completion_output_params(
-        self, response: litellm.ModelResponse
+        self, response: ModelResponse
     ) -> Optional[AnthropicResponse]:
 
         return litellm.AnthropicExperimentalPassThroughConfig().translate_openai_response_to_anthropic(

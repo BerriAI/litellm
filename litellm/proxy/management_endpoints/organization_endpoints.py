@@ -4,27 +4,18 @@ Endpoints for /organization operations
 /organization/new
 /organization/update
 /organization/delete
+/organization/member_add
 /organization/info
 /organization/list
 """
 
 #### ORGANIZATION MANAGEMENT ####
 
-import asyncio
-import copy
-import json
-import re
-import secrets
-import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import (
@@ -32,7 +23,6 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.secret_managers.main import get_secret
 
 router = APIRouter()
 
@@ -241,7 +231,9 @@ async def list_organization(
             status_code=400,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
-    response = await prisma_client.db.litellm_organizationtable.find_many()
+    response = await prisma_client.db.litellm_organizationtable.find_many(
+        include={"members": True}
+    )
 
     return response
 
@@ -328,12 +320,7 @@ async def organization_member_add(
     3. Add Internal User to the `LiteLLM_OrganizationMembership` table
     """
     try:
-        from litellm.proxy.proxy_server import (
-            litellm_proxy_admin_name,
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})

@@ -10,16 +10,7 @@ Requirements:
 
 ## Set Budgets
 
-You can set budgets at 3 levels: 
-- For the proxy 
-- For an internal user 
-- For a customer (end-user)
-- For a key
-- For a key (model specific budgets)
-
-
-<Tabs>
-<TabItem value="proxy" label="For Proxy">
+### Global Proxy
 
 Apply a budget across all calls on the proxy
 
@@ -57,8 +48,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     ],
 }'
 ```
-</TabItem>
-<TabItem value="per-team" label="For Team">
+
+### Team
+
 You can:
 - Add budgets to Teams
 
@@ -126,8 +118,7 @@ curl 'http://0.0.0.0:4000/team/new' \
 }'
 ```
 
-</TabItem>
-<TabItem value="per-team-member" label="For Team Members">
+### Team Members
 
 Use this when you want to budget a users spend within a Team 
 
@@ -196,62 +187,75 @@ curl --location 'http://localhost:4000/chat/completions' \
 }'
 ```
 
-</TabItem>
-<TabItem value="per-user-chat" label="For Customers">
 
-Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
+### Internal User
 
-**Step 1. Modify config.yaml**
-Define `litellm.max_end_user_budget`
-```yaml
-general_settings:
-  master_key: sk-1234
+Apply a budget across all calls an internal user (key owner) can make on the proxy. 
 
-litellm_settings:
-  max_end_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
+:::info
+
+For most use-cases, we recommend setting team-member budgets
+
+:::
+
+LiteLLM exposes a `/user/new` endpoint to create budgets for this.
+
+You can:
+- Add budgets to users [**Jump**](#add-budgets-to-users)
+- Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-users)
+
+By default the `max_budget` is set to `null` and is not checked for keys
+
+#### **Add budgets to users**
+```shell 
+curl --location 'http://localhost:4000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
 ```
 
-2. Make a /chat/completions call, pass 'user' - First call Works 
+[**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
+
+**Sample Response**
+
 ```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-        --header 'Content-Type: application/json' \
-        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
-        --data ' {
-        "model": "azure-gpt-3.5",
-        "user": "ishaan3",
-        "messages": [
-            {
-            "role": "user",
-            "content": "what time is it"
-            }
-        ]
-        }'
+{
+    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
+    "expires": "2023-12-22T09:53:13.861000Z",
+    "user_id": "krrish3@berri.ai",
+    "max_budget": 0.0
+}
 ```
 
-3. Make a /chat/completions call, pass 'user' - Call Fails, since 'ishaan3' over budget
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-        --header 'Content-Type: application/json' \
-        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
-        --data ' {
-        "model": "azure-gpt-3.5",
-        "user": "ishaan3",
-        "messages": [
-            {
-            "role": "user",
-            "content": "what time is it"
-            }
-        ]
-        }'
+#### **Add budget duration to users**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:4000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_id": "core-infra", # [OPTIONAL]
+  "max_budget": 10,
+  "budget_duration": 10s,
+}'
 ```
 
-Error
-```shell
-{"error":{"message":"Budget has been exceeded: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
+#### Create new keys for existing user
+
+Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) and:
+- **Budget Check**: krrish3@berri.ai's budget (i.e. $10) will be checked for this key
+- **Spend Tracking**: spend for this key will update krrish3@berri.ai's spend as well
+
+```bash
+curl --location 'http://0.0.0.0:4000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
 ```
 
-</TabItem>
-<TabItem value="per-key" label="For Key">
+### Virtual Key
 
 Apply a budget on a key.
 
@@ -319,109 +323,149 @@ curl 'http://0.0.0.0:4000/key/generate' \
 }'
 ```
 
-</TabItem>
 
-<TabItem value="per-user" label="For Internal User (Global)">
+### ✨ Virtual Key (Model Specific)
 
-Apply a budget across all calls an internal user (key owner) can make on the proxy. 
-
-:::info
-
-For most use-cases, we recommend setting team-member budgets
-
-:::
-
-LiteLLM exposes a `/user/new` endpoint to create budgets for this.
-
-You can:
-- Add budgets to users [**Jump**](#add-budgets-to-users)
-- Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-users)
-
-By default the `max_budget` is set to `null` and is not checked for keys
-
-#### **Add budgets to users**
-```shell 
-curl --location 'http://localhost:4000/user/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
-```
-
-[**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
-
-**Sample Response**
-
-```shell
-{
-    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
-    "expires": "2023-12-22T09:53:13.861000Z",
-    "user_id": "krrish3@berri.ai",
-    "max_budget": 0.0
-}
-```
-
-#### **Add budget duration to users**
-
-`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-
-```
-curl 'http://0.0.0.0:4000/user/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{
-  "team_id": "core-infra", # [OPTIONAL]
-  "max_budget": 10,
-  "budget_duration": 10s,
-}'
-```
-
-#### Create new keys for existing user
-
-Now you can just call `/key/generate` with that user_id (i.e. krrish3@berri.ai) and:
-- **Budget Check**: krrish3@berri.ai's budget (i.e. $10) will be checked for this key
-- **Spend Tracking**: spend for this key will update krrish3@berri.ai's spend as well
-
-```bash
-curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{"models": ["azure-models"], "user_id": "krrish3@berri.ai"}'
-```
-
-</TabItem>
-
-<TabItem value="per-model-key" label="For Key (model specific)">
-
-Apply model specific budgets on a key.
-
-**Expected Behaviour**
-- `model_spend` gets auto-populated in `LiteLLM_VerificationToken` Table
-- After the key crosses the budget set for the `model` in `model_max_budget`, calls fail
-
-By default the `model_max_budget` is set to `{}` and is not checked for keys
+Apply model specific budgets on a key. Example: 
+- Budget for `gpt-4o` is $0.0000001, for time period `1d` for `key = "sk-12345"`
+- Budget for `gpt-4o-mini` is $10, for time period `30d` for `key = "sk-12345"`
 
 :::info
 
-- LiteLLM will track the cost/budgets for the `model` passed to LLM endpoints (`/chat/completions`, `/embeddings`)
-
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/#pricing)
 
 :::
 
-#### **Add model specific budgets to keys**
+
+The spec for `model_max_budget` is **[`Dict[str, GenericBudgetInfo]`](#genericbudgetinfo)**
 
 ```bash
 curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{
-  model_max_budget={"gpt4": 0.5, "gpt-5": 0.01}
+  "model_max_budget": {"gpt-4o": {"budget_limit": "0.0000001", "time_period": "1d"}}
 }'
+```
+
+
+#### Make a test request
+
+We expect the first request to succeed, and the second request to fail since we cross the budget for `gpt-4o` on the Virtual Key
+
+**[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
+
+<Tabs>
+<TabItem label="Successful Call " value = "allowed">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <sk-generated-key>' \
+--data ' {
+      "model": "gpt-4o",
+      "messages": [
+        {
+          "role": "user",
+          "content": "testing request"
+        }
+      ]
+    }
+'
+```
+
+</TabItem>
+<TabItem label="Unsuccessful call" value = "not-allowed">
+
+Expect this to fail since since we cross the budget `model=gpt-4o` on the Virtual Key
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <sk-generated-key>' \
+--data ' {
+      "model": "gpt-4o",
+      "messages": [
+        {
+          "role": "user",
+          "content": "testing request"
+        }
+      ]
+    }
+'
+```
+
+Expected response on failure
+
+```json
+{
+    "error": {
+        "message": "LiteLLM Virtual Key: 9769f3f6768a199f76cc29xxxx, key_alias: None, exceeded budget for model=gpt-4o",
+        "type": "budget_exceeded",
+        "param": null,
+        "code": "400"
+    }
+}
 ```
 
 </TabItem>
 </Tabs>
 
-### Reset Budgets 
+
+### Customers
+
+Use this to budget `user` passed to `/chat/completions`, **without needing to create a key for every user**
+
+**Step 1. Modify config.yaml**
+Define `litellm.max_end_user_budget`
+```yaml
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  max_end_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
+```
+
+2. Make a /chat/completions call, pass 'user' - First call Works 
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+3. Make a /chat/completions call, pass 'user' - Call Fails, since 'ishaan3' over budget
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-zi5onDRdHGD24v0Zdn7VBA' \
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "user": "ishaan3",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+Error
+```shell
+{"error":{"message":"Budget has been exceeded: User ishaan3 has exceeded their budget. Current spend: 0.0008869999999999999; Max Budget: 0.0001","type":"auth_error","param":"None","code":401}}%                
+```
+
+## Reset Budgets 
 
 Reset budgets across keys/internal users/teams/customers
 
@@ -782,4 +826,33 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "user_id": "krrish@berri.ai"}'
+```
+
+
+## API Specification 
+
+### `GenericBudgetInfo`
+
+A Pydantic model that defines budget information with a time period and limit.
+
+```python
+class GenericBudgetInfo(BaseModel):
+    budget_limit: float  # The maximum budget amount in USD
+    time_period: str    # Duration string like "1d", "30d", etc.
+```
+
+#### Fields:
+- `budget_limit` (float): The maximum budget amount in USD
+- `time_period` (str): Duration string specifying the time period for the budget. Supported formats:
+  - Seconds: "30s"
+  - Minutes: "30m" 
+  - Hours: "30h"
+  - Days: "30d"
+
+#### Example:
+```json
+{
+  "budget_limit": "0.0001",
+  "time_period": "1d"
+}
 ```

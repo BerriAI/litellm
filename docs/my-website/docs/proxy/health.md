@@ -121,6 +121,20 @@ model_list:
       mode: audio_speech
 ```
 
+### Rerank Models 
+
+To run rerank health checks, specify the mode as "rerank" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: rerank-english-v3.0
+    litellm_params:
+      model: cohere/rerank-english-v3.0
+      api_key: os.environ/COHERE_API_KEY
+    model_info:
+      mode: rerank
+```
+
 ### Batch Models (Azure Only)
 
 For Azure models deployed as 'batch' models, set `mode: batch`. 
@@ -152,6 +166,42 @@ Expected Response
     "healthy_count": 1,
     "unhealthy_count": 0
 }
+```
+
+### Realtime Models 
+
+To run realtime health checks, specify the mode as "realtime" in your config for the relevant model.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o-realtime-audio
+    litellm_params:
+      model: openai/gpt-4o-realtime-audio
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
+```
+
+### Wildcard Routes
+
+For wildcard routes, you can specify a `health_check_model` in your config.yaml. This model will be used for health checks for that wildcard route.
+
+In this example, when running a health check for `openai/*`, the health check will make a `/chat/completions` request to `openai/gpt-4o-mini`.
+
+```yaml
+model_list:
+  - model_name: openai/*
+    litellm_params:
+      model:  openai/*
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_model: openai/gpt-4o-mini
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      health_check_model: anthropic/claude-3-5-sonnet-20240620
 ```
 
 ## Background Health Checks 
@@ -193,6 +243,22 @@ You can hide these details by setting the `health_check_details` setting to `Fal
 ```yaml
 general_settings: 
   health_check_details: False
+```
+
+## Health Check Timeout
+
+The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.
+
+This can be overridden in the config.yaml by setting `health_check_timeout` in the model_info section.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_timeout: 10 # 👈 OVERRIDE HEALTH CHECK TIMEOUT
 ```
 
 ## `/health/readiness`
