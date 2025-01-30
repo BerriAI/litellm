@@ -987,3 +987,6 @@ custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
     []
 )  # internal helper util, used to track names of custom providers
+disable_hf_tokenizer_download: Optional[bool] = (
+    None  # disable huggingface tokenizer download. Defaults to openai clk100
+)
