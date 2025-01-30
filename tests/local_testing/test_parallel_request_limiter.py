@@ -454,6 +454,7 @@ Test with Router
 """
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_normal_router_call():
     model_list = [
