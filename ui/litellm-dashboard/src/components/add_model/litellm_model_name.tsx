@@ -96,7 +96,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         <Col span={10}></Col>
         <Col span={10}>
           <Text className="mb-3 mt-1">
-            Actual model name used for making litellm.completion() call. We'll loadbalance models with the same 'public name'
+            Actual model name used for making litellm.completion() call. We loadbalance models with the same public name
           </Text>
         </Col>
       </Row>
