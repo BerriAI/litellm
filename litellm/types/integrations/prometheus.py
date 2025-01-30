@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union, Annotated
 
 from pydantic import BaseModel, Field
 
@@ -228,21 +228,21 @@ class PrometheusMetricLabels:
 
 
 class UserAPIKeyLabelValues(BaseModel):
-    end_user: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.END_USER.value)
-    user: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.USER.value)
-    hashed_api_key: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.API_KEY_HASH.value)
-    api_key_alias: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.API_KEY_ALIAS.value)
-    team: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.TEAM.value)
-    team_alias: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)
-    requested_model: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value)
-    model: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value)
-    litellm_model_name: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value)
-    tags: List[str] = Field(default_factory=list)
-    custom_metadata_labels: Dict[str, str] = Field(default_factory=dict)
-    model_id: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.MODEL_ID.value)
-    api_base: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.API_BASE.value)
-    api_provider: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.API_PROVIDER.value)
-    exception_status: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.EXCEPTION_STATUS.value)
-    exception_class: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.EXCEPTION_CLASS.value )
-    status_code: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.STATUS_CODE.value)
-    fallback_model: Optional[str] = Field(None, validation_alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
+    end_user: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.END_USER.value)] = None
+    user: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER.value)] = None
+    hashed_api_key: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_HASH.value)] = None
+    api_key_alias: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_ALIAS.value)] = None
+    team: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM.value)] = None
+    team_alias: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.TEAM_ALIAS.value)] = None
+    requested_model: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.REQUESTED_MODEL.value)] = None
+    model: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value)] = None
+    litellm_model_name: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value)] = None
+    tags: List[str] = []
+    custom_metadata_labels: Dict[str, str] = {}
+    model_id: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_ID.value)] = None
+    api_base: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_BASE.value)] = None
+    api_provider: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_PROVIDER.value)] = None
+    exception_status: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.EXCEPTION_STATUS.value)] = None
+    exception_class: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.EXCEPTION_CLASS.value)] = None
+    status_code: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.STATUS_CODE.value)] = None
+    fallback_model: Annotated[Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)] = None
