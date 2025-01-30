@@ -4,6 +4,7 @@ import moment from "moment";
 import React from "react";
 import { CountryCell } from "./country_cell";
 import { getProviderLogoAndName } from "../provider_info_helpers";
+import { Tooltip } from "antd";
 
 export type LogEntry = {
   request_id: string;
@@ -111,6 +112,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => {
       const row = info.row.original;
       const provider = row.custom_llm_provider;
+      const modelName = String(info.getValue() || "");
       return (
         <div className="flex items-center space-x-2">
           {provider && (
@@ -124,7 +126,11 @@ export const columns: ColumnDef<LogEntry>[] = [
               }}
             />
           )}
-          <span>{String(info.getValue() || "")}</span>
+          <Tooltip title={modelName}>
+            <span className="max-w-[100px] truncate">
+              {modelName}
+            </span>
+          </Tooltip>
         </div>
       );
     },
