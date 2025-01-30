@@ -113,6 +113,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "top_logprobs",
     "extra_headers",
 ]
+OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null"]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = 60  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 

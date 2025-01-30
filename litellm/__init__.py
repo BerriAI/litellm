@@ -34,6 +34,9 @@ from litellm.constants import (
     LITELLM_CHAT_PROVIDERS,
     HUMANLOOP_PROMPT_CACHE_TTL_SECONDS,
     OPENAI_CHAT_COMPLETION_PARAMS,
+    OPENAI_CHAT_COMPLETION_PARAMS as _openai_completion_params,  # backwards compatibility
+    OPENAI_FINISH_REASONS,
+    OPENAI_FINISH_REASONS as _openai_finish_reasons,  # backwards compatibility
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -219,36 +222,7 @@ default_soft_budget: float = (
     50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )
 forward_traceparent_to_llm_provider: bool = False
-_openai_finish_reasons = ["stop", "length", "function_call", "content_filter", "null"]
-_openai_completion_params = [
-    "functions",
-    "function_call",
-    "temperature",
-    "temperature",
-    "top_p",
-    "n",
-    "stream",
-    "stop",
-    "max_tokens",
-    "presence_penalty",
-    "frequency_penalty",
-    "logit_bias",
-    "user",
-    "request_timeout",
-    "api_base",
-    "api_version",
-    "api_key",
-    "deployment_id",
-    "organization",
-    "base_url",
-    "default_headers",
-    "timeout",
-    "response_format",
-    "seed",
-    "tools",
-    "tool_choice",
-    "max_retries",
-]
+
 
 _current_cost = 0.0  # private variable, used if max budget is set
 error_logs: Dict = {}
