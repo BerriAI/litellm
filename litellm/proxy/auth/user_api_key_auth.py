@@ -257,7 +257,7 @@ async def get_global_proxy_spend(
                 spend=global_proxy_spend,
                 token=token,
             )
-            asyncio.create_task(
+            create_background_task(
                 proxy_logging_obj.budget_alerts(
                     type="proxy_budget",
                     user_info=user_info,
@@ -828,7 +828,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-            asyncio.create_task(
+            create_background_task(
                 _cache_key_object(
                     hashed_token=hash_token(master_key),
                     user_api_key_obj=_user_api_key_obj,
@@ -1117,7 +1117,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         user_id=litellm_proxy_admin_name,
                         team_id=valid_token.team_id,
                     )
-                    asyncio.create_task(
+                    create_background_task(
                         proxy_logging_obj.budget_alerts(
                             type="proxy_budget",
                             user_info=call_info,
@@ -1143,7 +1143,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             api_key = valid_token.token
 
             # Add hashed token to cache
-            asyncio.create_task(
+            create_background_task(
                 _cache_key_object(
                     hashed_token=api_key,
                     user_api_key_obj=valid_token,
@@ -1209,7 +1209,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span=parent_otel_span,
             api_key=api_key,
         )
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=e,
@@ -1283,7 +1283,7 @@ async def _return_user_api_key_auth_obj(
 ) -> UserAPIKeyAuth:
     end_time = datetime.now()
 
-    asyncio.create_task(
+    create_background_task(
         user_api_key_service_logger_obj.async_service_success_hook(
             service=ServiceTypes.AUTH,
             call_type=route,
