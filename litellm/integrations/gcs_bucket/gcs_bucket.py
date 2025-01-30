@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardLoggingPayload
@@ -32,7 +33,7 @@ class GCSBucketLogger(GCSBucketBase):
         self.flush_interval = int(
             os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS)
         )
-        asyncio.create_task(self.periodic_flush())
+        create_background_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
         super().__init__(
             flush_lock=self.flush_lock,

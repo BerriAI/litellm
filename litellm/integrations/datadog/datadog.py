@@ -28,6 +28,7 @@ from httpx import Response
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -85,7 +86,7 @@ class DataDogLogger(
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
             ###################################
             self.sync_client = _get_httpx_client()
-            asyncio.create_task(self.periodic_flush())
+            create_background_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(
                 **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE

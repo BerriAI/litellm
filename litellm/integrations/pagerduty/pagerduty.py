@@ -14,6 +14,7 @@ from typing import List, Literal, Optional, Union
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -154,7 +155,7 @@ class PagerDutyAlerting(SlackAlerting):
         If the request didn't finish by then, we treat it as 'hanging'.
         """
         verbose_logger.info("Inside Proxy Logging Pre-call hook!")
-        asyncio.create_task(
+        create_background_task(
             self.hanging_response_handler(
                 request_data=data, user_api_key_dict=user_api_key_dict
             )

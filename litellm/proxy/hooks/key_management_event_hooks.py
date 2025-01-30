@@ -8,6 +8,7 @@ from fastapi import status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
@@ -57,7 +58,7 @@ class KeyManagementEventHooks:
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
             _updated_values = response.model_dump_json(exclude_none=True)
-            asyncio.create_task(
+            create_background_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
@@ -106,7 +107,7 @@ class KeyManagementEventHooks:
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
 
-            asyncio.create_task(
+            create_background_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
@@ -182,7 +183,7 @@ class KeyManagementEventHooks:
                 key_row = key_row.json(exclude_none=True)
                 _key_row = json.dumps(key_row, default=str)
 
-                asyncio.create_task(
+                create_background_task(
                     create_audit_log_for_update(
                         request_data=LiteLLM_AuditLogs(
                             id=str(uuid.uuid4()),
@@ -317,7 +318,7 @@ class KeyManagementEventHooks:
         )
 
         # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                 webhook_event=event,
             )

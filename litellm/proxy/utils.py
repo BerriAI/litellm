@@ -13,6 +13,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, overload
 
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -281,7 +282,7 @@ class ProxyLogging:
             self.slack_alerting_instance is not None
             and "daily_reports" in self.slack_alerting_instance.alert_types
         ):
-            asyncio.create_task(
+            create_background_task(
                 self.slack_alerting_instance._run_scheduled_daily_report(
                     llm_router=llm_router
                 )
@@ -703,7 +704,7 @@ class ProxyLogging:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
             error_message += traceback_str[:1000]
-        asyncio.create_task(
+        create_background_task(
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
                 level="High",
@@ -757,7 +758,7 @@ class ProxyLogging:
             if litellm_debug_info is not None:
                 exception_str += litellm_debug_info
 
-            asyncio.create_task(
+            create_background_task(
                 self.alerting_handler(
                     message=f"LLM API call failed: `{exception_str}`",
                     level="High",
@@ -1024,7 +1025,7 @@ class ProxyLogging:
             self.slack_alerting_instance
             and self.slack_alerting_instance.alerting is not None
         ):
-            asyncio.create_task(
+            create_background_task(
                 self.slack_alerting_instance.response_taking_too_long(request_data=data)
             )
 
@@ -1257,7 +1258,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -1615,7 +1616,7 @@ class PrismaClient:
             end_time = time.time()
             _duration = end_time - start_time
 
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -1772,7 +1773,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -2005,7 +2006,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -2085,7 +2086,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -2122,7 +2123,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -2152,7 +2153,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -2182,7 +2183,7 @@ class PrismaClient:
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
+            create_background_task(
                 self.proxy_logging_obj.failure_handler(
                     original_exception=e,
                     duration=_duration,
@@ -2798,7 +2799,7 @@ def _raise_failed_update_spend_exception(
     error_traceback = error_msg + "\n" + traceback.format_exc()
     end_time = time.time()
     _duration = end_time - start_time
-    asyncio.create_task(
+    create_background_task(
         proxy_logging_obj.failure_handler(
             original_exception=e,
             duration=_duration,

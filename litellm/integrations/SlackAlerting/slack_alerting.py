@@ -12,6 +12,7 @@ from openai import APIError
 
 import litellm
 import litellm.litellm_core_utils
+from litellm.litellm_core_utils.async_utils import create_background_task
 import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -90,7 +91,7 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
-            asyncio.create_task(self.periodic_flush())
+            create_background_task(self.periodic_flush())
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:

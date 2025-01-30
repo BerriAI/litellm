@@ -30,6 +30,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 import litellm
+from litellm.litellm_core_utils.async_utils import create_background_task
 
 from .litellm_logging import Logging as LiteLLMLogging
 
@@ -89,7 +90,7 @@ class RealTimeStreaming:
         if self.logging_obj:
             ## ASYNC LOGGING
             # Create an event loop for the new thread
-            asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
+            create_background_task(self.logging_obj.async_success_handler(self.messages))
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 

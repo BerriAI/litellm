@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -185,7 +186,7 @@ async def new_user(
         )
 
         # If user configured email alerting - send an Email letting their end-user know the key was created
-        asyncio.create_task(
+        create_background_task(
             proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                 webhook_event=event,
             )
@@ -548,7 +549,7 @@ async def user_update(
         "user_role": "proxy_admin_viewer"
     }'
     ```
-    
+
     Parameters:
         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
         - user_email: Optional[str] - Specify a user email.
@@ -579,8 +580,8 @@ async def user_update(
         - team_id: Optional[str] - [DEPRECATED PARAM] The team id of the user. Default is None. 
         - duration: Optional[str] - [NOT IMPLEMENTED].
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
-            
-    
+
+
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -830,7 +831,7 @@ async def delete_user(
                 # make an audit log for each team deleted
                 _user_row = user_row.json(exclude_none=True)
 
-                asyncio.create_task(
+                create_background_task(
                     create_audit_log_for_update(
                         request_data=LiteLLM_AuditLogs(
                             id=str(uuid.uuid4()),

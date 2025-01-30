@@ -11,6 +11,7 @@ from litellm.constants import (
     BATCH_STATUS_POLL_MAX_ATTEMPTS,
 )
 from litellm.files.main import afile_content
+from litellm.litellm_core_utils.async_utils import create_background_task
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import StandardLoggingPayload, Usage
@@ -121,7 +122,7 @@ async def _log_completed_batch(
     logging_obj.model_call_details["standard_logging_object"] = standard_logging_object
 
     # Launch async and sync logging handlers
-    asyncio.create_task(
+    create_background_task(
         logging_obj.async_success_handler(
             result=None,
             start_time=start_time,
