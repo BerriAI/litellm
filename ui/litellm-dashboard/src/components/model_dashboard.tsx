@@ -18,6 +18,7 @@ import {
 } from "@tremor/react";
 import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
+import AdvancedSettings from "./add_model/advanced_settings";
 import {
   TabPanel,
   TabPanels,
@@ -282,7 +283,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-
+  
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const providers = Object.values(Providers).filter((key) =>
@@ -1977,48 +1978,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       <TextInput placeholder="us-east-1" />
                     </Form.Item>
                   )}
-                  <Form.Item
-                    label="LiteLLM Params"
-                    name="litellm_extra_params"
-                    tooltip="Optional litellm params used for making a litellm.completion() call."
-                    className="mb-0"
-                  >
-                    <TextArea
-                      rows={4}
-                      placeholder='{
-                    "rpm": 100,
-                    "timeout": 0,
-                    "stream_timeout": 0
-                  }'
-                    />
-                  </Form.Item>
-                  <Row>
-                    <Col span={10}></Col>
-                    <Col span={10}>
-                      <Text className="mb-3 mt-1">
-                        Pass JSON of litellm supported params{" "}
-                        <Link
-                          href="https://docs.litellm.ai/docs/completion/input"
-                          target="_blank"
-                        >
-                          litellm.completion() call
-                        </Link>
-                      </Text>
-                    </Col>
-                  </Row>
-                  <Form.Item
-                    label="Model Info"
-                    name="model_info_params"
-                    tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
-                    className="mb-0"
-                  >
-                    <TextArea
-                      rows={4}
-                      placeholder='{
-                    "mode": "chat"
-                  }'
-                    />
-                  </Form.Item>
+
+                  <AdvancedSettings 
+                    showAdvancedSettings={showAdvancedSettings}
+                    setShowAdvancedSettings={setShowAdvancedSettings}
+                  />
+                  
 
                   <div className="flex justify-between items-center mb-4">
                     <Tooltip title="Get help on our github">
