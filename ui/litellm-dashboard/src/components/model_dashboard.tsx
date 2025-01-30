@@ -1904,19 +1904,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Row>
 
                   {/* Conditionally Render "Public Model Name" */}
-                  <Form.Item
-                    shouldUpdate={(prevValues, currentValues) => 
-                      prevValues.model !== currentValues.model || 
-                      prevValues.custom_llm_provider !== currentValues.custom_llm_provider
-                    }
-                  >
-                    {({ getFieldValue }) => {
-                      const selectedModels = getFieldValue('model') || [];
-                      const showPublicModelName = !selectedModels.includes('all-wildcard');
-
-                      return <ConditionalPublicModelName show={showPublicModelName} />;
-                    }}
-                  </Form.Item>
+                  <ConditionalPublicModelName  />
 
                   {/* Provider-specific fields */}
                   {dynamicProviderForm !== undefined &&

@@ -3,12 +3,15 @@ import { Form } from "antd";
 import { TextInput, Text } from "@tremor/react";
 import { Row, Col } from "antd";
 
-interface ConditionalPublicModelNameProps {
-  show: boolean;
-}
+const ConditionalPublicModelName: React.FC = () => {
+  // Access the form instance
+  const form = Form.useFormInstance();
 
-const ConditionalPublicModelName: React.FC<ConditionalPublicModelNameProps> = ({ show }) => {
-  if (!show) return null;
+  // Watch the 'model' field for changes
+  const selectedModels = Form.useWatch('model', form) || [];
+  const showPublicModelName = !selectedModels.includes('all-wildcard');
+
+  if (!showPublicModelName) return null;
 
   return (
     <>
