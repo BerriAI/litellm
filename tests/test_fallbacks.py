@@ -5,6 +5,7 @@ import asyncio
 import aiohttp
 from large_text import text
 import time
+from typing import Optional
 
 
 async def generate_key(
@@ -44,6 +45,7 @@ async def chat_completion(
     model: str,
     messages: list,
     return_headers: bool = False,
+    extra_headers: Optional[dict] = None,
     **kwargs,
 ):
     url = "http://0.0.0.0:4000/chat/completions"
@@ -51,6 +53,8 @@ async def chat_completion(
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
+    if extra_headers is not None:
+        headers.update(extra_headers)
     data = {"model": model, "messages": messages, **kwargs}
 
     async with session.post(url, headers=headers, json=data) as response:
@@ -180,6 +184,38 @@ async def test_chat_completion_with_timeout():
         )  # assert model-specific timeout used
 
 
+@pytest.mark.asyncio
+async def test_chat_completion_with_timeout_from_request():
+    """
+    make chat completion call with low timeout and `mock_timeout`: true. Expect it to fail and correct timeout to be set in headers.
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "fake-openai-endpoint-5"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        extra_headers = {
+            "x-litellm-timeout": "0.001",
+        }
+        start_time = time.time()
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            num_retries=0,
+            mock_timeout=True,
+            extra_headers=extra_headers,
+            return_headers=True,
+        )
+        end_time = time.time()
+        print(f"headers: {headers}")
+        assert (
+            headers["x-litellm-timeout"] == "0.001"
+        )  # assert model-specific timeout used
+
+
 @pytest.mark.parametrize("has_access", [True, False])
 @pytest.mark.asyncio
 async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
@@ -228,3 +264,52 @@ async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
         except Exception as e:
             if has_access:
                 pytest.fail("Expected this to work: {}".format(str(e)))
+
+
+import asyncio
+from openai import AsyncOpenAI
+from typing import List
+import time
+
+
+async def make_request(client: AsyncOpenAI, model: str) -> bool:
+    try:
+        await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Who was Alexander?"}],
+        )
+        return True
+    except Exception as e:
+        print(f"Error with {model}: {str(e)}")
+        return False
+
+
+async def run_good_model_test(client: AsyncOpenAI, num_requests: int) -> bool:
+    tasks = [make_request(client, "good-model") for _ in range(num_requests)]
+    good_results = await asyncio.gather(*tasks)
+    return all(good_results)
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_bad_and_good_model():
+    """
+    Prod test - ensure even if bad model is down, good model is still working.
+    """
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    num_requests = 100
+    num_iterations = 3
+
+    for iteration in range(num_iterations):
+        print(f"\nIteration {iteration + 1}/{num_iterations}")
+        start_time = time.time()
+
+        # Fire and forget bad model requests
+        for _ in range(num_requests):
+            asyncio.create_task(make_request(client, "bad-model"))
+
+        # Wait only for good model requests
+        success = await run_good_model_test(client, num_requests)
+        print(
+            f"Iteration {iteration + 1}: {'✓' if success else '✗'} ({time.time() - start_time:.2f}s)"
+        )
+        assert success, "Not all good model requests succeeded"

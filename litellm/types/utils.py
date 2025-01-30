@@ -487,6 +487,8 @@ class Message(OpenAIObject):
 
         if provider_specific_fields:  # set if provider_specific_fields is not empty
             self.provider_specific_fields = provider_specific_fields
+            for k, v in provider_specific_fields.items():
+                setattr(self, k, v)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -522,18 +524,18 @@ class Delta(OpenAIObject):
         audio: Optional[ChatCompletionAudioResponse] = None,
         **params,
     ):
+        super(Delta, self).__init__(**params)
         provider_specific_fields: Dict[str, Any] = {}
         if "reasoning_content" in params:
             provider_specific_fields["reasoning_content"] = params["reasoning_content"]
-            del params["reasoning_content"]
-        super(Delta, self).__init__(**params)
+            setattr(self, "reasoning_content", params["reasoning_content"])
         self.content = content
         self.role = role
-        self.provider_specific_fields = provider_specific_fields
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+
         if provider_specific_fields:  # set if provider_specific_fields is not empty
             self.provider_specific_fields = provider_specific_fields
 
@@ -801,6 +803,7 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
             new_choice = StreamingChoices(**choice).model_dump()
             new_choices.append(new_choice)
         kwargs["choices"] = new_choices
+
         super().__init__(**kwargs)
 
 
@@ -1726,6 +1729,7 @@ all_litellm_params = [
     "max_fallbacks",
     "max_budget",
     "budget_duration",
+    "use_in_pass_through",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 

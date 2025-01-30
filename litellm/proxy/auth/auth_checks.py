@@ -12,16 +12,19 @@ import asyncio
 import re
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
+from fastapi import status
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    RBAC_ROLES,
     CallInfo,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
@@ -31,6 +34,9 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -95,6 +101,14 @@ async def common_checks(
         model=_model,
         llm_router=llm_router,
     )
+
+    ## 2.1 If user can call model (if personal key)
+    if team_object is None and user_object is not None:
+        await can_user_call_model(
+            model=_model,
+            llm_router=llm_router,
+            user_object=user_object,
+        )
 
     # 3. If team is in budget
     await _team_max_budget_check(
@@ -385,6 +399,30 @@ def _update_last_db_access_time(
     key: str, value: Optional[Any], last_db_access_time: LimitedSizeOrderedDict
 ):
     last_db_access_time[key] = (value, time.time())
+
+
+def get_role_based_models(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+) -> Optional[List[str]]:
+    """
+    Get the models allowed for a user role.
+
+    Used by JWT Auth.
+    """
+
+    role_based_permissions = cast(
+        Optional[List[RoleBasedPermissions]],
+        general_settings.get("role_permissions", []),
+    )
+    if role_based_permissions is None:
+        return None
+
+    for role_based_permission in role_based_permissions:
+        if role_based_permission["role"] == rbac_role:
+            return role_based_permission["models"]
+
+    return None
 
 
 @log_db_metrics
@@ -832,6 +870,68 @@ async def get_org_object(
         )
 
 
+async def _can_object_call_model(
+    model: str,
+    llm_router: Optional[Router],
+    models: List[str],
+) -> Literal[True]:
+    """
+    Checks if token can call a given model
+
+    Returns:
+        - True: if token allowed to call model
+
+    Raises:
+        - Exception: If token not allowed to call model
+    """
+    if model in litellm.model_alias_map:
+        model = litellm.model_alias_map[model]
+
+    ## check if model in allowed model names
+    from collections import defaultdict
+
+    access_groups: Dict[str, List[str]] = defaultdict(list)
+
+    if llm_router:
+        access_groups = llm_router.get_model_access_groups(model_name=model)
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
+        for idx, m in enumerate(
+            models
+        ):  # loop token models, if any of them are an access group add the access group
+            if m in access_groups:
+                return True
+
+    # Filter out models that are access_groups
+    filtered_models = [m for m in models if m not in access_groups]
+
+    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
+
+    if _model_matches_any_wildcard_pattern_in_list(
+        model=model, allowed_model_list=filtered_models
+    ):
+        return True
+
+    all_model_access: bool = False
+
+    if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
+        all_model_access = True
+
+    if model is not None and model not in filtered_models and all_model_access is False:
+        raise ProxyException(
+            message=f"API Key not allowed to access model. This token can only access models={models}. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    verbose_proxy_logger.debug(
+        f"filtered allowed_models: {filtered_models}; models: {models}"
+    )
+    return True
+
+
 async def can_key_call_model(
     model: str,
     llm_model_list: Optional[list],
@@ -847,49 +947,27 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    if model in litellm.model_alias_map:
-        model = litellm.model_alias_map[model]
-
-    ## check if model in allowed model names
-    verbose_proxy_logger.debug(
-        f"LLM Model List pre access group check: {llm_model_list}"
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=valid_token.models,
     )
-    from collections import defaultdict
 
-    access_groups: Dict[str, List[str]] = defaultdict(list)
 
-    if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
-    if (
-        len(access_groups) > 0 and llm_router is not None
-    ):  # check if token contains any model access groups
-        for idx, m in enumerate(
-            valid_token.models
-        ):  # loop token models, if any of them are an access group add the access group
-            if m in access_groups:
-                return True
+async def can_user_call_model(
+    model: str,
+    llm_router: Optional[Router],
+    user_object: Optional[LiteLLM_UserTable],
+) -> Literal[True]:
 
-    # Filter out models that are access_groups
-    filtered_models = [m for m in valid_token.models if m not in access_groups]
+    if user_object is None:
+        return True
 
-    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
-
-    all_model_access: bool = False
-
-    if (
-        len(filtered_models) == 0 and len(valid_token.models) == 0
-    ) or "*" in filtered_models:
-        all_model_access = True
-
-    if model is not None and model not in filtered_models and all_model_access is False:
-        raise ValueError(
-            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
-        )
-    valid_token.models = filtered_models
-    verbose_proxy_logger.debug(
-        f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=user_object.models,
     )
-    return True
 
 
 async def is_valid_fallback_model(
@@ -1037,7 +1115,7 @@ async def _team_max_budget_check(
         raise litellm.BudgetExceededError(
             current_cost=team_object.spend,
             max_budget=team_object.max_budget,
-            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
+            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
 
 
@@ -1059,11 +1137,7 @@ def _team_model_access_check(
         and model not in team_object.models
     ):
         # this means the team has access to all models on the proxy
-        if (
-            "all-proxy-models" in team_object.models
-            or "*" in team_object.models
-            or "openai/*" in team_object.models
-        ):
+        if "all-proxy-models" in team_object.models or "*" in team_object.models:
             # this means the team has access to all models on the proxy
             pass
         # check if the team model is an access_group
@@ -1076,14 +1150,16 @@ def _team_model_access_check(
             pass
         elif model and "*" in model:
             pass
-        elif any(
-            is_model_allowed_by_pattern(model=model, allowed_model_pattern=team_model)
-            for team_model in team_object.models
+        elif _model_matches_any_wildcard_pattern_in_list(
+            model=model, allowed_model_list=team_object.models
         ):
             pass
         else:
-            raise Exception(
-                f"Team={team_object.team_id} not allowed to call model={model}. Allowed team models = {team_object.models}"
+            raise ProxyException(
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={model}. Allowed team models = {team_object.models}",
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=status.HTTP_401_UNAUTHORIZED,
             )
 
 
@@ -1104,3 +1180,68 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
         return bool(re.match(pattern, model))
 
     return False
+
+
+def _model_matches_any_wildcard_pattern_in_list(
+    model: str, allowed_model_list: list
+) -> bool:
+    """
+    Returns True if a model matches any wildcard pattern in a list.
+
+    eg.
+    - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns True
+    - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/us.*` returns True
+    - model=`bedrockzzzz/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns False
+    """
+
+    if any(
+        _is_wildcard_pattern(allowed_model_pattern)
+        and is_model_allowed_by_pattern(
+            model=model, allowed_model_pattern=allowed_model_pattern
+        )
+        for allowed_model_pattern in allowed_model_list
+    ):
+        return True
+
+    if any(
+        _is_wildcard_pattern(allowed_model_pattern)
+        and _model_custom_llm_provider_matches_wildcard_pattern(
+            model=model, allowed_model_pattern=allowed_model_pattern
+        )
+        for allowed_model_pattern in allowed_model_list
+    ):
+        return True
+
+    return False
+
+
+def _model_custom_llm_provider_matches_wildcard_pattern(
+    model: str, allowed_model_pattern: str
+) -> bool:
+    """
+    Returns True for this scenario:
+    - `model=gpt-4o`
+    - `allowed_model_pattern=openai/*`
+
+    or
+    - `model=claude-3-5-sonnet-20240620`
+    - `allowed_model_pattern=anthropic/*`
+    """
+    try:
+        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+    except Exception:
+        return False
+
+    return is_model_allowed_by_pattern(
+        model=f"{custom_llm_provider}/{model}",
+        allowed_model_pattern=allowed_model_pattern,
+    )
+
+
+def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
+    """
+    Returns True if the pattern is a wildcard pattern.
+
+    Checks if `*` is in the pattern.
+    """
+    return "*" in allowed_model_pattern

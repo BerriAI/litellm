@@ -13,7 +13,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -1527,3 +1527,326 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
 
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
+
+
+def test_custom_logger_exists_in_callbacks_individual_functions(monkeypatch):
+    """
+    Test _custom_logger_class_exists_in_success_callbacks and _custom_logger_class_exists_in_failure_callbacks helper functions
+    Tests if logger is found in different callback lists
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import (
+        _custom_logger_class_exists_in_failure_callbacks,
+        _custom_logger_class_exists_in_success_callbacks,
+    )
+
+    # Create a mock CustomLogger class
+    class MockCustomLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    # Reset all callback lists
+    for list_name in [
+        "callbacks",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "success_callback",
+        "failure_callback",
+    ]:
+        monkeypatch.setattr(litellm, list_name, [])
+
+    mock_logger = MockCustomLogger()
+
+    # Test 1: No logger exists in any callback list
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == False
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == False
+
+    # Test 2: Logger exists in success_callback
+    litellm.success_callback.append(mock_logger)
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == True
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == False
+
+    # Reset callbacks
+    litellm.success_callback = []
+
+    # Test 3: Logger exists in _async_success_callback
+    litellm._async_success_callback.append(mock_logger)
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == True
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == False
+
+    # Reset callbacks
+    litellm._async_success_callback = []
+
+    # Test 4: Logger exists in failure_callback
+    litellm.failure_callback.append(mock_logger)
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == False
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == True
+
+    # Reset callbacks
+    litellm.failure_callback = []
+
+    # Test 5: Logger exists in _async_failure_callback
+    litellm._async_failure_callback.append(mock_logger)
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == False
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == True
+
+    # Test 6: Logger exists in both success and failure callbacks
+    litellm.success_callback.append(mock_logger)
+    litellm.failure_callback.append(mock_logger)
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == True
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == True
+
+    # Test 7: Different instance of same logger class
+    mock_logger_2 = MockCustomLogger()
+    assert _custom_logger_class_exists_in_success_callbacks(mock_logger_2) == True
+    assert _custom_logger_class_exists_in_failure_callbacks(mock_logger_2) == True
+
+
+@pytest.mark.asyncio
+async def test_add_custom_logger_callback_to_specific_event_with_duplicates(
+    monkeypatch,
+):
+    """
+    Test that when a callback exists in both success_callback and _async_success_callback,
+    it's not added again
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Reset all callback lists
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    # Add logger to both success_callback and _async_success_callback
+    langfuse_logger = LangfusePromptManagement()
+    litellm.success_callback.append(langfuse_logger)
+    litellm._async_success_callback.append(langfuse_logger)
+
+    # Get initial lengths
+    initial_success_callback_len = len(litellm.success_callback)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+
+    # Make a completion call
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing duplicate callbacks",
+    )
+
+    # Assert no new callbacks were added
+    assert len(litellm.success_callback) == initial_success_callback_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+
+
+@pytest.mark.asyncio
+async def test_add_custom_logger_callback_to_specific_event_with_duplicates_success_callback(
+    monkeypatch,
+):
+    """
+    Test that when a callback exists in both success_callback and _async_success_callback,
+    it's not added again
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Reset all callback lists
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    # Add logger to both success_callback and _async_success_callback
+    langfuse_logger = LangfusePromptManagement()
+    litellm.success_callback.append(langfuse_logger)
+
+    # Get initial lengths
+    initial_success_callback_len = len(litellm.success_callback)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+
+    # Make a completion call
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing duplicate callbacks",
+    )
+
+    # Assert no new callbacks were added
+    assert len(litellm.success_callback) == initial_success_callback_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+
+
+@pytest.mark.asyncio
+async def test_add_custom_logger_callback_to_specific_event_with_duplicates_callbacks(
+    monkeypatch,
+):
+    """
+    Test that when a callback exists in both success_callback and _async_success_callback,
+    it's not added again
+    """
+    from litellm.integrations.langfuse.langfuse_prompt_management import (
+        LangfusePromptManagement,
+    )
+
+    # Reset all callback lists
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+
+    # Add logger to both success_callback and _async_success_callback
+    langfuse_logger = LangfusePromptManagement()
+    litellm.callbacks.append(langfuse_logger)
+
+    # Make a completion call
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing duplicate callbacks",
+    )
+
+    # Assert no new callbacks were added
+    initial_callbacks_len = len(litellm.callbacks)
+    initial_async_success_callback_len = len(litellm._async_success_callback)
+    initial_success_callback_len = len(litellm.success_callback)
+    print(
+        f"Num callbacks before: litellm.callbacks: {len(litellm.callbacks)}, litellm._async_success_callback: {len(litellm._async_success_callback)}, litellm.success_callback: {len(litellm.success_callback)}"
+    )
+
+    for _ in range(10):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Testing duplicate callbacks",
+        )
+
+    assert len(litellm.callbacks) == initial_callbacks_len
+    assert len(litellm._async_success_callback) == initial_async_success_callback_len
+    assert len(litellm.success_callback) == initial_success_callback_len
+
+    print(
+        f"Num callbacks after 10 mock calls: litellm.callbacks: {len(litellm.callbacks)}, litellm._async_success_callback: {len(litellm._async_success_callback)}, litellm.success_callback: {len(litellm.success_callback)}"
+    )
+
+
+def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
+    from litellm.integrations.openmeter import OpenMeterLogger
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setenv("OPENMETER_API_KEY", "wedlwe")
+    monkeypatch.setenv("OPENMETER_API_URL", "https://openmeter.dev")
+
+    litellm.failure_callback = ["openmeter"]
+
+    curr_len_success_callback = len(litellm.success_callback)
+    curr_len_failure_callback = len(litellm.failure_callback)
+
+    litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Testing langfuse",
+    )
+
+    assert len(litellm.success_callback) == curr_len_success_callback
+    assert len(litellm.failure_callback) == curr_len_failure_callback
+
+    assert any(
+        isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrapper_kwargs_passthrough():
+    from litellm.utils import client
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObject,
+    )
+
+    # Create mock original function
+    mock_original = AsyncMock()
+
+    # Apply decorator
+    @client
+    async def test_function(**kwargs):
+        return await mock_original(**kwargs)
+
+    # Test kwargs
+    test_kwargs = {"base_model": "gpt-4o-mini"}
+
+    # Call decorated function
+    await test_function(**test_kwargs)
+
+    mock_original.assert_called_once()
+
+    # get litellm logging object
+    litellm_logging_obj: LiteLLMLoggingObject = mock_original.call_args.kwargs.get(
+        "litellm_logging_obj"
+    )
+    assert litellm_logging_obj is not None
+
+    print(
+        f"litellm_logging_obj.model_call_details: {litellm_logging_obj.model_call_details}"
+    )
+
+    # get base model
+    assert (
+        litellm_logging_obj.model_call_details["litellm_params"]["base_model"]
+        == "gpt-4o-mini"
+    )
+
+
+def test_dict_to_response_format_helper():
+    from litellm.llms.base_llm.base_utils import _dict_to_response_format_helper
+
+    args = {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "schema": {
+                    "$defs": {
+                        "CalendarEvent": {
+                            "properties": {
+                                "name": {"title": "Name", "type": "string"},
+                                "date": {"title": "Date", "type": "string"},
+                                "participants": {
+                                    "items": {"type": "string"},
+                                    "title": "Participants",
+                                    "type": "array",
+                                },
+                            },
+                            "required": ["name", "date", "participants"],
+                            "title": "CalendarEvent",
+                            "type": "object",
+                            "additionalProperties": False,
+                        }
+                    },
+                    "properties": {
+                        "events": {
+                            "items": {"$ref": "#/$defs/CalendarEvent"},
+                            "title": "Events",
+                            "type": "array",
+                        }
+                    },
+                    "required": ["events"],
+                    "title": "EventsList",
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+                "name": "EventsList",
+                "strict": True,
+            },
+        },
+        "ref_template": "/$defs/{model}",
+    }
+    _dict_to_response_format_helper(**args)

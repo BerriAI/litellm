@@ -11,7 +11,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelInfoBase, ModelResponse
+from litellm.types.utils import ModelResponse
 
 from ..common_utils import OpenAIError
 
@@ -254,23 +254,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         models = response.json()["data"]
         return [model["id"] for model in models]
-
-    def get_model_info(
-        self, model: str, existing_model_info: Optional[ModelInfoBase] = None
-    ) -> ModelInfoBase:
-
-        if existing_model_info is not None:
-            return existing_model_info
-        return ModelInfoBase(
-            key=model,
-            litellm_provider="openai",
-            mode="chat",
-            input_cost_per_token=0.0,
-            output_cost_per_token=0.0,
-            max_tokens=None,
-            max_input_tokens=None,
-            max_output_tokens=None,
-        )
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:

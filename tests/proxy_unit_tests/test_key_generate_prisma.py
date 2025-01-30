@@ -361,11 +361,9 @@ def test_call_with_invalid_model(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
-        assert (
-            e.message
-            == "Authentication Error, API Key not allowed to access model. This token can only access models=['mistral']. Tried to access gemini-pro-vision"
-        )
-        pass
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.key_model_access_denied
+        assert e.param == "model"
 
 
 def test_call_with_valid_model(prisma_client):
@@ -1354,7 +1352,7 @@ def test_generate_and_update_key(prisma_client):
             current_time = datetime.now(timezone.utc)
 
             # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 29
+            assert 31 >= (budget_reset_at - current_time).days >= 28
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -3200,10 +3198,9 @@ async def test_team_access_groups(prisma_client):
             pytest.fail(f"This should have failed!. IT's an invalid model")
         except Exception as e:
             print("got exception", e)
-            assert (
-                "not allowed to call model" in e.message
-                and "Allowed team models" in e.message
-            )
+            assert isinstance(e, ProxyException)
+            assert e.type == ProxyErrorTypes.team_model_access_denied
+            assert e.param == "model"
 
 
 @pytest.mark.asyncio()

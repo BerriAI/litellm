@@ -14,7 +14,7 @@ from litellm.integrations.langfuse.langfuse import (
 from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
 from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 from unittest.mock import Mock, patch
-
+from respx import MockRouter
 from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingModelInformation,
@@ -292,3 +292,54 @@ def test_get_langfuse_tags():
     mock_payload["request_tags"] = []
     result = global_langfuse_logger._get_langfuse_tags(mock_payload)
     assert result == []
+
+
+
+@patch.dict(os.environ, {}, clear=True)  # Start with empty environment
+def test_get_langfuse_flush_interval():
+    """
+    Test that _get_langfuse_flush_interval correctly reads from environment variable
+    or falls back to the provided flush_interval
+    """
+    default_interval = 60
+
+    # Test when env var is not set
+    result = LangFuseLogger._get_langfuse_flush_interval(
+        flush_interval=default_interval
+    )
+    assert result == default_interval
+
+    # Test when env var is set
+    with patch.dict(os.environ, {"LANGFUSE_FLUSH_INTERVAL": "120"}):
+        result = LangFuseLogger._get_langfuse_flush_interval(
+            flush_interval=default_interval
+        )
+        assert result == 120
+
+def test_langfuse_e2e_sync(monkeypatch):
+    from litellm import completion
+    import litellm
+    import respx
+    import httpx
+    import time
+
+    litellm._turn_on_debug()
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+
+    with respx.mock:
+        # Mock Langfuse
+        # Mock any Langfuse endpoint
+        langfuse_mock = respx.post(
+            "https://*.cloud.langfuse.com/api/public/ingestion"
+        ).mock(return_value=httpx.Response(200))
+        completion(
+            model="openai/my-fake-endpoint",
+            messages=[{"role": "user", "content": "hello from litellm"}],
+            stream=False,
+            mock_response="Hello from litellm 2",
+        )
+
+        time.sleep(3)
+
+        assert langfuse_mock.called
+

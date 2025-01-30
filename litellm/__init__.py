@@ -77,6 +77,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "langfuse",
     "pagerduty",
     "humanloop",
+    "gcs_pubsub",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -87,6 +88,7 @@ callbacks: List[
 ] = []
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
+prometheus_initialize_budget_metrics: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
@@ -401,7 +403,7 @@ def identify(event_details):
 
 
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
-api_base = None
+api_base: Optional[str] = None
 headers = None
 api_version = None
 organization = None
@@ -432,7 +434,6 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
-    "meta.llama3-2-405b-instruct-v1:0",
 ]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
@@ -1252,7 +1253,7 @@ from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
-from .batch_completion.main import *
+from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .realtime_api.main import _arealtime
 from .fine_tuning.main import *

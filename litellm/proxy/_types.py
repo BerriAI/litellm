@@ -253,6 +253,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/team/available",
         "/user/info",
         "/model/info",
         "/v2/model/info",
@@ -284,6 +285,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/info",
         "/team/block",
         "/team/unblock",
+        "/team/available",
         # model
         "/model/new",
         "/model/update",
@@ -443,6 +445,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_id_jwt_field: Optional[str] = None
     user_email_jwt_field: Optional[str] = None
     user_allowed_email_domain: Optional[str] = None
+    user_roles_jwt_field: Optional[str] = None
+    user_allowed_roles: Optional[List[str]] = None
     user_id_upsert: bool = Field(
         default=False, description="If user doesn't exist, upsert them into the db."
     )
@@ -456,10 +460,18 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         allowed_keys = self.__annotations__.keys()
 
         invalid_keys = set(kwargs.keys()) - allowed_keys
+        user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
+        user_allowed_roles = kwargs.get("user_allowed_roles")
 
         if invalid_keys:
             raise ValueError(
                 f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
+            )
+        if (user_roles_jwt_field is not None and user_allowed_roles is None) or (
+            user_roles_jwt_field is None and user_allowed_roles is not None
+        ):
+            raise ValueError(
+                "user_allowed_roles must be provided if user_roles_jwt_field is set."
             )
 
         super().__init__(**kwargs)
@@ -1563,6 +1575,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
+    teams: List[str] = []
 
     @model_validator(mode="before")
     @classmethod
@@ -1571,6 +1584,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
             values.update({"spend": 0.0})
         if values.get("models") is None:
             values.update({"models": []})
+        if values.get("teams") is None:
+            values.update({"teams": []})
         return values
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1987,6 +2002,8 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    key_model_access_denied = "key_model_access_denied"
+    team_model_access_denied = "team_model_access_denied"
     expired_key = "expired_key"
     auth_error = "auth_error"
     internal_server_error = "internal_server_error"
@@ -2151,6 +2168,13 @@ class TeamListResponseObject(LiteLLM_TeamTable):
     keys: List  # list of keys that belong to the team
 
 
+class KeyListResponseObject(TypedDict, total=False):
+    keys: List[Union[str, UserAPIKeyAuth]]
+    total_count: Optional[int]
+    current_page: Optional[int]
+    total_pages: Optional[int]
+
+
 class CurrentItemRateLimit(TypedDict):
     current_requests: int
     current_tpm: int
@@ -2180,6 +2204,7 @@ class SpecialHeaders(enum.Enum):
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
+    timeout: Optional[float]
 
 
 class JWTKeyItem(TypedDict, total=False):
@@ -2321,3 +2346,15 @@ class ClientSideFallbackModel(TypedDict, total=False):
 
 
 ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
+
+
+RBAC_ROLES = Literal[
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.TEAM,
+    LitellmUserRoles.INTERNAL_USER,
+]
+
+
+class RoleBasedPermissions(TypedDict):
+    role: Required[RBAC_ROLES]
+    models: Required[List[str]]

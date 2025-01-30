@@ -3,10 +3,12 @@ import { getCountryFromIP } from "./ip_lookup";
 import moment from "moment";
 import React from "react";
 import { CountryCell } from "./country_cell";
+import { getProviderLogoAndName } from "../provider_info_helpers";
 
 export type LogEntry = {
   request_id: string;
   api_key: string;
+  team_id: string;
   model: string;
   api_base?: string;
   call_type: string;
@@ -17,6 +19,7 @@ export type LogEntry = {
   startTime: string;
   endTime: string;
   user?: string;
+  custom_llm_provider?: string;
   metadata?: Record<string, any>;
   cache_hit: string;
   cache_key?: string;
@@ -105,7 +108,26 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Model",
     accessorKey: "model",
-    cell: (info: any) => <span>{String(info.getValue() || "")}</span>,
+    cell: (info: any) => {
+      const row = info.row.original;
+      const provider = row.custom_llm_provider;
+      return (
+        <div className="flex items-center space-x-2">
+          {provider && (
+            <img
+              src={getProviderLogoAndName(provider).logo}
+              alt=""
+              className="w-4 h-4"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+              }}
+            />
+          )}
+          <span>{String(info.getValue() || "")}</span>
+        </div>
+      );
+    },
   },
   {
     header: "Tokens",
@@ -154,11 +176,6 @@ export const columns: ColumnDef<LogEntry>[] = [
         </div>
       );
     },
-  },
-  {
-    header: "Country",
-    accessorKey: "requester_ip_address",
-    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
 ];
 

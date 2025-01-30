@@ -691,6 +691,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install numpydoc
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -986,6 +987,7 @@ jobs:
             pip install ruff
             pip install pylint
             pip install pyright
+            pip install beautifulsoup4
             pip install .
             curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       - run: python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
@@ -995,6 +997,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/recursive_detector.py
       - run: python ./tests/code_coverage_tests/test_router_strategy_async.py
       - run: python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
+      - run: python ./tests/code_coverage_tests/bedrock_pricing.py
       - run: python ./tests/documentation_tests/test_env_keys.py
       - run: python ./tests/documentation_tests/test_router_settings.py
       - run: python ./tests/documentation_tests/test_api_docs.py
