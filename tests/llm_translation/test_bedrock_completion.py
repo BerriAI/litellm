@@ -2518,14 +2518,14 @@ def test_bedrock_custom_proxy():
             response = completion(
                 model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
                 messages=[{"content": "Tell me a joke", "role": "user"}],
-                api_key="Bearer Token",
+                api_key="Token",
                 client=client,
-                aws_bedrock_runtime_endpoint="https://some-api-url/models",
+                api_base="https://some-api-url/models",
             )
         except Exception as e:
             print(e)
+        print(mock_post.call_args.kwargs)
         mock_post.assert_called_once()
-        assert (
-            mock_post.call_args.kwargs["url"]
-            == "https://some-api-url/models/claude-3-5-sonnet-20241022/chat/completions"
-        )
+        assert mock_post.call_args.kwargs["url"] == "https://some-api-url/models"
+
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer Token"

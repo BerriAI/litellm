@@ -718,4 +718,6 @@ class AmazonConverseConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
