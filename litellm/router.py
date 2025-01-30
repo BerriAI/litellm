@@ -502,7 +502,9 @@ class Router:
             ]
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
-            litellm.failure_callback.append(self.deployment_callback_on_failure)
+            litellm.logging_callback_manager.add_litellm_failure_callback(
+                self.deployment_callback_on_failure
+            )
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         verbose_router_logger.debug(

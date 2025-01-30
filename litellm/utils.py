@@ -369,7 +369,9 @@ def _add_custom_logger_callback_to_specific_event(
             and _custom_logger_class_exists_in_failure_callbacks(callback_class)
             is False
         ):
-            litellm.failure_callback.append(callback_class)
+            litellm.logging_callback_manager.add_litellm_failure_callback(
+                callback_class
+            )
             litellm._async_failure_callback.append(callback_class)
             if callback in litellm.failure_callback:
                 litellm.failure_callback.remove(
@@ -451,7 +453,7 @@ def function_setup(  # noqa: PLR0915
                 if callback not in litellm.success_callback:
                     litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
                 if callback not in litellm.failure_callback:
-                    litellm.failure_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
                 if callback not in litellm._async_success_callback:
                     litellm._async_success_callback.append(callback)  # type: ignore
                 if callback not in litellm._async_failure_callback:
