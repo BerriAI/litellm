@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Control Model Access with SSO (Azure AD/Keycloak/etc.)
+# Control Model Access with OIDC (Azure AD/Keycloak/etc.)
 
 :::info
 
