@@ -1,6 +1,6 @@
-import React from "react";
-import { Form, Switch } from "antd";
-import { Text, Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import React, { useState } from "react";
+import { Form, Switch, Input, Select } from "antd";
+import { Text, TextInput, Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Row, Col, Typography, Card } from "antd";
 import TextArea from "antd/es/input/TextArea";
 const { Link } = Typography;
@@ -15,6 +15,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   setShowAdvancedSettings,
 }) => {
   const [form] = Form.useForm();
+  const [pricingModel, setPricingModel] = useState<'per_second' | 'per_token'>('per_token');
 
   // Add validation function
   const validateJSON = (_: any, value: string) => {
@@ -27,6 +28,16 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
     } catch (error) {
       return Promise.reject('Please enter valid JSON');
     }
+  };
+
+  const validateNumber = (_: any, value: string) => {
+    if (!value) {
+      return Promise.resolve();
+    }
+    if (isNaN(Number(value)) || Number(value) < 0) {
+      return Promise.reject('Please enter a valid positive number');
+    }
+    return Promise.resolve();
   };
 
   const handlePassThroughChange = (checked: boolean) => {
@@ -52,6 +63,81 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         form.setFieldValue('litellm_extra_params', '');
       }
     }
+  };
+
+  const updateLiteLLMParams = (updates: any) => {
+    const currentParams = form.getFieldValue('litellm_extra_params');
+    try {
+      let paramsObj = currentParams ? JSON.parse(currentParams) : {};
+      paramsObj = { ...paramsObj, ...updates };
+      
+      // Remove any null or undefined values
+      Object.keys(paramsObj).forEach(key => {
+        if (paramsObj[key] === null || paramsObj[key] === undefined) {
+          delete paramsObj[key];
+        }
+      });
+
+      // Only set the field value if there are parameters
+      if (Object.keys(paramsObj).length > 0) {
+        form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+      } else {
+        form.setFieldValue('litellm_extra_params', '');
+      }
+    } catch (error) {
+      // If JSON parsing fails, create new object with updates
+      form.setFieldValue('litellm_extra_params', JSON.stringify(updates, null, 2));
+    }
+  };
+
+  const handlePricingChange = (value: string | number | null, type: string) => {
+    if (value === '' || value === null) {
+      return;
+    }
+
+    const numValue = Number(value);
+    if (isNaN(numValue)) {
+      return;
+    }
+
+    let updates: any = {};
+    
+    if (pricingModel === 'per_second') {
+      updates.input_cost_per_second = numValue;
+    } else {
+      // Convert from per million tokens to per token
+      const perTokenValue = numValue / 1_000_000;
+      if (type === 'input') {
+        updates.input_cost_per_token = perTokenValue;
+      } else {
+        updates.output_cost_per_token = perTokenValue;
+      }
+    }
+
+    updateLiteLLMParams(updates);
+  };
+
+  const handlePricingModelChange = (value: 'per_token' | 'per_second') => {
+    setPricingModel(value);
+    // Clear existing pricing in litellm_params when switching models
+    const currentParams = form.getFieldValue('litellm_extra_params');
+    try {
+      let paramsObj = currentParams ? JSON.parse(currentParams) : {};
+      delete paramsObj.input_cost_per_second;
+      delete paramsObj.input_cost_per_token;
+      delete paramsObj.output_cost_per_token;
+      form.setFieldValue('litellm_extra_params', 
+        Object.keys(paramsObj).length > 0 ? JSON.stringify(paramsObj, null, 2) : ''
+      );
+    } catch (error) {
+      form.setFieldValue('litellm_extra_params', '');
+    }
+    // Clear the form fields
+    form.setFieldsValue({
+      input_cost_per_second: undefined,
+      input_cost_per_million_tokens: undefined,
+      output_cost_per_million_tokens: undefined
+    });
   };
 
   return (
@@ -83,6 +169,63 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   className="bg-gray-600" 
                 />
               </Form.Item>
+              <Form.Item
+                label="Pricing Model"
+                name="pricing_model"
+                className="mb-4"
+                tooltip="Select pricing model type"
+                initialValue="per_token"
+              >
+                <Select
+                  onChange={handlePricingModelChange}
+                  options={[
+                    { value: 'per_token', label: 'Per Token' },
+                    { value: 'per_second', label: 'Per Second' },
+                  ]}
+                />
+              </Form.Item>
+
+              {pricingModel === 'per_second' ? (
+                <Form.Item
+                  label="Cost Per Second"
+                  name="input_cost_per_second"
+                  tooltip="Cost per second of model usage"
+                  rules={[{ validator: validateNumber }]}
+                  className="mb-4"
+                >
+                  <TextInput 
+                    placeholder="0.0001" 
+                    onChange={(e) => handlePricingChange(e.target.value, 'input')}
+                  />
+                </Form.Item>
+              ) : (
+                <>
+                  <Form.Item
+                    label="Input Cost (per 1M tokens)"
+                    name="input_cost_per_million_tokens"
+                    tooltip="Cost per 1 million input tokens"
+                    rules={[{ validator: validateNumber }]}
+                    className="mb-4"
+                  >
+                    <TextInput 
+                      placeholder="1.00" 
+                      onChange={(e) => handlePricingChange(e.target.value, 'input')}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="Output Cost (per 1M tokens)"
+                    name="output_cost_per_million_tokens"
+                    tooltip="Cost per 1 million output tokens"
+                    rules={[{ validator: validateNumber }]}
+                    className="mb-4"
+                  >
+                    <TextInput 
+                      placeholder="2.00" 
+                      onChange={(e) => handlePricingChange(e.target.value, 'output')}
+                    />
+                  </Form.Item>
+                </>
+              )}
               <Form.Item
                 label="LiteLLM Params"
                 name="litellm_extra_params"
