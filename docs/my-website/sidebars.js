@@ -206,6 +206,7 @@ const sidebars = {
         "providers/perplexity",
         "providers/friendliai",
         "providers/galadriel",
+        "providers/topaz",
         "providers/groq",
         "providers/github",
         "providers/deepseek",
@@ -278,7 +279,14 @@ const sidebars = {
         },
         "text_completion",
         "embedding/supported_embedding",
-        "image_generation",
+        {
+          type: "category",
+          label: "Image",
+          items: [
+            "image_generation",
+            "image_variations",
+          ]
+        },
         {
           type: "category",
           label: "Audio",
