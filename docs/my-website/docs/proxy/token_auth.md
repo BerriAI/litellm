@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# SSO - JWT-based Auth 
+# OIDC - JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 
