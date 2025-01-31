@@ -1804,6 +1804,10 @@ jobs:
             cd tests/proxy_admin_ui_tests/ui_unit_tests
             npm install
             npm install --save-dev jest @testing-library/react @types/jest
+            # Install UI dependencies
+            npm install antd @types/antd
+            npm install react react-dom @types/react @types/react-dom
+            npm install @testing-library/jest-dom
             npm test
       - run:
           name: Install Docker CLI (In case it's not already installed)
