@@ -833,8 +833,9 @@ class OpenAIChatCompletion(BaseLLM):
         stream_options: Optional[dict] = None,
     ):
         data["stream"] = True
-        if stream_options is not None:
-            data["stream_options"] = stream_options
+        data.update(
+            self.get_stream_options(stream_options=stream_options, api_base=api_base)
+        )
 
         openai_client: OpenAI = self._get_openai_client(  # type: ignore
             is_async=False,
@@ -893,8 +894,9 @@ class OpenAIChatCompletion(BaseLLM):
     ):
         response = None
         data["stream"] = True
-        if stream_options is not None:
-            data["stream_options"] = stream_options
+        data.update(
+            self.get_stream_options(stream_options=stream_options, api_base=api_base)
+        )
         for _ in range(2):
             try:
                 openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
@@ -976,6 +978,17 @@ class OpenAIChatCompletion(BaseLLM):
                         raise OpenAIError(
                             status_code=500, message=f"{str(e)}", headers=error_headers
                         )
+
+    def get_stream_options(
+        self, stream_options: Optional[dict], api_base: Optional[str]
+    ) -> dict:
+        if stream_options is not None:
+            return {"stream_options": stream_options}
+        else:
+            # by default litellm will include usage for openai endpoints
+            if api_base is None or "api.openai.com" in api_base:
+                return {"stream_options": {"include_usage": True}}
+        return {}
 
     # Embedding
     @track_llm_api_timing()
