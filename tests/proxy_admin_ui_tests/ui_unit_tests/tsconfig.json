@@ -1,5 +1,5 @@
 {
-    "compilerOptions": {
+  "compilerOptions": {
       "target": "es5",
       "lib": ["dom", "dom.iterable", "esnext"],
       "allowJs": true,
@@ -14,13 +14,17 @@
       "resolveJsonModule": true,
       "isolatedModules": true,
       "noEmit": true,
-      "jsx": "react-jsx"
-    },
-    "include": [
+      "jsx": "react-jsx",
+      "baseUrl": ".",
+      "paths": {
+          "*": ["*", "node_modules/*"]
+      }
+  },
+  "include": [
       "**/*.ts",
       "**/*.tsx"
-    ],
-    "exclude": [
+  ],
+  "exclude": [
       "node_modules"
-    ]
-  }
+  ]
+}
