@@ -150,6 +150,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     ProviderSpecificModelInfo,
+    SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
@@ -1440,34 +1441,47 @@ def _select_tokenizer(
 
 
 @lru_cache(maxsize=128)
-def _select_tokenizer_helper(model: str):
+def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
+
+    if litellm.disable_hf_tokenizer_download is True:
+        return _return_openai_tokenizer(model)
+
     try:
-        if model in litellm.cohere_models and "command-r" in model:
-            # cohere
-            cohere_tokenizer = Tokenizer.from_pretrained(
-                "Xenova/c4ai-command-r-v01-tokenizer"
-            )
-            return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
-        # anthropic
-        elif model in litellm.anthropic_models and "claude-3" not in model:
-            claude_tokenizer = Tokenizer.from_str(claude_json_str)
-            return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
-        # llama2
-        elif "llama-2" in model.lower() or "replicate" in model.lower():
-            tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-        # llama3
-        elif "llama-3" in model.lower():
-            tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
-            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        result = _return_huggingface_tokenizer(model)
+        if result is not None:
+            return result
     except Exception as e:
         verbose_logger.debug(f"Error selecting tokenizer: {e}")
 
     # default - tiktoken
-    return {
-        "type": "openai_tokenizer",
-        "tokenizer": encoding,
-    }  # default to openai tokenizer
+    return _return_openai_tokenizer(model)
+
+
+def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
+    return {"type": "openai_tokenizer", "tokenizer": encoding}
+
+
+def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerResponse]:
+    if model in litellm.cohere_models and "command-r" in model:
+        # cohere
+        cohere_tokenizer = Tokenizer.from_pretrained(
+            "Xenova/c4ai-command-r-v01-tokenizer"
+        )
+        return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
+    # anthropic
+    elif model in litellm.anthropic_models and "claude-3" not in model:
+        claude_tokenizer = Tokenizer.from_str(claude_json_str)
+        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
+    # llama2
+    elif "llama-2" in model.lower() or "replicate" in model.lower():
+        tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # llama3
+    elif "llama-3" in model.lower():
+        tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    else:
+        return None
 
 
 def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
