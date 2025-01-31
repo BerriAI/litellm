@@ -119,3 +119,41 @@ async def test_stream_token_counting_without_include_usage():
         actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
     )
     assert actual_usage.total_tokens == custom_logger.recorded_usage.total_tokens
+
+
+@pytest.mark.asyncio
+async def test_stream_token_counting_with_redaction():
+    """
+    When litellm.turn_off_message_logging=True is used, the usage tracked == usage from llm api chunk
+    """
+    litellm.turn_off_message_logging = True
+    custom_logger = TestCustomLogger()
+    litellm.logging_callback_manager.add_litellm_callback(custom_logger)
+
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello, how are you?" * 100}],
+        stream=True,
+    )
+
+    actual_usage = None
+    async for chunk in response:
+        if "usage" in chunk:
+            actual_usage = chunk["usage"]
+            print("chunk.usage", json.dumps(chunk["usage"], indent=4, default=str))
+        pass
+
+    await asyncio.sleep(2)
+
+    print("\n\n\n\n\n")
+    print(
+        "recorded_usage",
+        json.dumps(custom_logger.recorded_usage, indent=4, default=str),
+    )
+    print("\n\n\n\n\n")
+
+    assert actual_usage.prompt_tokens == custom_logger.recorded_usage.prompt_tokens
+    assert (
+        actual_usage.completion_tokens == custom_logger.recorded_usage.completion_tokens
+    )
+    assert actual_usage.total_tokens == custom_logger.recorded_usage.total_tokens
