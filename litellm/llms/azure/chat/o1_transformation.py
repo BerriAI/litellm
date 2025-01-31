@@ -1,5 +1,5 @@
 """
-Support for o1 model family 
+Support for o1 and o3 model families
 
 https://platform.openai.com/docs/guides/reasoning
 
@@ -47,5 +47,5 @@ class AzureOpenAIO1Config(OpenAIO1Config):
 
         return True
 
-    def is_o1_model(self, model: str) -> bool:
-        return "o1" in model
+    def is_reasoning_model(self, model: str) -> bool:
+        return "o1" in model or "o3" in model

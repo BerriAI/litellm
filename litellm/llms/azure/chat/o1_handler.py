@@ -1,7 +1,7 @@
 """
-Handler file for calls to Azure OpenAI's o1 family of models
+Handler file for calls to Azure OpenAI's o1/o3 family of models
 
-Written separately to handle faking streaming for o1 models.
+Written separately to handle faking streaming for o1 and o3 models.
 """
 
 from typing import Optional, Union
