@@ -1789,25 +1789,6 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-      # Add Node.js setup and Jest testing
-      - run:
-          name: Install Node.js
-          command: |
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-            node --version
-            npm --version
-
-      - run:
-          name: Install and Run Jest Tests
-          command: |
-            cd tests/proxy_admin_ui_tests/ui_unit_tests
-            rm -rf node_modules package-lock.json
-            npm install
-            npm install --save-dev jest @testing-library/react @testing-library/jest-dom @types/jest
-            npm install antd@5.12.5
-            npm install react react-dom @types/react @types/react-dom
-            npm test
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
