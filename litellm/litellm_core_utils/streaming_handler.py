@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
@@ -28,11 +29,6 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
-
-MAX_THREADS = 100
-
-# Create a ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 
 
 def is_async_iterable(obj: Any) -> bool:
@@ -1658,6 +1654,15 @@ class CustomStreamWrapper:
                         end_time=None,
                     )
                 )
+
+                executor.submit(
+                    self.logging_obj.success_handler,
+                    complete_streaming_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                )
+
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True

@@ -166,7 +166,6 @@ with resources.open_text(
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from concurrent.futures import ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -185,6 +184,7 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -235,10 +235,6 @@ from .types.router import LiteLLM_Params
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
-MAX_THREADS = 100
-
-# Create a ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
