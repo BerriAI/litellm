@@ -1,4 +1,4 @@
-# Public Teams
+# [BETA] Public Teams
 
 Expose available teams to your users to join on signup.
 
