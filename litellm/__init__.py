@@ -1274,3 +1274,4 @@ custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
     []
 )  # internal helper util, used to track names of custom providers
+disable_no_log_param: bool = False

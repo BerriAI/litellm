@@ -867,6 +867,17 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    def should_run_callback(self, callback: str, litellm_params: dict) -> bool:
+        if litellm_params.get("no-log", False) is True:
+            # proxy cost tracking cal backs should run
+            if not (
+                isinstance(callback, CustomLogger)
+                and "_PROXY_" in callback.__class__.__name__
+            ):
+                verbose_logger.debug("no-log request, skipping logging")
+                return False
+        return True
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -1072,14 +1083,9 @@ class Logging(LiteLLMLoggingBaseClass):
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
-                    if litellm_params.get("no-log", False) is True:
-                        # proxy cost tracking cal backs should run
-                        if not (
-                            isinstance(callback, CustomLogger)
-                            and "_PROXY_" in callback.__class__.__name__
-                        ):
-                            verbose_logger.info("no-log request, skipping logging")
-                            continue
+                    should_run = self.should_run_callback(callback, litellm_params)
+                    if not should_run:
+                        continue
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
                         promptLayerLogger.log_event(
@@ -1626,17 +1632,12 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) is True:
-                # proxy cost tracking cal backs should run
-                if not (
-                    isinstance(callback, CustomLogger)
-                    and "_PROXY_" in callback.__class__.__name__
-                ):
-                    print_verbose("no-log request, skipping logging")
-                    continue
+            should_run = self.should_run_callback(callback, litellm_params)
+            if not should_run:
+                continue
             try:
-                if kwargs.get("no-log", False) is True:
-                    print_verbose("no-log request, skipping logging")
+                should_run = self.should_run_callback(callback, litellm_params)
+                if not should_run:
                     continue
                 if callback == "openmeter" and openMeterLogger is not None:
                     if self.stream is True:
