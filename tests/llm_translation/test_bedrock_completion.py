@@ -2580,3 +2580,20 @@ def test_bedrock_custom_deepseek():
         except Exception as e:
             print(f"Error: {str(e)}")
             raise e
+        
+@pytest.mark.parametrize(
+    "model", 
+    [
+        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0", 
+        "bedrock/converse/us.amazon.nova-pro-v1:0", 
+        "bedrock/meta.llama3-70b-instruct-v1:0",
+        "bedrock/mistral.mistral-7b-instruct-v0:2",
+    ]
+)
+def test_bedrock_top_k(model):
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        top_k=2,
+    )  
+
