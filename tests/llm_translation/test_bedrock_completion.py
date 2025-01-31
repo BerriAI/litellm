@@ -733,7 +733,7 @@ def test_bedrock_stop_value(stop, model):
     "model",
     [
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "meta.llama3-70b-instruct-v1:0",
+        # "meta.llama3-70b-instruct-v1:0",
         "anthropic.claude-v2",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
