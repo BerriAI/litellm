@@ -540,6 +540,8 @@ async def test_async_chat_openai_stream_options():
 
             async for chunk in response:
                 continue
+
+            await asyncio.sleep(1)
             print("mock client args list=", mock_client.await_args_list)
             mock_client.assert_awaited_once()
     except Exception as e:
