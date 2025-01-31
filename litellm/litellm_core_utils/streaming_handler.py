@@ -1674,11 +1674,11 @@ class CustomStreamWrapper:
                 ## LOGGING
                 threading.Thread(
                     target=self.logging_obj.success_handler,
-                    args=(response, None, None, cache_hit),
+                    args=(complete_streaming_response, None, None, cache_hit),
                 ).start()  # log response
                 asyncio.create_task(
                     self.logging_obj.async_success_handler(
-                        response, cache_hit=cache_hit
+                        complete_streaming_response, cache_hit=cache_hit
                     )
                 )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
