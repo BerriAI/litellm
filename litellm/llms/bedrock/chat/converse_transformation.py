@@ -336,17 +336,17 @@ class AmazonConverseConfig(BaseConfig):
     def _handle_top_k_value(self, model: str, inference_params: dict) -> dict:
         base_model = self._get_base_model(model)
 
-        valTopK = None
+        val_top_k = None
         if "topK" in inference_params:
-            valTopK = inference_params.pop("topK")
+            val_top_k = inference_params.pop("topK")
         elif "top_k" in inference_params:
-            valTopK = inference_params.pop("top_k")
+            val_top_k = inference_params.pop("top_k")
 
-        if valTopK:
+        if val_top_k:
             if (base_model.startswith("anthropic")):
-                return {"top_k": valTopK}
-            elif base_model.startswith("amazon.nova"):
-                return {'inferenceConfig': {"topK": valTopK}}                
+                return {"top_k": val_top_k}
+            if base_model.startswith("amazon.nova"):
+                return {'inferenceConfig': {"topK": val_top_k}}                
                 
         return {}
 
