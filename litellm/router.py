@@ -3104,7 +3104,6 @@ class Router:
                 deployment_num_retries, int
             ):
                 num_retries = deployment_num_retries
-
             """
             Retry Logic
             """
@@ -3141,6 +3140,9 @@ class Router:
             else:
                 raise
 
+            verbose_router_logger.info(
+                f"Retrying request with num_retries: {num_retries}"
+            )
             # decides how long to sleep before retry
             retry_after = self._time_to_sleep_before_retry(
                 e=original_exception,
