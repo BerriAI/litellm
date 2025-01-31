@@ -192,7 +192,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                     ttl=self.routing_args.ttl,
                     parent_otel_span=parent_otel_span,
                 )
-                if result is not None and result >= deployment_rpm:
+                if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message="Deployment over defined rpm limit={}. current usage={}".format(
                             deployment_rpm, result
