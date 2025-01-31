@@ -1099,7 +1099,7 @@ class BedrockLLM(BaseAWSLLM):
         else:
             modelId = model
 
-        if provider == "llama" and "/llama/" in modelId:
+        if provider == "llama" and "llama/" in modelId:
             modelId = self._get_model_id_for_llama_like_model(modelId)
 
         return modelId
@@ -1111,7 +1111,7 @@ class BedrockLLM(BaseAWSLLM):
         """
         Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
         """
-        return model.replace("/llama/", "/")
+        return model.replace("llama/", "")
 
 
 def get_response_stream_shape():
