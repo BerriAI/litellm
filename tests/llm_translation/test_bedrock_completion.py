@@ -2564,7 +2564,7 @@ def test_bedrock_custom_deepseek():
             # Verify the URL
             assert (
                 mock_post.call_args.kwargs["url"]
-                == "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n/invoke"
+                == "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
             )
 
             # Verify the request body format

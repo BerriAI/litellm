@@ -1111,7 +1111,12 @@ class BedrockLLM(BaseAWSLLM):
         """
         Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
         """
-        return model.replace("llama/", "")
+        model_id = model.replace("llama/", "")
+        if litellm.skip_encoding_model_id is True:
+            return model_id
+
+        encoded_model_id = self.encode_model_id(model_id=model_id)
+        return encoded_model_id
 
 
 def get_response_stream_shape():
