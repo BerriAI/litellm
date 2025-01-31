@@ -1568,21 +1568,6 @@ class CustomStreamWrapper:
                     )
                     if processed_chunk is None:
                         continue
-                    ## LOGGING
-                    ## LOGGING
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        result=processed_chunk,
-                        start_time=None,
-                        end_time=None,
-                        cache_hit=cache_hit,
-                    )
-
-                    asyncio.create_task(
-                        self.logging_obj.async_success_handler(
-                            processed_chunk, cache_hit=cache_hit
-                        )
-                    )
 
                     if self.logging_obj._llm_caching_handler is not None:
                         asyncio.create_task(
@@ -1634,16 +1619,6 @@ class CustomStreamWrapper:
                         )
                         if processed_chunk is None:
                             continue
-                        ## LOGGING
-                        threading.Thread(
-                            target=self.logging_obj.success_handler,
-                            args=(processed_chunk, None, None, cache_hit),
-                        ).start()  # log processed_chunk
-                        asyncio.create_task(
-                            self.logging_obj.async_success_handler(
-                                processed_chunk, cache_hit=cache_hit
-                            )
-                        )
 
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):
@@ -1671,33 +1646,22 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(response, None, None, cache_hit),
-                ).start()  # log response
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
-                        response, cache_hit=cache_hit
-                    )
-                )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
+
+                asyncio.create_task(
+                    self.logging_obj.async_success_handler(
+                        complete_streaming_response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                    )
+                )
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
                 processed_chunk = self.finish_reason_handler()
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(processed_chunk, None, None, cache_hit),
-                ).start()  # log response
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
-                        processed_chunk, cache_hit=cache_hit
-                    )
-                )
                 return processed_chunk
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()

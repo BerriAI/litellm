@@ -1544,8 +1544,7 @@ class Logging(LiteLLMLoggingBaseClass):
             Union[ModelResponse, TextCompletionResponse]
         ] = None
         if self.stream is True and (
-            isinstance(result, litellm.ModelResponse)
-            or isinstance(result, litellm.ModelResponseStream)
+            isinstance(result, litellm.ModelResponseStream)
             or isinstance(result, TextCompletionResponse)
         ):
             complete_streaming_response: Optional[
@@ -1558,6 +1557,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 streaming_chunks=self.streaming_chunks,
                 is_async=True,
             )
+        if self.stream is True and isinstance(result, ModelResponse):
+            complete_streaming_response = result
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
