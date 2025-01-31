@@ -449,7 +449,7 @@ async def test_async_vertexai_response():
             or "32k" in model
             or "ultra" in model
             or "002" in model
-            or "gemini-2.0-flash-thinking-exp" == model
+            or "gemini-2.0-flash-thinking-exp" in model
         ):
             # our account does not have access to this model
             continue
