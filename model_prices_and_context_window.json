@@ -887,7 +887,7 @@
     },
     "whisper-1": {
         "mode": "audio_transcription",
-        "input_cost_per_second": 0,
+        "input_cost_per_second": 0.0001,
         "output_cost_per_second": 0.0001, 
         "litellm_provider": "openai"
     }, 
@@ -913,7 +913,7 @@
     },
     "azure/whisper-1": {
         "mode": "audio_transcription",
-        "input_cost_per_second": 0, 
+        "input_cost_per_second": 0.0001, 
         "output_cost_per_second": 0.0001, 
         "litellm_provider": "azure"
     },
