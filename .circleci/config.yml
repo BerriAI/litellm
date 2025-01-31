@@ -994,6 +994,7 @@ jobs:
       - run: ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/callback_manager_test.py
       - run: python ./tests/code_coverage_tests/recursive_detector.py
       - run: python ./tests/code_coverage_tests/test_router_strategy_async.py
       - run: python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
