@@ -982,6 +982,9 @@ class OpenAIChatCompletion(BaseLLM):
     def get_stream_options(
         self, stream_options: Optional[dict], api_base: Optional[str]
     ) -> dict:
+        """
+        Pass `stream_options` to the data dict for OpenAI requests
+        """
         if stream_options is not None:
             return {"stream_options": stream_options}
         else:
