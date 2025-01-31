@@ -150,30 +150,10 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         <AccordionBody>
           <div className="bg-white rounded-lg">
             <Form.Item
-              label="Use in pass through routes"
-              name="use_in_pass_through"
-              valuePropName="checked"
-              className="mb-4 mt-4"
-              tooltip={
-                <span>
-                  Allow using these credentials in pass through routes.{" "}
-                  <Link href="https://docs.litellm.ai/docs/pass_through/vertex_ai" target="_blank">
-                    Learn more
-                  </Link>
-                </span>
-              }
-            >
-              <Switch 
-                onChange={handlePassThroughChange} 
-                className="bg-gray-600" 
-              />
-            </Form.Item>
-
-            <Form.Item
               label="Custom Pricing"
               name="custom_pricing_enabled"
               valuePropName="checked"
-              className="mb-8"
+              className="mb-4"
               tooltip={
                 <span>
                   LiteLLM tracks pricing for all models by default. View default model prices{" "}
@@ -250,6 +230,26 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 )}
               </div>
             )}
+
+            <Form.Item
+              label="Use in pass through routes"
+              name="use_in_pass_through"
+              valuePropName="checked"
+              className="mb-4 mt-4"
+              tooltip={
+                <span>
+                  Allow using these credentials in pass through routes.{" "}
+                  <Link href="https://docs.litellm.ai/docs/pass_through/vertex_ai" target="_blank">
+                    Learn more
+                  </Link>
+                </span>
+              }
+            >
+              <Switch 
+                onChange={handlePassThroughChange} 
+                className="bg-gray-600" 
+              />
+            </Form.Item>
 
             <Form.Item
               label="LiteLLM Params"
