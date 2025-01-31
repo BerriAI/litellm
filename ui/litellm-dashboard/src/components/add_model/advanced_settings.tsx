@@ -16,6 +16,19 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
 }) => {
   const [form] = Form.useForm();
 
+  // Add validation function
+  const validateJSON = (_: any, value: string) => {
+    if (!value) {
+      return Promise.resolve();
+    }
+    try {
+      JSON.parse(value);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject('Please enter valid JSON');
+    }
+  };
+
   const handlePassThroughChange = (checked: boolean) => {
     const currentParams = form.getFieldValue('litellm_extra_params');
     try {
@@ -75,6 +88,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 name="litellm_extra_params"
                 tooltip="Optional litellm params used for making a litellm.completion() call."
                 className="mb-4 mt-4"
+                rules={[{ validator: validateJSON }]}
               >
                 <TextArea
                   rows={4}
@@ -104,6 +118,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 name="model_info_params"
                 tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
                 className="mb-0"
+                rules={[{ validator: validateJSON }]}
               >
                 <TextArea
                   rows={4}
