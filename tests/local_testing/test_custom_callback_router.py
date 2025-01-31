@@ -415,6 +415,8 @@ async def test_async_chat_azure():
             len(customHandler_completion_azure_router.states) == 3
         )  # pre, post, success
         # streaming
+
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_streaming_azure_router]
         router2 = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router2.acompletion(
@@ -445,6 +447,8 @@ async def test_async_chat_azure():
                 "rpm": 1800,
             },
         ]
+
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         router3 = Router(model_list=model_list, num_retries=0)  # type: ignore
         try:
@@ -507,6 +511,7 @@ async def test_async_embedding_azure():
                 "rpm": 1800,
             },
         ]
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         router3 = Router(model_list=model_list, num_retries=0)  # type: ignore
         try:

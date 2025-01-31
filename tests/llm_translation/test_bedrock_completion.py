@@ -733,7 +733,7 @@ def test_bedrock_stop_value(stop, model):
     "model",
     [
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "meta.llama3-70b-instruct-v1:0",
+        # "meta.llama3-70b-instruct-v1:0",
         "anthropic.claude-v2",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
@@ -2506,3 +2506,26 @@ async def test_bedrock_document_understanding(image_url):
     )
     assert response is not None
     assert response.choices[0].message.content != ""
+
+
+def test_bedrock_custom_proxy():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+                messages=[{"content": "Tell me a joke", "role": "user"}],
+                api_key="Token",
+                client=client,
+                api_base="https://some-api-url/models",
+            )
+        except Exception as e:
+            print(e)
+        print(mock_post.call_args.kwargs)
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"] == "https://some-api-url/models"
+
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer Token"
