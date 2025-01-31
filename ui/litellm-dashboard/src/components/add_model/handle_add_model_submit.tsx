@@ -12,7 +12,9 @@ export const handleAddModelSubmit = async (
       console.log("handling submit for formValues:", formValues);
       // If model_name is not provided, use provider.toLowerCase() + "/*"
       if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
-        formValues["model_name"] = formValues["custom_llm_provider"].toLowerCase() + "/*";
+        const wildcardModel = formValues["custom_llm_provider"].toLowerCase() + "/*";
+        formValues["model_name"] = wildcardModel;
+        formValues["model"] = wildcardModel; 
       }
       /**
        * For multiple litellm model names - create a separate deployment for each
