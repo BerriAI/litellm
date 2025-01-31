@@ -179,8 +179,9 @@ async def test_async_create_batch(provider):
     2. Create Batch Request
     3. Retrieve the specific batch
     """
+    litellm._turn_on_debug()
     print("Testing async create batch")
-
+    litellm.logging_callback_manager._reset_all_callbacks()
     custom_logger = TestCustomLogger()
     litellm.callbacks = [custom_logger, "datadog"]
 

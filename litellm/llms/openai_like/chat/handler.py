@@ -337,6 +337,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     timeout=timeout,
                     base_model=base_model,
                     client=client,
+                    json_mode=json_mode
                 )
         else:
             ## COMPLETION CALL

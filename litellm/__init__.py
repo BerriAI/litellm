@@ -38,6 +38,7 @@ from litellm.proxy._types import (
 )
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
 from enum import Enum
@@ -55,6 +56,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
+logging_callback_manager = LoggingCallbackManager()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",

@@ -846,6 +846,7 @@ async def test_async_embedding_openai():
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         try:
             response = await litellm.aembedding(
@@ -882,6 +883,7 @@ def test_amazing_sync_embedding():
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         try:
             response = litellm.embedding(
@@ -916,6 +918,7 @@ async def test_async_embedding_azure():
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         try:
             response = await litellm.aembedding(
@@ -956,6 +959,7 @@ async def test_async_embedding_bedrock():
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         try:
             response = await litellm.aembedding(
@@ -1123,6 +1127,7 @@ def test_image_generation_openai():
         assert len(customHandler_success.errors) == 0
         assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         try:
             response = litellm.image_generation(
