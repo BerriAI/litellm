@@ -418,6 +418,8 @@ async def test_async_chat_openai_stream():
         )
         async for chunk in response:
             continue
+
+        await asyncio.sleep(1)
         ## test failure callback
         try:
             response = await litellm.acompletion(
@@ -428,6 +430,7 @@ async def test_async_chat_openai_stream():
             )
             async for chunk in response:
                 continue
+            await asyncio.sleep(1)
         except Exception:
             pass
         time.sleep(1)
@@ -499,6 +502,8 @@ async def test_async_chat_azure_stream():
         )
         async for chunk in response:
             continue
+
+        await asyncio.sleep(1)
         # test failure callback
         try:
             response = await litellm.acompletion(
@@ -509,6 +514,7 @@ async def test_async_chat_azure_stream():
             )
             async for chunk in response:
                 continue
+            await asyncio.sleep(1)
         except Exception:
             pass
         await asyncio.sleep(1)
@@ -609,6 +615,8 @@ async def test_async_chat_bedrock_stream():
         async for chunk in response:
             print(f"chunk: {chunk}")
             continue
+
+        await asyncio.sleep(1)
         ## test failure callback
         try:
             response = await litellm.acompletion(
@@ -619,6 +627,8 @@ async def test_async_chat_bedrock_stream():
             )
             async for chunk in response:
                 continue
+
+            await asyncio.sleep(1)
         except Exception:
             pass
         await asyncio.sleep(1)
@@ -772,6 +782,8 @@ async def test_async_text_completion_bedrock():
         async for chunk in response:
             print(f"chunk: {chunk}")
             continue
+
+        await asyncio.sleep(1)
         ## test failure callback
         try:
             response = await litellm.atext_completion(
@@ -782,6 +794,8 @@ async def test_async_text_completion_bedrock():
             )
             async for chunk in response:
                 continue
+
+            await asyncio.sleep(1)
         except Exception:
             pass
         time.sleep(1)
@@ -811,6 +825,8 @@ async def test_async_text_completion_openai_stream():
         async for chunk in response:
             print(f"chunk: {chunk}")
             continue
+
+        await asyncio.sleep(1)
         ## test failure callback
         try:
             response = await litellm.atext_completion(
@@ -821,6 +837,8 @@ async def test_async_text_completion_openai_stream():
             )
             async for chunk in response:
                 continue
+
+            await asyncio.sleep(1)
         except Exception:
             pass
         time.sleep(1)
