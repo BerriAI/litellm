@@ -1889,3 +1889,8 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+
+
+class SelectTokenizerResponse(TypedDict):
+    type: Literal["openai_tokenizer", "huggingface_tokenizer"]
+    tokenizer: Any
