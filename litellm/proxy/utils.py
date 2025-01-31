@@ -323,8 +323,8 @@ class ProxyLogging:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
                 if "daily_reports" in self.alert_types:
-                    litellm.callbacks.append(self.slack_alerting_instance)  # type: ignore
-                litellm.success_callback.append(
+                    litellm.logging_callback_manager.add_litellm_callback(self.slack_alerting_instance)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
                 )
 
@@ -332,10 +332,10 @@ class ProxyLogging:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
 
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
-        litellm.callbacks.append(self.max_parallel_request_limiter)  # type: ignore
-        litellm.callbacks.append(self.max_budget_limiter)  # type: ignore
-        litellm.callbacks.append(self.cache_control_check)  # type: ignore
-        litellm.callbacks.append(self.service_logging_obj)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(self.max_parallel_request_limiter)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(self.max_budget_limiter)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(self.cache_control_check)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
@@ -348,13 +348,13 @@ class ProxyLogging:
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)  # type: ignore
             if callback not in litellm.success_callback:
-                litellm.success_callback.append(callback)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
             if callback not in litellm.failure_callback:
-                litellm.failure_callback.append(callback)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
             if callback not in litellm._async_success_callback:
-                litellm._async_success_callback.append(callback)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
             if callback not in litellm._async_failure_callback:
-                litellm._async_failure_callback.append(callback)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
             if callback not in litellm.service_callback:
                 litellm.service_callback.append(callback)  # type: ignore
 

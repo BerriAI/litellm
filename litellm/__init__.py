@@ -38,6 +38,7 @@ from litellm.proxy._types import (
 )
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
 from enum import Enum
@@ -50,6 +51,7 @@ if set_verbose == True:
     _turn_on_debug()
 ###############################################
 ### Callbacks /Logging / Success / Failure Handlers #####
+logging_callback_manager = LoggingCallbackManager()
 input_callback: List[Union[str, Callable, CustomLogger]] = []
 success_callback: List[Union[str, Callable, CustomLogger]] = []
 failure_callback: List[Union[str, Callable, CustomLogger]] = []
