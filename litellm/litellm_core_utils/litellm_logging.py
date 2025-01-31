@@ -870,10 +870,13 @@ class Logging(LiteLLMLoggingBaseClass):
     def should_run_callback(
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
     ) -> bool:
+
         if litellm.disable_no_log_param:
             return True
+
         if litellm_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
+
             if not (
                 isinstance(callback, CustomLogger)
                 and "_PROXY_" in callback.__class__.__name__
