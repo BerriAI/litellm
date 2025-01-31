@@ -2592,6 +2592,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                     status_code=500,
                     message=f"Setting {non_default_params} is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                 )
+    elif custom_llm_provider == "nebius":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="nebius",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.NebiusEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+        final_params = {**optional_params, **kwargs}
+        return final_params
     final_params = {**non_default_params, **kwargs}
     return final_params
 
@@ -4873,6 +4888,11 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("CLOUDFLARE_API_KEY")
                 missing_keys.append("CLOUDFLARE_API_BASE")
+        elif custom_llm_provider == "nebius":
+            if "NEBIUS_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NEBIUS_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -6077,6 +6097,8 @@ class ProviderConfigManager:
             return litellm.TritonEmbeddingConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXEmbeddingConfig()
+        if litellm.LlmProviders.NEBIUS == provider:
+            return litellm.NebiusEmbeddingConfig()
         raise ValueError(f"Provider {provider.value} does not support embedding config")
 
     @staticmethod

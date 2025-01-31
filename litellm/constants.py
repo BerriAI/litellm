@@ -79,6 +79,7 @@ LITELLM_CHAT_PROVIDERS = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "nebius",
 ]
 
 
@@ -137,6 +138,7 @@ openai_compatible_endpoints: List = [
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
     "api.galadriel.ai/v1",
+    "https://api.studio.nebius.ai/v1"
 ]
 
 
@@ -166,12 +168,14 @@ openai_compatible_providers: List = [
     "hosted_vllm",
     "lm_studio",
     "galadriel",
+    "nebius",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
         "together_ai",
         "fireworks_ai",
         "hosted_vllm",
+        "nebius"
     ]
 )
 _openai_like_providers: List = [

@@ -1842,6 +1842,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    NEBIUS = "nebius"
 
 
 # Create a set of all provider values for quick lookup

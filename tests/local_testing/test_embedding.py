@@ -905,6 +905,20 @@ def test_voyage_embeddings():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+@pytest.mark.skip(
+    reason="Community maintained embedding provider - they are quite unstable"
+)
+def test_nebius_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="nebius/BAAI/bge-en-icl",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(

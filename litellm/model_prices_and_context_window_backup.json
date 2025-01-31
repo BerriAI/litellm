@@ -8352,5 +8352,45 @@
         "litellm_provider": "sambanova",
         "supports_function_calling": true,
         "mode": "chat"
+    },
+    "nebius/deepseek-ai/DeepSeek-V3": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/deepseek-ai/DeepSeek-R1": {
+        "max_tokens": 128000,
+        "max_input_tokens": 64000,
+        "max_output_tokens": 64000,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000024,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/meta-llama/Llama-3.3-70B-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/QwQ-32B-Preview": {
+        "max_tokens": 32000,
+        "max_input_tokens": 24000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.00000009,
+        "output_cost_per_token": 0.00000027,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
     }
 }
