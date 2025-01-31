@@ -867,6 +867,26 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    def should_run_callback(
+        self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
+    ) -> bool:
+
+        if litellm.global_disable_no_log_param:
+            return True
+
+        if litellm_params.get("no-log", False) is True:
+            # proxy cost tracking cal backs should run
+
+            if not (
+                isinstance(callback, CustomLogger)
+                and "_PROXY_" in callback.__class__.__name__
+            ):
+                verbose_logger.debug(
+                    f"no-log request, skipping logging for {event_hook} event"
+                )
+                return False
+        return True
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -1072,14 +1092,13 @@ class Logging(LiteLLMLoggingBaseClass):
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
-                    if litellm_params.get("no-log", False) is True:
-                        # proxy cost tracking cal backs should run
-                        if not (
-                            isinstance(callback, CustomLogger)
-                            and "_PROXY_" in callback.__class__.__name__
-                        ):
-                            verbose_logger.info("no-log request, skipping logging")
-                            continue
+                    should_run = self.should_run_callback(
+                        callback=callback,
+                        litellm_params=litellm_params,
+                        event_hook="success_handler",
+                    )
+                    if not should_run:
+                        continue
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
                         promptLayerLogger.log_event(
@@ -1626,18 +1645,14 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) is True:
-                # proxy cost tracking cal backs should run
-                if not (
-                    isinstance(callback, CustomLogger)
-                    and "_PROXY_" in callback.__class__.__name__
-                ):
-                    print_verbose("no-log request, skipping logging")
-                    continue
+            should_run = self.should_run_callback(
+                callback=callback,
+                litellm_params=litellm_params,
+                event_hook="async_success_handler",
+            )
+            if not should_run:
+                continue
             try:
-                if kwargs.get("no-log", False) is True:
-                    print_verbose("no-log request, skipping logging")
-                    continue
                 if callback == "openmeter" and openMeterLogger is not None:
                     if self.stream is True:
                         if (
