@@ -1682,7 +1682,7 @@ def test_standard_logging_retries():
 
 @pytest.mark.parametrize("disable_no_log_param", [True, False])
 def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
-    monkeypatch.setattr(litellm, "disable_no_log_param", disable_no_log_param)
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", disable_no_log_param)
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     litellm.success_callback = ["langfuse"]

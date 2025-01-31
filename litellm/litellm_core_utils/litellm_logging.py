@@ -871,7 +871,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
     ) -> bool:
 
-        if litellm.disable_no_log_param:
+        if litellm.global_disable_no_log_param:
             return True
 
         if litellm_params.get("no-log", False) is True:
