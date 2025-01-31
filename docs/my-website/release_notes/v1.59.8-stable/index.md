@@ -34,7 +34,7 @@ Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
 
 1. New OpenAI `/image/variations` endpoint BETA support [Docs](../../docs/image_variations)
 2. Topaz API support on OpenAI `/image/variations` BETA endpoint [Docs](../../docs/providers/topaz)
-3. Deepseek - r1 support w/ reasoning_content ([Deepseek API](../../docs/providers/deepseek#reasoning-models), [Vertex AI](../../docs/providers/vertex.md#model-garden), [Bedrock](../../docs/providers/bedrock#deepseek)) 
+3. Deepseek - r1 support w/ reasoning_content ([Deepseek API](../../docs/providers/deepseek#reasoning-models), [Vertex AI](../../docs/providers/vertex#model-garden), [Bedrock](../../docs/providers/bedrock#deepseek)) 
 4. Azure - Add azure o1 pricing [See Here](https://github.com/BerriAI/litellm/blob/b8b927f23bc336862dacb89f59c784a8d62aaa15/model_prices_and_context_window.json#L952)
 5. Anthropic - handle `-latest` tag in model for cost calculation
 6. Gemini-2.0-flash-thinking - add model pricing (it’s 0.0) [See Here](https://github.com/BerriAI/litellm/blob/b8b927f23bc336862dacb89f59c784a8d62aaa15/model_prices_and_context_window.json#L3393)
@@ -51,8 +51,8 @@ Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
 5. Bedrock - cache IAM role credentials when used 
 6. Google AI Studio (`gemini/`) - support gemini 'frequency_penalty' and 'presence_penalty'
 7. Azure O1 - fix model name check 
-8. WatsonX - ZenAPIKey support for WatsonX [Docs](../../docs/providers/watsonx.md)
-9. Ollama Chat - support json schema response format [Start Here](../../docs/providers/ollama.md#json-schema-support)
+8. WatsonX - ZenAPIKey support for WatsonX [Docs](../../docs/providers/watsonx)
+9. Ollama Chat - support json schema response format [Start Here](../../docs/providers/ollama#json-schema-support)
 10. Bedrock - return correct bedrock status code and error message if error during streaming
 11. Anthropic - Supported nested json schema on anthropic calls
 12. OpenAI - `metadata` param preview support 
@@ -90,8 +90,8 @@ Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
     1. set/edit guardrails on a virtual key 
     2. Allow setting guardrails on a team 
     3. Set guardrails on team create + edit page
-13. Support temporary budget increases on `/key/update` - new `temp_budget_increase` and `temp_budget_expiry` fields - [Start Here](../../docs/proxy/virtual_keys.md#temporary-budget-increase)
-14. Support writing new key alias to AWS Secret Manager - on key rotation [Start Here](../../docs/secret.md#aws-secret-manager)
+13. Support temporary budget increases on `/key/update` - new `temp_budget_increase` and `temp_budget_expiry` fields - [Start Here](../../docs/proxy/virtual_keys#temporary-budget-increase)
+14. Support writing new key alias to AWS Secret Manager - on key rotation [Start Here](../../docs/secret#aws-secret-manager)
 
 ## Helm
 
@@ -101,32 +101,32 @@ Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
 
 ## Logging / Guardrail Integrations
 
-1. Log the used prompt when prompt management used. [Start Here](../../docs/proxy/prompt_management.md)
+1. Log the used prompt when prompt management used. [Start Here](../../docs/proxy/prompt_management)
 2. Support s3 logging with team alias prefixes - [Start Here](https://docs.litellm.ai/docs/proxy/logging#team-alias-prefix-in-object-key)
-3. Prometheus [Start Here](../../docs/proxy/prometheus.md)
+3. Prometheus [Start Here](../../docs/proxy/prometheus)
     1. fix litellm_llm_api_time_to_first_token_metric not populating for bedrock models
     2. emit remaining team budget metric on regular basis (even when call isn’t made) - allows for more stable metrics on Grafana/etc. 
     3. add key and team level budget metrics
     4. emit `litellm_overhead_latency_metric` 
     5. Emit `litellm_team_budget_reset_at_metric` and `litellm_api_key_budget_remaining_hours_metric` 
-4. Datadog - support logging spend tags to Datadog. [Start Here](../../docs/proxy/enterprise.md#tracking-spend-for-custom-tags)
+4. Datadog - support logging spend tags to Datadog. [Start Here](../../docs/proxy/enterprise#tracking-spend-for-custom-tags)
 5. Langfuse - fix logging request tags, read from standard logging payload 
 6. GCS - don’t truncate payload on logging 
 7. New GCS Pub/Sub logging support [Start Here](https://docs.litellm.ai/docs/proxy/logging#google-cloud-storage---pubsub-topic)
-8. Add AIM Guardrails support [Start Here](../../docs/proxy/guardrails/aim_security.md)
+8. Add AIM Guardrails support [Start Here](../../docs/proxy/guardrails/aim_security)
 
 ## Security
 
-1. New Enterprise SLA for patching security vulnerabilities. [See Here](../../docs/enterprise.md#slas--professional-support)
-2. Hashicorp - support using vault namespace for TLS auth. [Start Here](../../docs/secret.md#hashicorp-vault)
+1. New Enterprise SLA for patching security vulnerabilities. [See Here](../../docs/enterprise#slas--professional-support)
+2. Hashicorp - support using vault namespace for TLS auth. [Start Here](../../docs/secret#hashicorp-vault)
 3. Azure - DefaultAzureCredential support 
 
 ## Health Checks
 
 1. Cleanup pricing-only model names from wildcard route list - prevent bad health checks 
 2. Allow specifying a health check model for wildcard routes - https://docs.litellm.ai/docs/proxy/health#wildcard-routes
-3. New ‘health_check_timeout ‘ param with default 1min upperbound to prevent bad model from health check to hang and cause pod restarts. [Start Here](../../docs/proxy/health.md#health-check-timeout)
-4. Datadog - add data dog service health check + expose new `/health/services` endpoint. [Start Here](../../docs/proxy/health.md#healthservices)
+3. New ‘health_check_timeout ‘ param with default 1min upperbound to prevent bad model from health check to hang and cause pod restarts. [Start Here](../../docs/proxy/health#health-check-timeout)
+4. Datadog - add data dog service health check + expose new `/health/services` endpoint. [Start Here](../../docs/proxy/health#healthservices)
 
 ## Performance / Reliability improvements
 
@@ -147,9 +147,9 @@ Get a 7 day free trial for LiteLLM Enterprise [here](https://litellm.ai/#trial).
 
 ## General Proxy Improvements
 
-1. JWT / OIDC Auth - new `enforce_rbac` param,allows proxy admin to prevent any unmapped yet authenticated jwt tokens from calling proxy. [Start Here](../../docs/proxy/token_auth.md#enforce-role-based-access-control-rbac)
+1. JWT / OIDC Auth - new `enforce_rbac` param,allows proxy admin to prevent any unmapped yet authenticated jwt tokens from calling proxy. [Start Here](../../docs/proxy/token_auth#enforce-role-based-access-control-rbac)
 2. fix custom openapi schema generation for customized swagger’s 
-3. Request Headers - support reading `x-litellm-timeout` param from request headers. Enables model timeout control when using Vercel’s AI SDK + LiteLLM Proxy. [Start Here](../../docs/proxy/request_headers.md#litellm-headers)
+3. Request Headers - support reading `x-litellm-timeout` param from request headers. Enables model timeout control when using Vercel’s AI SDK + LiteLLM Proxy. [Start Here](../../docs/proxy/request_headers#litellm-headers)
 4. JWT / OIDC Auth - new `role` based permissions for model authentication. [See Here](https://docs.litellm.ai/docs/proxy/jwt_auth_arch)
 
 ## Complete Git Diff
