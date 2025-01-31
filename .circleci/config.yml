@@ -1875,6 +1875,22 @@ jobs:
           no_output_timeout: 120m
       - store_test_results:
           path: test-results
+      # Add Node.js setup and Jest testing
+      - run:
+          name: Install Node.js
+          command: |
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            node --version
+            npm --version
+
+      - run:
+          name: Install and Run Jest Tests
+          command: |
+            cd tests/proxy_admin_ui_tests/ui_unit_tests
+            npm install
+            npm install --save-dev jest @testing-library/react @types/jest
+            npm test
 
   test_nonroot_image:
     machine:
