@@ -51,11 +51,12 @@ if set_verbose == True:
     _turn_on_debug()
 ###############################################
 ### Callbacks /Logging / Success / Failure Handlers #####
+CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+input_callback: List[CALLBACK_TYPES] = []
+success_callback: List[CALLBACK_TYPES] = []
+failure_callback: List[CALLBACK_TYPES] = []
+service_callback: List[CALLBACK_TYPES] = []
 logging_callback_manager = LoggingCallbackManager()
-input_callback: List[Union[str, Callable, CustomLogger]] = []
-success_callback: List[Union[str, Callable, CustomLogger]] = []
-failure_callback: List[Union[str, Callable, CustomLogger]] = []
-service_callback: List[Union[str, Callable, CustomLogger]] = []
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -1276,3 +1277,4 @@ custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
     []
 )  # internal helper util, used to track names of custom providers
+global_disable_no_log_param: bool = False
