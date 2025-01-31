@@ -228,3 +228,11 @@ def test_default_on_guardrail():
         )
         == True
     )
+
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": []}},
+            GuardrailEventHooks.pre_call,
+        )
+        == True
+    )

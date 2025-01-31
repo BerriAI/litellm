@@ -4,6 +4,15 @@ import TabItem from '@theme/TabItem';
 # AWS Bedrock
 ALL Bedrock models (Anthropic, Meta, Mistral, Amazon, etc.) are Supported
 
+| Property | Details |
+|-------|-------|
+| Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy) |
+| Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
+| Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
+
+
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
 pip install boto3>=1.28.57
@@ -1201,11 +1210,9 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
-## Calling via Proxy
+## Calling via Internal Proxy
 
-Here's how to call bedrock via your internal proxy.
-
-This example uses Cloudflare's AI Gateway.
+Use the `bedrock/converse_like/model` endpoint to call bedrock converse model via your internal proxy.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1214,10 +1221,11 @@ This example uses Cloudflare's AI Gateway.
 from litellm import completion
 
 response = completion(
-    model="anthropic.claude-3-sonnet-20240229-v1:0",
+    model="bedrock/converse_like/some-model",
     messages=[{"role": "user", "content": "What's AWS?"}],
-    extra_headers={"test": "hello world", "Authorization": "my-test-key"},
-    api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
+    api_key="sk-1234",
+    api_base="https://some-api-url/models",
+    extra_headers={"test": "hello world"},
 )
 ```
 
@@ -1230,8 +1238,8 @@ response = completion(
 model_list:
     - model_name: anthropic-claude
       litellm_params:
-        model: anthropic.claude-3-sonnet-20240229-v1:0
-        api_base: https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1
+        model: bedrock/converse_like/some-model
+        api_base: https://some-api-url/models
 ```
 
 2. Start proxy server
@@ -1266,7 +1274,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 **Expected Output URL**
 
 ```bash
-https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse
+https://some-api-url/models
 ```
 
 ## Provisioned throughput models
