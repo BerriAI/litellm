@@ -2582,18 +2582,45 @@ def test_bedrock_custom_deepseek():
             raise e
         
 @pytest.mark.parametrize(
-    "model", 
+    "model, expected_output", 
     [
-        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0", 
-        "bedrock/converse/us.amazon.nova-pro-v1:0", 
-        "bedrock/meta.llama3-70b-instruct-v1:0",
-        "bedrock/mistral.mistral-7b-instruct-v0:2",
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 3}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {'inferenceConfig': {"topK": 3}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
     ]
 )
-def test_bedrock_top_k(model):
-    litellm.completion(
-        model=model,
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        top_k=2,
-    )  
+def test_handle_top_k_value_helper(model, expected_output):
+    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3}) == expected_output
+    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3}) == expected_output
 
+@pytest.mark.parametrize(
+    "model, expected_params", 
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 2}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {'inferenceConfig': {"topK": 2}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+        ("bedrock/mistral.mistral-7b-instruct-v0:2", {}),
+
+    ]
+)
+def test_bedrock_top_k_param(model, expected_params):
+    import json
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                top_k=2,
+                client=client
+            )  
+        except Exception as e:
+            print(e)
+
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        if ("mistral" in model):
+            assert (data["top_k"] == 2)
+        else:
+            assert (data["additionalModelRequestFields"] == expected_params)
