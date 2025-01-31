@@ -16,6 +16,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [pricingModel, setPricingModel] = useState<'per_second' | 'per_token'>('per_token');
+  const [showCustomPricing, setShowCustomPricing] = useState(false);
 
   // Add validation function
   const validateJSON = (_: any, value: string) => {
@@ -142,138 +143,161 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
 
   return (
     <>
+      <Accordion className="mt-2 mb-4">
+        <AccordionHeader>
+          <b>Advanced Settings</b>
+        </AccordionHeader>
+        <AccordionBody>
+          <div className="bg-white rounded-lg">
+            <Form.Item
+              label="Use in pass through routes"
+              name="use_in_pass_through"
+              valuePropName="checked"
+              className="mb-4 mt-4"
+              tooltip={
+                <span>
+                  Allow using these credentials in pass through routes.{" "}
+                  <Link href="https://docs.litellm.ai/docs/pass_through/vertex_ai" target="_blank">
+                    Learn more
+                  </Link>
+                </span>
+              }
+            >
+              <Switch 
+                onChange={handlePassThroughChange} 
+                className="bg-gray-600" 
+              />
+            </Form.Item>
 
-        <Accordion className="mt-2 mb-4">
-          
-          <AccordionHeader>
-            <b>Advanced Settings</b>
-          </AccordionHeader>
-          <AccordionBody>
-            <div className="bg-white rounded-lg">
-              <Form.Item
-                label="Use in pass through routes"
-                name="use_in_pass_through"
-                valuePropName="checked"
-                className="mb-4 mt-4"
-                tooltip={
-                  <span>
-                    Allow using these credentials in pass through routes.{" "}
-                    <Link href="https://docs.litellm.ai/docs/pass_through/vertex_ai" target="_blank">
-                      Learn more
-                    </Link>
-                  </span>
-                }
-              >
-                <Switch 
-                  onChange={handlePassThroughChange} 
-                  className="bg-gray-600" 
-                />
-              </Form.Item>
-              <Form.Item
-                label="Pricing Model"
-                name="pricing_model"
-                className="mb-4"
-                tooltip="Select pricing model type"
-                initialValue="per_token"
-              >
-                <Select
-                  onChange={handlePricingModelChange}
-                  options={[
-                    { value: 'per_token', label: 'Per Token' },
-                    { value: 'per_second', label: 'Per Second' },
-                  ]}
-                />
-              </Form.Item>
+            <Form.Item
+              label="Custom Pricing"
+              name="custom_pricing_enabled"
+              valuePropName="checked"
+              className="mb-8"
+              tooltip={
+                <span>
+                  LiteLLM tracks pricing for all models by default. View default model prices{" "}
+                  <Link href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" target="_blank">
+                    here
+                  </Link>. Only set this if you want to use custom pricing for this model.
+                </span>
+              }
+            >
+              <Switch
+                onChange={setShowCustomPricing}
+                className="bg-gray-600"
+              />
+            </Form.Item>
 
-              {pricingModel === 'per_second' ? (
+            {showCustomPricing && (
+              <div className="ml-6 border-l-2 pl-4 border-gray-200 mb-10">
                 <Form.Item
-                  label="Cost Per Second"
-                  name="input_cost_per_second"
-                  tooltip="Cost per second of model usage"
-                  rules={[{ validator: validateNumber }]}
+                  label="Pricing Model"
+                  name="pricing_model"
                   className="mb-4"
+                  tooltip="Select pricing model type"
+                  initialValue="per_token"
                 >
-                  <TextInput 
-                    placeholder="0.0001" 
-                    onChange={(e) => handlePricingChange(e.target.value, 'input')}
+                  <Select
+                    onChange={handlePricingModelChange}
+                    options={[
+                      { value: 'per_token', label: 'Per Token' },
+                      { value: 'per_second', label: 'Per Second' },
+                    ]}
                   />
                 </Form.Item>
-              ) : (
-                <>
+
+                {pricingModel === 'per_second' ? (
                   <Form.Item
-                    label="Input Cost (per 1M tokens)"
-                    name="input_cost_per_million_tokens"
-                    tooltip="Cost per 1 million input tokens"
+                    label="Cost Per Second"
+                    name="input_cost_per_second"
+                    tooltip="Cost per second of model usage"
                     rules={[{ validator: validateNumber }]}
                     className="mb-4"
                   >
                     <TextInput 
-                      placeholder="1.00" 
+                      placeholder="0.0001" 
                       onChange={(e) => handlePricingChange(e.target.value, 'input')}
                     />
                   </Form.Item>
-                  <Form.Item
-                    label="Output Cost (per 1M tokens)"
-                    name="output_cost_per_million_tokens"
-                    tooltip="Cost per 1 million output tokens"
-                    rules={[{ validator: validateNumber }]}
-                    className="mb-4"
-                  >
-                    <TextInput 
-                      placeholder="2.00" 
-                      onChange={(e) => handlePricingChange(e.target.value, 'output')}
-                    />
-                  </Form.Item>
-                </>
-              )}
-              <Form.Item
-                label="LiteLLM Params"
-                name="litellm_extra_params"
-                tooltip="Optional litellm params used for making a litellm.completion() call."
-                className="mb-4 mt-4"
-                rules={[{ validator: validateJSON }]}
-              >
-                <TextArea
-                  rows={4}
-                  placeholder='{
-                    "rpm": 100,
-                    "timeout": 0,
-                    "stream_timeout": 0
-                  }'
-                />
-              </Form.Item>
-              <Row className="mb-4">
-                <Col span={10}></Col>
-                <Col span={10}>
-                  <Text className="text-gray-600 text-sm">
-                    Pass JSON of litellm supported params{" "}
-                    <Link
-                      href="https://docs.litellm.ai/docs/completion/input"
-                      target="_blank"
+                ) : (
+                  <>
+                    <Form.Item
+                      label="Input Cost (per 1M tokens)"
+                      name="input_cost_per_million_tokens"
+                      tooltip="Cost per 1 million input tokens"
+                      rules={[{ validator: validateNumber }]}
+                      className="mb-4"
                     >
-                      litellm.completion() call
-                    </Link>
-                  </Text>
-                </Col>
-              </Row>
-              <Form.Item
-                label="Model Info"
-                name="model_info_params"
-                tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
-                className="mb-0"
-                rules={[{ validator: validateJSON }]}
-              >
-                <TextArea
-                  rows={4}
-                  placeholder='{
-                    "mode": "chat"
-                  }'
-                />
-              </Form.Item>
-            </div>
-          </AccordionBody>
-        </Accordion>
+                      <TextInput 
+                        placeholder="1.00" 
+                        onChange={(e) => handlePricingChange(e.target.value, 'input')}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="Output Cost (per 1M tokens)"
+                      name="output_cost_per_million_tokens"
+                      tooltip="Cost per 1 million output tokens"
+                      rules={[{ validator: validateNumber }]}
+                      className="mb-4"
+                    >
+                      <TextInput 
+                        placeholder="2.00" 
+                        onChange={(e) => handlePricingChange(e.target.value, 'output')}
+                      />
+                    </Form.Item>
+                  </>
+                )}
+              </div>
+            )}
 
+            <Form.Item
+              label="LiteLLM Params"
+              name="litellm_extra_params"
+              tooltip="Optional litellm params used for making a litellm.completion() call."
+              className="mb-4 mt-4"
+              rules={[{ validator: validateJSON }]}
+            >
+              <TextArea
+                rows={4}
+                placeholder='{
+                  "rpm": 100,
+                  "timeout": 0,
+                  "stream_timeout": 0
+                }'
+              />
+            </Form.Item>
+            <Row className="mb-4">
+              <Col span={10}></Col>
+              <Col span={10}>
+                <Text className="text-gray-600 text-sm">
+                  Pass JSON of litellm supported params{" "}
+                  <Link
+                    href="https://docs.litellm.ai/docs/completion/input"
+                    target="_blank"
+                  >
+                    litellm.completion() call
+                  </Link>
+                </Text>
+              </Col>
+            </Row>
+            <Form.Item
+              label="Model Info"
+              name="model_info_params"
+              tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
+              className="mb-0"
+              rules={[{ validator: validateJSON }]}
+            >
+              <TextArea
+                rows={4}
+                placeholder='{
+                  "mode": "chat"
+                }'
+              />
+            </Form.Item>
+          </div>
+        </AccordionBody>
+      </Accordion>
     </>
   );
 };
