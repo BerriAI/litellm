@@ -14,6 +14,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import urlparse
 
 import httpx
 import openai
@@ -989,7 +990,7 @@ class OpenAIChatCompletion(BaseLLM):
             return {"stream_options": stream_options}
         else:
             # by default litellm will include usage for openai endpoints
-            if api_base is None or "api.openai.com" in api_base:
+            if api_base is None or urlparse(api_base).hostname == "api.openai.com":
                 return {"stream_options": {"include_usage": True}}
         return {}
 
