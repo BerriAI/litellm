@@ -125,6 +125,8 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Set `default_on: true` in your guardrail config to run the guardrail on every request. This is useful if you want to run a guardrail on every request without the user having to specify it.
 
+**Note:** These will run even if user specifies a different guardrail or empty guardrails array.
+
 ```yaml
 guardrails:
   - guardrail_name: "aporia-pre-guard"
