@@ -40,8 +40,8 @@ Features:
 - **Control Guardrails per API Key**
 - **Custom Branding**
     - ✅ [Custom Branding + Routes on Swagger Docs](#swagger-docs---custom-routes--branding)
-    - ✅ [Public Model Hub](../docs/proxy/enterprise.md#public-model-hub)
-    - ✅ [Custom Email Branding](../docs/proxy/email.md#customizing-email-branding)
+    - ✅ [Public Model Hub](../proxy/enterprise.md#public-model-hub)
+    - ✅ [Custom Email Branding](../proxy/email.md#customizing-email-branding)
 
 ## Audit Logs
 
