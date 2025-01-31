@@ -78,8 +78,7 @@ export default function SpendLogsTable({
     }
 
     document.addEventListener("mousedown", handleClickOutside);
-    return () =>
-      document.removeEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const logs = useQuery<PaginatedResponse>({
@@ -105,14 +104,16 @@ export default function SpendLogsTable({
         };
       }
 
-      const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+      const formattedStartTime = moment(startTime).format(
+        "YYYY-MM-DD HH:mm:ss"
+      );
       const formattedEndTime = moment(endTime).format("YYYY-MM-DD HH:mm:ss");
 
       return await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
         selectedTeamId || undefined,
-        undefined,  // This parameter might be setting a default min_spend
+        undefined, // This parameter might be setting a default min_spend
         formattedStartTime,
         formattedEndTime,
         currentPage,
@@ -124,7 +125,7 @@ export default function SpendLogsTable({
 
   if (!accessToken || !token || !userRole || !userID) {
     console.log(
-      "got None values for one of accessToken, token, userRole, userID",
+      "got None values for one of accessToken, token, userRole, userID"
     );
     return null;
   }
@@ -136,24 +137,23 @@ export default function SpendLogsTable({
         log.request_id.includes(searchTerm) ||
         log.model.includes(searchTerm) ||
         (log.user && log.user.includes(searchTerm));
-      
+
       // No need for additional filtering since we're now handling this in the API call
       return matchesSearch;
     }) || [];
 
-
   return (
     <div className="w-full">
-      <h1 className="text-xl font-semibold mb-4">Traces</h1>
+      <h1 className="px-6 pt-6 text-xl font-semibold ">Traces</h1>
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="border-b px-6 py-4">
+        <div className=" px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative w-64">
                 <input
                   type="text"
                   placeholder="Search by Request ID"
-                  className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-3 py-2 pl-8 custom-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -199,7 +199,9 @@ export default function SpendLogsTable({
                         <span className="text-sm font-medium">Where</span>
                         <div className="relative">
                           <button
-                            onClick={() => setShowColumnDropdown(!showColumnDropdown)}
+                            onClick={() =>
+                              setShowColumnDropdown(!showColumnDropdown)
+                            }
                             className="px-3 py-1.5 border rounded-md bg-white text-sm min-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-left flex justify-between items-center"
                           >
                             {selectedFilter}
@@ -223,9 +225,9 @@ export default function SpendLogsTable({
                                 <button
                                   key={option}
                                   className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2 ${
-                                    selectedFilter === option
-                                      ? "bg-blue-50 text-blue-600"
-                                      : ""
+                                    selectedFilter === option ?
+                                      "bg-blue-50 text-blue-600"
+                                    : ""
                                   }`}
                                   onClick={() => {
                                     setSelectedFilter(option);
@@ -262,7 +264,11 @@ export default function SpendLogsTable({
                           type="text"
                           placeholder="Enter value..."
                           className="px-3 py-1.5 border rounded-md text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          value={selectedFilter === "Team ID" ? tempTeamId : tempKeyHash}
+                          value={
+                            selectedFilter === "Team ID" ? tempTeamId : (
+                              tempKeyHash
+                            )
+                          }
                           onChange={(e) => {
                             if (selectedFilter === "Team ID") {
                               setTempTeamId(e.target.value);
@@ -281,7 +287,7 @@ export default function SpendLogsTable({
                           <span className="text-gray-500">×</span>
                         </button>
                       </div>
-                      
+
                       <div className="flex justify-end gap-2">
                         <button
                           className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50"
@@ -335,7 +341,11 @@ export default function SpendLogsTable({
                   <div className="absolute left-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                     <div className="space-y-1">
                       {[
-                        { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+                        {
+                          label: "Last 15 Minutes",
+                          value: 15,
+                          unit: "minutes",
+                        },
                         { label: "Last Hour", value: 1, unit: "hours" },
                         { label: "Last 4 Hours", value: 4, unit: "hours" },
                         { label: "Last 24 Hours", value: 24, unit: "hours" },
@@ -402,38 +412,36 @@ export default function SpendLogsTable({
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-700">
                 Showing{" "}
-                {logs.isLoading
-                  ? "..."
-                  : logs.data
-                  ? (currentPage - 1) * pageSize + 1
-                  : 0}{" "}
+                {logs.isLoading ?
+                  "..."
+                : logs.data ?
+                  (currentPage - 1) * pageSize + 1
+                : 0}{" "}
                 -{" "}
-                {logs.isLoading
-                  ? "..."
-                  : logs.data
-                  ? Math.min(currentPage * pageSize, logs.data.total)
-                  : 0}{" "}
+                {logs.isLoading ?
+                  "..."
+                : logs.data ?
+                  Math.min(currentPage * pageSize, logs.data.total)
+                : 0}{" "}
                 of{" "}
-                {logs.isLoading
-                  ? "..."
-                  : logs.data
-                  ? logs.data.total
-                  : 0}{" "}
+                {logs.isLoading ?
+                  "..."
+                : logs.data ?
+                  logs.data.total
+                : 0}{" "}
                 results
               </span>
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-700">
                   Page {logs.isLoading ? "..." : currentPage} of{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : logs.data
-                    ? logs.data.total_pages
-                    : 1}
+                  {logs.isLoading ?
+                    "..."
+                  : logs.data ?
+                    logs.data.total_pages
+                  : 1}
                 </span>
                 <button
-                  onClick={() =>
-                    setCurrentPage((p) => Math.max(1, p - 1))
-                  }
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                   disabled={logs.isLoading || currentPage === 1}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -442,10 +450,7 @@ export default function SpendLogsTable({
                 <button
                   onClick={() =>
                     setCurrentPage((p) =>
-                      Math.min(
-                        logs.data?.total_pages || 1,
-                        p + 1,
-                      ),
+                      Math.min(logs.data?.total_pages || 1, p + 1)
                     )
                   }
                   disabled={
@@ -498,7 +503,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
         </div>
-        <pre className="p-4 overflow-auto text-sm">
+        <pre className="p-4  text-wrap overflow-auto text-sm">
           {JSON.stringify(formatData(row.original.messages), null, 2)}
         </pre>
       </div>
@@ -516,7 +521,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </button>
           </div>
         </div>
-        <pre className="p-4 overflow-auto text-sm">
+        <pre className="p-4 text-wrap overflow-auto text-sm">
           {JSON.stringify(formatData(row.original.response), null, 2)}
         </pre>
       </div>
@@ -533,7 +538,7 @@ function RequestViewer({ row }: { row: Row<LogEntry> }) {
                 </button>
               </div>
             </div>
-            <pre className="p-4 overflow-auto text-sm">
+            <pre className="p-4 text-wrap  overflow-auto text-sm ">
               {JSON.stringify(row.original.metadata, null, 2)}
             </pre>
           </div>
