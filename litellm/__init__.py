@@ -50,10 +50,11 @@ if set_verbose == True:
     _turn_on_debug()
 ###############################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-input_callback: List[Union[str, Callable, CustomLogger]] = []
-success_callback: List[Union[str, Callable, CustomLogger]] = []
-failure_callback: List[Union[str, Callable, CustomLogger]] = []
-service_callback: List[Union[str, Callable, CustomLogger]] = []
+CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+input_callback: List[CALLBACK_TYPES] = []
+success_callback: List[CALLBACK_TYPES] = []
+failure_callback: List[CALLBACK_TYPES] = []
+service_callback: List[CALLBACK_TYPES] = []
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
