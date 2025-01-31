@@ -1,5 +1,4 @@
 import React from "react";
-import { handleSubmit } from "./model_dashboard";
 
 export enum Providers {
     OpenAI = "OpenAI",
