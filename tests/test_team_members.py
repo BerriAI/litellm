@@ -55,6 +55,23 @@ class TeamAPI:
         response.raise_for_status()
         return response.json()
 
+    def delete_team_member(self, team_id: str, user_id: str) -> Dict:
+        """Delete a team member
+
+        Args:
+            team_id (str): ID of the team
+            user_id (str): User ID to remove from team
+
+        Returns:
+            Dict: Response from the API
+        """
+        data = {"team_id": team_id, "user_id": user_id}
+        response = requests.post(
+            f"{self.base_url}/team/member_delete", headers=self.headers, json=data
+        )
+        response.raise_for_status()
+        return response.json()
+
 
 @pytest.fixture
 def api_client():
@@ -227,3 +244,103 @@ def test_duplicate_user_addition(api_client, new_team):
 
     logger.info(f"Duplicate addition attempted. Final team size: {size_after_second}")
     logger.info(f"Number of times user appears in team: {user_count}")
+
+
+def test_member_deletion(api_client, new_team):
+    """Test that member deletion works correctly and removes all instances of a user"""
+    # Add a test user
+    user_id = f"pytest_user_{uuid.uuid4().hex[:6]}"
+    api_client.add_team_member(new_team, user_id, "user")
+    time.sleep(1)
+
+    # Verify user was added
+    team_info_before = api_client.get_team_info(new_team)
+    assert verify_member_in_team(
+        team_info_before, user_id
+    ), "User was not added successfully"
+
+    initial_size = len(team_info_before["team_info"]["members_with_roles"])
+
+    # Attempt to delete the same user multiple times (5 times)
+    for i in range(5):
+        logger.info(f"Attempting deletion {i+1}/5")
+        if i == 0:
+            # First deletion should succeed
+            api_client.delete_team_member(new_team, user_id)
+            time.sleep(1)
+        else:
+            # Subsequent deletions should raise an error
+            try:
+                api_client.delete_team_member(new_team, user_id)
+                pytest.fail("Expected HTTPError for duplicate deletion")
+            except requests.exceptions.HTTPError as e:
+                logger.info(
+                    f"Expected error received on deletion attempt {i+1}: {str(e)}"
+                )
+
+    # Verify final state
+    final_info = api_client.get_team_info(new_team)
+    final_size = len(final_info["team_info"]["members_with_roles"])
+
+    # Verify user is completely removed
+    assert not verify_member_in_team(
+        final_info, user_id
+    ), "User still exists in team after deletion"
+
+    # Verify only one member was removed
+    assert (
+        final_size == initial_size - 1
+    ), f"Team size changed unexpectedly (was {initial_size}, now {final_size})"
+
+
+def test_delete_nonexistent_member(api_client, new_team):
+    """Test that attempting to delete a nonexistent member raises appropriate error"""
+    nonexistent_user = f"nonexistent_{uuid.uuid4().hex[:6]}"
+
+    # Verify user doesn't exist first
+    team_info = api_client.get_team_info(new_team)
+    assert not verify_member_in_team(
+        team_info, nonexistent_user
+    ), "Test setup error: nonexistent user somehow exists"
+
+    # Attempt to delete nonexistent user
+    try:
+        api_client.delete_team_member(new_team, nonexistent_user)
+        pytest.fail("Expected HTTPError for deleting nonexistent user")
+    except requests.exceptions.HTTPError as e:
+        logger.info(f"Expected error received: {str(e)}")
+        assert (
+            "user id / email not in team" in str(e).lower()
+        ), "Unexpected error message"
+
+
+def test_delete_last_admin(api_client, new_team):
+    """Test that system prevents deletion of the last admin"""
+    # Add an admin user
+    admin_id = f"admin_{uuid.uuid4().hex[:6]}"
+    api_client.add_team_member(new_team, admin_id, "admin")
+    time.sleep(1)
+
+    # Get all admins
+    team_info = api_client.get_team_info(new_team)
+    admins = [
+        member["user_id"]
+        for member in team_info["team_info"]["members_with_roles"]
+        if member["role"] == "admin"
+    ]
+
+    # If this is the only admin, deletion should fail
+    if len(admins) == 1:
+        try:
+            api_client.delete_team_member(new_team, admin_id)
+            pytest.fail("Expected HTTPError for deleting last admin")
+        except requests.exceptions.HTTPError as e:
+            logger.info(f"Expected error received: {str(e)}")
+    else:
+        # If there are multiple admins, deletion should succeed
+        api_client.delete_team_member(new_team, admin_id)
+        time.sleep(1)
+        final_info = api_client.get_team_info(new_team)
+        assert not verify_member_in_team(
+            final_info, admin_id
+        ), "Admin was not deleted successfully"

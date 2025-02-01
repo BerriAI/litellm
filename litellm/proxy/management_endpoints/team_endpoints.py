@@ -884,6 +884,7 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
+    is_member_in_team = False
     new_team_members: List[Member] = []
     for m in existing_team_row.members_with_roles:
         if (
@@ -891,14 +892,20 @@ async def team_member_delete(
             and m.user_id is not None
             and data.user_id == m.user_id
         ):
+            is_member_in_team = True
             continue
         elif (
             data.user_email is not None
             and m.user_email is not None
             and data.user_email == m.user_email
         ):
+            is_member_in_team = True
             continue
         new_team_members.append(m)
+
+    if not is_member_in_team:
+        raise HTTPException(status_code=400, detail={"error": "User not found in team"})
+
     existing_team_row.members_with_roles = new_team_members
 
     _db_new_team_members: List[dict] = [m.model_dump() for m in new_team_members]
