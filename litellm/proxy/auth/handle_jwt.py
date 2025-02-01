@@ -506,21 +506,43 @@ class JWTAuthManager:
         )
 
     @staticmethod
-    def get_all_team_ids(jwt_handler: JWTHandler, jwt_valid_token: dict) -> Set[str]:
-        """Get combined team IDs from groups and individual team_id"""
-        team_ids_from_groups = jwt_handler.get_team_ids_from_jwt(token=jwt_valid_token)
+    async def find_and_validate_specific_team_id(
+        jwt_handler: JWTHandler,
+        jwt_valid_token: dict,
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        parent_otel_span: Optional[Span],
+        proxy_logging_obj: ProxyLogging,
+    ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
+        """Find and validate specific team ID"""
         individual_team_id = jwt_handler.get_team_id(
             token=jwt_valid_token, default_value=None
         )
 
-        all_team_ids = set(team_ids_from_groups)
-        if individual_team_id:
-            all_team_ids.add(individual_team_id)
-
-        if not all_team_ids and jwt_handler.is_required_team_id() is True:
+        if not individual_team_id and jwt_handler.is_required_team_id() is True:
             raise Exception(
-                f"No team id found in token. Checked team_id field '{jwt_handler.litellm_jwtauth.team_id_jwt_field}' and groups"
+                f"No team id found in token. Checked team_id field '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
             )
+
+        ## VALIDATE TEAM OBJECT ###
+        team_object: Optional[LiteLLM_TeamTable] = None
+        if individual_team_id:
+            team_object = await get_team_object(
+                team_id=individual_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        return individual_team_id, team_object
+
+    @staticmethod
+    def get_all_team_ids(jwt_handler: JWTHandler, jwt_valid_token: dict) -> Set[str]:
+        """Get combined team IDs from groups and individual team_id"""
+        team_ids_from_groups = jwt_handler.get_team_ids_from_jwt(token=jwt_valid_token)
+
+        all_team_ids = set(team_ids_from_groups)
 
         return all_team_ids
 
@@ -539,6 +561,7 @@ class JWTAuthManager:
 
         if not team_ids:
             return None, None
+
         for team_id in team_ids:
             try:
                 team_object = await get_team_object(
@@ -613,7 +636,7 @@ class JWTAuthManager:
     ]:
         """Get user, org, and end user objects"""
         org_object: Optional[LiteLLM_OrganizationTable] = None
-        try:
+        if org_id:
             org_object = (
                 await get_org_object(
                     org_id=org_id,
@@ -625,11 +648,9 @@ class JWTAuthManager:
                 if org_id
                 else None
             )
-        except Exception as e:
-            verbose_proxy_logger.debug("Error getting org object: %s", e)
 
         user_object: Optional[LiteLLM_UserTable] = None
-        try:
+        if user_id:
             user_object = (
                 await get_user_object(
                     user_id=user_id,
@@ -644,11 +665,9 @@ class JWTAuthManager:
                 if user_id
                 else None
             )
-        except Exception as e:
-            verbose_proxy_logger.debug("Error getting user object: %s", e)
 
         end_user_object: Optional[LiteLLM_EndUserTable] = None
-        try:
+        if end_user_id:
             end_user_object = (
                 await get_end_user_object(
                     end_user_id=end_user_id,
@@ -660,8 +679,6 @@ class JWTAuthManager:
                 if end_user_id
                 else None
             )
-        except Exception as e:
-            verbose_proxy_logger.debug("Error getting end user object: %s", e)
 
         return user_object, org_object, end_user_object
 
@@ -705,17 +722,28 @@ class JWTAuthManager:
             return admin_result
 
         # Get team with model access
-        all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
-        team_id, team_object = await JWTAuthManager.find_team_with_model_access(
-            team_ids=all_team_ids,
-            requested_model=request_data.get("model"),
-            route=route,
-            jwt_handler=jwt_handler,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
+        ## SPECIFIC TEAM ID
+        team_id, team_object = await JWTAuthManager.find_and_validate_specific_team_id(
+            jwt_handler,
+            jwt_valid_token,
+            prisma_client,
+            user_api_key_cache,
+            parent_otel_span,
+            proxy_logging_obj,
         )
+        if not team_object:
+            ## CHECK USER GROUP ACCESS
+            all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
+            team_id, team_object = await JWTAuthManager.find_team_with_model_access(
+                team_ids=all_team_ids,
+                requested_model=request_data.get("model"),
+                route=route,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         # Get other objects
         user_object, org_object, end_user_object = await JWTAuthManager.get_objects(
