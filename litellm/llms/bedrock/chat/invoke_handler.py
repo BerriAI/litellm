@@ -311,7 +311,7 @@ class BedrockLLM(BaseAWSLLM):
         model: str,
         response: httpx.Response,
         model_response: ModelResponse,
-        stream: bool,
+        stream: Optional[bool],
         logging_obj: Logging,
         optional_params: dict,
         api_key: str,
