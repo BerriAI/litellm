@@ -167,6 +167,17 @@ class TestOpenAIO1(BaseLLMChatTest):
         pass
 
 
+class TestOpenAIO3(BaseLLMChatTest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "o3-mini",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
+
+
 def test_o1_supports_vision():
     """Test that o1 supports vision"""
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

@@ -3485,7 +3485,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -5918,9 +5918,9 @@ class ProviderConfigManager:
         """
         if (
             provider == LlmProviders.OPENAI
-            and litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
-            return litellm.OpenAIO1Config()
+            return litellm.openaiOSeriesConfig
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
@@ -5993,7 +5993,7 @@ class ProviderConfigManager:
         ):
             return litellm.AI21ChatConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
                 return litellm.AzureOpenAIO1Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
