@@ -29,6 +29,18 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
     return Promise.resolve();
   };
 
+  const validateJSON = (_: any, value: string) => {
+    if (!value) {
+      return Promise.resolve();
+    }
+    try {
+      JSON.parse(value);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject('Please enter valid JSON');
+    }
+  };
+
   // Handle custom pricing changes
   const handleCustomPricingChange = (checked: boolean) => {
     setCustomPricing(checked);
