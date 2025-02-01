@@ -105,10 +105,13 @@ export default function SpendLogsTable({
         };
       }
 
-      const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
-        ? moment(endTime).format("YYYY-MM-DD HH:mm:ss")
-        : moment().format("YYYY-MM-DD HH:mm:ss");
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+      console.log("formattedStartTime", formattedStartTime);
+      console.log("formattedEndTime", formattedEndTime);
 
       return await uiSpendLogsCall(
         accessToken,
