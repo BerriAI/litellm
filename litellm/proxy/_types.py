@@ -454,9 +454,6 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     public_key_ttl: float = 600
     public_allowed_routes: List[str] = ["public_routes"]
     enforce_rbac: bool = False
-    enforce_team_access: bool = (
-        False  # If true, request only allowed if user is part of a team which has model access
-    )
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model

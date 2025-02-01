@@ -592,7 +592,7 @@ class JWTAuthManager:
         if requested_model:
             raise HTTPException(
                 status_code=403,
-                detail=f"No team has access to the requested model: {requested_model}",
+                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}",
             )
 
         return None, None
@@ -757,15 +757,6 @@ class JWTAuthManager:
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-
-        if (
-            jwt_handler.litellm_jwtauth.enforce_team_access is True
-            and team_object is None
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="User is not part of any team with model access.",
-            )
 
         return JWTAuthBuilderResult(
             is_proxy_admin=False,
