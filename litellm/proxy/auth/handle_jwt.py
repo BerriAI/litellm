@@ -14,7 +14,6 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException
-from opentelemetry.trace import Span
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -31,6 +30,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Span,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
