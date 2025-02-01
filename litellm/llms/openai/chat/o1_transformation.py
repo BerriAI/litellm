@@ -129,7 +129,7 @@ class OpenAIO1Config(OpenAIGPTConfig):
         )
 
     def is_model_o1_reasoning_model(self, model: str) -> bool:
-        if model in litellm.open_ai_chat_completion_models and "o1" in model:
+        if model in litellm.open_ai_chat_completion_models and "o1" in model or "o3" in model:
             return True
         return False
 
