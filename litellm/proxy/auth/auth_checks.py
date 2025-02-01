@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     CallInfo,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
+    LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
@@ -425,6 +426,45 @@ def get_role_based_models(
     return None
 
 
+async def _get_fuzzy_user_object(
+    prisma_client: PrismaClient,
+    sso_user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+) -> Optional[LiteLLM_UserTable]:
+    """
+    Checks if sso user is in db.
+
+    Called when user id match is not found in db.
+
+    - Check if sso_user_id is user_id in db
+    - Check if sso_user_id is sso_user_id in db
+    - Check if user_email is user_email in db
+    - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
+    """
+    response = None
+    if sso_user_id is not None:
+        response = await prisma_client.db.litellm_usertable.find_unique(
+            where={"sso_user_id": sso_user_id},
+            include={"organization_memberships": True},
+        )
+
+    if response is None and user_email is not None:
+        response = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": user_email},
+            include={"organization_memberships": True},
+        )
+
+        if response is not None and sso_user_id is not None:  # update sso_user_id
+            asyncio.create_task(  # background task to update user with sso id
+                prisma_client.db.litellm_usertable.update(
+                    where={"user_id": response.user_id},
+                    data={"sso_user_id": sso_user_id},
+                )
+            )
+
+    return response
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: Optional[str],
@@ -468,27 +508,12 @@ async def get_user_object(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
 
-            if response is None and sso_user_id is not None:
-                response = await prisma_client.db.litellm_usertable.find_unique(
-                    where={"sso_user_id": sso_user_id},
-                    include={"organization_memberships": True},
+            if response is None:
+                response = await _get_fuzzy_user_object(
+                    prisma_client=prisma_client,
+                    sso_user_id=sso_user_id,
+                    user_email=user_email,
                 )
-
-            if response is None and user_email is not None:
-                response = await prisma_client.db.litellm_usertable.find_first(
-                    where={"user_email": user_email},
-                    include={"organization_memberships": True},
-                )
-
-                if (
-                    response is not None and sso_user_id is not None
-                ):  # update sso_user_id
-                    asyncio.create_task(
-                        prisma_client.db.litellm_usertable.update(
-                            where={"user_id": response.user_id},
-                            data={"sso_user_id": sso_user_id},
-                        )
-                    )
 
         else:
             response = None
@@ -508,7 +533,7 @@ async def get_user_object(
         ):
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
             _dumped_memberships = [
-                membership.model_dump()
+                LiteLLM_OrganizationMembershipTable(**membership.model_dump())
                 for membership in response.organization_memberships
                 if membership is not None
             ]
