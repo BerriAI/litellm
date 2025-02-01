@@ -799,8 +799,7 @@ async def test_user_api_key_auth_websocket():
 @pytest.mark.parametrize("enforce_rbac", [True, False])
 @pytest.mark.asyncio
 async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-    from litellm.proxy.auth.user_api_key_auth import _jwt_auth_user_api_key_auth_builder
+    from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
     from unittest.mock import patch, Mock
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.caching import DualCache
@@ -861,9 +860,9 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
 
     if enforce_rbac:
         with pytest.raises(HTTPException):
-            await _jwt_auth_user_api_key_auth_builder(**args)
+            await JWTAuthManager.auth_builder(**args)
     else:
-        await _jwt_auth_user_api_key_auth_builder(**args)
+        await JWTAuthManager.auth_builder(**args)
 
 
 def test_user_api_key_auth_end_user_str():
