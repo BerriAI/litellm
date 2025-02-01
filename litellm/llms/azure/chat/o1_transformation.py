@@ -12,9 +12,10 @@ Translations handled by LiteLLM:
 - Temperature => drop param (if user opts in to dropping param)
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from litellm import verbose_logger
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
@@ -30,6 +31,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         """
         Currently no Azure O Series models support native streaming.
         """
+
         if stream is not True:
             return False
 
@@ -38,6 +40,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 model_info = get_model_info(
                     model=model, custom_llm_provider=custom_llm_provider
                 )
+
                 if (
                     model_info.get("supports_native_streaming") is True
                 ):  # allow user to override default with model_info={"supports_native_streaming": true}
@@ -46,9 +49,22 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 verbose_logger.debug(
                     f"Error getting model info in AzureOpenAIO1Config: {e}"
                 )
-
         return True
 
     def is_o_series_model(self, model: str) -> bool:
+        return "o1" in model or "o3" in model or "o_series/" in model
 
-        return "o1" in model or "o3" in model
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        model = model.replace(
+            "o_series/", ""
+        )  # handle o_series/my-random-deployment-name
+        return super().transform_request(
+            model, messages, optional_params, litellm_params, headers
+        )
