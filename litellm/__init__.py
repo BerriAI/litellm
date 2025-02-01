@@ -890,7 +890,7 @@ from .llms.openai.chat.o1_transformation import (
     OpenAIO1Config,
 )
 
-openAIO1Config = OpenAIO1Config()
+openaiOSeriesConfig = OpenAIO1Config()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )

@@ -5918,9 +5918,9 @@ class ProviderConfigManager:
         """
         if (
             provider == LlmProviders.OPENAI
-            and litellm.openAIO1Config.is_model_o1_reasoning_model(model=model)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
-            return litellm.OpenAIO1Config()
+            return litellm.openaiOSeriesConfig
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:

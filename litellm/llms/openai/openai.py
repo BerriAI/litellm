@@ -47,7 +47,10 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from .chat.o1_transformation import OpenAIO1Config
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
+
+openaiOSeriesConfig = OpenAIO1Config()
 
 
 class MistralEmbeddingConfig:
@@ -174,8 +177,8 @@ class OpenAIConfig(BaseConfig):
         Returns:
             list: List of supported openai parameters
         """
-        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
-            return litellm.openAIO1Config.get_supported_openai_params(model=model)
+        if openaiOSeriesConfig.is_model_o_series_model(model=model):
+            return openaiOSeriesConfig.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
@@ -203,8 +206,8 @@ class OpenAIConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         """ """
-        if litellm.openAIO1Config.is_model_o1_reasoning_model(model=model):
-            return litellm.openAIO1Config.map_openai_params(
+        if openaiOSeriesConfig.is_model_o_series_model(model=model):
+            return openaiOSeriesConfig.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,

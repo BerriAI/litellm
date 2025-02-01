@@ -211,8 +211,11 @@
         "cache_read_input_token_cost": 0.00000055,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "o3-mini-2025-01-31": {
         "max_tokens": 100000,
@@ -223,8 +226,11 @@
         "cache_read_input_token_cost": 0.00000055,
         "litellm_provider": "openai",
         "mode": "chat",
-        "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "o1-mini-2024-09-12": {
         "max_tokens": 65536,
@@ -954,8 +960,9 @@
         "cache_read_input_token_cost": 0.00000055,
         "litellm_provider": "azure",
         "mode": "chat",
-        "supports_vision": true,
-        "supports_prompt_caching": true
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "azure/o1-mini": {
         "max_tokens": 65536,
