@@ -758,6 +758,15 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        if (
+            jwt_handler.litellm_jwtauth.enforce_team_access is True
+            and team_object is None
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="User is not part of any team with model access.",
+            )
+
         return JWTAuthBuilderResult(
             is_proxy_admin=False,
             team_id=team_id,
