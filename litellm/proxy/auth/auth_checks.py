@@ -427,12 +427,14 @@ def get_role_based_models(
 
 @log_db_metrics
 async def get_user_object(
-    user_id: str,
+    user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     user_id_upsert: bool,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
+    sso_user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -465,6 +467,29 @@ async def get_user_object(
             response = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
+
+            if response is None and sso_user_id is not None:
+                response = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"sso_user_id": sso_user_id},
+                    include={"organization_memberships": True},
+                )
+
+            if response is None and user_email is not None:
+                response = await prisma_client.db.litellm_usertable.find_first(
+                    where={"user_email": user_email},
+                    include={"organization_memberships": True},
+                )
+
+                if (
+                    response is not None and sso_user_id is not None
+                ):  # update sso_user_id
+                    asyncio.create_task(
+                        prisma_client.db.litellm_usertable.update(
+                            where={"user_id": response.user_id},
+                            data={"sso_user_id": sso_user_id},
+                        )
+                    )
+
         else:
             response = None
 

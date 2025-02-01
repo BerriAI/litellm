@@ -340,7 +340,9 @@ async def _jwt_auth_user_api_key_auth_builder(
 
     # [OPTIONAL] allowed user email domains
     valid_user_email: Optional[bool] = None
-    user_email: Optional[str] = None
+    user_email: Optional[str] = jwt_handler.get_user_email(
+        token=jwt_valid_token, default_value=None
+    )
     if jwt_handler.is_enforced_email_domain():
         """
         if 'allowed_email_subdomains' is set,
@@ -348,9 +350,6 @@ async def _jwt_auth_user_api_key_auth_builder(
         - checks if token contains 'email' field
         - checks if 'email' is from an allowed domain
         """
-        user_email = jwt_handler.get_user_email(
-            token=jwt_valid_token, default_value=None
-        )
         if user_email is None:
             valid_user_email = False
         else:
@@ -449,6 +448,8 @@ async def _jwt_auth_user_api_key_auth_builder(
             ),
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            user_email=user_email,
+            sso_user_id=user_id,
         )
     # [OPTIONAL] track spend against an external user - `LiteLLM_EndUserTable`
     end_user_object = None
