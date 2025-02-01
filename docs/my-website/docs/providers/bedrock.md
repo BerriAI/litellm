@@ -1399,65 +1399,6 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
-### Deepseek
-
-Native Deepseek support will be [available soon](https://github.com/BerriAI/litellm/pull/8132)
-
-Till then, use this: 
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-response = litellm.completion(
-    model="bedrock/meta.DeepSeek-R1-Distill-Llama-8B",
-    model_id="provisioned-model-arn",
-    messages=[{"content": "Hello, how are you?", "role": "user"}]
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-    - model_name: bedrock-deepseek
-      litellm_params:
-        model: bedrock/meta.DeepSeek-R1-Distill-Llama-8B
-        model_id: provisioned-model-arn
-```
-
-2. Start proxy server
-
-```bash
-litellm --config config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-3. Test it! 
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--d '{
-  "model": "bedrock-deepseek",
-  "messages": [
-    {
-      "role": "user",
-      "content": "What'\''s the weather like in Boston today 236589?"
-    }
-  ]
-}'
-```
-
-</TabItem>
-</Tabs>
-
 ## Bedrock Embedding
 
 ### API keys
