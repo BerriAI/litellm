@@ -15,7 +15,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
 @pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1"])
@@ -152,45 +152,16 @@ def test_litellm_responses():
     assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
 
 
-from abc import ABC, abstractmethod
-
-
-class TestOSeriesModels(ABC):
-    @abstractmethod
-    def get_base_completion_call_args(self):
-        pass
-
-    def test_reasoning_effort(self):
-        """Test that reasoning_effort is passed correctly to the model"""
-        from openai import OpenAI
-        from litellm import completion
-
-        client = OpenAI(api_key="fake-api-key")
-
-        with patch.object(
-            client.chat.completions.with_raw_response, "create"
-        ) as mock_client:
-            try:
-                completion(
-                    model="o1",
-                    reasoning_effort="low",
-                    messages=[{"role": "user", "content": "Hello!"}],
-                    client=client,
-                )
-            except Exception as e:
-                print(f"Error: {e}")
-
-            mock_client.assert_called_once()
-            request_body = mock_client.call_args.kwargs
-            print("request_body: ", request_body)
-            assert request_body["reasoning_effort"] == "low"
-
-
-class TestOpenAIO1(TestOSeriesModels, BaseLLMChatTest):
+class TestOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
             "model": "o1",
         }
+
+    def get_client(self):
+        from openai import OpenAI
+
+        return OpenAI(api_key="fake-api-key")
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -201,11 +172,16 @@ class TestOpenAIO1(TestOSeriesModels, BaseLLMChatTest):
         pass
 
 
-class TestOpenAIO3(TestOSeriesModels, BaseLLMChatTest):
+class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
             "model": "o3-mini",
         }
+
+    def get_client(self):
+        from openai import OpenAI
+
+        return OpenAI(api_key="fake-api-key")
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""

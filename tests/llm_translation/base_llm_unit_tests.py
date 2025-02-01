@@ -18,9 +18,11 @@ from litellm.utils import (
     get_supported_openai_params,
     get_optional_params,
 )
+from typing import Union
 
 # test_example.py
 from abc import ABC, abstractmethod
+from openai import OpenAI
 
 
 def _usage_format_tests(usage: litellm.Usage):
@@ -605,3 +607,38 @@ class BaseLLMChatTest(ABC):
         cost = completion_cost(response)
 
         assert cost > 0
+
+
+class BaseOSeriesModelsTest(ABC):  # test across azure/openai
+    @abstractmethod
+    def get_base_completion_call_args(self):
+        pass
+
+    @abstractmethod
+    def get_client(self) -> OpenAI:
+        pass
+
+    def test_reasoning_effort(self):
+        """Test that reasoning_effort is passed correctly to the model"""
+
+        from litellm import completion
+
+        client = self.get_client()
+
+        with patch.object(
+            client.chat.completions.with_raw_response, "create"
+        ) as mock_client:
+            try:
+                completion(
+                    model="o1",
+                    reasoning_effort="low",
+                    messages=[{"role": "user", "content": "Hello!"}],
+                    client=client,
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+            print("request_body: ", request_body)
+            assert request_body["reasoning_effort"] == "low"
