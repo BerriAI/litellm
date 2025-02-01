@@ -97,7 +97,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
             </Form.Item>
 
             {customPricing && (
-              <>
+              <div className="ml-6 pl-4 border-l-2 border-gray-200">
                 <Form.Item
                   label="Pricing Model"
                   name="pricing_model"
@@ -142,7 +142,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     <TextInput />
                   </Form.Item>
                 )}
-              </>
+              </div>
             )}
 
             <Form.Item
