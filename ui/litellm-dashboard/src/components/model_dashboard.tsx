@@ -20,6 +20,7 @@ import ConditionalPublicModelName from "./add_model/conditional_public_model_nam
 import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+import EditModelModal from "./edit_model/edit_model_modal";
 import {
   TabPanel,
   TabPanels,
@@ -367,134 +368,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     return null;
   }
 
-  const EditModelModal: React.FC<EditModelModalProps> = ({
-    visible,
-    onCancel,
-    model,
-    onSubmit,
-  }) => {
-    const [form] = Form.useForm();
-    let litellm_params_to_edit: Record<string, any> = {};
-    let model_name = "";
-    let model_id = "";
-    if (model) {
-      litellm_params_to_edit = model.litellm_params;
-      model_name = model.model_name;
-      let model_info = model.model_info;
-      if (model_info) {
-        model_id = model_info.id;
-        console.log(`model_id: ${model_id}`);
-        litellm_params_to_edit.model_id = model_id;
-      }
-    }
-
-    const handleOk = () => {
-      form
-        .validateFields()
-        .then((values) => {
-          onSubmit(values);
-          form.resetFields();
-        })
-        .catch((error) => {
-          console.error("Validation failed:", error);
-        });
-    };
-
-    return (
-      <Modal
-        title={"Edit Model " + model_name}
-        visible={visible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={onCancel}
-      >
-        <Form
-          form={form}
-          onFinish={handleEditSubmit}
-          initialValues={litellm_params_to_edit} // Pass initial values here
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item className="mt-8" label="api_base" name="api_base">
-              <TextInput />
-            </Form.Item>
-            <Form.Item
-              label="organization"
-              name="organization"
-              tooltip="OpenAI Organization ID"
-            >
-                <TextInput />
-            </Form.Item>
-
-            <Form.Item
-              label="tpm"
-              name="tpm"
-              tooltip="int (optional) - Tokens limit for this deployment: in tokens per minute (tpm). Find this information on your model/providers website"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="rpm"
-              name="rpm"
-              tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item label="max_retries" name="max_retries">
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="timeout"
-              name="timeout"
-              tooltip="int (optional) - Timeout in seconds for LLM requests (Defaults to 600 seconds)"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="stream_timeout"
-              name="stream_timeout"
-              tooltip="int (optional) - Timeout for stream requests (seconds)"
-            >
-              <InputNumber min={0} step={1} />
-            </Form.Item>
-
-            <Form.Item
-              label="Input Cost per 1M Tokens"
-              name="input_cost_per_million_tokens"
-              tooltip="float (optional) - Input cost per 1 million tokens"
-            >
-              <InputNumber min={0} step={0.01} />
-            </Form.Item>
-
-            <Form.Item
-              label="Output Cost per 1M Tokens"
-              name="output_cost_per_million_tokens"
-              tooltip="float (optional) - Output cost per 1 million tokens"
-            >
-              <InputNumber min={0} step={0.01} />
-            </Form.Item>
-
-            <Form.Item
-              label="model_id"
-              name="model_id"
-              hidden={true}
-            ></Form.Item>
-          </>
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Save</Button2>
-          </div>
-        </Form>
-      </Modal>
-    );
-  };
-
   const handleEditClick = (model: any) => {
     setSelectedModel(model);
     setEditModalVisible(true);
@@ -526,14 +399,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     let newLiteLLMParams: Record<string, any> = {};
     let model_info_model_id = null;
 
-    if (formValues.input_cost_per_million_tokens) {
-      formValues.input_cost_per_token = formValues.input_cost_per_million_tokens / 1000000;
-      delete formValues.input_cost_per_million_tokens;
+    if (formValues.input_cost_per_token) {
+      // Convert from per 1M tokens to per token
+      formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1_000_000;
     }
-    if (formValues.output_cost_per_million_tokens) {
-      formValues.output_cost_per_token = formValues.output_cost_per_million_tokens / 1000000;
-      delete formValues.output_cost_per_million_tokens;
+    if (formValues.output_cost_per_token) {
+      // Convert from per 1M tokens to per token
+      formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1_000_000;
     }
+  
 
     for (const [key, value] of Object.entries(formValues)) {
       if (key !== "model_id") {
