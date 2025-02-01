@@ -625,12 +625,14 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
 
         client = self.get_client()
 
+        completion_args = self.get_base_completion_call_args()
+
         with patch.object(
             client.chat.completions.with_raw_response, "create"
         ) as mock_client:
             try:
                 completion(
-                    model="o1",
+                    **completion_args,
                     reasoning_effort="low",
                     messages=[{"role": "user", "content": "Hello!"}],
                     client=client,
