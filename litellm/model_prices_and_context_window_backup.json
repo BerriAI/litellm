@@ -935,6 +935,30 @@
         "input_cost_per_character": 0.000030,
         "litellm_provider": "openai"
     },
+    "azure/o3-mini": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.0000011,
+        "output_cost_per_token": 0.0000044,
+        "cache_read_input_token_cost": 0.00000055,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_vision": false,
+        "supports_prompt_caching": true
+    },
+    "azure/o3-mini-2025-01-31": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.0000011,
+        "output_cost_per_token": 0.0000044,
+        "cache_read_input_token_cost": 0.00000055,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_vision": false,
+        "supports_prompt_caching": true
+    },
     "azure/tts-1": {
         "mode": "audio_speech", 
         "input_cost_per_character": 0.000015,
@@ -3864,6 +3888,16 @@
         "supports_function_calling": true
     },
     "vertex_ai/codestral@latest": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "vertex_ai-mistral_models",
+        "mode": "chat",
+        "supports_function_calling": true
+    },
+    "vertex_ai/codestral@2405": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
