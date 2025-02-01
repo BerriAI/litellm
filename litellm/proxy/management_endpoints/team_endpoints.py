@@ -58,8 +58,11 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy, _premium_user_check
-
+from litellm.proxy.utils import (
+    PrismaClient,
+    _premium_user_check,
+    handle_exception_on_proxy,
+)
 
 router = APIRouter()
 
@@ -67,6 +70,7 @@ router = APIRouter()
 def _is_user_team_admin(
     user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
 ) -> bool:
+
     for member in team_obj.members_with_roles:
         if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
             return True
@@ -595,6 +599,26 @@ def team_call_validation_checks(
         raise HTTPException(status_code=400, detail={"error": str(e)})
 
 
+def team_member_add_duplication_check(
+    data: TeamMemberAddRequest,
+    existing_team_row: LiteLLM_TeamTable,
+):
+    def _check_member_duplication(member: Member):
+        if member.user_id in [m.user_id for m in existing_team_row.members_with_roles]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"User={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}"
+                },
+            )
+
+    if isinstance(data.member, Member):
+        _check_member_duplication(data.member)
+    elif isinstance(data.member, List):
+        for m in data.member:
+            _check_member_duplication(m)
+
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -661,6 +685,11 @@ async def team_member_add(
         )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+
+    team_member_add_duplication_check(
+        data=data,
+        existing_team_row=complete_team_data,
+    )
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
 
@@ -859,6 +888,7 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
+    is_member_in_team = False
     new_team_members: List[Member] = []
     for m in existing_team_row.members_with_roles:
         if (
@@ -866,14 +896,20 @@ async def team_member_delete(
             and m.user_id is not None
             and data.user_id == m.user_id
         ):
+            is_member_in_team = True
             continue
         elif (
             data.user_email is not None
             and m.user_email is not None
             and data.user_email == m.user_email
         ):
+            is_member_in_team = True
             continue
         new_team_members.append(m)
+
+    if not is_member_in_team:
+        raise HTTPException(status_code=400, detail={"error": "User not found in team"})
+
     existing_team_row.members_with_roles = new_team_members
 
     _db_new_team_members: List[dict] = [m.model_dump() for m in new_team_members]
