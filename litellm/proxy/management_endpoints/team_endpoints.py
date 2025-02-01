@@ -58,8 +58,11 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy, _premium_user_check
-
+from litellm.proxy.utils import (
+    PrismaClient,
+    _premium_user_check,
+    handle_exception_on_proxy,
+)
 
 router = APIRouter()
 
@@ -595,6 +598,23 @@ def team_call_validation_checks(
         raise HTTPException(status_code=400, detail={"error": str(e)})
 
 
+def team_member_add_duplication_check(
+    data: TeamMemberAddRequest,
+    existing_team_row: LiteLLM_TeamTable,
+):
+    def _check_member_duplication(member: Member):
+        if member.user_id in [m.user_id for m in existing_team_row.members_with_roles]:
+            raise HTTPException(
+                status_code=400, detail={"error": "User already in team"}
+            )
+
+    if isinstance(data.member, Member):
+        _check_member_duplication(data.member)
+    elif isinstance(data.member, List):
+        for m in data.member:
+            _check_member_duplication(m)
+
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -661,6 +681,11 @@ async def team_member_add(
         )
 
     complete_team_data = LiteLLM_TeamTable(**existing_team_row.model_dump())
+
+    team_member_add_duplication_check(
+        data=data,
+        existing_team_row=complete_team_data,
+    )
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
 

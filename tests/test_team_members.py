@@ -184,3 +184,46 @@ def test_error_handling(api_client):
     """Test error handling for invalid team ID"""
     with pytest.raises(requests.exceptions.HTTPError):
         api_client.get_team_info("invalid-team-id")
+
+
+def test_duplicate_user_addition(api_client, new_team):
+    """Test that adding the same user twice is handled appropriately"""
+    # Add user first time
+    test_email = f"pytest_user_{uuid.uuid4().hex[:6]}@mycompany.com"
+    initial_response = api_client.add_team_member(new_team, test_email, "user")
+
+    # Allow time for system to process
+    time.sleep(1)
+
+    # Get team info after first addition
+    team_info_after_first = api_client.get_team_info(new_team)
+    size_after_first = len(team_info_after_first["team_info"]["members_with_roles"])
+
+    logger.info(f"First addition completed. Team size: {size_after_first}")
+
+    # Attempt to add same user again
+    with pytest.raises(requests.exceptions.HTTPError):
+        api_client.add_team_member(new_team, test_email, "user")
+
+    # Allow time for system to process
+    time.sleep(1)
+
+    # Get team info after second addition attempt
+    team_info_after_second = api_client.get_team_info(new_team)
+    size_after_second = len(team_info_after_second["team_info"]["members_with_roles"])
+
+    # Verify team size didn't change
+    assert (
+        size_after_second == size_after_first
+    ), f"Team size changed after duplicate addition (was {size_after_first}, now {size_after_second})"
+
+    # Verify user appears exactly once
+    user_count = sum(
+        1
+        for member in team_info_after_second["team_info"]["members_with_roles"]
+        if member["user_id"] == test_email
+    )
+    assert user_count == 1, f"User appears {user_count} times in team (expected 1)"
+
+    logger.info(f"Duplicate addition attempted. Final team size: {size_after_second}")
+    logger.info(f"Number of times user appears in team: {user_count}")
