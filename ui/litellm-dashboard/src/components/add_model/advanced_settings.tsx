@@ -105,7 +105,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 >
                   <Select
                     defaultValue="per_token"
-                    onChange={(value) => setPricingModel(value)}
+                    onChange={(value: 'per_token' | 'per_second') => setPricingModel(value)}
                     options={[
                       { value: 'per_token', label: 'Per Million Tokens' },
                       { value: 'per_second', label: 'Per Second' },
