@@ -93,6 +93,7 @@ def test_azure_o3_streaming():
         ) as e:  # expect output translation error as mock response doesn't return a json
             print(e)
         assert mock_create.call_count == 1
+        assert "stream" not in mock_create.call_args.kwargs
 
 
 def test_azure_o_series_routing():

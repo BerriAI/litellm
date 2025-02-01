@@ -28,7 +28,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         """
-        Currently no Azure OpenAI models support native streaming.
+        Currently no Azure O Series models support native streaming.
         """
         if stream is not True:
             return False
@@ -38,7 +38,9 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
                 model_info = get_model_info(
                     model=model, custom_llm_provider=custom_llm_provider
                 )
-                if model_info.get("supports_native_streaming") is True:
+                if (
+                    model_info.get("supports_native_streaming") is True
+                ):  # allow user to override default with model_info={"supports_native_streaming": true}
                     return False
             except Exception as e:
                 verbose_logger.debug(
