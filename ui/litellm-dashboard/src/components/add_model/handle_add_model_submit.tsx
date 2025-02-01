@@ -35,6 +35,16 @@ export const handleAddModelSubmit = async (
         console.log(`litellm_model: ${litellm_model}`);
         const litellmParamsObj: Record<string, any> = {};
         const modelInfoObj: Record<string, any> = {};
+        
+        // Handle pricing conversion before processing other fields
+        if (formValues.input_cost_per_token) {
+          formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1000000;
+        }
+        if (formValues.output_cost_per_token) {
+          formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1000000;
+        }
+        // Keep input_cost_per_second as is, no conversion needed
+        
         // Iterate through the key-value pairs in formValues
         litellmParamsObj["model"] = litellm_model;
         let modelName: string = "";
@@ -95,6 +105,16 @@ export const handleAddModelSubmit = async (
                 modelInfoObj[key] = value;
               }
             }
+          }
+  
+          // Handle the pricing fields
+          else if (key === "input_cost_per_token" || 
+                  key === "output_cost_per_token" || 
+                  key === "input_cost_per_second") {
+            if (value) {
+              litellmParamsObj[key] = Number(value);
+            }
+            continue;
           }
   
           // Check if key is any of the specified API related keys
