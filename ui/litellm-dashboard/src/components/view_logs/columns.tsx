@@ -61,9 +61,11 @@ export const columns: ColumnDef<LogEntry>[] = [
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
-      <span className="font-mono text-xs max-w-[100px] truncate block">
-        {String(info.getValue() || "")}
-      </span>
+      <Tooltip title={String(info.getValue() || "")}>
+        <span className="font-mono text-xs max-w-[100px] truncate block">
+          {String(info.getValue() || "")}
+        </span>
+      </Tooltip>
     ),
   },
   {
