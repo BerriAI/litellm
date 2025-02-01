@@ -70,6 +70,21 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
         labelAlign="left"
       >
         <>
+          <Form.Item
+            label="Input Cost (per 1M tokens)"
+            name="input_cost_per_token"
+            tooltip="float (optional) - Input cost per 1 million tokens"
+          >
+            <TextInput />
+          </Form.Item>
+
+          <Form.Item
+            label="Output Cost (per 1M tokens)"
+            name="output_cost_per_token"
+            tooltip="float (optional) - Output cost per 1 million tokens"
+          >
+            <TextInput />
+          </Form.Item>
           <Form.Item className="mt-8" label="api_base" name="api_base">
             <TextInput />
           </Form.Item>
@@ -117,21 +132,6 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
             <InputNumber min={0} step={1} />
           </Form.Item>
 
-          <Form.Item
-            label="Input Cost (per 1M tokens)"
-            name="input_cost_per_token"
-            tooltip="float (optional) - Input cost per 1 million tokens"
-          >
-            <TextInput />
-          </Form.Item>
-
-          <Form.Item
-            label="Output Cost (per 1M tokens)"
-            name="output_cost_per_token"
-            tooltip="float (optional) - Output cost per 1 million tokens"
-          >
-            <TextInput />
-          </Form.Item>
 
           <Form.Item label="model_id" name="model_id" hidden={true}></Form.Item>
         </>
