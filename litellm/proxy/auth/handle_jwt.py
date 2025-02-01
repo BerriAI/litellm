@@ -621,6 +621,7 @@ class JWTAuthManager:
     @staticmethod
     async def get_objects(
         user_id: Optional[str],
+        user_email: Optional[str],
         org_id: Optional[str],
         end_user_id: Optional[str],
         valid_user_email: Optional[bool],
@@ -661,6 +662,8 @@ class JWTAuthManager:
                     ),
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    user_email=user_email,
+                    sso_user_id=user_id,
                 )
                 if user_id
                 else None
@@ -704,7 +707,7 @@ class JWTAuthManager:
 
         # Get basic user info
         scopes = jwt_handler.get_scopes(token=jwt_valid_token)
-        user_id, _, valid_user_email = await JWTAuthManager.get_user_info(
+        user_id, user_email, valid_user_email = await JWTAuthManager.get_user_info(
             jwt_handler, jwt_valid_token
         )
 
@@ -748,6 +751,7 @@ class JWTAuthManager:
         # Get other objects
         user_object, org_object, end_user_object = await JWTAuthManager.get_objects(
             user_id=user_id,
+            user_email=user_email,
             org_id=org_id,
             end_user_id=end_user_id,
             valid_user_email=valid_user_email,
