@@ -36,7 +36,9 @@ class AzureOpenAIO1ChatCompletion(OpenAIChatCompletion):
     ]:
 
         # Override to use Azure-specific client initialization
-        if isinstance(client, OpenAI) or isinstance(client, AsyncOpenAI):
+        if not isinstance(client, AzureOpenAI) and not isinstance(
+            client, AsyncAzureOpenAI
+        ):
             client = None
 
         return get_azure_openai_client(

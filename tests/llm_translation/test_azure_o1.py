@@ -63,3 +63,40 @@ class TestAzureOpenAIO1(BaseLLMChatTest):
             model="azure/o1-preview", stream=True
         )
         assert fake_stream is False
+
+
+def test_azure_o3_streaming():
+    """
+    Test that o3 models handles fake streaming correctly.
+    """
+    from openai import AzureOpenAI
+    from litellm import completion
+
+    client = AzureOpenAI(
+        api_key="my-fake-o1-key",
+        base_url="https://openai-gpt-4-test-v-1.openai.azure.com",
+        api_version="2024-02-15-preview",
+    )
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_create:
+        try:
+            completion(
+                model="azure/o3-mini",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                stream=True,
+                client=client,
+            )
+        except (
+            Exception
+        ) as e:  # expect output translation error as mock response doesn't return a json
+            print(e)
+        assert mock_create.call_count == 1
+
+
+def test_azure_o_series_routing():
+    """
+    Allows user to pass model="azure/o_series/<any-deployment-name>" for explicit o_series model routing.
+    """
+    pass

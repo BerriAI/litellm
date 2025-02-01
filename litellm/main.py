@@ -1202,6 +1202,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params["extra_headers"] = extra_headers
 
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():

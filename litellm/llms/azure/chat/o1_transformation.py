@@ -48,4 +48,5 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         return True
 
     def is_o_series_model(self, model: str) -> bool:
+
         return "o1" in model or "o3" in model
