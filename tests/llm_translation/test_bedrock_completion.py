@@ -2554,6 +2554,7 @@ def test_bedrock_custom_deepseek():
             response = completion(
                 model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # Updated to specify provider
                 messages=[{"role": "user", "content": "Tell me a joke"}],
+                max_tokens=100,
                 client=client,
             )
 
@@ -2569,8 +2570,12 @@ def test_bedrock_custom_deepseek():
 
             # Verify the request body format
             request_body = json.loads(mock_post.call_args.kwargs["data"])
+            print("request_body=", json.dumps(request_body, indent=4, default=str))
             assert "prompt" in request_body
             assert request_body["prompt"] == "Tell me a joke"
+
+            # follows the llama spec
+            assert request_body["max_gen_len"] == 100
 
         except Exception as e:
             print(f"Error: {str(e)}")
