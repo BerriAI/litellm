@@ -975,6 +975,17 @@
         "output_cost_per_second": 0.0001, 
         "litellm_provider": "azure"
     },
+    "azure/deepseek-r1": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "input_cost_per_token_cache_hit": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_prompt_caching": true
+    },
     "azure/o3-mini": {
         "max_tokens": 100000,
         "max_input_tokens": 200000,
