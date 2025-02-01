@@ -156,34 +156,11 @@ scope: ["litellm-proxy-admin",...]
 scope: "litellm-proxy-admin ..."
 ```
 
-## Enforce Role-Based Access Control (RBAC)
+## Control Model Access with Roles
 
 Reject a JWT token if it's valid but doesn't have the required scopes / fields.
 
 Only tokens which with valid Admin (`admin_jwt_scope`), User (`user_id_jwt_field`), Team (`team_id_jwt_field`) are allowed.
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  enable_jwt_auth: True
-  litellm_jwtauth:
-    admin_jwt_scope: "litellm_proxy_endpoints_access"
-    admin_allowed_routes:
-      - openai_routes
-      - info_routes
-    public_key_ttl: 600
-    enforce_rbac: true # 👈 Enforce RBAC
-```
-
-Expected Scope in JWT: 
-
-```
-{
-  "scope": "litellm_proxy_endpoints_access"
-}
-```
-
-### Control Model Access 
 
 ```yaml
 general_settings:
@@ -198,8 +175,56 @@ general_settings:
       models: ["anthropic-claude"]
 ```
 
-
 **[Architecture Diagram (Control Model Access)](./jwt_auth_arch)**
+
+## Control model access with Teams
+
+
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups" 
+```
+
+This is assuming your token looks like this:
+```
+{
+  ...,
+  "sub": "my-unique-user",
+  "groups": ["team_id_1", "team_id_2"]
+}
+```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the flow
+
+SSO for UI: [**See Walkthrough**](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a426183a46b1e2b522200?sid=4ed6d497-ead6-47f9-80c0-ca1c4b6b4814)
+
+
+### Flow
+
+- Validate if user id is in the DB (LiteLLM_UserTable)
+- Validate if any of the groups are in the DB (LiteLLM_TeamTable)
+- Validate if any group has model access
+- If all checks pass, allow the request
+
 
 ## Advanced - Allowed Routes 
 
