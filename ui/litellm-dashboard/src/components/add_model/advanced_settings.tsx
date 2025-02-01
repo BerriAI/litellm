@@ -1,6 +1,6 @@
 import React from "react";
 import { Form, Switch, Select, Input } from "antd";
-import { Text, Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { Text, Button, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
 import { Row, Col, Typography, Card } from "antd";
 import TextArea from "antd/es/input/TextArea";
 const { Link } = Typography;
@@ -121,7 +121,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       rules={[{ validator: validateNumber }]}
                       className="mb-4"
                     >
-                      <Input />
+                      <TextInput />
                     </Form.Item>
                     <Form.Item
                       label="Output Cost (per 1M tokens)"
@@ -129,7 +129,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       rules={[{ validator: validateNumber }]}
                       className="mb-4"
                     >
-                      <Input />
+                      <TextInput />
                     </Form.Item>
                   </>
                 ) : (
@@ -139,7 +139,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     rules={[{ validator: validateNumber }]}
                     className="mb-4"
                   >
-                    <Input />
+                    <TextInput />
                   </Form.Item>
                 )}
               </>
