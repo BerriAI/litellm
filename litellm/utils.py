@@ -6045,20 +6045,23 @@ class ProviderConfigManager:
             return litellm.PetalsConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             base_model = litellm.AmazonConverseConfig()._get_base_model(model)
+            bedrock_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model)
             if (
                 base_model in litellm.bedrock_converse_models
                 or "converse_like" in model
             ):
                 return litellm.AmazonConverseConfig()
-            elif "amazon" in model:  # amazon titan llms
+            elif bedrock_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
-            elif "meta" in model:  # amazon / meta llms
+            elif (
+                bedrock_provider == "meta" or bedrock_provider == "llama"
+            ):  # amazon / meta llms
                 return litellm.AmazonLlamaConfig()
-            elif "ai21" in model:  # ai21 llms
+            elif bedrock_provider == "ai21":  # ai21 llms
                 return litellm.AmazonAI21Config()
-            elif "cohere" in model:  # cohere models on bedrock
+            elif bedrock_provider == "cohere":  # cohere models on bedrock
                 return litellm.AmazonCohereConfig()
-            elif "mistral" in model:  # mistral models on bedrock
+            elif bedrock_provider == "mistral":  # mistral models on bedrock
                 return litellm.AmazonMistralConfig()
         return litellm.OpenAIGPTConfig()
 
