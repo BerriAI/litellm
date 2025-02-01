@@ -53,6 +53,10 @@ export const handleAddModelSubmit = async (
           if (value === "") {
             continue;
           }
+          // Skip the custom_pricing and pricing_model fields as they're only used for UI control
+          if (key === 'custom_pricing' || key === 'pricing_model') {
+            continue;
+          }
           if (key == "model_name") {
             modelName = modelName + value;
           } else if (key == "custom_llm_provider") {
