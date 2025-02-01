@@ -69,10 +69,10 @@ from enum import Enum
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-###############################################
+################################################
 if set_verbose == True:
     _turn_on_debug()
-###############################################
+################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
 CALLBACK_TYPES = Union[str, Callable, CustomLogger]
 input_callback: List[CALLBACK_TYPES] = []
@@ -358,6 +358,9 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
+]
+BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
+    "cohere", "anthropic", "mistral", "amazon", "meta", "llama"
 ]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
