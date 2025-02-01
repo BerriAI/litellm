@@ -103,6 +103,7 @@ model LiteLLM_UserTable {
 		user_id    String @id
     user_alias String? 
     team_id    String?
+    sso_user_id String? @unique
     organization_id String?
     password  String?
     teams    String[] @default([])
