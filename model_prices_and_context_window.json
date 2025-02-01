@@ -945,6 +945,18 @@
         "output_cost_per_second": 0.0001, 
         "litellm_provider": "azure"
     },
+    "azure/o3-mini": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.0000011,
+        "output_cost_per_token": 0.0000044,
+        "cache_read_input_token_cost": 0.00000055,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_prompt_caching": true
+    },
     "azure/o1-mini": {
         "max_tokens": 65536,
         "max_input_tokens": 128000,
