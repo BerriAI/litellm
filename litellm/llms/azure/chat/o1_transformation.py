@@ -47,5 +47,5 @@ class AzureOpenAIO1Config(OpenAIO1Config):
 
         return True
 
-    def is_reasoning_model(self, model: str) -> bool:
+    def is_o_series_model(self, model: str) -> bool:
         return "o1" in model or "o3" in model
