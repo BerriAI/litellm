@@ -17,10 +17,10 @@ from typing import Optional
 from litellm import verbose_logger
 from litellm.utils import get_model_info
 
-from ...openai.chat.o1_transformation import OpenAIO1Config
+from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
 
-class AzureOpenAIO1Config(OpenAIO1Config):
+class AzureOpenAIO1Config(OpenAIOSeriesConfig):
     def should_fake_stream(
         self,
         model: Optional[str],

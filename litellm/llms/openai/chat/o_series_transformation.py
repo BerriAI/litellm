@@ -26,7 +26,7 @@ from litellm.utils import (
 from .gpt_transformation import OpenAIGPTConfig
 
 
-class OpenAIO1Config(OpenAIGPTConfig):
+class OpenAIOSeriesConfig(OpenAIGPTConfig):
     """
     Reference: https://platform.openai.com/docs/guides/reasoning
     """

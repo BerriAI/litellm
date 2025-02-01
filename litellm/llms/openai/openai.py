@@ -47,10 +47,10 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.o1_transformation import OpenAIO1Config
+from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import OpenAIError, drop_params_from_unprocessable_entity_error
 
-openaiOSeriesConfig = OpenAIO1Config()
+openaiOSeriesConfig = OpenAIOSeriesConfig()
 
 
 class MistralEmbeddingConfig:
