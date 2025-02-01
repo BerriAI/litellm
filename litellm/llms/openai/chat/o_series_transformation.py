@@ -1,5 +1,5 @@
 """
-Support for o1 model family 
+Support for o1/o3 model family 
 
 https://platform.openai.com/docs/guides/reasoning
 
@@ -66,6 +66,10 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             "frequency_penalty",
             "top_logprobs",
         ]
+
+        o_series_only_param = ["reasoning_effort"]
+
+        all_openai_params.extend(o_series_only_param)
 
         try:
             model, custom_llm_provider, api_base, api_key = get_llm_provider(
