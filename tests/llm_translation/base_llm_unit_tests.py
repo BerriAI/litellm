@@ -72,6 +72,34 @@ class BaseLLMChatTest(ABC):
         """Must return the base completion call args"""
         pass
 
+    def test_developer_role_translation(self):
+        """
+        Test that the developer role is translated correctly for non-OpenAI providers.
+
+        Translate `developer` role to `system` role for non-OpenAI providers.
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {
+                "role": "developer",
+                "content": [{"type": "text", "text": "Hello, how are you?"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello, how are you?"}],
+            },
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+            )
+            assert response is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+        assert response.choices[0].message.content is not None
+
     def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
         base_completion_call_args = self.get_base_completion_call_args()
@@ -644,3 +672,35 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
             request_body = mock_client.call_args.kwargs
             print("request_body: ", request_body)
             assert request_body["reasoning_effort"] == "low"
+
+    def test_developer_role_translation(self):
+        """Test that developer role is translated correctly to system role for non-OpenAI providers"""
+        from litellm import completion
+
+        client = self.get_client()
+
+        completion_args = self.get_base_completion_call_args()
+
+        with patch.object(
+            client.chat.completions.with_raw_response, "create"
+        ) as mock_client:
+            try:
+                completion(
+                    **completion_args,
+                    reasoning_effort="low",
+                    messages=[
+                        {"role": "developer", "content": "Be a good bot!"},
+                        {"role": "user", "content": "Hello!"},
+                    ],
+                    client=client,
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+            print("request_body: ", request_body)
+            assert (
+                request_body["messages"][0]["role"] == "developer"
+            ), "Got={} instead of system".format(request_body["messages"][0]["role"])
+            assert request_body["messages"][0]["content"] == "Be a good bot!"

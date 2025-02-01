@@ -18,10 +18,14 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
-from ..base_utils import type_to_response_format_param
+from ..base_utils import (
+    map_developer_role_to_system_role,
+    type_to_response_format_param,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -98,6 +102,20 @@ class BaseConfig(ABC):
         Returns True if the model/provider should fake stream
         """
         return False
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
+        """
+        Translate `developer` role to `system` role for non-OpenAI providers.
+
+        Overriden by OpenAI/Azure
+        """
+        verbose_logger.debug(
+            "Translating developer role to system role for non-OpenAI providers."
+        )  # ensure user knows what's happening with their input.
+        return map_developer_role_to_system_role(messages=messages)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict

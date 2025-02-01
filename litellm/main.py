@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
@@ -1046,6 +1047,19 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_prompt_dict[model]["bos_token"] = bos_token
             if eos_token:
                 custom_prompt_dict[model]["eos_token"] = eos_token
+
+        provider_config: Optional[BaseConfig] = None
+        if custom_llm_provider is not None and custom_llm_provider in [
+            provider.value for provider in LlmProviders
+        ]:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+
+        if provider_config is not None:
+            messages = provider_config.translate_developer_role_to_system_role(
+                messages=messages
+            )
 
         if (
             supports_system_message is not None

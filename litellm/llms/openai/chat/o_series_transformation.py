@@ -35,6 +35,14 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def translate_developer_role_to_system_role(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        O-series models support `developer` role.
+        """
+        return messages
+
     def should_fake_stream(
         self,
         model: Optional[str],
