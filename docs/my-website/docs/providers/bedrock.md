@@ -62,9 +62,9 @@ model_list:
   - model_name: bedrock-claude-v1
     litellm_params:
       model: bedrock/anthropic.claude-instant-v1
-      aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
-      aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
-      aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
 ```
 
 All possible auth params: 
@@ -1553,6 +1553,8 @@ curl http://0.0.0.0:4000/rerank \
         "Capital punishment has existed in the United States since before it was a country."
     ],
     "top_n": 3
+
+
   }'
 ```
 
