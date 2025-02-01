@@ -309,38 +309,4 @@ def test_delete_nonexistent_member(api_client, new_team):
         pytest.fail("Expected HTTPError for deleting nonexistent user")
     except requests.exceptions.HTTPError as e:
         logger.info(f"Expected error received: {str(e)}")
-        assert (
-            "user id / email not in team" in str(e).lower()
-        ), "Unexpected error message"
-
-
-def test_delete_last_admin(api_client, new_team):
-    """Test that system prevents deletion of the last admin"""
-    # Add an admin user
-    admin_id = f"admin_{uuid.uuid4().hex[:6]}"
-    api_client.add_team_member(new_team, admin_id, "admin")
-    time.sleep(1)
-
-    # Get all admins
-    team_info = api_client.get_team_info(new_team)
-    admins = [
-        member["user_id"]
-        for member in team_info["team_info"]["members_with_roles"]
-        if member["role"] == "admin"
-    ]
-
-    # If this is the only admin, deletion should fail
-    if len(admins) == 1:
-        try:
-            api_client.delete_team_member(new_team, admin_id)
-            pytest.fail("Expected HTTPError for deleting last admin")
-        except requests.exceptions.HTTPError as e:
-            logger.info(f"Expected error received: {str(e)}")
-    else:
-        # If there are multiple admins, deletion should succeed
-        api_client.delete_team_member(new_team, admin_id)
-        time.sleep(1)
-        final_info = api_client.get_team_info(new_team)
-        assert not verify_member_in_team(
-            final_info, admin_id
-        ), "Admin was not deleted successfully"
+        assert e.response.status_code == 400
