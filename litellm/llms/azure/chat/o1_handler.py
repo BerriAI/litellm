@@ -1,7 +1,7 @@
 """
-Handler file for calls to Azure OpenAI's o1 family of models
+Handler file for calls to Azure OpenAI's o family of models
 
-Written separately to handle faking streaming for o1 models.
+Written separately to handle faking streaming for o family models.
 """
 
 from typing import Optional, Union
@@ -13,7 +13,7 @@ from ...openai.openai import OpenAIChatCompletion
 from ..common_utils import get_azure_openai_client
 
 
-class AzureOpenAIO1ChatCompletion(OpenAIChatCompletion):
+class AzureOpenAIOSeriesChatCompletion(OpenAIChatCompletion):
     def _get_openai_client(
         self,
         is_async: bool,

@@ -20,7 +20,7 @@ from litellm.utils import get_model_info
 from ...openai.chat.o1_transformation import OpenAIO1Config
 
 
-class AzureOpenAIO1Config(OpenAIO1Config):
+class AzureOpenAIOSeriesConfig(OpenAIO1Config):
     def should_fake_stream(
         self,
         model: Optional[str],
@@ -42,10 +42,10 @@ class AzureOpenAIO1Config(OpenAIO1Config):
                     return False
             except Exception as e:
                 verbose_logger.debug(
-                    f"Error getting model info in AzureOpenAIO1Config: {e}"
+                    f"Error getting model info in AzureOpenAIOSeriesConfig: {e}"
                 )
 
         return True
 
-    def is_o1_model(self, model: str) -> bool:
-        return "o1" in model
+    def is_o_series_model(self, model: str) -> bool:
+        return "o1" in model or "o3" in model

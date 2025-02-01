@@ -59,7 +59,7 @@ class TestAzureOpenAIO1(BaseLLMChatTest):
         )
         assert model_info["supports_native_streaming"] is True
 
-        fake_stream = litellm.AzureOpenAIO1Config().should_fake_stream(
+        fake_stream = litellm.AzureOpenAIOSeriesConfig().should_fake_stream(
             model="azure/o1-preview", stream=True
         )
         assert fake_stream is False
