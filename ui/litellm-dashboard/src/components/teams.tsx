@@ -628,19 +628,25 @@ const Team: React.FC<TeamProps> = ({
                         >
                           {team["team_alias"]}
                         </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            fontSize: "0.75em", // or any smaller size as needed
-                          }}
-                        >
-                          <Tooltip title={team.team_id}>
-                          {team.team_id}
-                          </Tooltip>
+                        <TableRow>
+                        <TableCell>
+                          <div className="overflow-hidden">
+                            <Tooltip title={team.team_id}>
+                              <Button 
+                                size="xs"
+                                variant="light"
+                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 rounded text-left overflow-hidden truncate max-w-[200px] transition-colors duration-200"
+                                onClick={() => {
+                                  // Add click handler
+                                }}
+                              >
+                                {team.team_id.slice(0, 7)}...
+                              </Button>
+                            </Tooltip>
+                          </div>
                         </TableCell>
+                      </TableRow>
+
                         <TableCell
                           style={{
                             maxWidth: "4px",
@@ -964,25 +970,30 @@ const Team: React.FC<TeamProps> = ({
           </Modal>
           </Col>
         ) : null}
-        <Col numColSpan={1}>
+        {/* <Col numColSpan={1}>
           <Title level={4}>Team Members</Title>
           <Paragraph>
-            If you belong to multiple teams, this setting controls which teams
-            members you see.
+            If you belong to multiple teams, this setting controls which teams' members you see.
           </Paragraph>
           {teams && teams.length > 0 ? (
             <Select defaultValue="0">
-              {teams.map((team: any, index) => (
-                <SelectItem
-                  key={index}
-                  value={String(index)}
-                  onClick={() => {
-                    setSelectedTeam(team);
-                  }}
-                >
-                  {team["team_alias"]}
-                </SelectItem>
-              ))}
+              {[...teams]
+                .sort((a, b) => {
+                  const aliasA = a.team_alias || '';
+                  const aliasB = b.team_alias || '';
+                  return aliasA.localeCompare(aliasB);
+                })
+                .map((team: any, index) => (
+                  <SelectItem
+                    key={index}
+                    value={String(index)}
+                    onClick={() => {
+                      setSelectedTeam(team);
+                    }}
+                  >
+                    {team.team_alias || 'Unnamed Team'}
+                  </SelectItem>
+                ))}
             </Select>
           ) : (
             <Paragraph>
@@ -1112,7 +1123,7 @@ const Team: React.FC<TeamProps> = ({
               </div>
             </Form>
           </Modal>
-        </Col>
+        </Col> */}
       </Grid>
       </TabPanel>
       <TabPanel>  
