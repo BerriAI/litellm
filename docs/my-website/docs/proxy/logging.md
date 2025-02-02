@@ -1504,9 +1504,6 @@ class MyCustomHandler(CustomLogger):
     
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         print(f"Post-API Call")
-
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print("On Success")
