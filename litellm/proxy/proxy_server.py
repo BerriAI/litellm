@@ -280,7 +280,7 @@ from litellm.types.router import RouterGeneralSettings, updateDeployment
 from litellm.types.utils import CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_end_user_id_for_cost_tracking
+from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
     from litellm._version import version
@@ -736,7 +736,7 @@ user_api_key_cache = DualCache(
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
-litellm.callbacks.append(model_max_budget_limiter)
+litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
 )
@@ -787,9 +787,10 @@ def get_custom_headers(
     hidden_params: Optional[dict] = None,
     fastest_response_batch_completion: Optional[bool] = None,
     request_data: Optional[dict] = {},
+    timeout: Optional[Union[float, int, httpx.Timeout]] = None,
     **kwargs,
 ) -> dict:
-    exclude_values = {"", None}
+    exclude_values = {"", None, "None"}
     hidden_params = hidden_params or {}
     headers = {
         "x-litellm-call-id": call_id,
@@ -812,6 +813,7 @@ def get_custom_headers(
             if fastest_response_batch_completion is not None
             else None
         ),
+        "x-litellm-timeout": str(timeout) if timeout is not None else None,
         **{k: str(v) for k, v in kwargs.items()},
     }
     if request_data:
@@ -932,7 +934,7 @@ def cost_tracking():
         if isinstance(litellm._async_success_callback, list):
             verbose_proxy_logger.debug("setting litellm success callback to track cost")
             if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
-                litellm._async_success_callback.append(_PROXY_track_cost_callback)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_async_success_callback(_PROXY_track_cost_callback)  # type: ignore
 
 
 def error_tracking():
@@ -941,7 +943,7 @@ def error_tracking():
         if isinstance(litellm.failure_callback, list):
             verbose_proxy_logger.debug("setting litellm failure callback to track cost")
             if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
-                litellm.failure_callback.append(_PROXY_failure_handler)  # type: ignore
+                litellm.logging_callback_manager.add_litellm_failure_callback(_PROXY_failure_handler)  # type: ignore
 
 
 def _set_spend_logs_payload(
@@ -1049,7 +1051,6 @@ async def update_database(  # noqa: PLR0915
                         response_obj=completion_response,
                         start_time=start_time,
                         end_time=end_time,
-                        end_user_id=end_user_id,
                     )
 
                     payload["spend"] = response_cost
@@ -1889,12 +1890,14 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
-                            litellm.success_callback.append(
+                            litellm.logging_callback_manager.add_litellm_success_callback(
                                 get_instance_fn(value=callback)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.success_callback.append(callback)
+                            litellm.logging_callback_manager.add_litellm_success_callback(
+                                callback
+                            )
                             if "prometheus" in callback:
                                 if not premium_user:
                                     raise Exception(
@@ -1918,12 +1921,14 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
-                            litellm.failure_callback.append(
+                            litellm.logging_callback_manager.add_litellm_failure_callback(
                                 get_instance_fn(value=callback)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
-                            litellm.failure_callback.append(callback)
+                            litellm.logging_callback_manager.add_litellm_failure_callback(
+                                callback
+                            )
                     print(  # noqa
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
@@ -2214,7 +2219,7 @@ class ProxyConfig:
                         },
                     )
                     if _logger is not None:
-                        litellm.callbacks.append(_logger)
+                        litellm.logging_callback_manager.add_litellm_callback(_logger)
         pass
 
     def initialize_secret_manager(self, key_management_system: Optional[str]):
@@ -2400,13 +2405,12 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
-    async def _update_llm_router(  # noqa: PLR0915
+    async def _update_llm_router(
         self,
         new_models: list,
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-        import base64
 
         try:
             if llm_router is None and master_key is not None:
@@ -2462,21 +2466,64 @@ class ProxyConfig:
 
         # check if user set any callbacks in Config Table
         config_data = await proxy_config.get_config()
+        self._add_callbacks_from_db_config(config_data)
+
+        # we need to set env variables too
+        self._add_environment_variables_from_db_config(config_data)
+
+        # router settings
+        await self._add_router_settings_from_db_config(
+            config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
+        )
+
+        # general settings
+        self._add_general_settings_from_db_config(
+            config_data=config_data,
+            general_settings=general_settings,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    def _add_callbacks_from_db_config(self, config_data: dict) -> None:
+        """
+        Adds callbacks from DB config to litellm
+        """
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
 
         if success_callbacks is not None and isinstance(success_callbacks, list):
             for success_callback in success_callbacks:
-                if success_callback not in litellm.success_callback:
-                    litellm.success_callback.append(success_callback)
+                if (
+                    success_callback
+                    in litellm._known_custom_logger_compatible_callbacks
+                ):
+                    _add_custom_logger_callback_to_specific_event(
+                        success_callback, "success"
+                    )
+                elif success_callback not in litellm.success_callback:
+                    litellm.logging_callback_manager.add_litellm_success_callback(
+                        success_callback
+                    )
 
         # Add failure callbacks from DB to litellm
         if failure_callbacks is not None and isinstance(failure_callbacks, list):
             for failure_callback in failure_callbacks:
-                if failure_callback not in litellm.failure_callback:
-                    litellm.failure_callback.append(failure_callback)
-        # we need to set env variables too
+                if (
+                    failure_callback
+                    in litellm._known_custom_logger_compatible_callbacks
+                ):
+                    _add_custom_logger_callback_to_specific_event(
+                        failure_callback, "failure"
+                    )
+                elif failure_callback not in litellm.failure_callback:
+                    litellm.logging_callback_manager.add_litellm_failure_callback(
+                        failure_callback
+                    )
+
+    def _add_environment_variables_from_db_config(self, config_data: dict) -> None:
+        """
+        Adds environment variables from DB config to litellm
+        """
         environment_variables = config_data.get("environment_variables", {})
         for k, v in environment_variables.items():
             try:
@@ -2488,7 +2535,15 @@ class ProxyConfig:
                     "Error setting env variable: %s - %s", k, str(e)
                 )
 
-        # router settings
+    async def _add_router_settings_from_db_config(
+        self,
+        config_data: dict,
+        llm_router: Optional[Router],
+        prisma_client: Optional[PrismaClient],
+    ) -> None:
+        """
+        Adds router settings from DB config to litellm proxy
+        """
         if llm_router is not None and prisma_client is not None:
             db_router_settings = await prisma_client.db.litellm_config.find_first(
                 where={"param_name": "router_settings"}
@@ -2500,7 +2555,17 @@ class ProxyConfig:
                 _router_settings = db_router_settings.param_value
                 llm_router.update_settings(**_router_settings)
 
-        ## ALERTING ## [TODO] move this to the _update_general_settings() block
+    def _add_general_settings_from_db_config(
+        self, config_data: dict, general_settings: dict, proxy_logging_obj: ProxyLogging
+    ) -> None:
+        """
+        Adds general settings from DB config to litellm proxy
+
+        Args:
+            config_data: dict
+            general_settings: dict - global general_settings currently in use
+            proxy_logging_obj: ProxyLogging
+        """
         _general_settings = config_data.get("general_settings", {})
         if "alerting" in _general_settings:
             if (
@@ -3321,6 +3386,7 @@ class ProxyStartupEvent:
 )  # if project requires model list
 async def model_list(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    return_wildcard_routes: Optional[bool] = False,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -3353,6 +3419,7 @@ async def model_list(
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        return_wildcard_routes=return_wildcard_routes,
     )
     return dict(
         data=[
@@ -3638,14 +3705,28 @@ async def chat_completion(  # noqa: PLR0915
             litellm_debug_info,
         )
 
+        timeout = getattr(
+            e, "timeout", None
+        )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
+
+        custom_headers = get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            response_cost=0,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            request_data=data,
+            timeout=timeout,
+        )
+        headers = getattr(e, "headers", {}) or {}
+        headers.update(custom_headers)
+
         if isinstance(e, HTTPException):
-            # print("e.headers={}".format(e.headers))
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                headers=getattr(e, "headers", {}),
+                headers=headers,
             )
         error_msg = f"{str(e)}"
         raise ProxyException(
@@ -3653,7 +3734,7 @@ async def chat_completion(  # noqa: PLR0915
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
-            headers=getattr(e, "headers", {}),
+            headers=headers,
         )
 
 

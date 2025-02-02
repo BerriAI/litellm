@@ -17,7 +17,7 @@ import asyncio
 import json
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
 import httpx
 
@@ -62,6 +62,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-flash-exp-0827",
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash-thinking-exp",
+    "gemini-2.0-flash-thinking-exp-01-21",
 ]
 
 
@@ -449,7 +450,7 @@ async def test_async_vertexai_response():
             or "32k" in model
             or "ultra" in model
             or "002" in model
-            or "gemini-2.0-flash-thinking-exp" == model
+            or "gemini-2.0-flash-thinking-exp" in model
         ):
             # our account does not have access to this model
             continue
@@ -491,7 +492,11 @@ async def test_async_vertexai_streaming_response():
     test_models += litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
-            "gecko" in model or "32k" in model or "ultra" in model or "002" in model
+            "gecko" in model
+            or "32k" in model
+            or "ultra" in model
+            or "002" in model
+            or "gemini-2.0-flash-thinking-exp" in model
         ):
             # our account does not have access to this model
             continue
@@ -1222,6 +1227,7 @@ Using this JSON schema:
             messages=messages,
             response_format={"type": "json_object"},
             client=client,
+            logging_obj=ANY,
         )
 
         assert response.choices[0].finish_reason == "content_filter"

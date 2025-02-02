@@ -238,6 +238,76 @@ Ollama supported models: https://github.com/ollama/ollama
 | Nous-Hermes 13B     | `completion(model='ollama/nous-hermes:13b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Wizard Vicuna Uncensored | `completion(model='ollama/wizard-vicuna', messages, api_base="http://localhost:11434", stream=True)` |
 
+
+### JSON Schema support 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="ollama_chat/deepseek-r1", 
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+    response_format={"type": "json_schema", "json_schema": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}},
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "deepseek-r1"             
+    litellm_params:
+      model: "ollama_chat/deepseek-r1"
+      api_base: "http://localhost:11434"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING ON http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```python
+from pydantic import BaseModel
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="anything", # 👈 PROXY KEY (can be anything, if master_key not set)
+    base_url="http://0.0.0.0:4000" # 👈 PROXY BASE URL
+)
+
+class Step(BaseModel):
+    explanation: str
+    output: str
+
+class MathReasoning(BaseModel):
+    steps: list[Step]
+    final_answer: str
+
+completion = client.beta.chat.completions.parse(
+    model="deepseek-r1",
+    messages=[
+        {"role": "system", "content": "You are a helpful math tutor. Guide the user through the solution step by step."},
+        {"role": "user", "content": "how can I solve 8x + 7 = -23"}
+    ],
+    response_format=MathReasoning,
+)
+
+math_reasoning = completion.choices[0].message.parsed
+```
+</TabItem>
+</Tabs>
+
 ## Ollama Vision Models
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|

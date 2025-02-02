@@ -3,10 +3,14 @@ import { getCountryFromIP } from "./ip_lookup";
 import moment from "moment";
 import React from "react";
 import { CountryCell } from "./country_cell";
+import { getProviderLogoAndName } from "../provider_info_helpers";
+import { Tooltip } from "antd";
+import { TimeCell } from "./time_cell";
 
 export type LogEntry = {
   request_id: string;
   api_key: string;
+  team_id: string;
   model: string;
   api_base?: string;
   call_type: string;
@@ -17,6 +21,8 @@ export type LogEntry = {
   startTime: string;
   endTime: string;
   user?: string;
+  end_user?: string;
+  custom_llm_provider?: string;
   metadata?: Record<string, any>;
   cache_hit: string;
   cache_key?: string;
@@ -48,17 +54,17 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Time",
     accessorKey: "startTime",
-    cell: (info: any) => (
-      <span>{moment(info.getValue()).format("MMM DD HH:mm:ss")}</span>
-    ),
+    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
-      <span className="font-mono text-xs max-w-[100px] truncate block">
-        {String(info.getValue() || "")}
-      </span>
+      <Tooltip title={String(info.getValue() || "")}>
+        <span className="font-mono text-xs max-w-[100px] truncate block">
+          {String(info.getValue() || "")}
+        </span>
+      </Tooltip>
     ),
   },
   {
@@ -105,7 +111,31 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Model",
     accessorKey: "model",
-    cell: (info: any) => <span>{String(info.getValue() || "")}</span>,
+    cell: (info: any) => {
+      const row = info.row.original;
+      const provider = row.custom_llm_provider;
+      const modelName = String(info.getValue() || "");
+      return (
+        <div className="flex items-center space-x-2">
+          {provider && (
+            <img
+              src={getProviderLogoAndName(provider).logo}
+              alt=""
+              className="w-4 h-4"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+              }}
+            />
+          )}
+          <Tooltip title={modelName}>
+            <span className="max-w-[100px] truncate">
+              {modelName}
+            </span>
+          </Tooltip>
+        </div>
+      );
+    },
   },
   {
     header: "Tokens",
@@ -124,8 +154,13 @@ export const columns: ColumnDef<LogEntry>[] = [
     },
   },
   {
-    header: "User",
+    header: "Internal User",
     accessorKey: "user",
+    cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
+  },
+  {
+    header: "End User",
+    accessorKey: "end_user",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
   },
   {
@@ -154,11 +189,6 @@ export const columns: ColumnDef<LogEntry>[] = [
         </div>
       );
     },
-  },
-  {
-    header: "Country",
-    accessorKey: "requester_ip_address",
-    cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
 ];
 

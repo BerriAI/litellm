@@ -1,0 +1,85 @@
+{
+    "batch": [
+        {
+            "id": "7e00e081-468b-4fe9-a409-eb12ac7d3d2d",
+            "type": "trace-create",
+            "body": {
+                "id": "litellm-test-793c217f-9417-4e77-84a7-8dcc16e5b72b",
+                "timestamp": "2025-01-16T19:28:55.124873Z",
+                "name": "litellm-acompletion",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "tags": []
+            },
+            "timestamp": "2025-01-16T19:28:55.125002Z"
+        },
+        {
+            "id": "b9ec2c0f-18df-46c7-9e90-624c60bf78ee",
+            "type": "generation-create",
+            "body": {
+                "name": "litellm-acompletion",
+                "startTime": "2025-01-16T11:28:54.796360-08:00",
+                "metadata": {
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 5.4999999999999995e-05,
+                        "additional_headers": {}
+                    },
+                    "litellm_response_cost": 5.4999999999999995e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null
+                },
+                "level": "DEFAULT",
+                "id": "time-11-28-54-796360_chatcmpl-521e530f-5e29-4d0a-8d1a-58fca0a847c2",
+                "endTime": "2025-01-16T11:28:55.124353-08:00",
+                "completionStartTime": "2025-01-16T11:28:55.124353-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 5.4999999999999995e-05
+                }
+            },
+            "timestamp": "2025-01-16T19:28:55.125258Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-03734ab3-8790-4c09-b5fb-8c3b663413b6"
+    }
+}

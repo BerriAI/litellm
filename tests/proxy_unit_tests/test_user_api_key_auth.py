@@ -799,8 +799,7 @@ async def test_user_api_key_auth_websocket():
 @pytest.mark.parametrize("enforce_rbac", [True, False])
 @pytest.mark.asyncio
 async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-    from litellm.proxy.auth.user_api_key_auth import _jwt_auth_user_api_key_auth_builder
+    from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
     from unittest.mock import patch, Mock
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.caching import DualCache
@@ -855,10 +854,79 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
         "user_api_key_cache": Mock(),
         "parent_otel_span": None,
         "proxy_logging_obj": Mock(),
+        "request_data": {},
+        "general_settings": {},
     }
 
     if enforce_rbac:
         with pytest.raises(HTTPException):
-            await _jwt_auth_user_api_key_auth_builder(**args)
+            await JWTAuthManager.auth_builder(**args)
     else:
-        await _jwt_auth_user_api_key_auth_builder(**args)
+        await JWTAuthManager.auth_builder(**args)
+
+
+def test_user_api_key_auth_end_user_str():
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    user_api_key_args = {
+        "api_key": "sk-1234",
+        "parent_otel_span": None,
+        "user_role": LitellmUserRoles.PROXY_ADMIN,
+        "end_user_id": "1",
+        "user_id": "default_user_id",
+    }
+
+    user_api_key_auth = UserAPIKeyAuth(**user_api_key_args)
+    assert user_api_key_auth.end_user_id == "1"
+
+
+def test_can_rbac_role_call_model():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+
+    roles_based_permissions = [
+        RoleBasedPermissions(
+            role=LitellmUserRoles.INTERNAL_USER,
+            models=["gpt-4"],
+        ),
+        RoleBasedPermissions(
+            role=LitellmUserRoles.PROXY_ADMIN,
+            models=["anthropic-claude"],
+        ),
+    ]
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={"role_permissions": roles_based_permissions},
+        model="gpt-4",
+    )
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="gpt-4o",
+        )
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.PROXY_ADMIN,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="gpt-4o",
+        )
+
+
+def test_can_rbac_role_call_model_no_role_permissions():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={},
+        model="gpt-4",
+    )
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.PROXY_ADMIN,
+        general_settings={"role_permissions": []},
+        model="anthropic-claude",
+    )

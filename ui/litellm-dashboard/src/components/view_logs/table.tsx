@@ -22,6 +22,7 @@ interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   renderSubComponent: (props: { row: Row<TData> }) => React.ReactElement;
   getRowCanExpand: (row: Row<TData>) => boolean;
+  isLoading?: boolean;
 }
 
 export function DataTable<TData, TValue>({
@@ -29,6 +30,7 @@ export function DataTable<TData, TValue>({
   columns,
   getRowCanExpand,
   renderSubComponent,
+  isLoading = false,
 }: DataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
@@ -60,7 +62,15 @@ export function DataTable<TData, TValue>({
           ))}
         </TableHead>
         <TableBody>
-          {table.getRowModel().rows.length > 0 ? (
+          {isLoading ? (
+            <TableRow>
+              <TableCell colSpan={columns.length} className="h-24 text-center">
+                <div className="p-8 text-center text-gray-500">
+                  <p>🚅 Loading logs...</p>
+                </div>
+              </TableCell>
+            </TableRow>
+          ) : table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
                 <TableRow>
@@ -87,14 +97,7 @@ export function DataTable<TData, TValue>({
             <TableRow>
               <TableCell colSpan={columns.length} className="h-24 text-center">
                 <div className="p-8 text-center text-gray-500">
-                  <p>No SpendLogs messages available.</p>
-                  <p className="text-sm mt-2">
-                    To enable this, set{" "}
-                    <code>
-                      `general_settings.store_prompts_in_spend_logs: true`
-                    </code>{" "}
-                    in your config.yaml
-                  </p>
+                  <p>No logs found</p>
                 </div>
               </TableCell>
             </TableRow>
