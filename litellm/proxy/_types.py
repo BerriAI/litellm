@@ -240,8 +240,13 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/vertex-ai",
+        "/vertex_ai",
+        "/cohere",
         "/gemini",
+        "/anthropic",
         "/langfuse",
+        "/azure",
+        "/openai",
     ]
 
     anthropic_routes = [
