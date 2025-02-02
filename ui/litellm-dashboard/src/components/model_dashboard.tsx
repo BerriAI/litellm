@@ -99,7 +99,7 @@ import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder } from "./provider_info_helpers";
+import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -225,6 +225,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+
+  const setProviderModelsFn = (provider: Providers) => {
+    const _providerModels = getProviderModels(provider, modelMap);
+    setProviderModels(_providerModels);
+    console.log(`providerModels: ${_providerModels}`);
+  };
 
   const updateModelMetrics = async (
     modelGroup: string | null,
@@ -786,8 +792,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       }
     });
   }
-
-
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
@@ -799,51 +803,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       </div>
     );
   }
-
-  const setProviderModelsFn = (provider: Providers) => {
-    console.log(`received provider string: ${provider}`);
-    let providerKey = provider;
-    let custom_llm_provider = provider_map[providerKey as keyof typeof Providers];
-    console.log(`setProviderModelsFn custom_llm_provider: ${custom_llm_provider}`);
-    if (providerKey) {
-      let _providerModels: Array<string> = [];
-      if (typeof modelMap === "object") {
-        Object.entries(modelMap).forEach(([key, value]) => {
-          console.log("value:", JSON.stringify(value, null, 2));
-          if (
-            value !== null &&
-            typeof value === "object" &&
-            "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === custom_llm_provider ||
-              (value as any)["litellm_provider"].includes(custom_llm_provider))
-          ) {
-            _providerModels.push(key);
-          }
-        });
-
-        // Special case for cohere_chat
-        // we need both cohere_chat and cohere models to show on dropdown
-        if (providerKey == Providers.Cohere) {
-          console.log("adding cohere chat model")
-          Object.entries(modelMap).forEach(([key, value]) => {
-            if (
-              value !== null &&
-              typeof value === "object" &&
-              "litellm_provider" in (value as object) &&
-              ((value as any)["litellm_provider"] === "cohere")
-            ) {
-              _providerModels.push(key);
-            }
-          });
-        }
-      }
-
-      
-
-      setProviderModels(_providerModels);
-      console.log(`providerModels: ${providerModels}`);
-    }
-  };
 
   const runHealthCheck = async () => {
     try {
