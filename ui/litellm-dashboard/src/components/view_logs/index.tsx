@@ -105,10 +105,11 @@ export default function SpendLogsTable({
         };
       }
 
-      const formattedStartTime = moment(startTime).format("YYYY-MM-DD HH:mm:ss");
+      // Convert times to UTC before formatting
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
-        ? moment(endTime).format("YYYY-MM-DD HH:mm:ss")
-        : moment().format("YYYY-MM-DD HH:mm:ss");
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       return await uiSpendLogsCall(
         accessToken,
@@ -176,7 +177,7 @@ export default function SpendLogsTable({
         <h1 className="text-xl font-semibold">Request Logs</h1>
       </div>
       
-      <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="bg-white rounded-lg shadow">
         <div className="border-b px-6 py-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
             <div className="flex flex-wrap items-center gap-3">

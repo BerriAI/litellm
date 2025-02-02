@@ -1,6 +1,8 @@
 import json
 import secrets
+from datetime import datetime
 from datetime import datetime as dt
+from datetime import timezone
 from typing import Optional, cast
 
 from pydantic import BaseModel
@@ -153,9 +155,9 @@ def get_logging_payload(  # noqa: PLR0915
             call_type=call_type or "",
             api_key=str(api_key),
             cache_hit=str(cache_hit),
-            startTime=start_time,
-            endTime=end_time,
-            completionStartTime=completion_start_time,
+            startTime=_ensure_datetime_utc(start_time),
+            endTime=_ensure_datetime_utc(end_time),
+            completionStartTime=_ensure_datetime_utc(completion_start_time),
             model=kwargs.get("model", "") or "",
             user=kwargs.get("litellm_params", {})
             .get("metadata", {})
@@ -193,6 +195,12 @@ def get_logging_payload(  # noqa: PLR0915
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+def _ensure_datetime_utc(timestamp: datetime) -> datetime:
+    """Helper to ensure datetime is in UTC"""
+    timestamp = timestamp.astimezone(timezone.utc)
+    return timestamp
 
 
 async def get_spend_by_team_and_customer(
