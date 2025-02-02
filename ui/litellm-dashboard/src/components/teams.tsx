@@ -129,10 +129,9 @@ const Team: React.FC<TeamProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<null | any>(
-    teams ? teams[0] : null
+    null
   );
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -502,6 +501,9 @@ const Team: React.FC<TeamProps> = ({
   };
 
   const is_team_admin = (team: any) => {
+    if (team == null || team.members_with_roles == null) {
+      return false;
+    }
     for (let i = 0; i < team.members_with_roles.length; i++) {
       let member = team.members_with_roles[i];
       if (member.user_id == userID && member.role == "admin") {
@@ -584,6 +586,8 @@ const Team: React.FC<TeamProps> = ({
         teamId={selectedTeamId} 
         onClose={() => setSelectedTeamId(null)} 
         accessToken={accessToken}
+        is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
+        is_proxy_admin={userRole == "Admin"}
       />
     ) : (
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">

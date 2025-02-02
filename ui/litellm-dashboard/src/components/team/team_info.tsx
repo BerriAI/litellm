@@ -10,10 +10,18 @@ import {
   TabPanels,
   Grid,
   Badge,
+  Button as TremorButton,
+  TableRow,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  Table,
+  Icon
 } from "@tremor/react";
 import { teamInfoCall } from "@/components/networking";
-import TeamMemberModal from "@/components/team/edit_membership";
-import { Button, message } from "antd";
+import { Button, Modal, Form, Input, Select as AntSelect, message } from "antd";
+import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 
 interface TeamMember {
   user_id: string;
@@ -52,32 +60,94 @@ interface TeamInfoProps {
   teamId: string;
   onClose: () => void;
   accessToken: string | null;
+  is_team_admin: boolean;
+  is_proxy_admin: boolean;
 }
 
-const TeamInfoView: React.FC<TeamInfoProps> = ({ teamId, onClose, accessToken }) => {
+const TeamInfoView: React.FC<TeamInfoProps> = ({ 
+  teamId, 
+  onClose, 
+  accessToken, 
+  is_team_admin, 
+  is_proxy_admin 
+}) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
+  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
+  const [form] = Form.useForm();
+
+  const canManageMembers = is_team_admin || is_proxy_admin;
+
+  const fetchTeamInfo = async () => {
+    try {
+      setLoading(true);
+      if (!accessToken) return;
+      const response = await teamInfoCall(accessToken, teamId);
+      setTeamData(response);
+    } catch (error) {
+      message.error("Failed to load team information");
+      console.error("Error fetching team info:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchTeamInfo = async () => {
-      try {
-        setLoading(true);
-        if (!accessToken) {
-          return;
-        }
-        const response = await teamInfoCall(accessToken, teamId);
-        setTeamData(response);
-      } catch (error) {
-        message.error("Failed to load team information");
-        console.error("Error fetching team info:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchTeamInfo();
-  }, [teamId]);
+  }, [teamId, accessToken]);
+
+  const handleMemberCreate = async (values: any) => {
+    try {
+      const response = await fetch("/team/member_create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          team_id: teamId,
+          user_email: values.user_email,
+          user_id: values.user_id,
+          role: values.role,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to add member");
+
+      message.success("Team member added successfully");
+      setIsAddMemberModalVisible(false);
+      form.resetFields();
+      fetchTeamInfo();
+    } catch (error) {
+      message.error("Failed to add team member");
+      console.error("Error adding team member:", error);
+    }
+  };
+
+  const handleMemberDelete = async (member: TeamMember) => {
+    try {
+      const response = await fetch("/team/member_delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          team_id: teamId,
+          user_email: member.user_email,
+          user_id: member.user_id,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to delete member");
+
+      message.success("Team member removed successfully");
+      fetchTeamInfo();
+    } catch (error) {
+      message.error("Failed to remove team member");
+      console.error("Error removing team member:", error);
+    }
+  };
 
   if (loading) {
     return <div className="p-4">Loading...</div>;
@@ -89,6 +159,56 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({ teamId, onClose, accessToken })
 
   const { team_info: info } = teamData;
 
+  const renderMembersPanel = () => (
+    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell>User ID</TableHeaderCell>
+            <TableHeaderCell>User Email</TableHeaderCell>
+            <TableHeaderCell>Role</TableHeaderCell>
+          </TableRow>
+        </TableHead>
+
+        <TableBody>
+          {teamData
+            ? teamData.team_info.members_with_roles.map(
+                (member: any, index: number) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Text className="font-mono">{member["user_id"]}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">{member["user_email"]}</Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text className="font-mono">{member["role"]}</Text>
+                    </TableCell>
+                    <TableCell>
+                    {is_team_admin ? (
+                      <>
+                      <Icon
+                        icon={PencilAltIcon}
+                        size="sm"
+                        onClick={() => {}}
+                      />
+                      <Icon
+                        onClick={() => {}}
+                        icon={TrashIcon}
+                        size="sm"
+                      />
+                      </>
+                    ) : null}
+                  </TableCell>
+                  </TableRow>
+                )
+              )
+            : null}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -97,9 +217,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({ teamId, onClose, accessToken })
           <Title>{info.team_alias}</Title>
           <Text className="text-gray-500 font-mono">{info.team_id}</Text>
         </div>
-        <Button type="primary" onClick={() => setIsMemberModalOpen(true)}>
-          Manage Members
-        </Button>
       </div>
 
       <TabGroup>
@@ -148,24 +265,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({ teamId, onClose, accessToken })
           </TabPanel>
 
           <TabPanel>
-            <Card>
-              <Title>Team Members ({info.members_with_roles.length})</Title>
-              <div className="mt-4 space-y-4">
-                {info.members_with_roles.map((member, index) => (
-                  <div key={index} className="flex justify-between items-center p-4 bg-gray-50 rounded-lg">
-                    <div>
-                      <Text className="font-medium">{member.user_id}</Text>
-                      {member.user_email && (
-                        <Text className="text-gray-500">{member.user_email}</Text>
-                      )}
-                    </div>
-                    <Badge color={member.role === 'admin' ? 'red' : 'blue'}>
-                      {member.role}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </Card>
+            {renderMembersPanel()}
           </TabPanel>
 
           <TabPanel>
@@ -192,11 +292,46 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({ teamId, onClose, accessToken })
         </TabPanels>
       </TabGroup>
 
-      <TeamMemberModal
-        open={isMemberModalOpen}
-        onClose={() => setIsMemberModalOpen(false)}
-        teamId={teamId}
-      />
+      <Modal
+        title="Add Team Member"
+        open={isAddMemberModalVisible}
+        onCancel={() => {
+          setIsAddMemberModalVisible(false);
+          form.resetFields();
+        }}
+        footer={null}
+        width={800}
+      >
+        <Form
+          form={form}
+          onFinish={handleMemberCreate}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+          initialValues={{
+            role: "user",
+          }}
+        >
+          <Form.Item label="Email" name="user_email" className="mb-4">
+            <Input className="px-3 py-2 border rounded-md w-full" />
+          </Form.Item>
+          <div className="text-center mb-4">OR</div>
+          <Form.Item label="User ID" name="user_id" className="mb-4">
+            <Input className="px-3 py-2 border rounded-md w-full" />
+          </Form.Item>
+          <Form.Item label="Member Role" name="role" className="mb-4">
+            <AntSelect defaultValue="user">
+              <AntSelect.Option value="admin">admin</AntSelect.Option>
+              <AntSelect.Option value="user">user</AntSelect.Option>
+            </AntSelect>
+          </Form.Item>
+          <div className="text-right mt-4">
+            <Button type="primary" htmlType="submit">
+              Add Member
+            </Button>
+          </div>
+        </Form>
+      </Modal>
     </div>
   );
 };
