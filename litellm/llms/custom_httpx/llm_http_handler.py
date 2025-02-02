@@ -158,7 +158,8 @@ class BaseLLMHTTPHandler:
     ):
         if client is None:
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             async_httpx_client = client
@@ -205,6 +206,7 @@ class BaseLLMHTTPHandler:
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
+
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
@@ -318,7 +320,9 @@ class BaseLLMHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
         else:
             sync_httpx_client = client
 
@@ -359,7 +363,11 @@ class BaseLLMHTTPHandler:
         client: Optional[HTTPHandler] = None,
     ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_httpx_client(
+                {
+                    "ssl_verify": litellm_params.get("ssl_verify", None),
+                }
+            )
         else:
             sync_httpx_client = client
         stream = True
@@ -411,7 +419,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ):
-        completion_stream, _response_headers = await self.make_async_call(
+        completion_stream, _response_headers = await self.make_async_call_stream_helper(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
             api_base=api_base,
@@ -432,7 +440,7 @@ class BaseLLMHTTPHandler:
         )
         return streamwrapper
 
-    async def make_async_call(
+    async def make_async_call_stream_helper(
         self,
         custom_llm_provider: str,
         provider_config: BaseConfig,
@@ -446,9 +454,15 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Tuple[Any, httpx.Headers]:
+        """
+        Helper function for making an async call with stream.
+
+        Handles fake stream as well.
+        """
         if client is None:
             async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
             )
         else:
             async_httpx_client = client

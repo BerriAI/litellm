@@ -61,6 +61,7 @@ def _get_user_in_team(
     for member in team_table.members_with_roles:
         if member.user_id is not None and member.user_id == user_id:
             return member
+
     return None
 
 
@@ -366,6 +367,7 @@ async def generate_key_fn(  # noqa: PLR0915
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
+                    check_db_only=True,
                 )
             except Exception as e:
                 verbose_proxy_logger.debug(
@@ -1651,17 +1653,20 @@ async def list_keys(
     user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
-):
+) -> KeyListResponseObject:
+    """
+    List all keys for a given user or team.
+
+    Returns:
+        {
+            "keys": List[str],
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
     try:
-        import logging
-
         from litellm.proxy.proxy_server import prisma_client
-
-        logging.debug("Entering list_keys function")
-
-        if prisma_client is None:
-            logging.error("Database not connected")
-            raise Exception("Database not connected")
 
         # Check for unsupported parameters
         supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
@@ -1674,56 +1679,22 @@ async def list_keys(
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Prepare filter conditions
-        where = {}
-        if user_id and isinstance(user_id, str):
-            where["user_id"] = user_id
-        if team_id and isinstance(team_id, str):
-            where["team_id"] = team_id
-        if key_alias and isinstance(key_alias, str):
-            where["key_alias"] = key_alias
+        verbose_proxy_logger.debug("Entering list_keys function")
 
-        logging.debug(f"Filter conditions: {where}")
+        if prisma_client is None:
+            verbose_proxy_logger.error("Database not connected")
+            raise Exception("Database not connected")
 
-        # Calculate skip for pagination
-        skip = (page - 1) * size
-
-        logging.debug(f"Pagination: skip={skip}, take={size}")
-
-        # Fetch keys with pagination
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
+        response = await _list_key_helper(
+            prisma_client=prisma_client,
+            page=page,
+            size=size,
+            user_id=user_id,
+            team_id=team_id,
+            key_alias=key_alias,
         )
 
-        logging.debug(f"Fetched {len(keys)} keys")
-
-        # Get total count of keys
-        total_count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where  # type: ignore
-        )
-
-        logging.debug(f"Total count of keys: {total_count}")
-
-        # Calculate total pages
-        total_pages = -(-total_count // size)  # Ceiling division
-
-        # Prepare response
-        key_list = []
-        for key in keys:
-            key_dict = key.dict()
-            _token = key_dict.get("token")
-            key_list.append(_token)
-
-        response = {
-            "keys": key_list,
-            "total_count": total_count,
-            "current_page": page,
-            "total_pages": total_pages,
-        }
-
-        logging.debug("Successfully prepared response")
+        verbose_proxy_logger.debug("Successfully prepared response")
 
         return response
 
@@ -1743,6 +1714,91 @@ async def list_keys(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+async def _list_key_helper(
+    prisma_client: PrismaClient,
+    page: int,
+    size: int,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    key_alias: Optional[str],
+    exclude_team_id: Optional[str] = None,
+    return_full_object: bool = False,
+) -> KeyListResponseObject:
+    """
+    Helper function to list keys
+    Args:
+        page: int
+        size: int
+        user_id: Optional[str]
+        team_id: Optional[str]
+        key_alias: Optional[str]
+        exclude_team_id: Optional[str] # exclude a specific team_id
+        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+
+    Returns:
+        KeyListResponseObject
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+
+    # Prepare filter conditions
+    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    if user_id and isinstance(user_id, str):
+        where["user_id"] = user_id
+    if team_id and isinstance(team_id, str):
+        where["team_id"] = team_id
+    if key_alias and isinstance(key_alias, str):
+        where["key_alias"] = key_alias
+    if exclude_team_id and isinstance(exclude_team_id, str):
+        where["team_id"] = {"not": exclude_team_id}
+
+    verbose_proxy_logger.debug(f"Filter conditions: {where}")
+
+    # Calculate skip for pagination
+    skip = (page - 1) * size
+
+    verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
+
+    # Fetch keys with pagination
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where=where,  # type: ignore
+        skip=skip,  # type: ignore
+        take=size,  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
+
+    # Get total count of keys
+    total_count = await prisma_client.db.litellm_verificationtoken.count(
+        where=where  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
+
+    # Calculate total pages
+    total_pages = -(-total_count // size)  # Ceiling division
+
+    # Prepare response
+    key_list: List[Union[str, UserAPIKeyAuth]] = []
+    for key in keys:
+        if return_full_object is True:
+            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+        else:
+            _token = key.dict().get("token")
+            key_list.append(_token)  # Return only the token
+
+    return KeyListResponseObject(
+        keys=key_list,
+        total_count=total_count,
+        current_page=page,
+        total_pages=total_pages,
+    )
 
 
 @router.post(

@@ -369,6 +369,17 @@ def _check_provider_config(config: BaseConfig, provider: LlmProviders):
     assert "_abc_impl" not in config.get_config(), f"Provider {provider} has _abc_impl"
 
 
+def test_provider_config_manager_bedrock_converse_like():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+        provider=LlmProviders.BEDROCK,
+    )
+    print(f"config: {config}")
+    assert isinstance(config, AmazonConverseConfig)
+
+
 # def test_provider_config_manager():
 #     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 

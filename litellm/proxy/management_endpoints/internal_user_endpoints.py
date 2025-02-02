@@ -49,7 +49,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         is_internal_user = True
         if litellm.default_internal_user_params:
             for key, value in litellm.default_internal_user_params.items():
-                if key not in data_json or data_json[key] is None:
+                if key == "available_teams":
+                    continue
+                elif key not in data_json or data_json[key] is None:
                     data_json[key] = value
                 elif (
                     key == "models"
@@ -147,20 +149,34 @@ async def new_user(
     if data_json.get("team_id", None) is not None:
         from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 
-        await team_member_add(
-            data=TeamMemberAddRequest(
-                team_id=data_json.get("team_id", None),
-                member=Member(
-                    user_id=data_json.get("user_id", None),
-                    role="user",
-                    user_email=data_json.get("user_email", None),
+        try:
+            await team_member_add(
+                data=TeamMemberAddRequest(
+                    team_id=data_json.get("team_id", None),
+                    member=Member(
+                        user_id=data_json.get("user_id", None),
+                        role="user",
+                        user_email=data_json.get("user_email", None),
+                    ),
                 ),
-            ),
-            http_request=Request(
-                scope={"type": "http", "path": "/user/new"},
-            ),
-            user_api_key_dict=user_api_key_dict,
-        )
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        except HTTPException as e:
+            if e.status_code == 400 and "already exists" in str(e):
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                        str(e)
+                    )
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                        str(e)
+                    )
+                )
 
     if data.send_invite_email is True:
         # check if user has setup email alerting

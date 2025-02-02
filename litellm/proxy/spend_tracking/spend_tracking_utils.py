@@ -1,6 +1,8 @@
 import json
 import secrets
+from datetime import datetime
 from datetime import datetime as dt
+from datetime import timezone
 from typing import Optional, cast
 
 from pydantic import BaseModel
@@ -10,6 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import get_end_user_id_for_cost_tracking
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -29,15 +32,38 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     return False
 
 
-def get_logging_payload(
-    kwargs, response_obj, start_time, end_time, end_user_id: Optional[str]
-) -> SpendLogsPayload:
-
-    from litellm.proxy.proxy_server import general_settings, master_key
-
+def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
+    if metadata is None:
+        return SpendLogsMetadata(
+            user_api_key=None,
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            additional_usage_values=None,
+        )
     verbose_proxy_logger.debug(
-        f"SpendTable: get_logging_payload - kwargs: {kwargs}\n\n"
+        "getting payload for SpendLogs, available keys in metadata: "
+        + str(list(metadata.keys()))
     )
+
+    # Filter the metadata dictionary to include only the specified keys
+    clean_metadata = SpendLogsMetadata(
+        **{  # type: ignore
+            key: metadata[key]
+            for key in SpendLogsMetadata.__annotations__.keys()
+            if key in metadata
+        }
+    )
+    return clean_metadata
+
+
+def get_logging_payload(  # noqa: PLR0915
+    kwargs, response_obj, start_time, end_time
+) -> SpendLogsPayload:
+    from litellm.proxy.proxy_server import general_settings, master_key
 
     if kwargs is None:
         kwargs = {}
@@ -57,10 +83,14 @@ def get_logging_payload(
     if isinstance(usage, litellm.Usage):
         usage = dict(usage)
     id = cast(dict, response_obj).get("id") or kwargs.get("litellm_call_id")
-    api_key = metadata.get("user_api_key", "")
-    standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
-        "standard_logging_object", None
+    standard_logging_payload = cast(
+        Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
+
+    end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
+
+    api_key = metadata.get("user_api_key", "")
+
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
@@ -71,40 +101,35 @@ def get_logging_payload(
         ):
             api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
 
-    _model_id = metadata.get("model_info", {}).get("id", "")
-    _model_group = metadata.get("model_group", "")
-
+    if (
+        standard_logging_payload is not None
+    ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
+        api_key = (
+            api_key
+            or standard_logging_payload["metadata"].get("user_api_key_hash")
+            or ""
+        )
+        end_user_id = end_user_id or standard_logging_payload["metadata"].get(
+            "user_api_key_end_user_id"
+        )
+    else:
+        api_key = ""
     request_tags = (
         json.dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
         else "[]"
     )
+    if (
+        _is_master_key(api_key=api_key, _master_key=master_key)
+        and general_settings.get("disable_adding_master_key_hash_to_db") is True
+    ):
+        api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
+
+    _model_id = metadata.get("model_info", {}).get("id", "")
+    _model_group = metadata.get("model_group", "")
 
     # clean up litellm metadata
-    clean_metadata = SpendLogsMetadata(
-        user_api_key=None,
-        user_api_key_alias=None,
-        user_api_key_team_id=None,
-        user_api_key_user_id=None,
-        user_api_key_team_alias=None,
-        spend_logs_metadata=None,
-        requester_ip_address=None,
-        additional_usage_values=None,
-    )
-    if isinstance(metadata, dict):
-        verbose_proxy_logger.debug(
-            "getting payload for SpendLogs, available keys in metadata: "
-            + str(list(metadata.keys()))
-        )
-
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = SpendLogsMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in SpendLogsMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
+    clean_metadata = _get_spend_logs_metadata(metadata)
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
     additional_usage_values = {}
@@ -130,9 +155,9 @@ def get_logging_payload(
             call_type=call_type or "",
             api_key=str(api_key),
             cache_hit=str(cache_hit),
-            startTime=start_time,
-            endTime=end_time,
-            completionStartTime=completion_start_time,
+            startTime=_ensure_datetime_utc(start_time),
+            endTime=_ensure_datetime_utc(end_time),
+            completionStartTime=_ensure_datetime_utc(completion_start_time),
             model=kwargs.get("model", "") or "",
             user=kwargs.get("litellm_params", {})
             .get("metadata", {})
@@ -170,6 +195,12 @@ def get_logging_payload(
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+def _ensure_datetime_utc(timestamp: datetime) -> datetime:
+    """Helper to ensure datetime is in UTC"""
+    timestamp = timestamp.astimezone(timezone.utc)
+    return timestamp
 
 
 async def get_spend_by_team_and_customer(

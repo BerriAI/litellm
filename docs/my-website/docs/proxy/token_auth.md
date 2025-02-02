@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# JWT-based Auth 
+# OIDC - JWT-based Auth 
 
 Use JWT's to auth admins / projects into the proxy.
 
@@ -156,7 +156,7 @@ scope: ["litellm-proxy-admin",...]
 scope: "litellm-proxy-admin ..."
 ```
 
-## Enforce Role-Based Access Control (RBAC)
+## Control Model Access with Roles
 
 Reject a JWT token if it's valid but doesn't have the required scopes / fields.
 
@@ -164,24 +164,67 @@ Only tokens which with valid Admin (`admin_jwt_scope`), User (`user_id_jwt_field
 
 ```yaml
 general_settings:
-  master_key: sk-1234
-  enable_jwt_auth: True
+  enable_jwt_auth: True 
   litellm_jwtauth:
-    admin_jwt_scope: "litellm_proxy_endpoints_access"
-    admin_allowed_routes:
-      - openai_routes
-      - info_routes
-    public_key_ttl: 600
-    enforce_rbac: true # 👈 Enforce RBAC
+    user_roles_jwt_field: "resource_access.litellm-test-client-id.roles"
+    user_allowed_roles: ["basic_user"] # roles that map to an 'internal_user' role on LiteLLM 
+    enforce_rbac: true # if true, will check if the user has the correct role to access the model + endpoint
+  
+  role_permissions: # control what models + endpointsare allowed for each role
+    - role: internal_user
+      models: ["anthropic-claude"]
 ```
 
-Expected Scope in JWT: 
+**[Architecture Diagram (Control Model Access)](./jwt_auth_arch)**
 
+## Control model access with Teams
+
+
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups" 
+```
+
+This is assuming your token looks like this:
 ```
 {
-  "scope": "litellm_proxy_endpoints_access"
+  ...,
+  "sub": "my-unique-user",
+  "groups": ["team_id_1", "team_id_2"]
 }
 ```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the flow
+
+SSO for UI: [**See Walkthrough**](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a426183a46b1e2b522200?sid=4ed6d497-ead6-47f9-80c0-ca1c4b6b4814)
+
+
+### Flow
+
+- Validate if user id is in the DB (LiteLLM_UserTable)
+- Validate if any of the groups are in the DB (LiteLLM_TeamTable)
+- Validate if any group has model access
+- If all checks pass, allow the request
+
 
 ## Advanced - Allowed Routes 
 

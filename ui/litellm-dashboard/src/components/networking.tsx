@@ -742,6 +742,38 @@ export const teamListCall = async (
   }
 };
 
+
+export const availableTeamListCall = async (
+  accessToken: String, 
+) => {
+  /**
+   * Get all available teams on proxy
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/available` : `/team/available`;
+    console.log("in availableTeamListCall");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("/team/available_teams API Response:", data);
+    return data;
+  } catch (error) {
+    throw error;
+  }
+};
+
 export const organizationListCall = async (accessToken: String) => {
   /**
    * Get all organizations on proxy
@@ -1286,7 +1318,8 @@ export const modelExceptionsCall = async (
 export const modelAvailableCall = async (
   accessToken: String,
   userID: String,
-  userRole: String
+  userRole: String,
+  return_wildcard_routes: boolean = false
 ) => {
   /**
    * Get all the models user has access to
@@ -1294,6 +1327,9 @@ export const modelAvailableCall = async (
   console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName)
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
+    if (return_wildcard_routes === true) {
+      url += `?return_wildcard_routes=True`;
+    }
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
@@ -1517,12 +1553,14 @@ export const userSpendLogsCall = async (
 export const uiSpendLogsCall = async (
   accessToken: String,
   api_key?: string, 
-  user_id?: string,
+  team_id?: string,
   request_id?: string,
   start_date?: string,
   end_date?: string,
   page?: number,
   page_size?: number,
+  min_spend?: number,
+  max_spend?: number,
 ) => {
   try {
     // Construct base URL
@@ -1531,7 +1569,9 @@ export const uiSpendLogsCall = async (
     // Add query parameters if they exist
     const queryParams = new URLSearchParams();
     if (api_key) queryParams.append('api_key', api_key);
-    if (user_id) queryParams.append('user_id', user_id);
+    if (team_id) queryParams.append('team_id', team_id);
+    if (min_spend) queryParams.append('min_spend', min_spend.toString());
+    if (max_spend) queryParams.append('max_spend', max_spend.toString());
     if (request_id) queryParams.append('request_id', request_id);
     if (start_date) queryParams.append('start_date', start_date);
     if (end_date) queryParams.append('end_date', end_date);
@@ -1559,7 +1599,7 @@ export const uiSpendLogsCall = async (
     }
 
     const data = await response.json();
-    console.log("Spend Logs UI Response:", data);
+    console.log("Spend Logs Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch spend logs:", error);
@@ -2278,7 +2318,7 @@ export const modelUpdateCall = async (
 export interface Member {
   role: string;
   user_id: string | null;
-  user_email: string | null;
+  user_email?: string | null;
 }
 
 export const teamMemberAddCall = async (
@@ -3050,3 +3090,31 @@ export const getProxyUISettings = async (
   }
 };
 
+
+
+export const getGuardrailsList = async (accessToken: String) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/list` : `/guardrails/list`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Guardrails list response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch guardrails list:", error);
+    throw error;
+  }
+};

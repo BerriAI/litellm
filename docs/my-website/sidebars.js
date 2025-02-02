@@ -51,7 +51,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch"],
         },
         {
           type: "link",
@@ -66,6 +66,7 @@ const sidebars = {
             "proxy/user_keys",
             "proxy/clientside_auth",
             "proxy/response_headers",
+            "proxy/request_headers",
           ],
         },
         {
@@ -76,6 +77,7 @@ const sidebars = {
             "proxy/token_auth",
             "proxy/service_accounts",
             "proxy/access_control",
+            "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/email",
             "proxy/multiple_admins",
@@ -96,6 +98,7 @@ const sidebars = {
             "proxy/ui",
             "proxy/admin_ui_sso",
             "proxy/self_serve",
+            "proxy/public_teams",
             "proxy/custom_sso"
           ],
         },
@@ -203,6 +206,7 @@ const sidebars = {
         "providers/perplexity",
         "providers/friendliai",
         "providers/galadriel",
+        "providers/topaz",
         "providers/groq",
         "providers/github",
         "providers/deepseek",
@@ -275,7 +279,14 @@ const sidebars = {
         },
         "text_completion",
         "embedding/supported_embedding",
-        "image_generation",
+        {
+          type: "category",
+          label: "Image",
+          items: [
+            "image_generation",
+            "image_variations",
+          ]
+        },
         {
           type: "category",
           label: "Audio",
@@ -418,13 +429,6 @@ const sidebars = {
         "data_security",
         "data_retention",
         "migration_policy",
-        "contributing",
-        "proxy/pii_masking",
-        "extras/code_quality",
-        "rules",
-        "proxy/team_based_routing",
-        "proxy/customer_routing",
-        "proxy_server",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -436,6 +440,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
+            "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
             "projects/dbally",
@@ -453,6 +458,13 @@ const sidebars = {
             "projects/llm_cord",
           ],
         },
+        "contributing",
+        "proxy/pii_masking",
+        "extras/code_quality",
+        "rules",
+        "proxy/team_based_routing",
+        "proxy/customer_routing",
+        "proxy_server",
       ],
     },
     "troubleshoot",

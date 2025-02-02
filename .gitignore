@@ -48,7 +48,7 @@ deploy/charts/litellm/charts/*
 deploy/charts/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/
-/node_modules
+**/node_modules
 kub.yaml
 loadtest_kub.yaml
 litellm/proxy/_new_secret_config.yaml
@@ -70,3 +70,4 @@ venv/
 tests/local_testing/log.txt
 
 .codegpt
+litellm/proxy/_new_new_secret_config.yaml

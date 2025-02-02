@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 import httpx
 
@@ -36,13 +36,13 @@ class HTTPHandler:
     async def post(
         self,
         url: str,
-        data: Optional[dict] = None,
+        data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
     ):
         try:
             response = await self.client.post(
-                url, data=data, params=params, headers=headers
+                url, data=data, params=params, headers=headers  # type: ignore
             )
             return response
         except Exception as e:
