@@ -5,6 +5,7 @@ import React from "react";
 import { CountryCell } from "./country_cell";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { Tooltip } from "antd";
+import { TimeCell } from "./time_cell";
 
 export type LogEntry = {
   request_id: string;
@@ -53,17 +54,17 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Time",
     accessorKey: "startTime",
-    cell: (info: any) => (
-      <span>{moment(info.getValue()).format("MMM DD HH:mm:ss")}</span>
-    ),
+    cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
     header: "Request ID",
     accessorKey: "request_id",
     cell: (info: any) => (
-      <span className="font-mono text-xs max-w-[100px] truncate block">
-        {String(info.getValue() || "")}
-      </span>
+      <Tooltip title={String(info.getValue() || "")}>
+        <span className="font-mono text-xs max-w-[100px] truncate block">
+          {String(info.getValue() || "")}
+        </span>
+      </Tooltip>
     ),
   },
   {
