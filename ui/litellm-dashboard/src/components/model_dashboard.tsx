@@ -178,7 +178,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
     []
   );
-  const [selectedProvider, setSelectedProvider] = useState<String>("OpenAI");
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
   const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
@@ -800,19 +800,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
-  const setProviderModelsFn = (provider: string) => {
+  const setProviderModelsFn = (provider: Providers) => {
     console.log(`received provider string: ${provider}`);
     let providerKey = provider;
+    let custom_llm_provider = provider_map[providerKey as keyof typeof Providers];
+    console.log(`setProviderModelsFn custom_llm_provider: ${custom_llm_provider}`);
     if (providerKey) {
       let _providerModels: Array<string> = [];
       if (typeof modelMap === "object") {
         Object.entries(modelMap).forEach(([key, value]) => {
+          console.log("value:", JSON.stringify(value, null, 2));
           if (
             value !== null &&
             typeof value === "object" &&
             "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === providerKey ||
-              (value as any)["litellm_provider"].includes(providerKey))
+            ((value as any)["litellm_provider"] === custom_llm_provider ||
+              (value as any)["litellm_provider"].includes(custom_llm_provider))
           ) {
             _providerModels.push(key);
           }
@@ -1537,12 +1540,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     labelAlign="left"
                   >
                     <Select
-                      value={selectedProvider as string}
+                      value={selectedProvider}
                       onChange={(value) => {
                         // Set the selected provider
-                        setSelectedProvider(value as unknown as string);
+                        setSelectedProvider(value as unknown as Providers);
                         // Update provider-specific models
-                        setProviderModelsFn(provider_map[value as unknown as string]);
+                        setProviderModelsFn(value as unknown as Providers);
                         // Reset the 'model' field
                         form.setFieldsValue({ model: [] });
                         // Reset the 'model_name' field
@@ -1552,10 +1555,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       {Object.keys(Providers).map((providerKey) => (
                         <SelectItem
                           key={providerKey}
-                          value={Providers[providerKey as keyof typeof Providers]}
+                          value={providerKey}
                           onClick={() => {
-                            setProviderModelsFn(provider_map[providerKey as keyof typeof Providers]);
-                            setSelectedProvider(Providers[providerKey as keyof typeof Providers]);
+                            setProviderModelsFn(providerKey as unknown as Providers);
+                            setSelectedProvider(providerKey as unknown as Providers);
                           }}
                         >
                           <div className="flex items-center space-x-2">
@@ -1582,7 +1585,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     </Select>
                   </Form.Item>
                   <LiteLLMModelNameField
-                      selectedProvider={selectedProvider as string}
+                      selectedProvider={selectedProvider}
                       providerModels={providerModels}
                       getPlaceholder={getPlaceholder}
                     />
