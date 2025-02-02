@@ -19,15 +19,10 @@ import {
   Table,
   Icon
 } from "@tremor/react";
-import { teamInfoCall } from "@/components/networking";
+import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member } from "@/components/networking";
 import { Button, Modal, Form, Input, Select as AntSelect, message } from "antd";
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
-
-interface TeamMember {
-  user_id: string;
-  user_email: string | null;
-  role: string;
-}
+import TeamMemberModal from "./edit_membership";
 
 interface TeamData {
   team_id: string;
@@ -37,7 +32,7 @@ interface TeamData {
     organization_id: string | null;
     admins: string[];
     members: string[];
-    members_with_roles: TeamMember[];
+    members_with_roles: Member[];
     metadata: Record<string, any>;
     tpm_limit: number | null;
     rpm_limit: number | null;
@@ -75,6 +70,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
+  const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
 
   const canManageMembers = is_team_admin || is_proxy_admin;
 
@@ -96,23 +93,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     fetchTeamInfo();
   }, [teamId, accessToken]);
 
+
   const handleMemberCreate = async (values: any) => {
     try {
-      const response = await fetch("/team/member_create", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          team_id: teamId,
-          user_email: values.user_email,
-          user_id: values.user_id,
-          role: values.role,
-        }),
-      });
+      if (accessToken == null) {
+        return;
+      }
 
-      if (!response.ok) throw new Error("Failed to add member");
+      const member: Member = {
+        user_email: values.user_email,
+        user_id: values.user_id,
+        role: values.role,
+      }
+      const response = await teamMemberAddCall(accessToken, teamId, member);
+
 
       message.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
@@ -124,22 +118,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  const handleMemberDelete = async (member: TeamMember) => {
+  const handleMemberDelete = async (member: Member) => {
     try {
-      const response = await fetch("/team/member_delete", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          team_id: teamId,
-          user_email: member.user_email,
-          user_id: member.user_id,
-        }),
-      });
+      if (accessToken == null) {
+        return;
+      }
 
-      if (!response.ok) throw new Error("Failed to delete member");
+      const response = await teamMemberDeleteCall(accessToken, teamId, member);
 
       message.success("Team member removed successfully");
       fetchTeamInfo();
@@ -148,6 +133,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Error removing team member:", error);
     }
   };
+
+  const handleMemberUpdate = async (values: any) => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+
+      const member: Member = {
+        user_email: values.user_email,
+        user_id: values.user_id,
+        role: values.role,
+      }
+
+      const response = await teamMemberUpdateCall(accessToken, teamId, member);
+
+      message.success("Team member updated successfully");
+      setIsEditMemberModalVisible(false);
+      fetchTeamInfo();
+    } catch (error) {
+      message.error("Failed to update team member");
+      console.error("Error updating team member:", error);
+    }
+  }
 
   if (loading) {
     return <div className="p-4">Loading...</div>;
@@ -191,7 +199,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Icon
                         icon={PencilAltIcon}
                         size="sm"
-                        onClick={() => {}}
+                        onClick={() => {
+                          setSelectedEditMember(member);
+                          setIsEditMemberModalVisible(true);
+                        }}
                       />
                       <Icon
                         onClick={() => {}}
@@ -291,6 +302,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               </div>
             </Card>
+            <TeamMemberModal
+            visible={isEditMemberModalVisible}
+            onCancel={() => setIsEditMemberModalVisible(false)}
+            onSubmit={handleMemberUpdate}
+            initialData={selectedEditMember}
+            mode="edit"
+          />
           </TabPanel>
         </TabPanels>
       </TabGroup>

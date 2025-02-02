@@ -2402,6 +2402,47 @@ export const teamMemberUpdateCall = async (
   }
 }
 
+export const teamMemberDeleteCall = async (
+  accessToken: string,
+  teamId: string,
+  formValues: Member // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/member_delete`
+      : `/team/member_delete`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        team_id: teamId,
+        ...(formValues.user_email && { user_email: formValues.user_email }),
+        ...(formValues.user_id && { user_id: formValues.user_id })
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
 export const organizationMemberAddCall = async (
   accessToken: string,
   organizationId: string,

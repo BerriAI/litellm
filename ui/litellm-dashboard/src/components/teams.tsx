@@ -513,58 +513,7 @@ const Team: React.FC<TeamProps> = ({
     return false;
   }
 
-  const _common_member_update_call = async (formValues: Record<string, any>, callType: "add" | "edit") => {
-    try {
-      if (accessToken != null && teams != null) {
-        message.info("Adding Member");
-        const user_role: Member = {
-          role: formValues.role,
-          user_email: formValues.user_email,
-          user_id: formValues.user_id,
-        };
-        let response: any;
-        if (callType == "add") {
-          response = await teamMemberAddCall(
-          accessToken,
-          selectedTeam["team_id"],
-          user_role
-        );
-        message.success("Member added");
-        } else {
-          response = await teamMemberUpdateCall(
-            accessToken,
-            selectedTeam["team_id"],
-            {
-              "role": formValues.role,
-              "user_id": formValues.id,
-              "user_email": formValues.email
-            }
-          );
-          message.success("Member updated");
-        }
-        
-        // Checking if the team exists in the list and updating or adding accordingly
-        const foundIndex = teams.findIndex((team) => {
-          console.log(
-            `team.team_id=${team.team_id}; response.data.team_id=${response.data.team_id}`
-          );
-          return team.team_id === response.data.team_id;
-        });
-        console.log(`foundIndex: ${foundIndex}`);
-        if (foundIndex !== -1) {
-          // If the team is found, update it
-          const updatedTeams = [...teams]; // Copy the current state
-          updatedTeams[foundIndex] = response.data; // Update the specific team
-          setTeams(updatedTeams); // Set the new state
-          setSelectedTeam(response.data);
-        }
-        setIsAddMemberModalVisible(false);
-        
-      }
-    } catch (error) {
-      console.error("Error creating the team:", error);
-    }
-  }
+
 
   const handleRefreshClick = () => {
     // Update the 'lastRefreshed' state to the current date and time
