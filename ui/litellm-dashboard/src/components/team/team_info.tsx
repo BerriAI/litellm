@@ -205,7 +205,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         }}
                       />
                       <Icon
-                        onClick={() => {}}
+                        onClick={() => {handleMemberDelete(member)}}
                         icon={TrashIcon}
                         size="sm"
                       />
