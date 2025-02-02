@@ -25,7 +25,7 @@ import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_tea
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
-
+import TeamInfoView from "@/components/team/team_info";
 import {
   Table,
   TableBody,
@@ -131,6 +131,8 @@ const Team: React.FC<TeamProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<null | any>(
     teams ? teams[0] : null
   );
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -577,6 +579,13 @@ const Team: React.FC<TeamProps> = ({
   }
   return (
     <div className="w-full mx-4">
+      {selectedTeamId ? (
+        <TeamInfoView 
+        teamId={selectedTeamId} 
+        onClose={() => setSelectedTeamId(null)} 
+        accessToken={accessToken}
+      />
+    ) : (
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
@@ -596,6 +605,9 @@ const Team: React.FC<TeamProps> = ({
       </TabList>
       <TabPanels>
       <TabPanel>
+      <Text>
+        Click on "Team ID" to view team details <b>and</b> manage team members.
+      </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
@@ -635,9 +647,11 @@ const Team: React.FC<TeamProps> = ({
                               <Button 
                                 size="xs"
                                 variant="light"
-                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 rounded text-left overflow-hidden truncate max-w-[200px] transition-colors duration-200"
+                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+
                                 onClick={() => {
                                   // Add click handler
+                                  setSelectedTeamId(team.team_id);
                                 }}
                               >
                                 {team.team_id.slice(0, 7)}...
@@ -1134,7 +1148,7 @@ const Team: React.FC<TeamProps> = ({
       </TabPanel>
       </TabPanels>
 
-    </TabGroup>
+      </TabGroup>)}
     </div>
   );
 };
