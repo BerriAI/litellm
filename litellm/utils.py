@@ -3782,6 +3782,18 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+
+    elif custom_llm_provider == "sap":
+        optional_params = litellm.GenAIHubOrchestrationConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "deepinfra":
         optional_params = litellm.DeepInfraConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -7094,6 +7106,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            return litellm.GenAIHubOrchestrationConfig()
         elif litellm.LlmProviders.FEATHERLESS_AI == provider:
             return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:

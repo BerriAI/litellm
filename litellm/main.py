@@ -163,6 +163,8 @@ from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
+from .llms.sap.chat.handler import GenAIHubOrchestration
+from .llms.huggingface.chat.handler import Huggingface
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
@@ -242,6 +244,7 @@ openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
+sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -1915,7 +1918,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     k not in optional_params
                 ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
-
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -1933,6 +1935,33 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
+            )
+        elif custom_llm_provider == "sap":
+            headers = headers or litellm.headers
+            ## LOAD CONFIG - if set
+            config = litellm.GenAIHubOrchestrationConfig.get_config()
+            for k, v in config.items():
+                if (
+                        k not in optional_params
+                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            response = sap_gen_ai_hub_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
@@ -2881,7 +2910,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 extra_headers=headers,
             )
 
-        elif custom_llm_provider == "vertex_ai":          
+        elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
                 optional_params.pop("vertex_project", None)
                 or optional_params.pop("vertex_ai_project", None)
@@ -2904,7 +2933,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             new_params = safe_deep_copy(optional_params or {})
             model_route = get_vertex_ai_model_route(model=model, litellm_params=litellm_params)
-            
+
             if model_route == VertexAIModelRoute.PARTNER_MODELS:
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
@@ -3493,6 +3522,35 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "sap" or model in litellm.sap_gen_ai_hub:
+            api_base = api_base or litellm.api_base
+
+            custom_llm_provider = "petals"
+            stream = optional_params.pop("stream", False)
+            model_response = petals_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+                client=client,
+            )
+            if stream is True:  ## [BETA]
+                # Fake streaming for petals
+                resp_string = model_response["choices"][0]["message"]["content"]
+                response = CustomStreamWrapper(
+                    resp_string,
+                    model,
+                    custom_llm_provider="petals",
+                    logging_obj=logging,
+                )
+                return response
+            response = model_response
         elif custom_llm_provider == "snowflake" or model in litellm.snowflake_models:
             try:
                 client = (
@@ -3917,7 +3975,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]: 
+) -> Coroutine[Any, Any, EmbeddingResponse]:
     ...
 
 
@@ -3943,7 +4001,7 @@ def embedding(
     *,
     aembedding: Literal[False] = False,
     **kwargs,
-) -> EmbeddingResponse: 
+) -> EmbeddingResponse:
     ...
 
 # fmt: on
