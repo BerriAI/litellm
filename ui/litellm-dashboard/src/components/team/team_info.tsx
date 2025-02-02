@@ -23,7 +23,7 @@ import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdate
 import { Button, Modal, Form, Input, Select as AntSelect, message } from "antd";
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import TeamMemberModal from "./edit_membership";
-
+import UserSearchModal from "@/components/common_components/user_search_modal";
 interface TeamData {
   team_id: string;
   team_info: {
@@ -313,46 +313,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </TabPanels>
       </TabGroup>
 
-      <Modal
-        title="Add Team Member"
-        open={isAddMemberModalVisible}
-        onCancel={() => {
-          setIsAddMemberModalVisible(false);
-          form.resetFields();
-        }}
-        footer={null}
-        width={800}
-      >
-        <Form
-          form={form}
-          onFinish={handleMemberCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-          initialValues={{
-            role: "user",
-          }}
-        >
-          <Form.Item label="Email" name="user_email" className="mb-4">
-            <Input className="px-3 py-2 border rounded-md w-full" />
-          </Form.Item>
-          <div className="text-center mb-4">OR</div>
-          <Form.Item label="User ID" name="user_id" className="mb-4">
-            <Input className="px-3 py-2 border rounded-md w-full" />
-          </Form.Item>
-          <Form.Item label="Member Role" name="role" className="mb-4">
-            <AntSelect defaultValue="user">
-              <AntSelect.Option value="admin">admin</AntSelect.Option>
-              <AntSelect.Option value="user">user</AntSelect.Option>
-            </AntSelect>
-          </Form.Item>
-          <div className="text-right mt-4">
-            <Button type="primary" htmlType="submit">
-              Add Member
-            </Button>
-          </div>
-        </Form>
-      </Modal>
+      <UserSearchModal
+        isVisible={isAddMemberModalVisible}
+        onCancel={() => setIsAddMemberModalVisible(false)}
+        onSubmit={handleMemberCreate}
+        accessToken={accessToken}
+      />
     </div>
   );
 };
