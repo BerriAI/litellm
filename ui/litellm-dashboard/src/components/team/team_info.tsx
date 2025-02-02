@@ -160,6 +160,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { team_info: info } = teamData;
 
   const renderMembersPanel = () => (
+    <div className="space-y-4">
     <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
       <Table>
         <TableHead>
@@ -207,6 +208,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </TableBody>
       </Table>
     </Card>
+    <TremorButton onClick={() => setIsAddMemberModalVisible(true)}>Add Member</TremorButton>
+    </div>
   );
 
   return (
