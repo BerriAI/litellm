@@ -934,7 +934,7 @@ async def add_internal_user_to_organization(
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
     responses={
-        200: {"model": List[LiteLLM_SpendLogs]},
+        200: {"model": List[LiteLLM_UserTable]},
     },
 )
 async def ui_view_users(
