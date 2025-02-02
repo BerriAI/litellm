@@ -1837,6 +1837,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    SAP_GENERATIVE_AI_HUB = "sap"
 
 
 # Create a set of all provider values for quick lookup

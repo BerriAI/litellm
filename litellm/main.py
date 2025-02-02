@@ -129,6 +129,7 @@ from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.groq.chat.handler import GroqChatCompletion
+from .llms.sap.chat.handler import GenAIHubOrchestration
 from .llms.huggingface.chat.handler import Huggingface
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.ollama.completion import handler as ollama
@@ -202,6 +203,7 @@ openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 databricks_chat_completions = DatabricksChatCompletion()
 groq_chat_completions = GroqChatCompletion()
+sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
@@ -1472,7 +1474,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     k not in optional_params
                 ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
-
             response = groq_chat_completions.completion(
                 model=model,
                 messages=messages,
@@ -1481,6 +1482,32 @@ def completion(  # type: ignore # noqa: PLR0915
                 print_verbose=print_verbose,
                 api_key=api_key,
                 api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+                custom_prompt_dict=custom_prompt_dict,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+            )
+        elif custom_llm_provider == "sap":
+            headers = headers or litellm.headers
+            ## LOAD CONFIG - if set
+            config = litellm.GenAIHubOrchestrationConfig.get_config()
+            for k, v in config.items():
+                if (
+                    k not in optional_params
+                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            response = sap_gen_ai_hub_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                print_verbose=print_verbose,
                 acompletion=acompletion,
                 logging_obj=logging,
                 optional_params=optional_params,
@@ -1583,6 +1610,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params[k] = v
 
             ## COMPLETION CALL
+            raise ValueError(f'{model=} - {custom_llm_provider=}')
             try:
                 response = openai_chat_completions.completion(
                     model=model,
@@ -2825,6 +2853,35 @@ def completion(  # type: ignore # noqa: PLR0915
                 return response
             response = model_response
         elif custom_llm_provider == "petals" or model in litellm.petals_models:
+            api_base = api_base or litellm.api_base
+
+            custom_llm_provider = "petals"
+            stream = optional_params.pop("stream", False)
+            model_response = petals_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+                client=client,
+            )
+            if stream is True:  ## [BETA]
+                # Fake streaming for petals
+                resp_string = model_response["choices"][0]["message"]["content"]
+                response = CustomStreamWrapper(
+                    resp_string,
+                    model,
+                    custom_llm_provider="petals",
+                    logging_obj=logging,
+                )
+                return response
+            response = model_response
+        elif custom_llm_provider == "sap" or model in litellm.sap_gen_ai_hub:
             api_base = api_base or litellm.api_base
 
             custom_llm_provider = "petals"

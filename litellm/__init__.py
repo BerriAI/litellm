@@ -852,6 +852,10 @@ petals_models = [
     "petals-team/StableBeluga2",
 ]
 
+sap_gen_ai_hub_models = [
+    "petals-team/StableBeluga2",
+]
+
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
@@ -1164,6 +1168,7 @@ from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.mistral_chat_transformation import MistralConfig
