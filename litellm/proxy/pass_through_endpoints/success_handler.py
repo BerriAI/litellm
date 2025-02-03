@@ -91,6 +91,8 @@ class PassThroughEndpointLogging:
             end_time,  # Positional argument 3
             cache_hit,  # Positional argument 4
             **kwargs,  # Unpacked keyword arguments
+            # NB: Since we already run this in a TPE, the handler itself can run sync
+            synchronous=True,
         )
 
         await logging_obj.async_success_handler(

@@ -129,13 +129,7 @@ async def _log_completed_batch(
             cache_hit=None,
         )
     )
-    if litellm.sync_logging:
-        logging_obj.success_handler(None, start_time, end_time)
-    else:
-        threading.Thread(
-            target=logging_obj.success_handler,
-            args=(None, start_time, end_time),
-        ).start()
+    logging_obj.success_handler(None, start_time, end_time)
 
 
 async def _batch_cost_calculator(

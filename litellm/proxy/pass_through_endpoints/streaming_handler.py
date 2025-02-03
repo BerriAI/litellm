@@ -123,15 +123,9 @@ class PassThroughStreamingHandler:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=f"cannot parse chunks to standard response object. Chunks={all_chunks}"
             )
-        threading.Thread(
-            target=litellm_logging_obj.success_handler,
-            args=(
-                standard_logging_response_object,
-                start_time,
-                end_time,
-                False,
-            ),
-        ).start()
+        litellm_logging_obj.success_handler(
+            standard_logging_response_object, start_time, end_time, False
+        )
         await litellm_logging_obj.async_success_handler(
             result=standard_logging_response_object,
             start_time=start_time,
