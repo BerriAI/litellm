@@ -1,18 +1,17 @@
 import React from "react";
-import { handleSubmit } from "./model_dashboard";
 
 export enum Providers {
     OpenAI = "OpenAI",
     Azure = "Azure",
     Azure_AI_Studio = "Azure AI Studio",
     Anthropic = "Anthropic",
+    Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
     Google_AI_Studio = "Google AI Studio",
     Bedrock = "Amazon Bedrock",
     Groq = "Groq",
     MistralAI = "Mistral AI",
     Deepseek = "Deepseek",
     OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
-    Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
     Cohere = "Cohere",
     Databricks = "Databricks",
     Ollama = "Ollama",

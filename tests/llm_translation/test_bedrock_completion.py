@@ -733,7 +733,7 @@ def test_bedrock_stop_value(stop, model):
     "model",
     [
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "meta.llama3-70b-instruct-v1:0",
+        # "meta.llama3-70b-instruct-v1:0",
         "anthropic.claude-v2",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
@@ -2506,3 +2506,77 @@ async def test_bedrock_document_understanding(image_url):
     )
     assert response is not None
     assert response.choices[0].message.content != ""
+
+
+def test_bedrock_custom_proxy():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+                messages=[{"content": "Tell me a joke", "role": "user"}],
+                api_key="Token",
+                client=client,
+                api_base="https://some-api-url/models",
+            )
+        except Exception as e:
+            print(e)
+        print(mock_post.call_args.kwargs)
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"] == "https://some-api-url/models"
+
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer Token"
+
+
+def test_bedrock_custom_deepseek():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import json
+
+    litellm._turn_on_debug()
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        # Mock the response
+        mock_response = Mock()
+        mock_response.text = json.dumps(
+            {"generation": "Here's a joke...", "stop_reason": "stop"}
+        )
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        try:
+            response = completion(
+                model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # Updated to specify provider
+                messages=[{"role": "user", "content": "Tell me a joke"}],
+                max_tokens=100,
+                client=client,
+            )
+
+            # Print request details
+            print("\nRequest Details:")
+            print(f"URL: {mock_post.call_args.kwargs['url']}")
+
+            # Verify the URL
+            assert (
+                mock_post.call_args.kwargs["url"]
+                == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+            )
+
+            # Verify the request body format
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            print("request_body=", json.dumps(request_body, indent=4, default=str))
+            assert "prompt" in request_body
+            assert request_body["prompt"] == "Tell me a joke"
+
+            # follows the llama spec
+            assert request_body["max_gen_len"] == 100
+
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            raise e

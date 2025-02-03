@@ -240,8 +240,13 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/vertex-ai",
+        "/vertex_ai",
+        "/cohere",
         "/gemini",
+        "/anthropic",
         "/langfuse",
+        "/azure",
+        "/openai",
     ]
 
     anthropic_routes = [
@@ -1576,6 +1581,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_role: Optional[str] = None
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
     teams: List[str] = []
+    sso_user_id: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod

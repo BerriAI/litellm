@@ -2153,7 +2153,7 @@ def stringify_json_tool_call_content(messages: List) -> List:
 
 import base64
 import mimetypes
-from cgi import parse_header
+from email.message import Message
 
 import httpx
 
@@ -2174,8 +2174,9 @@ from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 
 
 def _parse_content_type(content_type: str) -> str:
-    main_type, _ = parse_header(content_type)
-    return main_type
+    m = Message()
+    m["content-type"] = content_type
+    return m.get_content_type()
 
 
 class BedrockImageProcessor:

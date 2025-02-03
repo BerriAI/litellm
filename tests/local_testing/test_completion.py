@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
+)  # Adds the parent directory to the system path
 
 
 import os
@@ -2597,6 +2597,21 @@ def test_completion_openrouter1():
         response = completion(
             model="openrouter/mistralai/mistral-tiny",
             messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_openrouter_reasoning_effort():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="openrouter/deepseek/deepseek-r1",
+            messages=messages,
+            include_reasoning=True,
             max_tokens=5,
         )
         # Add any assertions here to check the response

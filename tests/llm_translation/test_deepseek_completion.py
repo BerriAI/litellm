@@ -2,7 +2,7 @@ from base_llm_unit_tests import BaseLLMChatTest
 import pytest
 
 
-# Test implementation
+# Test implementations
 @pytest.mark.skip(reason="Deepseek API is hanging")
 class TestDeepSeekChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:

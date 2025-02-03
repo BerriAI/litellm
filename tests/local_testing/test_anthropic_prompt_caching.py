@@ -205,20 +205,29 @@ def anthropic_messages():
     ]
 
 
-def test_anthropic_vertex_ai_prompt_caching(anthropic_messages):
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode):
     litellm._turn_on_debug()
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
     load_vertex_ai_credentials()
 
-    client = HTTPHandler()
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
-            response = completion(
-                model="vertex_ai/claude-3-5-sonnet-v2@20241022 ",
-                messages=anthropic_messages,
-                client=client,
-            )
+            if sync_mode:
+                response = completion(
+                    model="vertex_ai/claude-3-5-sonnet-v2@20241022 ",
+                    messages=anthropic_messages,
+                    client=client,
+                )
+            else:
+                response = await litellm.acompletion(
+                    model="vertex_ai/claude-3-5-sonnet-v2@20241022 ",
+                    messages=anthropic_messages,
+                    client=client,
+                )
         except Exception as e:
             print(f"Error: {e}")
 

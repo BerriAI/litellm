@@ -180,23 +180,10 @@ class RouteChecks:
         if RouteChecks._is_azure_openai_route(route=route):
             return True
 
-        # Pass through Bedrock, VertexAI, and Cohere Routes
-        if "/bedrock/" in route:
-            return True
-        if "/vertex-ai/" in route:
-            return True
-        if "/gemini/" in route:
-            return True
-        if "/cohere/" in route:
-            return True
-        if "/langfuse/" in route:
-            return True
-        if "/anthropic/" in route:
-            return True
-        if "/azure/" in route:
-            return True
-        if "/openai/" in route:
-            return True
+        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if _llm_passthrough_route in route:
+                return True
+
         return False
 
     @staticmethod

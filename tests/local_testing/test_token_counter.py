@@ -459,3 +459,14 @@ class TestTokenizerSelection(unittest.TestCase):
         # Verify fallback to OpenAI tokenizer
         self.assertEqual(result["type"], "openai_tokenizer")
         self.assertEqual(result["tokenizer"], encoding)
+
+    @patch("litellm.utils._return_huggingface_tokenizer")
+    def test_disable_hf_tokenizer_download(self, mock_return_huggingface_tokenizer):
+        # Use pytest.MonkeyPatch() directly instead of fixture
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+
+        result = _select_tokenizer_helper("grok-32r22r")
+        mock_return_huggingface_tokenizer.assert_not_called()
+        assert result["type"] == "openai_tokenizer"
+        assert result["tokenizer"] == encoding
