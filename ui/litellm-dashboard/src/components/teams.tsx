@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
-import TeamMemberModal, { TeamMember } from "@/components/team/edit_membership";
+import TeamMemberModal from "@/components/team/edit_membership";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -25,7 +25,7 @@ import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_tea
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
-
+import TeamInfoView from "@/components/team/team_info";
 import {
   Table,
   TableBody,
@@ -129,8 +129,9 @@ const Team: React.FC<TeamProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<null | any>(
-    teams ? teams[0] : null
+    null
   );
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -138,7 +139,6 @@ const Team: React.FC<TeamProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
-  const [selectedEditMember, setSelectedEditMember] = useState<null | TeamMember>(null);
   
 
 
@@ -500,6 +500,9 @@ const Team: React.FC<TeamProps> = ({
   };
 
   const is_team_admin = (team: any) => {
+    if (team == null || team.members_with_roles == null) {
+      return false;
+    }
     for (let i = 0; i < team.members_with_roles.length; i++) {
       let member = team.members_with_roles[i];
       if (member.user_id == userID && member.role == "admin") {
@@ -509,58 +512,7 @@ const Team: React.FC<TeamProps> = ({
     return false;
   }
 
-  const _common_member_update_call = async (formValues: Record<string, any>, callType: "add" | "edit") => {
-    try {
-      if (accessToken != null && teams != null) {
-        message.info("Adding Member");
-        const user_role: Member = {
-          role: formValues.role,
-          user_email: formValues.user_email,
-          user_id: formValues.user_id,
-        };
-        let response: any;
-        if (callType == "add") {
-          response = await teamMemberAddCall(
-          accessToken,
-          selectedTeam["team_id"],
-          user_role
-        );
-        message.success("Member added");
-        } else {
-          response = await teamMemberUpdateCall(
-            accessToken,
-            selectedTeam["team_id"],
-            {
-              "role": formValues.role,
-              "user_id": formValues.id,
-              "user_email": formValues.email
-            }
-          );
-          message.success("Member updated");
-        }
-        
-        // Checking if the team exists in the list and updating or adding accordingly
-        const foundIndex = teams.findIndex((team) => {
-          console.log(
-            `team.team_id=${team.team_id}; response.data.team_id=${response.data.team_id}`
-          );
-          return team.team_id === response.data.team_id;
-        });
-        console.log(`foundIndex: ${foundIndex}`);
-        if (foundIndex !== -1) {
-          // If the team is found, update it
-          const updatedTeams = [...teams]; // Copy the current state
-          updatedTeams[foundIndex] = response.data; // Update the specific team
-          setTeams(updatedTeams); // Set the new state
-          setSelectedTeam(response.data);
-        }
-        setIsAddMemberModalVisible(false);
-        
-      }
-    } catch (error) {
-      console.error("Error creating the team:", error);
-    }
-  }
+
 
   const handleRefreshClick = () => {
     // Update the 'lastRefreshed' state to the current date and time
@@ -568,15 +520,18 @@ const Team: React.FC<TeamProps> = ({
     setLastRefreshed(currentDate.toLocaleString());
   };
 
-  const handleMemberCreate = async (formValues: Record<string, any>) => {
-    _common_member_update_call(formValues, "add");
-  };
 
-  const handleMemberUpdate = async (formValues: Record<string, any>) => {
-    _common_member_update_call(formValues, "edit");
-  }
   return (
     <div className="w-full mx-4">
+      {selectedTeamId ? (
+        <TeamInfoView 
+        teamId={selectedTeamId} 
+        onClose={() => setSelectedTeamId(null)} 
+        accessToken={accessToken}
+        is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
+        is_proxy_admin={userRole == "Admin"}
+      />
+    ) : (
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
@@ -596,6 +551,9 @@ const Team: React.FC<TeamProps> = ({
       </TabList>
       <TabPanels>
       <TabPanel>
+      <Text>
+        Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
+      </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
@@ -628,19 +586,27 @@ const Team: React.FC<TeamProps> = ({
                         >
                           {team["team_alias"]}
                         </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            fontSize: "0.75em", // or any smaller size as needed
-                          }}
-                        >
-                          <Tooltip title={team.team_id}>
-                          {team.team_id}
-                          </Tooltip>
+                        <TableRow>
+                        <TableCell>
+                          <div className="overflow-hidden">
+                            <Tooltip title={team.team_id}>
+                              <Button 
+                                size="xs"
+                                variant="light"
+                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+
+                                onClick={() => {
+                                  // Add click handler
+                                  setSelectedTeamId(team.team_id);
+                                }}
+                              >
+                                {team.team_id.slice(0, 7)}...
+                              </Button>
+                            </Tooltip>
+                          </div>
                         </TableCell>
+                      </TableRow>
+
                         <TableCell
                           style={{
                             maxWidth: "4px",
@@ -964,155 +930,6 @@ const Team: React.FC<TeamProps> = ({
           </Modal>
           </Col>
         ) : null}
-        <Col numColSpan={1}>
-          <Title level={4}>Team Members</Title>
-          <Paragraph>
-            If you belong to multiple teams, this setting controls which teams
-            members you see.
-          </Paragraph>
-          {teams && teams.length > 0 ? (
-            <Select defaultValue="0">
-              {teams.map((team: any, index) => (
-                <SelectItem
-                  key={index}
-                  value={String(index)}
-                  onClick={() => {
-                    setSelectedTeam(team);
-                  }}
-                >
-                  {team["team_alias"]}
-                </SelectItem>
-              ))}
-            </Select>
-          ) : (
-            <Paragraph>
-              No team created. <b>Defaulting to personal account.</b>
-            </Paragraph>
-          )}
-        </Col>
-        <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Member Name</TableHeaderCell>
-                  <TableHeaderCell>Role</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {selectedTeam
-                  ? selectedTeam["members_with_roles"].map(
-                      (member: any, index: number) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            {member["user_email"]
-                              ? member["user_email"]
-                              : member["user_id"]
-                                ? member["user_id"]
-                                : null}
-                          </TableCell>
-                          <TableCell>{member["role"]}</TableCell>
-                          <TableCell>
-                          {userRole == "Admin" ? (
-                            <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => {
-                                setIsEditMemberModalVisible(true);
-                                setSelectedEditMember({
-                                  "id": member["user_id"],
-                                  "email": member["user_email"],
-                                  "role": member["role"]
-                                })
-                              }}
-                            />
-                            <Icon
-                              onClick={() => {}}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                            </>
-                          ) : null}
-                        </TableCell>
-                        </TableRow>
-                      )
-                    )
-                  : null}
-              </TableBody>
-            </Table>
-          </Card>
-          <TeamMemberModal
-            visible={isEditMemberModalVisible}
-            onCancel={handleMemberCancel}
-            onSubmit={handleMemberUpdate}
-            initialData={selectedEditMember}
-            mode="edit"
-          />
-          {selectedTeam && (
-            <EditTeamModal
-              visible={editModalVisible}
-              onCancel={handleEditCancel}
-              team={selectedTeam}
-              onSubmit={handleEditSubmit}
-            />
-          )}
-        </Col>
-        <Col numColSpan={1}>
-          {userRole == "Admin" || (selectedTeam && is_team_admin(selectedTeam)) ? (
-            <Button
-              className="mx-auto mb-5"
-              onClick={() => setIsAddMemberModalVisible(true)}
-            >
-              + Add member
-            </Button>
-          ) : null}
-          <Modal
-            title="Add member"
-            visible={isAddMemberModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleMemberOk}
-            onCancel={handleMemberCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleMemberCreate}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-              initialValues={{
-                role: "user",
-              }}
-            >
-              <>
-                <Form.Item label="Email" name="user_email" className="mb-4">
-                  <Input
-                    name="user_email"
-                    className="px-3 py-2 border rounded-md w-full"
-                  />
-                </Form.Item>
-                <div className="text-center mb-4">OR</div>
-                <Form.Item label="User ID" name="user_id" className="mb-4">
-                  <Input
-                    name="user_id"
-                    className="px-3 py-2 border rounded-md w-full"
-                  />
-                </Form.Item>
-                <Form.Item label="Member Role" name="role" className="mb-4">
-                  <Select2 defaultValue="user">
-                    <Select2.Option value="admin">admin</Select2.Option>
-                    <Select2.Option value="user">user</Select2.Option>
-                  </Select2>
-                </Form.Item>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Add member</Button2>
-              </div>
-            </Form>
-          </Modal>
-        </Col>
       </Grid>
       </TabPanel>
       <TabPanel>  
@@ -1123,7 +940,7 @@ const Team: React.FC<TeamProps> = ({
       </TabPanel>
       </TabPanels>
 
-    </TabGroup>
+      </TabGroup>)}
     </div>
   );
 };

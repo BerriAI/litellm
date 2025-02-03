@@ -2686,6 +2686,7 @@ def get_optional_params(  # noqa: PLR0915
     api_version=None,
     parallel_tool_calls=None,
     drop_params=None,
+    reasoning_effort=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     **kwargs,
@@ -2771,6 +2772,7 @@ def get_optional_params(  # noqa: PLR0915
         "drop_params": None,
         "additional_drop_params": None,
         "messages": None,
+        "reasoning_effort": None,
     }
 
     # filter out those parameters that were passed with non-default values
