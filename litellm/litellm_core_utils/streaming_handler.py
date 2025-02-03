@@ -1356,22 +1356,25 @@ class CustomStreamWrapper:
             Disables streaming logging.
             """
             return
-        ## ASYNC LOGGING
-        # Create an event loop for the new thread
-        if self.logging_loop is not None:
-            future = asyncio.run_coroutine_threadsafe(
-                self.logging_obj.async_success_handler(
-                    processed_chunk, None, None, cache_hit
-                ),
-                loop=self.logging_loop,
-            )
-            future.result()
-        else:
-            asyncio.run(
-                self.logging_obj.async_success_handler(
-                    processed_chunk, None, None, cache_hit
+
+        if not litellm.sync_logging:
+            ## ASYNC LOGGING
+            # Create an event loop for the new thread
+            if self.logging_loop is not None:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.logging_obj.async_success_handler(
+                        processed_chunk, None, None, cache_hit
+                    ),
+                    loop=self.logging_loop,
                 )
-            )
+                future.result()
+            else:
+                asyncio.run(
+                    self.logging_obj.async_success_handler(
+                        processed_chunk, None, None, cache_hit
+                    )
+                )
+
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
@@ -1427,10 +1430,13 @@ class CustomStreamWrapper:
                     if response is None:
                         continue
                     ## LOGGING
-                    threading.Thread(
-                        target=self.run_success_logging_and_cache_storage,
-                        args=(response, cache_hit),
-                    ).start()  # log response
+                    if litellm.sync_logging:
+                        self.run_success_logging_and_cache_storage(response, cache_hit)
+                    else:
+                        threading.Thread(
+                            target=self.run_success_logging_and_cache_storage,
+                            args=(response, cache_hit),
+                        ).start()  # log response
                     choice = response.choices[0]
                     if isinstance(choice, StreamingChoices):
                         self.response_uptil_now += choice.delta.get("content", "") or ""
@@ -1476,10 +1482,13 @@ class CustomStreamWrapper:
                     )
 
                 ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.success_handler,
-                    args=(response, None, None, cache_hit),
-                ).start()  # log response
+                if litellm.sync_logging:
+                    self.logging_obj.success_handler(response, None, None, cache_hit)
+                else:
+                    threading.Thread(
+                        target=self.logging_obj.success_handler,
+                        args=(response, None, None, cache_hit),
+                    ).start()  # log response
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
@@ -1492,10 +1501,13 @@ class CustomStreamWrapper:
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
                 ## LOGGING
-                threading.Thread(
-                    target=self.run_success_logging_and_cache_storage,
-                    args=(processed_chunk, cache_hit),
-                ).start()  # log response
+                if litellm.sync_logging:
+                    self.run_success_logging_and_cache_storage(processed_chunk, cache_hit)
+                else:
+                    threading.Thread(
+                        target=self.run_success_logging_and_cache_storage,
+                        args=(processed_chunk, cache_hit),
+                    ).start()  # log response
                 return processed_chunk
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -1654,13 +1666,18 @@ class CustomStreamWrapper:
                     )
                 )
 
-                executor.submit(
-                    self.logging_obj.success_handler,
-                    complete_streaming_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
+                if litellm.sync_logging:
+                    self.logging_obj.success_handler(
+                        complete_streaming_response, None, None, cache_hit
+                    )
+                else:
+                    executor.submit(
+                        self.logging_obj.success_handler,
+                        complete_streaming_response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                    )
 
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:

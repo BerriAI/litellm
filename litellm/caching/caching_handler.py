@@ -280,10 +280,13 @@ class LLMCachingHandler:
                         is_async=False,
                     )
 
-                    threading.Thread(
-                        target=logging_obj.success_handler,
-                        args=(cached_result, start_time, end_time, cache_hit),
-                    ).start()
+                    if litellm.sync_logging:
+                        logging_obj.success_handler(cached_result, start_time, end_time, True)
+                    else:
+                        threading.Thread(
+                            target=logging_obj.success_handler,
+                            args=(cached_result, start_time, end_time, cache_hit),
+                        ).start()
                     cache_key = litellm.cache._get_preset_cache_key_from_kwargs(
                         **kwargs
                     )
@@ -449,10 +452,13 @@ class LLMCachingHandler:
                 cached_result, start_time, end_time, cache_hit
             )
         )
-        threading.Thread(
-            target=logging_obj.success_handler,
-            args=(cached_result, start_time, end_time, cache_hit),
-        ).start()
+        if litellm.sync_logging:
+            logging_obj.success_handler(cached_result, start_time, end_time, cache_hit)
+        else:
+            threading.Thread(
+                target=logging_obj.success_handler,
+                args=(cached_result, start_time, end_time, cache_hit),
+            ).start()
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: Dict[str, Any], args: Tuple[Any, ...]

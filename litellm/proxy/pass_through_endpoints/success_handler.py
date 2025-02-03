@@ -83,6 +83,7 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
+            
         thread_pool_executor.submit(
             logging_obj.success_handler,
             standard_logging_response_object,  # Positional argument 1
