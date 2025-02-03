@@ -715,3 +715,42 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
                 request_body["messages"][0]["role"] == "developer"
             ), "Got={} instead of system".format(request_body["messages"][0]["role"])
             assert request_body["messages"][0]["content"] == "Be a good bot!"
+
+    def test_completion_o_series_models_temperature(self):
+        """
+        Test that temperature is not passed to O-series models
+        """
+        try:
+            from litellm import completion
+
+            client = self.get_client()
+
+            completion_args = self.get_base_completion_call_args()
+
+            with patch.object(
+                client.chat.completions.with_raw_response, "create"
+            ) as mock_client:
+                try:
+                    completion(
+                        **completion_args,
+                        temperature=0.0,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "Hello, world!",
+                            }
+                        ],
+                        drop_params=True,
+                        client=client,
+                    )
+                except Exception as e:
+                    print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+            print("request_body: ", request_body)
+            assert (
+                "temperature" not in request_body
+            ), "temperature should not be in the request body"
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")

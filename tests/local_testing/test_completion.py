@@ -4631,3 +4631,22 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
             }
         else:
             assert "metadata" not in mock_completion.call_args.kwargs
+
+
+def test_completion_o3_mini_temperature():
+    try:
+        litellm.set_verbose = True
+        resp = litellm.completion(
+            model="o3-mini",
+            temperature=0.0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, world!",
+                }
+            ],
+            drop_params=True,
+        )
+        assert resp.choices[0].message.content is not None
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
