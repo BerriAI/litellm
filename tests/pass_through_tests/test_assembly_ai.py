@@ -6,6 +6,7 @@ import pytest
 import assemblyai as aai
 import aiohttp
 import asyncio
+import time
 
 TEST_MASTER_KEY = "sk-1234"
 TEST_BASE_URL = "http://0.0.0.0:4000/assemblyai"
@@ -73,6 +74,8 @@ async def test_assemblyai_transcribe_with_non_admin_key():
     # You can also transcribe a local file by passing in a file path
     # FILE_URL = './path/to/file.mp3'
 
+    request_start_time = time.time()
+
     transcriber = aai.Transcriber()
     transcript = transcriber.transcribe(FILE_URL)
     print(transcript)
@@ -87,3 +90,6 @@ async def test_assemblyai_transcribe_with_non_admin_key():
         pytest.fail(f"Failed to transcribe file error: {transcript.error}")
     else:
         print(transcript.text)
+
+    request_end_time = time.time()
+    print(f"Request took {request_end_time - request_start_time} seconds")
