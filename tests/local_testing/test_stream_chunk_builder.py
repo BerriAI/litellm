@@ -730,7 +730,6 @@ def test_stream_chunk_builder_openai_audio_output_usage():
         usage_dict == response_usage_dict
     ), f"\nExpected: {usage_dict}\nGot: {response_usage_dict}"
 
-
 def test_stream_chunk_builder_empty_initial_chunk():
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         ChunkProcessor,
