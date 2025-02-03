@@ -8,6 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
+from unittest.mock import MagicMock, patch
 
 load_dotenv()
 import io
@@ -988,3 +989,28 @@ async def test_list_key_helper(prisma_client):
                 user_id="admin",
             ),
         )
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.get_team_object")
+async def test_key_generate_always_db_team(mock_get_team_object):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    mock_get_team_object.return_value = None
+    try:
+        await generate_key_fn(
+            data=GenerateKeyRequest(team_id="1234"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+
+    mock_get_team_object.assert_called_once()
+    assert mock_get_team_object.call_args.kwargs["check_db_only"] == True

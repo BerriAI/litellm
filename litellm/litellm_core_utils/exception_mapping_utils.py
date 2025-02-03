@@ -14,6 +14,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InternalServerError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -140,7 +141,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
         )  # noqa
         print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'."  # noqa
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
         )  # noqa
         print()  # noqa
 
@@ -467,10 +468,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             method="POST", url="https://api.openai.com/v1/"
                         ),
                     )
-            elif custom_llm_provider == "anthropic":  # one of the anthropics
+            elif (
+                custom_llm_provider == "anthropic"
+                or custom_llm_provider == "anthropic_text"
+            ):  # one of the anthropics
                 if "prompt is too long" in error_str or "prompt: length" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
+                        message="AnthropicError - {}".format(error_str),
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                elif "overloaded_error" in error_str:
+                    exception_mapping_worked = True
+                    raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",

@@ -15,7 +15,7 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
 @pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1"])
@@ -152,11 +152,16 @@ def test_litellm_responses():
     assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
 
 
-class TestOpenAIO1(BaseLLMChatTest):
+class TestOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
     def get_base_completion_call_args(self):
         return {
             "model": "o1",
         }
+
+    def get_client(self):
+        from openai import OpenAI
+
+        return OpenAI(api_key="fake-api-key")
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -164,6 +169,22 @@ class TestOpenAIO1(BaseLLMChatTest):
 
     def test_prompt_caching(self):
         """Temporary override. o1 prompt caching is not working."""
+        pass
+
+
+class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "o3-mini",
+        }
+
+    def get_client(self):
+        from openai import OpenAI
+
+        return OpenAI(api_key="fake-api-key")
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
 

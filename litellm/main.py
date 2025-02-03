@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
+from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
@@ -75,6 +76,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     Usage,
+    add_openai_metadata,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -114,7 +116,7 @@ from .llms import baseten, maritalk, ollama_chat
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
-from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
@@ -330,6 +332,7 @@ async def acompletion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -424,6 +427,7 @@ async def acompletion(
         "api_version": api_version,
         "api_key": api_key,
         "model_list": model_list,
+        "reasoning_effort": reasoning_effort,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
     }
@@ -776,6 +780,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
@@ -1045,6 +1050,19 @@ def completion(  # type: ignore # noqa: PLR0915
             if eos_token:
                 custom_prompt_dict[model]["eos_token"] = eos_token
 
+        provider_config: Optional[BaseConfig] = None
+        if custom_llm_provider is not None and custom_llm_provider in [
+            provider.value for provider in LlmProviders
+        ]:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+
+        if provider_config is not None:
+            messages = provider_config.translate_developer_role_to_system_role(
+                messages=messages
+            )
+
         if (
             supports_system_message is not None
             and isinstance(supports_system_message, bool)
@@ -1086,6 +1104,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version=api_version,
             parallel_tool_calls=parallel_tool_calls,
             messages=messages,
+            reasoning_effort=reasoning_effort,
             **non_default_params,
         )
 
@@ -1204,7 +1223,8 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():
@@ -1626,6 +1646,11 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+
+            if (
+                litellm.enable_preview_features and metadata is not None
+            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+                optional_params["metadata"] = add_openai_metadata(metadata)
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
@@ -2209,7 +2234,7 @@ def completion(  # type: ignore # noqa: PLR0915
             data = {"model": model, "messages": messages, **optional_params}
 
             ## COMPLETION CALL
-            response = openai_chat_completions.completion(
+            response = openai_like_chat_completion.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2224,6 +2249,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 acompletion=acompletion,
                 timeout=timeout,  # type: ignore
                 custom_llm_provider="openrouter",
+                custom_prompt_dict=custom_prompt_dict,
+                encoding=encoding,
             )
             ## LOGGING
             logging.post_call(
@@ -2592,6 +2619,25 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
+                )
+            elif "converse_like" in model:
+                model = model.replace("converse_like/", "")
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    custom_llm_provider="bedrock",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                    client=client,
                 )
             else:
                 model = model.replace("invoke/", "")

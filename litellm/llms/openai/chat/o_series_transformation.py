@@ -1,5 +1,5 @@
 """
-Support for o1 model family 
+Support for o1/o3 model family 
 
 https://platform.openai.com/docs/guides/reasoning
 
@@ -26,7 +26,7 @@ from litellm.utils import (
 from .gpt_transformation import OpenAIGPTConfig
 
 
-class OpenAIO1Config(OpenAIGPTConfig):
+class OpenAIOSeriesConfig(OpenAIGPTConfig):
     """
     Reference: https://platform.openai.com/docs/guides/reasoning
     """
@@ -34,6 +34,14 @@ class OpenAIO1Config(OpenAIGPTConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def translate_developer_role_to_system_role(
+        self, messages: List[AllMessageValues]
+    ) -> List[AllMessageValues]:
+        """
+        O-series models support `developer` role.
+        """
+        return messages
 
     def should_fake_stream(
         self,
@@ -66,6 +74,10 @@ class OpenAIO1Config(OpenAIGPTConfig):
             "frequency_penalty",
             "top_logprobs",
         ]
+
+        o_series_only_param = ["reasoning_effort"]
+
+        all_openai_params.extend(o_series_only_param)
 
         try:
             model, custom_llm_provider, api_base, api_key = get_llm_provider(
@@ -128,8 +140,10 @@ class OpenAIO1Config(OpenAIGPTConfig):
             non_default_params, optional_params, model, drop_params
         )
 
-    def is_model_o1_reasoning_model(self, model: str) -> bool:
-        if model in litellm.open_ai_chat_completion_models and "o1" in model:
+    def is_model_o_series_model(self, model: str) -> bool:
+        if model in litellm.open_ai_chat_completion_models and (
+            "o1" in model or "o3" in model
+        ):
             return True
         return False
 

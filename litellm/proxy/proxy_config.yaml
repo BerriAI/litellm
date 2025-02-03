@@ -1,19 +1,11 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: bedrock/*
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
+      model: bedrock/*
 
 litellm_settings:
-  callbacks: ["prometheus"]
-  prometheus_initialize_budget_metrics: true
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      guardrailIdentifier: gf3sc1mzinjw
-      guardrailVersion: "DRAFT"
+  callbacks: ["datadog"]
+
+general_settings:
+  store_prompts_in_spend_logs: true
+
