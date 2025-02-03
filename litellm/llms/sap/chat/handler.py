@@ -73,7 +73,7 @@ class GenAIHubOrchestrationError(Exception):
             )
         super().__init__(
             self.message
-        )  # Call the base class constructor with the parameters it needs
+        )
 
 
 
