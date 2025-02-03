@@ -442,7 +442,17 @@ class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
     name: str
 
 
+class OpenAIChatCompletionDeveloperMessage(TypedDict, total=False):
+    role: Required[Literal["developer"]]
+    content: Required[Union[str, List]]
+    name: str
+
+
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
+    cache_control: ChatCompletionCachedContent
+
+
+class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):
     cache_control: ChatCompletionCachedContent
 
 
@@ -458,6 +468,7 @@ AllMessageValues = Union[
     ChatCompletionToolMessage,
     ChatCompletionSystemMessage,
     ChatCompletionFunctionMessage,
+    ChatCompletionDeveloperMessage,
 ]
 
 
@@ -613,9 +624,15 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"]
 
+    class Config:
+        extra = "allow"  # This allows the model to accept additional fields
+
 
 AllEmbeddingInputValues = Union[str, List[str], List[int], List[List[int]]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
     "language", "prompt", "temperature", "response_format", "timestamp_granularities"
 ]
+
+
+OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "user"]

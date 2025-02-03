@@ -4,43 +4,11 @@ import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from openai.types.file_deleted import FileDeleted
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base import BaseLLM
 from litellm.types.llms.openai import *
 
-
-def get_azure_openai_client(
-    api_key: Optional[str],
-    api_base: Optional[str],
-    timeout: Union[float, httpx.Timeout],
-    max_retries: Optional[int],
-    api_version: Optional[str] = None,
-    organization: Optional[str] = None,
-    client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
-    _is_async: bool = False,
-) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-    received_args = locals()
-    openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
-    if client is None:
-        data = {}
-        for k, v in received_args.items():
-            if k == "self" or k == "client" or k == "_is_async":
-                pass
-            elif k == "api_base" and v is not None:
-                data["azure_endpoint"] = v
-            elif v is not None:
-                data[k] = v
-        if "api_version" not in data:
-            data["api_version"] = litellm.AZURE_DEFAULT_API_VERSION
-        if _is_async is True:
-            openai_client = AsyncAzureOpenAI(**data)
-        else:
-            openai_client = AzureOpenAI(**data)  # type: ignore
-    else:
-        openai_client = client
-
-    return openai_client
+from ..common_utils import get_azure_openai_client
 
 
 class AzureOpenAIFilesAPI(BaseLLM):

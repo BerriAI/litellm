@@ -3,13 +3,6 @@ import Image from '@theme/IdealImage';
 # Langsmith - Logging LLM Input/Output
 
 
-:::tip
-
-This is community maintained, Please make an issue if you run into a bug
-https://github.com/BerriAI/litellm
-
-:::
-
 
 An all-in-one developer platform for every step of the application lifecycle
 https://smith.langchain.com/
@@ -66,7 +59,7 @@ os.environ["LANGSMITH_API_KEY"] = ""
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 
-# set langfuse as a callback, litellm will send the data to langfuse
+# set langsmith as a callback, litellm will send the data to langsmith
 litellm.success_callback = ["langsmith"] 
  
 response = litellm.completion(

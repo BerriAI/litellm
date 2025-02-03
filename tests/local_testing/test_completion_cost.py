@@ -2600,7 +2600,14 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     assert round(cost, 2) == round(total_input_cost + total_output_cost, 2)
 
 
-def test_completion_cost_azure_ai_meta():
+@pytest.mark.parametrize(
+    "response_model, custom_llm_provider",
+    [
+        ("azure_ai/Meta-Llama-3.1-70B-Instruct", "azure_ai"),
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+    ],
+)
+def test_completion_cost_model_response_cost(response_model, custom_llm_provider):
     """
     Relevant issue: https://github.com/BerriAI/litellm/issues/6310
     """
@@ -2628,7 +2635,7 @@ def test_completion_cost_azure_ai_meta():
             }
         ],
         "created": 1729243714,
-        "model": "azure_ai/Meta-Llama-3.1-70B-Instruct",
+        "model": response_model,
         "object": "chat.completion",
         "service_tier": None,
         "system_fingerprint": None,
@@ -2642,7 +2649,7 @@ def test_completion_cost_azure_ai_meta():
     }
 
     model_response = ModelResponse(**response)
-    cost = completion_cost(model_response, custom_llm_provider="azure_ai")
+    cost = completion_cost(model_response, custom_llm_provider=custom_llm_provider)
 
     assert cost > 0
 
@@ -2702,3 +2709,255 @@ def test_select_model_name_for_cost_calc():
 
     return_model = _select_model_name_for_cost_calc(**args)
     assert return_model == "azure_ai/mistral-large"
+
+
+def test_moderations():
+    from litellm import moderation
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.add_known_models()
+
+    assert "omni-moderation-latest" in litellm.model_cost
+    print(
+        f"litellm.model_cost['omni-moderation-latest']: {litellm.model_cost['omni-moderation-latest']}"
+    )
+    assert "omni-moderation-latest" in litellm.open_ai_chat_completion_models
+
+    response = moderation("I am a bad person", model="omni-moderation-latest")
+    cost = completion_cost(response, model="omni-moderation-latest")
+    assert cost == 0
+
+
+def test_cost_calculator_azure_embedding():
+    from litellm.cost_calculator import response_cost_calculator
+    from litellm.types.utils import EmbeddingResponse, Usage
+
+    kwargs = {
+        "response_object": EmbeddingResponse(
+            model="text-embedding-3-small",
+            data=[{"embedding": [1, 2, 3]}],
+            usage=Usage(prompt_tokens=10, completion_tokens=10),
+        ),
+        "model": "text-embedding-3-small",
+        "cache_hit": None,
+        "custom_llm_provider": None,
+        "base_model": "azure/text-embedding-3-small",
+        "call_type": "aembedding",
+        "optional_params": {},
+        "custom_pricing": False,
+        "prompt": "Hello, world!",
+    }
+
+    try:
+        response_cost_calculator(**kwargs)
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error: {e}")
+
+
+def test_add_known_models():
+    litellm.add_known_models()
+    assert (
+        "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0" not in litellm.bedrock_models
+    )
+
+
+def test_bedrock_cost_calc_with_region():
+    from litellm import completion
+
+    from litellm import ModelResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    hidden_params = {
+        "custom_llm_provider": "bedrock",
+        "region_name": "us-east-1",
+        "optional_params": {},
+        "litellm_call_id": "cf371a5d-679b-410f-b862-8084676d6d59",
+        "model_id": None,
+        "api_base": None,
+        "response_cost": 0.0005639999999999999,
+        "additional_headers": {},
+    }
+
+    litellm.set_verbose = True
+
+    bedrock_models = litellm.bedrock_models + litellm.bedrock_converse_models
+
+    for model in bedrock_models:
+        if litellm.model_cost[model]["mode"] == "chat":
+            response = {
+                "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "logprobs": None,
+                        "message": {
+                            "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
+                            "refusal": None,
+                            "role": "assistant",
+                            "audio": None,
+                            "function_call": None,
+                            "tool_calls": [],
+                        },
+                    }
+                ],
+                "created": 1729243714,
+                "model": model,
+                "object": "chat.completion",
+                "service_tier": None,
+                "system_fingerprint": None,
+                "usage": {
+                    "completion_tokens": 32,
+                    "prompt_tokens": 16,
+                    "total_tokens": 48,
+                    "completion_tokens_details": None,
+                    "prompt_tokens_details": None,
+                },
+            }
+
+            model_response = ModelResponse(**response)
+            model_response._hidden_params = hidden_params
+            cost = completion_cost(model_response, custom_llm_provider="bedrock")
+
+            assert cost > 0
+
+
+# @pytest.mark.parametrize(
+#     "base_model_arg", [
+#         {"base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"},
+#         {"model_info": "anthropic.claude-3-sonnet-20240229-v1:0"},
+#     ]
+# )
+def test_cost_calculator_with_base_model():
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        base_model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        mock_response="Hello, how are you?",
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.fixture
+def model_item():
+    return {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "openai/my-fake-model",
+            "api_key": "my-fake-key",
+            "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+        },
+        "model_info": {},
+    }
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg, model_item):
+    from litellm import Router
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router(base_model_arg):
+    from litellm import Router
+
+    model_item = {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "bedrock/random-model",
+        },
+    }
+
+    if base_model_arg == "litellm_param":
+        model_item["litellm_params"][
+            "base_model"
+        ] = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+    elif base_model_arg == "model_info":
+        model_item["model_info"] = {
+            "base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        }
+
+    router = Router(model_list=[model_item])
+    resp = router.completion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
+def test_cost_calculator_with_base_model_with_router_embedding(base_model_arg):
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    model_item = {
+        "model_name": "random-model",
+        "litellm_params": {
+            "model": "bedrock/random-model",
+        },
+    }
+
+    if base_model_arg == "litellm_param":
+        model_item["litellm_params"]["base_model"] = "cohere.embed-english-v3"
+    elif base_model_arg == "model_info":
+        model_item["model_info"] = {
+            "base_model": "cohere.embed-english-v3",
+        }
+
+    router = Router(model_list=[model_item])
+    resp = router.embedding(
+        model="random-model",
+        input="Hello, how are you?",
+        mock_response=[1, 2, 3],
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+def test_cost_calculator_with_custom_pricing():
+    resp = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+        input_cost_per_token=0.0000008,
+        output_cost_per_token=0.0000032,
+    )
+    assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "custom_pricing",
+    [
+        "litellm_params",
+        "model_info",
+    ],
+)
+@pytest.mark.asyncio
+async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    if custom_pricing == "litellm_params":
+        model_item["litellm_params"]["input_cost_per_token"] = 0.0000008
+        model_item["litellm_params"]["output_cost_per_token"] = 0.0000032
+    elif custom_pricing == "model_info":
+        model_item["model_info"]["input_cost_per_token"] = 0.0000008
+        model_item["model_info"]["output_cost_per_token"] = 0.0000032
+
+    router = Router(model_list=[model_item])
+    resp = await router.acompletion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+    # assert resp.model == "random-model"
+    assert resp._hidden_params["response_cost"] > 0

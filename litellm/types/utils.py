@@ -4,6 +4,7 @@ import uuid
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.completion_usage import (
@@ -17,7 +18,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
@@ -86,6 +87,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_embedding_image_input: Optional[bool]
     supports_audio_output: Optional[bool]
     supports_pdf_input: Optional[bool]
+    supports_native_streaming: Optional[bool]
+    supports_parallel_function_calling: Optional[bool]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -435,6 +438,9 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
 
     def __init__(
         self,
@@ -443,6 +449,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        provider_specific_fields: Optional[Dict[str, Any]] = None,
         **params,
     ):
         init_values: Dict[str, Any] = {
@@ -478,6 +485,11 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             del self.audio
 
+        if provider_specific_fields:  # set if provider_specific_fields is not empty
+            self.provider_specific_fields = provider_specific_fields
+            for k, v in provider_specific_fields.items():
+                setattr(self, k, v)
+
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
@@ -499,6 +511,10 @@ class Message(OpenAIObject):
 
 
 class Delta(OpenAIObject):
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(
+        default=None, exclude=True
+    )
+
     def __init__(
         self,
         content=None,
@@ -509,13 +525,19 @@ class Delta(OpenAIObject):
         **params,
     ):
         super(Delta, self).__init__(**params)
+        provider_specific_fields: Dict[str, Any] = {}
+        if "reasoning_content" in params:
+            provider_specific_fields["reasoning_content"] = params["reasoning_content"]
+            setattr(self, "reasoning_content", params["reasoning_content"])
         self.content = content
         self.role = role
-
         # Set default values and correct types
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+
+        if provider_specific_fields:  # set if provider_specific_fields is not empty
+            self.provider_specific_fields = provider_specific_fields
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -781,6 +803,7 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
             new_choice = StreamingChoices(**choice).model_dump()
             new_choices.append(new_choice)
         kwargs["choices"] = new_choices
+
         super().__init__(**kwargs)
 
 
@@ -845,6 +868,13 @@ class ModelResponseStream(ModelResponseBase):
             created = int(time.time())
         else:
             created = created
+
+        if (
+            "usage" in kwargs
+            and kwargs["usage"] is not None
+            and isinstance(kwargs["usage"], dict)
+        ):
+            kwargs["usage"] = Usage(**kwargs["usage"])
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1073,10 +1103,10 @@ class EmbeddingResponse(OpenAIObject):
 
 
 class Logprobs(OpenAIObject):
-    text_offset: List[int]
-    token_logprobs: List[Union[float, None]]
-    tokens: List[str]
-    top_logprobs: List[Union[Dict[str, float], None]]
+    text_offset: Optional[List[int]]
+    token_logprobs: Optional[List[Union[float, None]]]
+    tokens: Optional[List[str]]
+    top_logprobs: Optional[List[Union[Dict[str, float], None]]]
 
 
 class TextChoices(OpenAIObject):
@@ -1449,9 +1479,15 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
 
 
+class StandardLoggingPromptManagementMetadata(TypedDict):
+    prompt_id: str
+    prompt_variables: Optional[dict]
+    prompt_integration: str
+
+
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     """
-    Specific metadata k,v pairs logged to integration for easier cost tracking
+    Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
     """
 
     spend_logs_metadata: Optional[
@@ -1459,6 +1495,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
+    prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1473,6 +1510,7 @@ class StandardLoggingHiddenParams(TypedDict):
     cache_key: Optional[str]
     api_base: Optional[str]
     response_cost: Optional[str]
+    litellm_overhead_time_ms: Optional[float]
     additional_headers: Optional[StandardLoggingAdditionalHeaders]
 
 
@@ -1600,6 +1638,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
 
+    # Humanloop dynamic params
+    humanloop_api_key: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
 
@@ -1620,6 +1661,7 @@ all_litellm_params = [
     "api_key",
     "api_version",
     "prompt_id",
+    "provider_specific_header",
     "prompt_variables",
     "api_base",
     "force_timeout",
@@ -1674,6 +1716,8 @@ all_litellm_params = [
     "azure_ad_token_provider",
     "tenant_id",
     "client_id",
+    "azure_username",
+    "azure_password",
     "client_secret",
     "user_continue_message",
     "configurable_clientside_auth_params",
@@ -1685,6 +1729,7 @@ all_litellm_params = [
     "max_fallbacks",
     "max_budget",
     "budget_duration",
+    "use_in_pass_through",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -1793,6 +1838,14 @@ class LlmProviders(str, Enum):
     GALADRIEL = "galadriel"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
+    AIOHTTP_OPENAI = "aiohttp_openai"
+    LANGFUSE = "langfuse"
+    HUMANLOOP = "humanloop"
+    TOPAZ = "topaz"
+
+
+# Create a set of all provider values for quick lookup
+LlmProvidersSet = {provider.value for provider in LlmProviders}
 
 
 class LiteLLMLoggingBaseClass:
@@ -1809,3 +1862,35 @@ class LiteLLMLoggingBaseClass:
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         pass
+
+
+class CustomHuggingfaceTokenizer(TypedDict):
+    identifier: str
+    revision: str  # usually 'main'
+    auth_token: Optional[str]
+
+
+class LITELLM_IMAGE_VARIATION_PROVIDERS(Enum):
+    """
+    Try using an enum for endpoints. This should make it easier to track what provider is supported for what endpoint.
+    """
+
+    OPENAI = LlmProviders.OPENAI.value
+    TOPAZ = LlmProviders.TOPAZ.value
+
+
+class HttpHandlerRequestFields(TypedDict, total=False):
+    data: dict  # request body
+    params: dict  # query params
+    files: dict  # file uploads
+    content: Any  # raw content
+
+
+class ProviderSpecificHeader(TypedDict):
+    custom_llm_provider: str
+    extra_headers: dict
+
+
+class SelectTokenizerResponse(TypedDict):
+    type: Literal["openai_tokenizer", "huggingface_tokenizer"]
+    tokenizer: Any

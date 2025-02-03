@@ -9,3 +9,5 @@ anthropic
 orjson==3.9.15
 pydantic==2.7.1
 google-cloud-aiplatform==1.43.0
+fastapi-sso==0.10.0
+uvloop==0.21.0

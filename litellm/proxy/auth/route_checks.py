@@ -177,22 +177,28 @@ class RouteChecks:
                 ):
                     return True
 
-        # Pass through Bedrock, VertexAI, and Cohere Routes
-        if "/bedrock/" in route:
+        if RouteChecks._is_azure_openai_route(route=route):
             return True
-        if "/vertex-ai/" in route:
-            return True
-        if "/gemini/" in route:
-            return True
-        if "/cohere/" in route:
-            return True
-        if "/langfuse/" in route:
-            return True
-        if "/anthropic/" in route:
-            return True
-        if "/azure/" in route:
-            return True
-        if "/openai/" in route:
+
+        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if _llm_passthrough_route in route:
+                return True
+
+        return False
+
+    @staticmethod
+    def _is_azure_openai_route(route: str) -> bool:
+        """
+        Check if route is a route from AzureOpenAI SDK client
+
+        eg.
+        route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
+        """
+        # Add support for deployment and engine model paths
+        deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
+        engine_pattern = r"^/engines/[^/]+/chat/completions$"
+
+        if re.match(deployment_pattern, route) or re.match(engine_pattern, route):
             return True
         return False
 

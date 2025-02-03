@@ -12,9 +12,7 @@ from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_his
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 
-class GoogleAIStudioGeminiConfig(
-    VertexGeminiConfig
-):  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
+class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     """
     Reference: https://ai.google.dev/api/rest/v1beta/GenerationConfig
 
@@ -82,6 +80,7 @@ class GoogleAIStudioGeminiConfig(
             "n",
             "stop",
             "logprobs",
+            "frequency_penalty",
         ]
 
     def map_openai_params(
@@ -92,11 +91,6 @@ class GoogleAIStudioGeminiConfig(
         drop_params: bool,
     ) -> Dict:
 
-        # drop frequency_penalty and presence_penalty
-        if "frequency_penalty" in non_default_params:
-            del non_default_params["frequency_penalty"]
-        if "presence_penalty" in non_default_params:
-            del non_default_params["presence_penalty"]
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
         return super().map_openai_params(
