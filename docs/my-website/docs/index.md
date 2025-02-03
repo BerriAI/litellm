@@ -89,7 +89,21 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -272,7 +286,22 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
