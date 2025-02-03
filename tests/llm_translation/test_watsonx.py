@@ -188,6 +188,27 @@ def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
     assert "deployment" not in mock_post.call_args.kwargs["url"]
 
 
+def test_watsonx_chat_completions_endpoint_space_id(
+    monkeypatch, watsonx_chat_completion_call
+):
+    my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
+    monkeypatch.setenv("WATSONX_SPACE_ID", my_fake_space_id)
+
+    monkeypatch.delenv("WATSONX_PROJECT_ID")
+
+    model = "watsonx/another-model"
+    messages = [{"role": "user", "content": "Test message"}]
+
+    mock_post, _ = watsonx_chat_completion_call(model=model, messages=messages)
+
+    assert mock_post.call_count == 1
+    assert "deployment" not in mock_post.call_args.kwargs["url"]
+
+    json_data = json.loads(mock_post.call_args.kwargs["data"])
+    assert my_fake_space_id == json_data["space_id"]
+    assert not json_data.get("project_id")
+
+
 @pytest.mark.parametrize(
     "model",
     [
