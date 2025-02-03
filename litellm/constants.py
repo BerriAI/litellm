@@ -118,6 +118,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "parallel_tool_calls",
     "logprobs",
     "top_logprobs",
+    "reasoning_effort",
     "extra_headers",
 ]
 
