@@ -1,19 +1,19 @@
 import React from "react";
 import { Form } from "antd";
 import { TextInput, Text } from "@tremor/react";
-import { Row, Col, Typography, Button as Button2, Upload } from "antd";
+import { Row, Col, Typography, Button as Button2, Upload, UploadProps } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 import { Providers } from "../provider_info_helpers";
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
-  props?: any; // For upload props if needed
+  uploadProps?: UploadProps;
 }
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
-  props
+  uploadProps
 }) => {
   console.log(`Selected provider: ${selectedProvider}`);
   console.log(`type of selectedProvider: ${typeof selectedProvider}`);
@@ -53,7 +53,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
             name="vertex_credentials"
             className="mb-0"
           >
-            <Upload {...props}>
+            <Upload {...uploadProps}>
               <Button2 icon={<UploadOutlined />}>
                 Click to Upload
               </Button2>

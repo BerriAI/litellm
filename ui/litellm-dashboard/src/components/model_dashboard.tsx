@@ -446,7 +446,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
-  const props: UploadProps = {
+  const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
     beforeUpload: (file) => {
@@ -1550,7 +1550,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
                   <ProviderSpecificFields
                     selectedProvider={selectedProvider}
-                    props={providerModels}
+                    uploadProps={uploadProps}
                   />
                   <AdvancedSettings 
                     showAdvancedSettings={showAdvancedSettings}
