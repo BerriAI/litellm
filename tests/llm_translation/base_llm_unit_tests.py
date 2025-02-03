@@ -82,7 +82,7 @@ class BaseLLMChatTest(ABC):
         messages = [
             {
                 "role": "developer",
-                "content": [{"type": "text", "text": "Hello, how are you?"}],
+                "content": "Be a good bot!",
             },
             {
                 "role": "user",
