@@ -92,3 +92,44 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "gpt-3.5-turbo";
     }
   };
+
+  export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
+    let providerKey = provider;
+    console.log(`Provider key: ${providerKey}`);
+    let custom_llm_provider = provider_map[providerKey];
+    console.log(`Provider mapped to: ${custom_llm_provider}`);
+    
+    let providerModels: Array<string> = [];
+    
+    if (providerKey && typeof modelMap === "object") {
+      Object.entries(modelMap).forEach(([key, value]) => {
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          "litellm_provider" in (value as object) &&
+          ((value as any)["litellm_provider"] === custom_llm_provider ||
+            (value as any)["litellm_provider"].includes(custom_llm_provider))
+        ) {
+          providerModels.push(key);
+        }
+      });
+  
+      // Special case for cohere_chat
+      // we need both cohere_chat and cohere models to show on dropdown
+      if (providerKey == Providers.Cohere) {
+        console.log("Adding cohere chat models");
+        Object.entries(modelMap).forEach(([key, value]) => {
+          if (
+            value !== null &&
+            typeof value === "object" &&
+            "litellm_provider" in (value as object) &&
+            ((value as any)["litellm_provider"] === "cohere")
+          ) {
+            providerModels.push(key);
+          }
+        });
+      }
+    }
+  
+    return providerModels;
+  };

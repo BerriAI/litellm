@@ -1,5 +1,5 @@
 import { message } from "antd";
-import { provider_map } from "../provider_info_helpers";
+import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
 
 
@@ -12,7 +12,9 @@ export const handleAddModelSubmit = async (
       console.log("handling submit for formValues:", formValues);
       // If model_name is not provided, use provider.toLowerCase() + "/*"
       if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
-        const wildcardModel = formValues["custom_llm_provider"].toLowerCase() + "/*";
+        const customProvider: Providers = formValues["custom_llm_provider"];
+        const litellm_custom_provider = provider_map[customProvider as keyof typeof Providers];
+        const wildcardModel = litellm_custom_provider + "/*";
         formValues["model_name"] = wildcardModel;
         formValues["model"] = wildcardModel; 
       }
