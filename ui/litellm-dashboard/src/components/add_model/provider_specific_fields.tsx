@@ -15,11 +15,6 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   props
 }) => {
-
-  const provider = selectedProvider as Providers;
-  console.log("ProviderSpecificFields selectedProvider:", selectedProvider);
-  console.log("ProviderSpecificFields props:", props);
-
   return (
     <>
       {selectedProvider == Providers.OpenAI && (

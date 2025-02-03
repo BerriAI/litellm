@@ -66,7 +66,7 @@ import {
   Popover,
   Form,
   Input,
-  Select as Select2,
+  Select as AntdSelect,
   InputNumber,
   message,
   Descriptions,
@@ -1499,32 +1499,32 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     labelCol={{ span: 10 }}
                     labelAlign="left"
                   >
-                    <Select
+                    <AntdSelect
+                      showSearch={true}
                       value={selectedProvider}
-                      onChange={(value) => {
-                        // Set the selected provider
-                        setSelectedProvider(value as unknown as Providers);
-                        // Update provider-specific models
-                        setProviderModelsFn(value as unknown as Providers);
-                        // Reset the 'model' field
-                        form.setFieldsValue({ model: [] });
-                        // Reset the 'model_name' field
-                        form.setFieldsValue({ model_name: undefined });
+                      onChange={(value: Providers) => {
+                        // value is already the enum value
+                        setSelectedProvider(value);
+                        setProviderModelsFn(value);
+                        form.setFieldsValue({ 
+                          model: [],
+                          model_name: undefined 
+                        });
                       }}
                     >
-                      {Object.keys(Providers).map((providerKey) => (
-                        <SelectItem
-                          key={providerKey}
-                          value={providerKey}
+                      {Object.values(Providers).map((provider) => (
+                        <AntdSelect.Option
+                          key={provider}
+                          value={provider}
                           onClick={() => {
-                            setProviderModelsFn(providerKey as unknown as Providers);
-                            setSelectedProvider(providerKey as unknown as Providers);
+                            setProviderModelsFn(provider);
+                            setSelectedProvider(provider);
                           }}
                         >
                           <div className="flex items-center space-x-2">
                             <img
-                              src={providerLogoMap[Providers[providerKey as keyof typeof Providers]]}
-                              alt={`${Providers[providerKey as keyof typeof Providers]} logo`}
+                              src={providerLogoMap[provider]}
+                              alt={`${provider} logo`}
                               className="w-5 h-5"
                               onError={(e) => {
                                 // Create a div with provider initial as fallback
@@ -1533,16 +1533,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 if (parent) {
                                   const fallbackDiv = document.createElement('div');
                                   fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                  fallbackDiv.textContent = Providers[providerKey as keyof typeof Providers].charAt(0);
+                                  fallbackDiv.textContent = provider.charAt(0);
                                   parent.replaceChild(fallbackDiv, target);
                                 }
                               }}
                             />
-                            <span>{Providers[providerKey as keyof typeof Providers]}</span>
+                            <span>{provider}</span>
                           </div>
-                        </SelectItem>
+                        </AntdSelect.Option>
                       ))}
-                    </Select>
+                    </AntdSelect>
                   </Form.Item>
                   <LiteLLMModelNameField
                       selectedProvider={selectedProvider}
