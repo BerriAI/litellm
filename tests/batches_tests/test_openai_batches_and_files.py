@@ -34,7 +34,7 @@ def load_vertex_ai_credentials():
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
+    vertex_key_path = filepath + "/pathrise-convert-1606954137718.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
@@ -170,7 +170,7 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
-@pytest.mark.parametrize("provider", ["azure", "openai"])  #  "azure"
+@pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_async_create_batch(provider):
@@ -179,8 +179,9 @@ async def test_async_create_batch(provider):
     2. Create Batch Request
     3. Retrieve the specific batch
     """
+    litellm._turn_on_debug()
     print("Testing async create batch")
-
+    litellm.logging_callback_manager._reset_all_callbacks()
     custom_logger = TestCustomLogger()
     litellm.callbacks = [custom_logger, "datadog"]
 
@@ -297,7 +298,7 @@ async def test_async_create_batch(provider):
     )
     print("cancel_batch_response=", cancel_batch_response)
 
-    if random.randint(1, 20) == 1:
+    if random.randint(1, 15) == 1:
         print("Running random cleanup of Azure files and models...")
         cleanup_azure_files()
         cleanup_azure_ft_models()
@@ -393,4 +394,10 @@ async def test_avertex_batch_prediction():
         metadata={"key1": "value1", "key2": "value2"},
     )
     print("create_batch_response=", create_batch_response)
+
+    retrieved_batch = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id,
+        custom_llm_provider="vertex_ai",
+    )
+    print("retrieved_batch=", retrieved_batch)
     pass

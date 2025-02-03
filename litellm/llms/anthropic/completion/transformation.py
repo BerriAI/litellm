@@ -85,6 +85,7 @@ class AnthropicTextConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(

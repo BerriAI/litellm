@@ -1,6 +1,7 @@
 import json
 from typing import Dict, List, Optional
 
+import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
@@ -20,35 +21,64 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
     try:
         if request is None:
             return {}
+
+        # Check if we already read and parsed the body
+        _cached_request_body: Optional[dict] = _safe_get_request_parsed_body(
+            request=request
+        )
+        if _cached_request_body is not None:
+            return _cached_request_body
+
         _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
+
         if "form" in content_type:
-            return dict(await request.form())
+            parsed_body = dict(await request.form())
         else:
             # Read the request body
             body = await request.body()
 
             # Return empty dict if body is empty or None
             if not body:
-                return {}
+                parsed_body = {}
+            else:
+                parsed_body = orjson.loads(body)
 
-            # Decode the body to a string
-            body_str = body.decode()
+        # Cache the parsed result
+        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+        return parsed_body
 
-            # Attempt JSON parsing (safe for untrusted input)
-            return json.loads(body_str)
-
-    except json.JSONDecodeError:
-        # Log detailed information for debugging
+    except (json.JSONDecodeError, orjson.JSONDecodeError):
         verbose_proxy_logger.exception("Invalid JSON payload received.")
         return {}
-
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
             "Unexpected error reading request body - {}".format(e)
         )
         return {}
+
+
+def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
+    if request is None:
+        return None
+    if hasattr(request, "state") and hasattr(request.state, "parsed_body"):
+        return request.state.parsed_body
+    return None
+
+
+def _safe_set_request_parsed_body(
+    request: Optional[Request],
+    parsed_body: dict,
+) -> None:
+    try:
+        if request is None:
+            return
+        request.state.parsed_body = parsed_body
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unexpected error setting request parsed body - {}".format(e)
+        )
 
 
 def _safe_get_request_headers(request: Optional[Request]) -> dict:

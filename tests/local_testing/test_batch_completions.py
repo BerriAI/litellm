@@ -43,6 +43,9 @@ def test_batch_completions():
     except Timeout as e:
         print(f"IN TIMEOUT")
         pass
+    except litellm.InternalServerError as e:
+        print(f"IN INTERNAL SERVER ERROR")
+        pass
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 

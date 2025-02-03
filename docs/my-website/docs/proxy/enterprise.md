@@ -17,12 +17,14 @@ Features:
     - ✅ [JWT-Auth](../docs/proxy/token_auth.md)
     - ✅ [Control available public, private routes (Restrict certain endpoints on proxy)](#control-available-public-private-routes)
     - ✅ [Control available public, private routes](#control-available-public-private-routes)
+    - ✅ [Secret Managers - AWS Key Manager, Google Secret Manager, Azure Key, Hashicorp Vault](../secret)
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
     - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
     - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
+    - ✅ [Key Rotations](./virtual_keys.md#-key-rotations)
 - **Customize Logging, Guardrails, Caching per project**
     - ✅ [Team Based Logging](./team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
     - ✅ [Disable Logging for a Team](./team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)

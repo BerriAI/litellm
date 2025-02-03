@@ -1163,10 +1163,11 @@ async def test_create_team_member_add_team_admin(
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
+    team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
-        user_id=user,
+        user_id=team_admin,
         token=hash_token(user_key),
         last_refreshed_at=time.time(),
     )
@@ -1176,7 +1177,7 @@ async def test_create_team_member_add_team_admin(
         team_id=_team_id,
         blocked=False,
         last_refreshed_at=time.time(),
-        members_with_roles=[Member(role=user_role, user_id=user)],
+        members_with_roles=[Member(role=user_role, user_id=team_admin)],
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
@@ -1604,7 +1605,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
                         "callback_type": callback_type,
                         "callback_vars": {
                             "gcs_bucket_name": "key-logging-project1",
-                            "gcs_path_service_account": "adroit-crow-413218-a956eef1a2a8.json",
+                            "gcs_path_service_account": "pathrise-convert-1606954137718-a956eef1a2a8.json",
                         },
                     }
                 ]
@@ -1653,7 +1654,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     assert new_data["gcs_bucket_name"] == "key-logging-project1"
     assert "gcs_path_service_account" in new_data
     assert (
-        new_data["gcs_path_service_account"] == "adroit-crow-413218-a956eef1a2a8.json"
+        new_data["gcs_path_service_account"]
+        == "pathrise-convert-1606954137718-a956eef1a2a8.json"
     )
 
     if expected_success_callbacks:
@@ -1914,8 +1916,10 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
+    print(f"resp: {resp}")
     models = resp["data"]
     is_model_alias_in_list = False
+    print(f"model_alias: {model_alias}, models: {models}")
     for item in models:
         if model_alias == item.model_group:
             is_model_alias_in_list = True
@@ -2187,3 +2191,19 @@ async def test_get_ui_settings_spend_logs_threshold():
 
     # Clean up
     proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+
+def test_get_timeout_from_request():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    headers = {
+        "x-litellm-timeout": "90",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90
+
+    headers = {
+        "x-litellm-timeout": "90.5",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90.5

@@ -1007,7 +1007,34 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 
-### Disable Fallbacks per key
+### Disable Fallbacks (Per Request/Key)
+
+
+<Tabs>
+
+<TabItem value="request" label="Per Request">
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your request body.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "List 5 important events in the XIX century"
+        }
+    ],
+    "model": "gpt-3.5-turbo",
+    "disable_fallbacks": true # 👈 DISABLE FALLBACKS
+}'
+```
+
+</TabItem>
+
+<TabItem value="key" label="Per Key">
 
 You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
 
@@ -1021,3 +1048,6 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
     }
 }'
 ```
+
+</TabItem>
+</Tabs>

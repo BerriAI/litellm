@@ -4,7 +4,7 @@ Payloads for Datadog LLM Observability Service (LLMObs)
 API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=example#api-standards
 """
 
-from typing import Any, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class InputMeta(TypedDict):
@@ -20,6 +20,7 @@ class Meta(TypedDict):
     kind: Literal["llm", "tool", "task", "embedding", "retrieval"]
     input: InputMeta  # The span’s input information.
     output: OutputMeta  # The span’s output information.
+    metadata: Dict[str, Any]
 
 
 class LLMMetrics(TypedDict, total=False):
@@ -39,6 +40,7 @@ class LLMObsPayload(TypedDict):
     start_ns: int
     duration: int
     metrics: LLMMetrics
+    tags: List
 
 
 class DDSpanAttributes(TypedDict):

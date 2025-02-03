@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # ✨ SSO for Admin UI
 
 :::info

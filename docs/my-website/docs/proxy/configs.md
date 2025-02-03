@@ -516,6 +516,32 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ``` 
 
+### Set custom tokenizer 
+
+If you're using the [`/utils/token_counter` endpoint](https://litellm-api.up.railway.app/#/llm%20utils/token_counter_utils_token_counter_post), and want to set a custom huggingface tokenizer for a model, you can do so in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: openai-deepseek
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      access_groups: ["restricted-models"]
+      custom_tokenizer: 
+        identifier: deepseek-ai/DeepSeek-V3-Base
+        revision: main
+        auth_token: os.environ/HUGGINGFACE_API_KEY
+```
+
+**Spec**
+```
+custom_tokenizer: 
+  identifier: str # huggingface model identifier
+  revision: str # huggingface model revision (usually 'main')
+  auth_token: Optional[str] # huggingface auth token 
+```
+
 ## General Settings `general_settings` (DB Connection, etc)
 
 ### Configure DB Pool Limits + Connection Timeouts 

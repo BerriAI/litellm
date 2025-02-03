@@ -5,6 +5,7 @@ import litellm
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.llms.databricks import GenericStreamingChunk
 
+
 class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
     """
     Reference: https://docs.mistral.ai/api/#operation/createFIMCompletion
@@ -77,6 +78,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
         return optional_params
 
     def _chunk_parser(self, chunk_data: str) -> GenericStreamingChunk:
+
         text = ""
         is_finished = False
         finish_reason = None
@@ -90,7 +92,15 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
             }
-        chunk_data_dict = json.loads(chunk_data)
+        try:
+            chunk_data_dict = json.loads(chunk_data)
+        except json.JSONDecodeError:
+            return {
+                "text": "",
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+
         original_chunk = litellm.ModelResponse(**chunk_data_dict, stream=True)
         _choices = chunk_data_dict.get("choices", []) or []
         _choice = _choices[0]

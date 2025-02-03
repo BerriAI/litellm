@@ -32,7 +32,7 @@ class TogetherAIConfig(OpenAIGPTConfig):
 
         optional_params = super().get_supported_openai_params(model)
         if supports_function_calling is not True:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 "Only some together models support function calling/response_format. Docs - https://docs.together.ai/docs/function-calling"
             )
             optional_params.remove("tools")

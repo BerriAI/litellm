@@ -308,7 +308,7 @@ def test_completion_bad_org():
         )
 
     print(exc_info.value)
-    assert "No such organization: bad-org" in str(exc_info.value)
+    assert "header should match organization for API key" in str(exc_info.value)
 
     if _old_org is not None:
         os.environ["OPENAI_ORGANIZATION"] = _old_org

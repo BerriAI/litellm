@@ -45,7 +45,7 @@ async def test_global_redaction_on():
     await asyncio.sleep(1)
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
-    assert standard_logging_payload["response"] == "redacted-by-litellm"
+    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
     print(
         "logged standard logging payload",
@@ -75,7 +75,7 @@ async def test_global_redaction_with_dynamic_params(turn_off_message_logging):
     )
 
     if turn_off_message_logging is True:
-        assert standard_logging_payload["response"] == "redacted-by-litellm"
+        assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
         assert (
             standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
         )
@@ -108,7 +108,7 @@ async def test_global_redaction_off_with_dynamic_params(turn_off_message_logging
         json.dumps(standard_logging_payload, indent=2),
     )
     if turn_off_message_logging is True:
-        assert standard_logging_payload["response"] == "redacted-by-litellm"
+        assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
         assert (
             standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
         )

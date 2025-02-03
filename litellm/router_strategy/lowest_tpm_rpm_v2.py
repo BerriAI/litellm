@@ -145,7 +145,6 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
         Raises - RateLimitError if deployment over defined RPM limit
         """
         try:
-
             # ------------
             # Setup values
             # ------------
@@ -183,6 +182,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         headers={"retry-after": str(60)},  # type: ignore
                         request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                     ),
+                    num_retries=deployment.get("num_retries"),
                 )
             else:
                 # if local result below limit, check redis ## prevent unnecessary redis checks
@@ -209,8 +209,8 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                             headers={"retry-after": str(60)},  # type: ignore
                             request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
                         ),
+                        num_retries=deployment.get("num_retries"),
                     )
-
             return deployment
         except Exception as e:
             if isinstance(e, litellm.RateLimitError):
@@ -540,7 +540,7 @@ class LowestTPMLoggingHandler_v2(CustomLogger):
                         "rpm_limit": _deployment_rpm,
                     }
             raise litellm.RateLimitError(
-                message=f"{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
+                message=f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}",
                 llm_provider="",
                 model=model_group,
                 response=httpx.Response(

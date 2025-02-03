@@ -14,6 +14,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InternalServerError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -140,7 +141,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
         )  # noqa
         print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'."  # noqa
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
         )  # noqa
         print()  # noqa
 
@@ -148,11 +149,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
+        error_str = str(original_exception)
         if model:
             if hasattr(original_exception, "message"):
                 error_str = str(original_exception.message)
-            else:
-                error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -225,8 +225,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 or "Timed out generating response" in error_str
             ):
                 exception_mapping_worked = True
+
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
@@ -467,10 +468,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             method="POST", url="https://api.openai.com/v1/"
                         ),
                     )
-            elif custom_llm_provider == "anthropic":  # one of the anthropics
+            elif (
+                custom_llm_provider == "anthropic"
+                or custom_llm_provider == "anthropic_text"
+            ):  # one of the anthropics
                 if "prompt is too long" in error_str or "prompt: length" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
+                        message="AnthropicError - {}".format(error_str),
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                elif "overloaded_error" in error_str:
+                    exception_mapping_worked = True
+                    raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",

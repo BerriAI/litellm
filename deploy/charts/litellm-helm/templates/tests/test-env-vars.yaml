@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "litellm.fullname" . }}-env-test"
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: test
+      image: busybox
+      command: ['sh', '-c']
+      args:
+        - |
+          # Test DD_ENV
+          if [ "$DD_ENV" != "dev_helm" ]; then
+            echo "❌ Environment variable DD_ENV mismatch. Expected: dev_helm, Got: $DD_ENV"
+            exit 1
+          fi
+          echo "✅ Environment variable DD_ENV matches expected value: $DD_ENV"
+          
+          # Test DD_SERVICE
+          if [ "$DD_SERVICE" != "litellm" ]; then
+            echo "❌ Environment variable DD_SERVICE mismatch. Expected: litellm, Got: $DD_SERVICE"
+            exit 1
+          fi
+          echo "✅ Environment variable DD_SERVICE matches expected value: $DD_SERVICE"
+          
+          # Test USE_DDTRACE
+          if [ "$USE_DDTRACE" != "true" ]; then
+            echo "❌ Environment variable USE_DDTRACE mismatch. Expected: true, Got: $USE_DDTRACE"
+            exit 1
+          fi
+          echo "✅ Environment variable USE_DDTRACE matches expected value: $USE_DDTRACE"
+      env:
+        - name: DD_ENV
+          value: {{ .Values.envVars.DD_ENV | quote }}
+        - name: DD_SERVICE
+          value: {{ .Values.envVars.DD_SERVICE | quote }}
+        - name: USE_DDTRACE
+          value: {{ .Values.envVars.USE_DDTRACE | quote }}
+  restartPolicy: Never

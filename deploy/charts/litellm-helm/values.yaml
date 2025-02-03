@@ -186,5 +186,11 @@ migrationJob:
   retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
+  annotations: {}
+
+# Additional environment variables to be added to the deployment
+envVars: {
+    # USE_DDTRACE: "true"
+}
 
 

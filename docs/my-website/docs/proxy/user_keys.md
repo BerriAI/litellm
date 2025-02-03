@@ -381,6 +381,51 @@ assert user.age == 25
 
 ```
 
+### **Streaming**
+
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $OPTIONAL_YOUR_PROXY_KEY" \
+-d '{
+  "model": "gpt-4-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "this is a test request, write a short poem"
+    }
+  ],
+  "stream": true
+}'
+```
+</TabItem>
+<TabItem value="sdk" label="SDK">
+
+```python 
+from openai import OpenAI
+client = OpenAI(
+    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    base_url="http://0.0.0.0:4000",
+)
+
+messages = [{"role": "user", "content": "this is a test request, write a short poem"}]
+completion = client.chat.completions.create(
+  model="gpt-4o",
+  messages=messages,
+  stream=True
+)
+
+print(completion)
+
+```
+</TabItem>
+</Tabs>
+
+
 ### Function Calling 
 
 Here's some examples of doing function calling with the proxy. 

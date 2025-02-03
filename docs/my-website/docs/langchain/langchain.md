@@ -111,5 +111,54 @@ chat.invoke(messages)
 </TabItem>
 </Tabs>
 
+## Use Langchain ChatLiteLLM with MLflow
+
+MLflow provides open-source observability solution for ChatLiteLLM.
+
+To enable the integration, simply call `mlflow.litellm.autolog()` before in your code. No other setup is necessary.
+
+```python
+import mlflow
+
+mlflow.litellm.autolog()
+```
+
+Once the auto-tracing is enabled, you can invoke `ChatLiteLLM` and see recorded traces in MLflow.
+
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+
+os.environ['OPENAI_API_KEY']="sk-..."
+
+chat = ChatLiteLLM(model="gpt-4o-mini")
+chat.invoke("Hi!")
+```
+
+## Use Langchain ChatLiteLLM with Lunary
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+from langchain.schema import HumanMessage
+import litellm
+
+os.environ["LUNARY_PUBLIC_KEY"] = "" # from https://app.lunary.ai/settings
+os.environ['OPENAI_API_KEY']="sk-..."
+
+litellm.success_callback = ["lunary"] 
+litellm.failure_callback = ["lunary"] 
+
+chat = ChatLiteLLM(
+  model="gpt-4o"
+  messages = [
+    HumanMessage(
+        content="what model are you"
+    )
+]
+chat(messages)
+```
+
+Get more details [here](../observability/lunary_integration.md)
+
 ## Use LangChain ChatLiteLLM + Langfuse
 Checkout this section [here](../observability/langfuse_integration#use-langchain-chatlitellm--langfuse) for more details on how to integrate Langfuse with ChatLiteLLM.

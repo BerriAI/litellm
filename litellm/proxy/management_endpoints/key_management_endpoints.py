@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
@@ -34,6 +35,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import (
+    PrismaClient,
     _hash_token_if_needed,
     duration_in_seconds,
     handle_exception_on_proxy,
@@ -47,7 +49,7 @@ from litellm.types.utils import (
 )
 
 
-def _is_team_key(data: GenerateKeyRequest):
+def _is_team_key(data: Union[GenerateKeyRequest, LiteLLM_VerificationToken]):
     return data.team_id is not None
 
 
@@ -59,6 +61,7 @@ def _get_user_in_team(
     for member in team_table.members_with_roles:
         if member.user_id is not None and member.user_id == user_id:
             return member
+
     return None
 
 
@@ -85,6 +88,11 @@ def _is_allowed_to_create_key(
         )
 
     if team_id is not None:
+        if (
+            user_api_key_dict.team_id is not None
+            and user_api_key_dict.team_id == UI_TEAM_ID
+        ):
+            return True  # handle https://github.com/BerriAI/litellm/issues/7482
         assert (
             user_api_key_dict.team_id == team_id
         ), "User can only create keys for their own team. Got={}, Your Team ID={}".format(
@@ -167,7 +175,7 @@ def _team_key_generation_check(
         _team_key_generation = litellm.key_generation_settings["team_key_generation"]
     else:
         _team_key_generation = TeamUIKeyGenerationConfig(
-            allowed_team_member_roles=["admin", "member"],
+            allowed_team_member_roles=["admin", "user"],
         )
 
     _team_key_generation_team_member_check(
@@ -359,6 +367,7 @@ async def generate_key_fn(  # noqa: PLR0915
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
+                    check_db_only=True,
                 )
             except Exception as e:
                 verbose_proxy_logger.debug(
@@ -516,6 +525,8 @@ async def generate_key_fn(  # noqa: PLR0915
             data.soft_budget
         )  # include the user-input soft budget in the response
 
+        response = GenerateKeyResponse(**response)
+
         asyncio.create_task(
             KeyManagementEventHooks.async_key_generated_hook(
                 data=data,
@@ -525,7 +536,7 @@ async def generate_key_fn(  # noqa: PLR0915
             )
         )
 
-        return GenerateKeyResponse(**response)
+        return response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -551,7 +562,10 @@ def prepare_metadata_fields(
     try:
         for k, v in data_json.items():
             if k in LiteLLM_ManagementEndpoint_MetadataFields:
-                casted_metadata[k] = v
+                if isinstance(v, datetime):
+                    casted_metadata[k] = v.isoformat()
+                else:
+                    casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -651,6 +665,8 @@ async def update_key_fn(
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
+    - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
+    - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
 
     Example:
     ```bash
@@ -700,9 +716,8 @@ async def update_key_fn(
             existing_key_token=existing_key_row.token,
         )
 
-        response = await prisma_client.update_data(
-            token=key, data={**non_default_values, "token": key}
-        )
+        _data = {**non_default_values, "token": key}
+        response = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
@@ -767,6 +782,7 @@ async def delete_key_fn(
 
     Parameters::
     - keys (List[str]): A list of keys or hashed keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
+    - key_aliases (List[str]): A list of key aliases to delete. Can be passed instead of `keys`.Example {"key_aliases": ["alias1", "alias2"]}
 
     Returns:
     - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
@@ -790,29 +806,33 @@ async def delete_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        keys = data.keys
-        if len(keys) == 0:
-            raise ProxyException(
-                message=f"No keys provided, passed in: keys={keys}",
-                type=ProxyErrorTypes.auth_error,
-                param="keys",
-                code=status.HTTP_400_BAD_REQUEST,
-            )
-
         ## only allow user to delete keys they own
-        user_id = user_api_key_dict.user_id
         verbose_proxy_logger.debug(
             f"user_api_key_dict.user_role: {user_api_key_dict.user_role}"
         )
-        if (
-            user_api_key_dict.user_role is not None
-            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        ):
-            user_id = None  # unless they're admin
 
-        number_deleted_keys, _keys_being_deleted = await delete_verification_token(
-            tokens=keys, user_id=user_id
-        )
+        num_keys_to_be_deleted = 0
+        deleted_keys = []
+        if data.keys:
+            number_deleted_keys, _keys_being_deleted = await delete_verification_tokens(
+                tokens=data.keys,
+                user_api_key_cache=user_api_key_cache,
+                user_api_key_dict=user_api_key_dict,
+            )
+            num_keys_to_be_deleted = len(data.keys)
+            deleted_keys = data.keys
+        elif data.key_aliases:
+            number_deleted_keys, _keys_being_deleted = await delete_key_aliases(
+                key_aliases=data.key_aliases,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_api_key_dict=user_api_key_dict,
+            )
+            num_keys_to_be_deleted = len(data.key_aliases)
+            deleted_keys = data.key_aliases
+        else:
+            raise ValueError("Invalid request type")
+
         if number_deleted_keys is None:
             raise ProxyException(
                 message="Failed to delete keys got None response from delete_verification_token",
@@ -820,25 +840,17 @@ async def delete_key_fn(
                 param="keys",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        verbose_proxy_logger.debug(
-            f"/key/delete - deleted_keys={number_deleted_keys['deleted_keys']}"
-        )
+        verbose_proxy_logger.debug(f"/key/delete - deleted_keys={number_deleted_keys}")
 
         try:
-            assert len(keys) == number_deleted_keys["deleted_keys"]
+            assert num_keys_to_be_deleted == len(deleted_keys)
         except Exception:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={len(keys)}, Deleted keys ={number_deleted_keys['deleted_keys']}"
+                    "error": f"Not all keys passed in were deleted. This probably means you don't have access to delete all the keys passed in. Keys passed in={num_keys_to_be_deleted}, Deleted keys ={number_deleted_keys}"
                 },
             )
-
-        for key in keys:
-            user_api_key_cache.delete_cache(key)
-            # remove hash token from cache
-            hashed_token = hash_token(key)
-            user_api_key_cache.delete_cache(hashed_token)
 
         verbose_proxy_logger.debug(
             f"/keys/delete - cache after delete: {user_api_key_cache.in_memory_cache.cache_dict}"
@@ -854,8 +866,13 @@ async def delete_key_fn(
             )
         )
 
-        return {"deleted_keys": keys}
+        return {"deleted_keys": deleted_keys}
     except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {}".format(
+                str(e)
+            )
+        )
         raise handle_exception_on_proxy(e)
 
 
@@ -1271,11 +1288,87 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     return key_data
 
 
-async def delete_verification_token(
-    tokens: List, user_id: Optional[str] = None
+async def _team_key_deletion_check(
+    user_api_key_dict: UserAPIKeyAuth,
+    key_info: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+):
+    is_team_key = _is_team_key(data=key_info)
+
+    if is_team_key and key_info.team_id is not None:
+        team_table = await get_team_object(
+            team_id=key_info.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+        if (
+            litellm.key_generation_settings is not None
+            and "team_key_generation" in litellm.key_generation_settings
+        ):
+            _team_key_generation = litellm.key_generation_settings[
+                "team_key_generation"
+            ]
+        else:
+            _team_key_generation = TeamUIKeyGenerationConfig(
+                allowed_team_member_roles=["admin", "user"],
+            )
+        # check if user is team admin
+        if team_table is not None:
+            return _team_key_generation_team_member_check(
+                assigned_user_id=user_api_key_dict.user_id,
+                team_table=team_table,
+                user_api_key_dict=user_api_key_dict,
+                team_key_generation=_team_key_generation,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": f"Team not found in db, and user not proxy admin. Team id = {key_info.team_id}"
+                },
+            )
+    return False
+
+
+async def can_delete_verification_token(
+    key_info: LiteLLM_VerificationToken,
+    user_api_key_cache: DualCache,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> bool:
+    """
+    - check if user is proxy admin
+    - check if user is team admin and key is a team key
+    - check if key is personal key
+    """
+    is_team_key = _is_team_key(data=key_info)
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
+    elif is_team_key and key_info.team_id is not None:
+        return await _team_key_deletion_check(
+            user_api_key_dict=user_api_key_dict,
+            key_info=key_info,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    elif key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    else:
+        return False
+
+
+async def delete_verification_tokens(
+    tokens: List,
+    user_api_key_cache: DualCache,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
+
+    - check if user is proxy admin
+    - check if user is team admin and key is a team key
 
     Args:
         tokens: List of tokens to delete
@@ -1289,12 +1382,12 @@ async def delete_verification_token(
                 - List of keys being deleted, this contains information about the key_alias, token, and user_id being deleted,
                 this is passed down to the KeyManagementEventHooks to delete the keys from the secret manager and handle audit logs
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted = (
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
                 await prisma_client.db.litellm_verificationtoken.find_many(
                     where={"token": {"in": tokens}}
                 )
@@ -1302,34 +1395,72 @@ async def delete_verification_token(
 
             # Assuming 'db' is your Prisma Client instance
             # check if admin making request - don't filter by user-id
-            if user_id == litellm_proxy_admin_name:
+            if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
             # else
             else:
-                deleted_tokens = await prisma_client.delete_data(
-                    tokens=tokens, user_id=user_id
-                )
-                if deleted_tokens is None:
-                    raise Exception(
-                        "Failed to delete tokens got response None when deleting tokens"
-                    )
-                _num_deleted_tokens = deleted_tokens.get("deleted_keys", 0)
+                tasks = []
+                deleted_tokens = []
+                for key in _keys_being_deleted:
+
+                    async def _delete_key(key: LiteLLM_VerificationToken):
+                        if await can_delete_verification_token(
+                            key_info=key,
+                            user_api_key_cache=user_api_key_cache,
+                            user_api_key_dict=user_api_key_dict,
+                            prisma_client=prisma_client,
+                        ):
+                            await prisma_client.delete_data(tokens=[key.token])
+                            deleted_tokens.append(key.token)
+
+                    tasks.append(_delete_key(key))
+                await asyncio.gather(*tasks)
+
+                _num_deleted_tokens = len(deleted_tokens)
                 if _num_deleted_tokens != len(tokens):
+                    failed_tokens = [
+                        token for token in tokens if token not in deleted_tokens
+                    ]
                     raise Exception(
-                        "Failed to delete all tokens. Tried to delete tokens that don't belong to user: "
-                        + str(user_id)
+                        "Failed to delete all tokens. Failed to delete tokens: "
+                        + str(failed_tokens)
                     )
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.delete_verification_token(): Exception occured - {}".format(
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - {}".format(
                 str(e)
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
-    return deleted_tokens, _keys_being_deleted
+
+    for key in tokens:
+        user_api_key_cache.delete_cache(key)
+        # remove hash token from cache
+        hashed_token = hash_token(cast(str, key))
+        user_api_key_cache.delete_cache(hashed_token)
+
+    return {"deleted_keys": deleted_tokens}, _keys_being_deleted
+
+
+async def delete_key_aliases(
+    key_aliases: List[str],
+    user_api_key_cache: DualCache,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
+    _keys_being_deleted = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"key_alias": {"in": key_aliases}}
+    )
+
+    tokens = [key.token for key in _keys_being_deleted]
+    return await delete_verification_tokens(
+        tokens=tokens,
+        user_api_key_cache=user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+    )
 
 
 @router.post(
@@ -1471,7 +1602,7 @@ async def regenerate_key_fn(
             updated_token_dict = dict(updated_token)
 
         updated_token_dict["key"] = new_token
-        updated_token_dict.pop("token")
+        updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
         ### 3. remove existing key entry from cache
         ######################################################################
@@ -1489,9 +1620,21 @@ async def regenerate_key_fn(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-        return GenerateKeyResponse(
+        response = GenerateKeyResponse(
             **updated_token_dict,
         )
+
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=data,
+                existing_key_row=_key_in_db,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+        )
+
+        return response
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -1510,17 +1653,20 @@ async def list_keys(
     user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
-):
+) -> KeyListResponseObject:
+    """
+    List all keys for a given user or team.
+
+    Returns:
+        {
+            "keys": List[str],
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
     try:
-        import logging
-
         from litellm.proxy.proxy_server import prisma_client
-
-        logging.debug("Entering list_keys function")
-
-        if prisma_client is None:
-            logging.error("Database not connected")
-            raise Exception("Database not connected")
 
         # Check for unsupported parameters
         supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
@@ -1533,56 +1679,22 @@ async def list_keys(
                 code=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Prepare filter conditions
-        where = {}
-        if user_id and isinstance(user_id, str):
-            where["user_id"] = user_id
-        if team_id and isinstance(team_id, str):
-            where["team_id"] = team_id
-        if key_alias and isinstance(key_alias, str):
-            where["key_alias"] = key_alias
+        verbose_proxy_logger.debug("Entering list_keys function")
 
-        logging.debug(f"Filter conditions: {where}")
+        if prisma_client is None:
+            verbose_proxy_logger.error("Database not connected")
+            raise Exception("Database not connected")
 
-        # Calculate skip for pagination
-        skip = (page - 1) * size
-
-        logging.debug(f"Pagination: skip={skip}, take={size}")
-
-        # Fetch keys with pagination
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,  # type: ignore
-            skip=skip,  # type: ignore
-            take=size,  # type: ignore
+        response = await _list_key_helper(
+            prisma_client=prisma_client,
+            page=page,
+            size=size,
+            user_id=user_id,
+            team_id=team_id,
+            key_alias=key_alias,
         )
 
-        logging.debug(f"Fetched {len(keys)} keys")
-
-        # Get total count of keys
-        total_count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where  # type: ignore
-        )
-
-        logging.debug(f"Total count of keys: {total_count}")
-
-        # Calculate total pages
-        total_pages = -(-total_count // size)  # Ceiling division
-
-        # Prepare response
-        key_list = []
-        for key in keys:
-            key_dict = key.dict()
-            _token = key_dict.get("token")
-            key_list.append(_token)
-
-        response = {
-            "keys": key_list,
-            "total_count": total_count,
-            "current_page": page,
-            "total_pages": total_pages,
-        }
-
-        logging.debug("Successfully prepared response")
+        verbose_proxy_logger.debug("Successfully prepared response")
 
         return response
 
@@ -1602,6 +1714,91 @@ async def list_keys(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+async def _list_key_helper(
+    prisma_client: PrismaClient,
+    page: int,
+    size: int,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    key_alias: Optional[str],
+    exclude_team_id: Optional[str] = None,
+    return_full_object: bool = False,
+) -> KeyListResponseObject:
+    """
+    Helper function to list keys
+    Args:
+        page: int
+        size: int
+        user_id: Optional[str]
+        team_id: Optional[str]
+        key_alias: Optional[str]
+        exclude_team_id: Optional[str] # exclude a specific team_id
+        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+
+    Returns:
+        KeyListResponseObject
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+
+    # Prepare filter conditions
+    where: Dict[str, Union[str, Dict[str, str]]] = {}
+    if user_id and isinstance(user_id, str):
+        where["user_id"] = user_id
+    if team_id and isinstance(team_id, str):
+        where["team_id"] = team_id
+    if key_alias and isinstance(key_alias, str):
+        where["key_alias"] = key_alias
+    if exclude_team_id and isinstance(exclude_team_id, str):
+        where["team_id"] = {"not": exclude_team_id}
+
+    verbose_proxy_logger.debug(f"Filter conditions: {where}")
+
+    # Calculate skip for pagination
+    skip = (page - 1) * size
+
+    verbose_proxy_logger.debug(f"Pagination: skip={skip}, take={size}")
+
+    # Fetch keys with pagination
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where=where,  # type: ignore
+        skip=skip,  # type: ignore
+        take=size,  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
+
+    # Get total count of keys
+    total_count = await prisma_client.db.litellm_verificationtoken.count(
+        where=where  # type: ignore
+    )
+
+    verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
+
+    # Calculate total pages
+    total_pages = -(-total_count // size)  # Ceiling division
+
+    # Prepare response
+    key_list: List[Union[str, UserAPIKeyAuth]] = []
+    for key in keys:
+        if return_full_object is True:
+            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+        else:
+            _token = key.dict().get("token")
+            key_list.append(_token)  # Return only the token
+
+    return KeyListResponseObject(
+        keys=key_list,
+        total_count=total_count,
+        current_page=page,
+        total_pages=total_pages,
+    )
 
 
 @router.post(

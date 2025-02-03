@@ -246,16 +246,19 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
         watsonx_api_params = _get_api_params(params=optional_params)
+
+        watsonx_auth_payload = self._prepare_payload(
+            model=model,
+            api_params=watsonx_api_params,
+        )
+
         # init the payload to the text generation call
         payload = {
             "input": prompt,
             "moderations": optional_params.pop("moderations", {}),
             "parameters": optional_params,
+            **watsonx_auth_payload,
         }
-
-        if not model.startswith("deployment/"):
-            payload["model_id"] = model
-            payload["project_id"] = watsonx_api_params["project_id"]
 
         return payload
 
@@ -320,11 +323,6 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
             # deployment models are passed in as 'deployment/<deployment_id>'
-            if optional_params.get("space_id") is None:
-                raise WatsonXAIError(
-                    status_code=401,
-                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
-                )
             deployment_id = "/".join(model.split("/")[1:])
             endpoint = (
                 WatsonXAIEndpoint.DEPLOYMENT_TEXT_GENERATION_STREAM.value

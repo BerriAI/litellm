@@ -8,6 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
+from unittest.mock import MagicMock, patch
 
 load_dotenv()
 import io
@@ -100,7 +101,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 def prisma_client():
     from litellm.proxy.proxy_cli import append_query_params
 
-    ### add connection pool + pool timeout args
+    ### add connection pool + pool timeout args.
     params = {"connection_limit": 100, "pool_timeout": 60}
     database_url = os.getenv("DATABASE_URL")
     modified_url = append_query_params(database_url, params)
@@ -842,3 +843,174 @@ async def test_key_update_with_model_specific_params(prisma_client):
         "token": token_hash,
     }
     await update_key_fn(request=request, data=UpdateKeyRequest(**args))
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper(prisma_client):
+    """
+    Test _list_key_helper function with various scenarios:
+    1. Basic pagination
+    2. Filtering by user_id
+    3. Filtering by team_id
+    4. Filtering by key_alias
+    5. Return full object vs token only
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _list_key_helper,
+    )
+
+    # Setup - create multiple test keys
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create test data
+    test_user_id = f"test_user_{uuid.uuid4()}"
+    test_team_id = f"test_team_{uuid.uuid4()}"
+    test_key_alias = f"test_alias_{uuid.uuid4()}"
+
+    # Create test data with clear patterns
+    test_keys = []
+
+    # 1. Create 2 keys for test user + test team
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                user_id=test_user_id,
+                team_id=test_team_id,
+                key_alias=f"team_key_{uuid.uuid4()}",  # Make unique with UUID
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # 2. Create 1 key for test user (no team)
+    key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            user_id=test_user_id,
+            key_alias=test_key_alias,  # Already unique from earlier UUID generation
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin",
+        ),
+    )
+    test_keys.append(key)
+
+    # 3. Create 2 keys for other users
+    for i in range(2):
+        key = await generate_key_fn(
+            data=GenerateKeyRequest(
+                user_id=f"other_user_{i}",
+                key_alias=f"other_key_{uuid.uuid4()}",  # Make unique with UUID
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+        test_keys.append(key)
+
+    # Test 1: Basic pagination
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=2,
+        user_id=None,
+        team_id=None,
+        key_alias=None,
+    )
+    assert len(result["keys"]) == 2, "Should return exactly 2 keys"
+    assert result["total_count"] >= 5, "Should have at least 5 total keys"
+    assert result["current_page"] == 1
+    assert isinstance(result["keys"][0], str), "Should return token strings by default"
+
+    # Test 2: Filter by user_id
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=test_user_id,
+        team_id=None,
+        key_alias=None,
+    )
+    assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
+
+    # Test 3: Filter by team_id
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=test_team_id,
+        key_alias=None,
+    )
+    assert len(result["keys"]) == 2, "Should return exactly 2 keys for test team"
+
+    # Test 4: Filter by key_alias
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=None,
+        key_alias=test_key_alias,
+    )
+    assert len(result["keys"]) == 1, "Should return exactly 1 key with test alias"
+
+    # Test 5: Return full object
+    result = await _list_key_helper(
+        prisma_client=prisma_client,
+        page=1,
+        size=10,
+        user_id=test_user_id,
+        team_id=None,
+        key_alias=None,
+        return_full_object=True,
+    )
+    assert all(
+        isinstance(key, UserAPIKeyAuth) for key in result["keys"]
+    ), "Should return UserAPIKeyAuth objects"
+    assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
+
+    # Clean up test keys
+    for key in test_keys:
+        await delete_key_fn(
+            data=KeyRequest(keys=[key.key]),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.get_team_object")
+async def test_key_generate_always_db_team(mock_get_team_object):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    mock_get_team_object.return_value = None
+    try:
+        await generate_key_fn(
+            data=GenerateKeyRequest(team_id="1234"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin",
+            ),
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+
+    mock_get_team_object.assert_called_once()
+    assert mock_get_team_object.call_args.kwargs["check_db_only"] == True

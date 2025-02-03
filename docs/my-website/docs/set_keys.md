@@ -179,6 +179,22 @@ assert(valid_models == expected_models)
 os.environ = old_environ
 ```
 
+### `get_valid_models(check_provider_endpoint: True)`
+
+This helper will check the provider's endpoint for valid models.
+
+Currently implemented for:
+- OpenAI (if OPENAI_API_KEY is set)
+- Fireworks AI (if FIREWORKS_AI_API_KEY is set)
+- LiteLLM Proxy (if LITELLM_PROXY_API_KEY is set)
+
+```python
+from litellm import get_valid_models
+
+valid_models = get_valid_models(check_provider_endpoint=True)
+print(valid_models)
+```
+
 ### `validate_environment(model: str)`
 
 This helper tells you if you have all the required environment variables for a model, and if not - what's missing. 

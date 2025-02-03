@@ -194,6 +194,7 @@ class VertexAIPartnerModels(VertexBase):
                         "is_vertex_request": True,
                     }
                 )
+
                 return anthropic_chat_completions.completion(
                     model=model,
                     messages=messages,

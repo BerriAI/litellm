@@ -28,13 +28,21 @@ class SourceBlock(TypedDict):
     bytes: Optional[str]  # base 64 encoded string
 
 
+BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
+
+
 class ImageBlock(TypedDict):
-    format: Literal["png", "jpeg", "gif", "webp"]
+    format: Union[BedrockImageTypes, str]
     source: SourceBlock
 
 
+BedrockDocumentTypes = Literal[
+    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+]
+
+
 class DocumentBlock(TypedDict):
-    format: Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+    format: Union[BedrockDocumentTypes, str]
     source: SourceBlock
     name: str
 
@@ -161,14 +169,19 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
     toolUse: ToolBlockDeltaEvent
 
 
-class RequestObject(TypedDict, total=False):
+class CommonRequestObject(
+    TypedDict, total=False
+):  # common request object across sync + async flows
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
     inferenceConfig: InferenceConfig
-    messages: Required[List[MessageBlock]]
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
+
+
+class RequestObject(CommonRequestObject, total=False):
+    messages: Required[List[MessageBlock]]
 
 
 class GenericStreamingChunk(TypedDict):

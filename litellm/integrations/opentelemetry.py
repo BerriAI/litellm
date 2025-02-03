@@ -70,7 +70,7 @@ class OpenTelemetryConfig:
             endpoint=os.getenv("OTEL_ENDPOINT"),
             headers=os.getenv(
                 "OTEL_HEADERS"
-            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96VGdFisfJVme1H"
+            ),  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         )
 
 

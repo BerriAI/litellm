@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system-path
 
 
 import httpx
@@ -22,6 +22,9 @@ from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
     set_default_vertex_config,
     VertexPassThroughCredentials,
     default_vertex_config,
+)
+from litellm.proxy.vertex_ai_endpoints.vertex_passthrough_router import (
+    VertexPassThroughRouter,
 )
 
 
@@ -167,3 +170,123 @@ async def test_set_default_vertex_config():
         del os.environ["DEFAULT_VERTEXAI_LOCATION"]
         del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
         del os.environ["GOOGLE_CREDS"]
+
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_router_init():
+    """Test VertexPassThroughRouter initialization"""
+    router = VertexPassThroughRouter()
+    assert isinstance(router.deployment_key_to_vertex_credentials, dict)
+    assert len(router.deployment_key_to_vertex_credentials) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_credentials_none():
+    """Test get_vertex_credentials with various inputs"""
+    from litellm.proxy.vertex_ai_endpoints import vertex_endpoints
+
+    setattr(vertex_endpoints, "default_vertex_config", VertexPassThroughCredentials())
+    router = VertexPassThroughRouter()
+
+    # Test with None project_id and location - should return default config
+    creds = router.get_vertex_credentials(None, None)
+    assert isinstance(creds, VertexPassThroughCredentials)
+
+    # Test with valid project_id and location but no stored credentials
+    creds = router.get_vertex_credentials("test-project", "us-central1")
+    assert isinstance(creds, VertexPassThroughCredentials)
+    assert creds.vertex_project is None
+    assert creds.vertex_location is None
+    assert creds.vertex_credentials is None
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_credentials_stored():
+    """Test get_vertex_credentials with stored credentials"""
+    router = VertexPassThroughRouter()
+    router.add_vertex_credentials(
+        project_id="test-project",
+        location="us-central1",
+        vertex_credentials="test-creds",
+    )
+
+    creds = router.get_vertex_credentials(
+        project_id="test-project", location="us-central1"
+    )
+    assert creds.vertex_project == "test-project"
+    assert creds.vertex_location == "us-central1"
+    assert creds.vertex_credentials == "test-creds"
+
+
+@pytest.mark.asyncio
+async def test_add_vertex_credentials():
+    """Test add_vertex_credentials functionality"""
+    router = VertexPassThroughRouter()
+
+    # Test adding valid credentials
+    router.add_vertex_credentials(
+        project_id="test-project",
+        location="us-central1",
+        vertex_credentials="test-creds",
+    )
+
+    assert "test-project-us-central1" in router.deployment_key_to_vertex_credentials
+    creds = router.deployment_key_to_vertex_credentials["test-project-us-central1"]
+    assert creds.vertex_project == "test-project"
+    assert creds.vertex_location == "us-central1"
+    assert creds.vertex_credentials == "test-creds"
+
+    # Test adding with None values
+    router.add_vertex_credentials(
+        project_id=None, location=None, vertex_credentials="test-creds"
+    )
+    # Should not add None values
+    assert len(router.deployment_key_to_vertex_credentials) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_deployment_key():
+    """Test _get_deployment_key with various inputs"""
+    router = VertexPassThroughRouter()
+
+    # Test with valid inputs
+    key = router._get_deployment_key("test-project", "us-central1")
+    assert key == "test-project-us-central1"
+
+    # Test with None values
+    key = router._get_deployment_key(None, "us-central1")
+    assert key is None
+
+    key = router._get_deployment_key("test-project", None)
+    assert key is None
+
+    key = router._get_deployment_key(None, None)
+    assert key is None
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_project_id_from_url():
+    """Test _get_vertex_project_id_from_url with various URLs"""
+    # Test with valid URL
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    project_id = VertexPassThroughRouter._get_vertex_project_id_from_url(url)
+    assert project_id == "test-project"
+
+    # Test with invalid URL
+    url = "https://invalid-url.com"
+    project_id = VertexPassThroughRouter._get_vertex_project_id_from_url(url)
+    assert project_id is None
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_location_from_url():
+    """Test _get_vertex_location_from_url with various URLs"""
+    # Test with valid URL
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    location = VertexPassThroughRouter._get_vertex_location_from_url(url)
+    assert location == "us-central1"
+
+    # Test with invalid URL
+    url = "https://invalid-url.com"
+    location = VertexPassThroughRouter._get_vertex_location_from_url(url)
+    assert location is None

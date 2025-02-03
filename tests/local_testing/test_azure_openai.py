@@ -74,6 +74,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
         created=int(datetime.now().timestamp()),
     )
     litellm.set_verbose = True
+
     mock_request = respx_mock.post(url__regex=r".*/chat/completions.*").mock(
         return_value=httpx.Response(200, json=obj.model_dump(mode="json"))
     )

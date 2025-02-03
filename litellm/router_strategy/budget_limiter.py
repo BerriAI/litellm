@@ -64,7 +64,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         # Add self to litellm callbacks if it's a list
         if isinstance(litellm.callbacks, list):
-            litellm.callbacks.append(self)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(self)  # type: ignore
 
     async def async_filter_deployments(
         self,

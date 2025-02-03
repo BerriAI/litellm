@@ -8,7 +8,7 @@
 # LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 # vertexai.init(
-#     project="adroit-crow-413218",
+#     project="pathrise-convert-1606954137718",
 #     location="us-central1",
 #     api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex-ai",
 #     api_transport="rest",

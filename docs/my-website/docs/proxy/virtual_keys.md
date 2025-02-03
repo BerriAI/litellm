@@ -393,55 +393,6 @@ curl -L -X POST 'http://0.0.0.0:4000/key/unblock' \
 ```
 
 
-### Custom Auth 
-
-You can now override the default api key auth.
-
-Here's how: 
-
-#### 1. Create a custom auth file. 
-
-Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
-
-```python
-from litellm.proxy._types import UserAPIKeyAuth
-
-async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
-    try: 
-        modified_master_key = "sk-my-master-key"
-        if api_key == modified_master_key:
-            return UserAPIKeyAuth(api_key=api_key)
-        raise Exception
-    except: 
-        raise Exception
-```
-
-#### 2. Pass the filepath (relative to the config.yaml)
-
-Pass the filepath to the config.yaml 
-
-e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, this is what it looks like:
-```yaml 
-model_list: 
-  - model_name: "openai-model"
-    litellm_params: 
-      model: "gpt-3.5-turbo"
-
-litellm_settings:
-  drop_params: True
-  set_verbose: True
-
-general_settings:
-  custom_auth: custom_auth.user_api_key_auth
-```
-
-[**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
-
-#### 3. Start the proxy
-```shell
-$ litellm --config /path/to/config.yaml 
-```
-
 ### Custom /key/generate
 
 If you need to add custom logic before generating a Proxy API Key (Example Validating `team_id`)
@@ -567,6 +518,61 @@ litellm_settings:
     metadata: {"setting":"default"}
     team_id: "core-infra"
 ```
+
+### ✨ Key Rotations 
+
+:::info
+
+This is an Enterprise feature.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/#trial)
+
+
+:::
+
+Rotate an existing API Key, while optionally updating its parameters.
+
+```bash
+
+curl 'http://localhost:4000/key/sk-1234/regenerate' \
+  -X POST \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "max_budget": 100,
+    "metadata": {
+      "team": "core-infra"
+    },
+    "models": [
+      "gpt-4",
+      "gpt-3.5-turbo"
+    ]
+  }'
+
+```
+
+**Read More**
+
+- [Write rotated keys to secrets manager](https://docs.litellm.ai/docs/secret#aws-secret-manager)
+
+[**👉 API REFERENCE DOCS**](https://litellm-api.up.railway.app/#/key%20management/regenerate_key_fn_key__key__regenerate_post)
+
+
+### Temporary Budget Increase
+
+Use the `/key/update` endpoint to increase the budget of an existing key. 
+
+```bash
+curl -L -X POST 'http://localhost:4000/key/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{"key": "sk-b3Z3Lqdb_detHXSUp4ol4Q", "temp_budget_increase": 100, "temp_budget_expiry": "10d"}'
+```
+
+[API Reference](https://litellm-api.up.railway.app/#/key%20management/update_key_fn_key_update_post)
+
 
 ### Restricting Key Generation
 

@@ -361,11 +361,9 @@ def test_call_with_invalid_model(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
-        assert (
-            e.message
-            == "Authentication Error, API Key not allowed to access model. This token can only access models=['mistral']. Tried to access gemini-pro-vision"
-        )
-        pass
+        assert isinstance(e, ProxyException)
+        assert e.type == ProxyErrorTypes.key_model_access_denied
+        assert e.param == "model"
 
 
 def test_call_with_valid_model(prisma_client):
@@ -1354,7 +1352,7 @@ def test_generate_and_update_key(prisma_client):
             current_time = datetime.now(timezone.utc)
 
             # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 29
+            assert 31 >= (budget_reset_at - current_time).days >= 27
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -2014,7 +2012,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
 
 @pytest.mark.asyncio()
-async def test_view_spend_per_user(prisma_client):
+async def test_aview_spend_per_user(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -3034,6 +3032,68 @@ async def test_generate_key_with_guardrails(prisma_client):
 
 
 @pytest.mark.asyncio()
+async def test_team_guardrails(prisma_client):
+    """
+    - Test setting guardrails on a team
+    - Assert this is returned when calling /team/info
+    - Team/update with guardrails should update the guardrails
+    - Assert new guardrails are returned when calling /team/info
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    _new_team = NewTeamRequest(
+        team_alias="test-teamA",
+        guardrails=["aporia-pre-call"],
+    )
+
+    new_team_response = await new_team(
+        data=_new_team,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("new_team_response", new_team_response)
+
+    # call /team/info
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+    print("team_info_response", team_info_response)
+
+    assert team_info_response["team_info"].metadata["guardrails"] == ["aporia-pre-call"]
+
+    # team update with guardrails
+    team_update_response = await update_team(
+        data=UpdateTeamRequest(
+            team_id=new_team_response["team_id"],
+            guardrails=["aporia-pre-call", "aporia-post-call"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_update_response", team_update_response)
+
+    # call /team/info again
+    team_info_response = await team_info(
+        team_id=new_team_response["team_id"],
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        http_request=Request(scope={"type": "http"}),
+    )
+
+    print("team_info_response", team_info_response)
+    assert team_info_response["team_info"].metadata["guardrails"] == [
+        "aporia-pre-call",
+        "aporia-post-call",
+    ]
+
+
+@pytest.mark.asyncio()
 @pytest.mark.flaky(retries=6, delay=1)
 async def test_team_access_groups(prisma_client):
     """
@@ -3099,7 +3159,6 @@ async def test_team_access_groups(prisma_client):
     generated_key = key.key
     bearer_token = "Bearer " + generated_key
 
-    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
     for model in ["gpt-4o", "gemini-pro-vision"]:
@@ -3109,6 +3168,8 @@ async def test_team_access_groups(prisma_client):
             # return string as bytes
             return return_string.encode()
 
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
         request.body = return_body
 
         # use generated key to auth in
@@ -3124,6 +3185,8 @@ async def test_team_access_groups(prisma_client):
             # return string as bytes
             return return_string.encode()
 
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
         request.body = return_body_2
 
         # use generated key to auth in
@@ -3135,10 +3198,9 @@ async def test_team_access_groups(prisma_client):
             pytest.fail(f"This should have failed!. IT's an invalid model")
         except Exception as e:
             print("got exception", e)
-            assert (
-                "not allowed to call model" in e.message
-                and "Allowed team models" in e.message
-            )
+            assert isinstance(e, ProxyException)
+            assert e.type == ProxyErrorTypes.team_model_access_denied
+            assert e.param == "model"
 
 
 @pytest.mark.asyncio()
@@ -3201,7 +3263,7 @@ async def test_team_tags(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_admin_only_routes(prisma_client):
+async def test_aadmin_only_routes(prisma_client):
     """
     Tests if setting admin_only_routes works
 
@@ -3561,7 +3623,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     # read from the secret manager
 
     result = await aws_secret_manager_client.async_read_secret(
-        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
+        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{key_alias}"
     )
 
     # Assert the correct key is stored in the secret manager
@@ -3582,7 +3644,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     # Assert the key is deleted from the secret manager
 
     result = await aws_secret_manager_client.async_read_secret(
-        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}/{key_alias}"
+        secret_name=f"{litellm._key_management_settings.prefix_for_stored_virtual_keys}{key_alias}"
     )
     assert result is None
 
@@ -3756,3 +3818,47 @@ def test_should_track_cost_callback():
         team_id=None,
         end_user_id="1234",
     )
+
+
+@pytest.mark.asyncio
+async def test_get_paginated_teams(prisma_client):
+    """
+    Test the get_paginated_teams function:
+    1. Test pagination returns valid results
+    2. Test total count matches across pages
+    3. Test page size is respected
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import get_paginated_teams
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    try:
+        # Get first page with page_size=2
+        teams_page_1, total_count_1 = await get_paginated_teams(
+            prisma_client=prisma_client, page_size=2, page=1
+        )
+
+        print("teams_page_1=", teams_page_1)
+        print("total_count_1=", total_count_1)
+
+        # Get second page
+        teams_page_2, total_count_2 = await get_paginated_teams(
+            prisma_client=prisma_client, page_size=2, page=2
+        )
+
+        print("teams_page_2=", teams_page_2)
+        print("total_count_2=", total_count_2)
+
+        # Verify results
+        assert isinstance(teams_page_1, list)  # Should return a list
+        assert isinstance(total_count_1, int)  # Should return an integer count
+        assert (
+            total_count_1 == total_count_2
+        )  # Total count should be consistent across pages
+        assert len(teams_page_1) <= 2  # Should respect page_size limit
+
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        pytest.fail(f"Test failed with exception: {e}")

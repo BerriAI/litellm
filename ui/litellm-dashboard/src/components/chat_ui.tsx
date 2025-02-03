@@ -35,6 +35,7 @@ interface ChatUIProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
+  disabledPersonalKeyCreation: boolean;
 }
 
 async function generateModelResponse(
@@ -81,8 +82,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   token,
   userRole,
   userID,
+  disabledPersonalKeyCreation,
 }) => {
-  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>('session');
+  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>(
+    disabledPersonalKeyCreation ? 'custom' : 'session'
+  );
   const [apiKey, setApiKey] = useState("");
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<{ role: string; content: string; model?: string }[]>([]);
@@ -141,7 +145,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   useEffect(() => {
     // Scroll to the bottom of the chat whenever chatHistory updates
     if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+      // Add a small delay to ensure content is rendered
+      setTimeout(() => {
+        chatEndRef.current?.scrollIntoView({ 
+          behavior: "smooth",
+          block: "end" // Keep the scroll position at the end
+        });
+      }, 100);
     }
   }, [chatHistory]);
 
@@ -180,17 +190,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-
+    // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
-
-    const updatedChatHistory = [...chatHistory, newUserMessage];
-
-    setChatHistory(updatedChatHistory);
+    
+    // Create chat history for API call - strip out model field
+    const apiChatHistory = [...chatHistory.map(({ role, content }) => ({ role, content })), newUserMessage];
+    
+    // Update UI with full message object (including model field for display)
+    setChatHistory([...chatHistory, newUserMessage]);
 
     try {
       if (selectedModel) {
         await generateModelResponse(
-          updatedChatHistory,
+          apiChatHistory,
           (chunk, model) => updateUI("assistant", chunk, model),
           selectedModel,
           effectiveApiKey
@@ -240,6 +252,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <Col>
                       <Text>API Key Source</Text>
                       <Select
+                        disabled={disabledPersonalKeyCreation}
                         defaultValue="session"
                         style={{ width: "100%" }}
                         onChange={(value) => setApiKeySource(value as "session" | "custom")}
@@ -354,7 +367,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     ))}
                     <TableRow>
                       <TableCell>
-                        <div ref={chatEndRef} />
+                        <div ref={chatEndRef} style={{ height: "1px" }} />
                       </TableCell>
                     </TableRow>
                   </TableBody>

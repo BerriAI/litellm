@@ -84,6 +84,9 @@ async def test_router_init():
     )
 
 
+@pytest.mark.skip(
+    reason="This test is not relevant to the current codebase. The default Azure AD workflow is used."
+)
 @patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(
     mocked_os_lib: MagicMock,

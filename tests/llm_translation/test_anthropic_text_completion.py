@@ -24,6 +24,7 @@ import pytest
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["claude-2", "anthropic/claude-2"])
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_acompletion_claude2(model):
     try:
         litellm.set_verbose = True

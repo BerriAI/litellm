@@ -51,6 +51,13 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             api_key=api_key,
         )
 
+        ## UPDATE PAYLOAD (optional params)
+        watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
+            model=model,
+            api_params=api_params,
+        )
+        optional_params.update(watsonx_auth_payload)
+
         ## GET API URL
         api_base = watsonx_chat_transformation.get_complete_url(
             api_base=api_base,
@@ -58,13 +65,6 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             optional_params=optional_params,
             stream=optional_params.get("stream", False),
         )
-
-        ## UPDATE PAYLOAD (optional params)
-        watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
-            model=model,
-            api_params=api_params,
-        )
-        optional_params.update(watsonx_auth_payload)
 
         return super().completion(
             model=model,
