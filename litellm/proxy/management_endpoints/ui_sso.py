@@ -563,16 +563,20 @@ async def auth_callback(request: Request):  # noqa: PLR0915
     user_role = None
     try:
         if prisma_client is not None:
-            user_info = await get_user_object(
-                user_id=user_id,
-                user_email=user_email,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-                parent_otel_span=None,
-                proxy_logging_obj=proxy_logging_obj,
-                sso_user_id=user_id,
-            )
+            try:
+                user_info = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=None,
+                    proxy_logging_obj=proxy_logging_obj,
+                    sso_user_id=user_id,
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error getting user object: {e}")
+                user_info = None
 
             verbose_proxy_logger.debug(
                 f"user_info: {user_info}; litellm.default_internal_user_params: {litellm.default_internal_user_params}"
