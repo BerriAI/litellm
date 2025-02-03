@@ -8,12 +8,13 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 from pydantic import BaseModel
 
@@ -1008,7 +1009,23 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
-    def success_handler(  # noqa: PLR0915
+    def success_handler(self, *args, synchronous: Optional[bool]=None):
+        """
+        Execute the success handler function in a sync or async manner.
+        If synchronous argument is not provided, global `litellm.sync_logging` config is used.
+        """
+        if synchronous is None:
+            synchronous = litellm.sync_logging
+
+        if synchronous:
+            self._success_handler(*args)
+        else:
+            threading.Thread(
+                target=self._success_handler,
+                args=args,
+            ).start()
+
+    def _success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(
@@ -2151,6 +2168,8 @@ class Logging(LiteLLMLoggingBaseClass):
             result,
             start_time,
             end_time,
+            # NB: Since we already run this in a TPE, the handler itself can run sync
+            synchronous=True,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:

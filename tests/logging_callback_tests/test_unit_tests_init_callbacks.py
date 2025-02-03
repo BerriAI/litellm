@@ -262,7 +262,7 @@ def test_dynamic_logging_global_callback():
 
         try:
             litellm_logging.success_handler(
-                result=ModelResponse(
+                ModelResponse(
                     id="chatcmpl-5418737b-ab14-420b-b9c5-b278b6681b70",
                     created=1732306261,
                     model="claude-3-opus-20240229",
@@ -288,9 +288,9 @@ def test_dynamic_logging_global_callback():
                         prompt_tokens_details=None,
                     ),
                 ),
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-                cache_hit=False,
+                datetime.now(),
+                datetime.now(),
+                False,
             )
         except Exception as e:
             print(f"Error: {e}")

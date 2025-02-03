@@ -1082,12 +1082,8 @@ def client(original_function):  # noqa: PLR0915
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            executor.submit(
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            logging_obj.success_handler(result, start_time, end_time)
+
             # RETURN RESULT
             update_response_metadata(
                 result=result,

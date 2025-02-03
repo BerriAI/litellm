@@ -83,6 +83,7 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
+            
         thread_pool_executor.submit(
             logging_obj.success_handler,
             standard_logging_response_object,  # Positional argument 1
@@ -90,6 +91,8 @@ class PassThroughEndpointLogging:
             end_time,  # Positional argument 3
             cache_hit,  # Positional argument 4
             **kwargs,  # Unpacked keyword arguments
+            # NB: Since we already run this in a TPE, the handler itself can run sync
+            synchronous=True,
         )
 
         await logging_obj.async_success_handler(
