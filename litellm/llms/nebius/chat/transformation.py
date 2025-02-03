@@ -6,10 +6,10 @@ this is OpenAI compatible - no translation needed / occurs
 
 from typing import Optional
 
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
-class NebiusConfig(OpenAIGPTConfig):
+class NebiusConfig(OpenAILikeChatConfig):
     """
     Reference: https://docs.nebius.com/studio/inference/quickstart
 
@@ -71,4 +71,5 @@ class NebiusConfig(OpenAIGPTConfig):
             "top_logprobs",
             "top_p",
             "user",
+            "extra_body"
         ]
