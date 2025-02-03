@@ -4599,6 +4599,21 @@ def test_provider_specific_header(custom_llm_provider, expected_result):
         assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]
 
 
+def test_qwen_text_completion():
+    # litellm._turn_on_debug()
+    resp = litellm.completion(
+        model="gpt-3.5-turbo-instruct",
+        messages=[{"content": "hello", "role": "user"}],
+        stream=False,
+        logprobs=1,
+    )
+    assert resp.choices[0].message.content is not None
+    assert resp.choices[0].logprobs.token_logprobs[0] is not None
+    print(
+        f"resp.choices[0].logprobs.token_logprobs[0]: {resp.choices[0].logprobs.token_logprobs[0]}"
+    )
+
+
 @pytest.mark.parametrize(
     "enable_preview_features",
     [True, False],

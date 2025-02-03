@@ -267,7 +267,7 @@ async def test_chat_completion_request_with_redaction():
     setattr(proxy_server, "llm_router", router)
     _test_logger = testLogger()
     litellm.callbacks = [_ENTERPRISE_SecretDetection(), _test_logger]
-    litellm.set_verbose = True
+    litellm._turn_on_debug()
 
     # Prepare the query string
     query_params = "param1=value1&param2=value2"
