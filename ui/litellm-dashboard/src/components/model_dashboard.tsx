@@ -1502,8 +1502,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     <AntdSelect
                       showSearch={true}
                       value={selectedProvider}
-                      onChange={(value: Providers) => {
-                        // value is already the enum value
+                      onChange={(value) => {
                         setSelectedProvider(value);
                         setProviderModelsFn(value);
                         form.setFieldsValue({ 
@@ -1512,19 +1511,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         });
                       }}
                     >
-                      {Object.values(Providers).map((provider) => (
+                      {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
                         <AntdSelect.Option
-                          key={provider}
-                          value={provider}
-                          onClick={() => {
-                            setProviderModelsFn(provider);
-                            setSelectedProvider(provider);
-                          }}
+                          key={providerEnum}
+                          value={providerEnum}
                         >
                           <div className="flex items-center space-x-2">
                             <img
-                              src={providerLogoMap[provider]}
-                              alt={`${provider} logo`}
+                              src={providerLogoMap[providerDisplayName]}
+                              alt={`${providerEnum} logo`}
                               className="w-5 h-5"
                               onError={(e) => {
                                 // Create a div with provider initial as fallback
@@ -1533,12 +1528,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 if (parent) {
                                   const fallbackDiv = document.createElement('div');
                                   fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                                  fallbackDiv.textContent = provider.charAt(0);
+                                  fallbackDiv.textContent = providerDisplayName.charAt(0);
                                   parent.replaceChild(fallbackDiv, target);
                                 }
                               }}
                             />
-                            <span>{provider}</span>
+                            <span>{providerDisplayName}</span>
                           </div>
                         </AntdSelect.Option>
                       ))}

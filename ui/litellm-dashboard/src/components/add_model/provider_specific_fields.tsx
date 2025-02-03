@@ -15,15 +15,21 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   props
 }) => {
+  console.log(`Selected provider: ${selectedProvider}`);
+  console.log(`type of selectedProvider: ${typeof selectedProvider}`);
+  // cast selectedProvider to Providers
+  const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
+  console.log(`selectedProviderEnum: ${selectedProviderEnum}`);
+  console.log(`type of selectedProviderEnum: ${typeof selectedProviderEnum}`);
   return (
     <>
-      {selectedProvider == Providers.OpenAI && (
+      {selectedProviderEnum === Providers.OpenAI && (
         <Form.Item label="Organization ID" name="organization">
           <TextInput placeholder="[OPTIONAL] my-unique-org" />
         </Form.Item>
       )}
 
-      {selectedProvider == Providers.Vertex_AI && (
+      {selectedProviderEnum === Providers.Vertex_AI && (
         <>
           <Form.Item
             rules={[{ required: true, message: "Required" }]}
@@ -66,8 +72,8 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         </>
       )}
 
-      {(selectedProvider == Providers.Azure ||
-        selectedProvider == Providers.OpenAI_Compatible) && (
+      {(selectedProviderEnum === Providers.Azure ||
+        selectedProviderEnum === Providers.OpenAI_Compatible) && (
         <Form.Item
           rules={[{ required: true, message: "Required" }]}
           label="API Base"
@@ -77,7 +83,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         </Form.Item>
       )}
 
-      {selectedProvider == Providers.Azure && (
+      {selectedProviderEnum === Providers.Azure && (
         <>
           <Form.Item
             label="API Version"
@@ -114,7 +120,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         </>
       )}
 
-      {selectedProvider == Providers.Bedrock && (
+      {selectedProviderEnum === Providers.Bedrock && (
         <>
           <Form.Item
             rules={[{ required: true, message: "Required" }]}
@@ -145,9 +151,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         </>
       )}
 
-      {selectedProvider != Providers.Bedrock &&
-        selectedProvider != Providers.Vertex_AI &&
-        selectedProvider != Providers.Ollama &&
+      {selectedProviderEnum != Providers.Bedrock &&
+        selectedProviderEnum != Providers.Vertex_AI &&
+        selectedProviderEnum != Providers.Ollama &&
         (
           <Form.Item
             rules={[{ required: true, message: "Required" }]}

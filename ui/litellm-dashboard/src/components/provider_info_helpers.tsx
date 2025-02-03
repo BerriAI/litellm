@@ -94,9 +94,9 @@ export const getPlaceholder = (selectedProvider: string): string => {
   };
 
   export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
-    console.log(`Getting models for provider: ${provider}`);
     let providerKey = provider;
-    let custom_llm_provider = provider_map[providerKey as keyof typeof Providers];
+    console.log(`Provider key: ${providerKey}`);
+    let custom_llm_provider = provider_map[providerKey];
     console.log(`Provider mapped to: ${custom_llm_provider}`);
     
     let providerModels: Array<string> = [];
