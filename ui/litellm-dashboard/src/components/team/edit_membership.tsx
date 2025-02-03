@@ -1,19 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, Select as AntSelect, Button as AntButton, message } from 'antd';
 import { Select, SelectItem } from "@tremor/react";
 import { Card, Text } from "@tremor/react";
-
-export interface TeamMember {
-  id?: string;
-  email?: string;
-  role: 'admin' | 'user';
-}
-
+import { Member } from "@/components/networking";
 interface TeamMemberModalProps {
   visible: boolean;
   onCancel: () => void;
-  onSubmit: (data: TeamMember) => void;
-  initialData?: TeamMember | null;
+  onSubmit: (data: Member) => void;
+  initialData?: Member | null;
   mode: 'add' | 'edit';
 }
 
@@ -26,11 +20,22 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
 }) => {
   const [form] = Form.useForm();
 
+  useEffect(() => {
+    if (initialData) {
+      form.setFieldsValue({
+        user_email: initialData.user_email,
+        user_id: initialData.user_id,
+        role: initialData.role,
+      });
+    }
+  }, [initialData, form]);
+  
+
   const handleSubmit = async (values: any) => {
     try {
-      const formData: TeamMember = {
-        email: values.user_email,
-        id: values.user_id,
+      const formData: Member = {
+        user_email: values.user_email,
+        user_id: values.user_id,
         role: values.role,
       };
       
@@ -60,8 +65,8 @@ const TeamMemberModal: React.FC<TeamMemberModalProps> = ({
         wrapperCol={{ span: 16 }}
         labelAlign="left"
         initialValues={{
-          user_email: initialData?.email?.trim() || '',
-          user_id: initialData?.id?.trim() || '',
+          user_email: initialData?.user_email?.trim() || '',
+          user_id: initialData?.user_id?.trim() || '',
           role: initialData?.role || 'user',
         }}
       >

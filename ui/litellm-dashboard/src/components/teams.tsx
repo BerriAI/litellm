@@ -25,7 +25,7 @@ import { fetchAvailableModelsForTeamOrKey, getModelDisplayName } from "./key_tea
 import { Select, SelectItem } from "@tremor/react";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { getGuardrailsList } from "./networking";
-
+import TeamInfoView from "@/components/team/team_info";
 import {
   Table,
   TableBody,
@@ -129,8 +129,9 @@ const Team: React.FC<TeamProps> = ({
   const [editModalVisible, setEditModalVisible] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState<null | any>(
-    teams ? teams[0] : null
+    null
   );
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -500,6 +501,9 @@ const Team: React.FC<TeamProps> = ({
   };
 
   const is_team_admin = (team: any) => {
+    if (team == null || team.members_with_roles == null) {
+      return false;
+    }
     for (let i = 0; i < team.members_with_roles.length; i++) {
       let member = team.members_with_roles[i];
       if (member.user_id == userID && member.role == "admin") {
@@ -509,58 +513,7 @@ const Team: React.FC<TeamProps> = ({
     return false;
   }
 
-  const _common_member_update_call = async (formValues: Record<string, any>, callType: "add" | "edit") => {
-    try {
-      if (accessToken != null && teams != null) {
-        message.info("Adding Member");
-        const user_role: Member = {
-          role: formValues.role,
-          user_email: formValues.user_email,
-          user_id: formValues.user_id,
-        };
-        let response: any;
-        if (callType == "add") {
-          response = await teamMemberAddCall(
-          accessToken,
-          selectedTeam["team_id"],
-          user_role
-        );
-        message.success("Member added");
-        } else {
-          response = await teamMemberUpdateCall(
-            accessToken,
-            selectedTeam["team_id"],
-            {
-              "role": formValues.role,
-              "user_id": formValues.id,
-              "user_email": formValues.email
-            }
-          );
-          message.success("Member updated");
-        }
-        
-        // Checking if the team exists in the list and updating or adding accordingly
-        const foundIndex = teams.findIndex((team) => {
-          console.log(
-            `team.team_id=${team.team_id}; response.data.team_id=${response.data.team_id}`
-          );
-          return team.team_id === response.data.team_id;
-        });
-        console.log(`foundIndex: ${foundIndex}`);
-        if (foundIndex !== -1) {
-          // If the team is found, update it
-          const updatedTeams = [...teams]; // Copy the current state
-          updatedTeams[foundIndex] = response.data; // Update the specific team
-          setTeams(updatedTeams); // Set the new state
-          setSelectedTeam(response.data);
-        }
-        setIsAddMemberModalVisible(false);
-        
-      }
-    } catch (error) {
-      console.error("Error creating the team:", error);
-    }
-  }
+
 
   const handleRefreshClick = () => {
     // Update the 'lastRefreshed' state to the current date and time
@@ -577,6 +530,15 @@ const Team: React.FC<TeamProps> = ({
   }
   return (
     <div className="w-full mx-4">
+      {selectedTeamId ? (
+        <TeamInfoView 
+        teamId={selectedTeamId} 
+        onClose={() => setSelectedTeamId(null)} 
+        accessToken={accessToken}
+        is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
+        is_proxy_admin={userRole == "Admin"}
+      />
+    ) : (
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
@@ -596,6 +558,9 @@ const Team: React.FC<TeamProps> = ({
       </TabList>
       <TabPanels>
       <TabPanel>
+      <Text>
+        Click on "Team ID" to view team details <b>and</b> manage team members.
+      </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
           <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
@@ -628,19 +593,27 @@ const Team: React.FC<TeamProps> = ({
                         >
                           {team["team_alias"]}
                         </TableCell>
-                        <TableCell
-                          style={{
-                            maxWidth: "4px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            fontSize: "0.75em", // or any smaller size as needed
-                          }}
-                        >
-                          <Tooltip title={team.team_id}>
-                          {team.team_id}
-                          </Tooltip>
+                        <TableRow>
+                        <TableCell>
+                          <div className="overflow-hidden">
+                            <Tooltip title={team.team_id}>
+                              <Button 
+                                size="xs"
+                                variant="light"
+                                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+
+                                onClick={() => {
+                                  // Add click handler
+                                  setSelectedTeamId(team.team_id);
+                                }}
+                              >
+                                {team.team_id.slice(0, 7)}...
+                              </Button>
+                            </Tooltip>
+                          </div>
                         </TableCell>
+                      </TableRow>
+
                         <TableCell
                           style={{
                             maxWidth: "4px",
@@ -964,25 +937,30 @@ const Team: React.FC<TeamProps> = ({
           </Modal>
           </Col>
         ) : null}
-        <Col numColSpan={1}>
+        {/* <Col numColSpan={1}>
           <Title level={4}>Team Members</Title>
           <Paragraph>
-            If you belong to multiple teams, this setting controls which teams
-            members you see.
+            If you belong to multiple teams, this setting controls which teams' members you see.
           </Paragraph>
           {teams && teams.length > 0 ? (
             <Select defaultValue="0">
-              {teams.map((team: any, index) => (
-                <SelectItem
-                  key={index}
-                  value={String(index)}
-                  onClick={() => {
-                    setSelectedTeam(team);
-                  }}
-                >
-                  {team["team_alias"]}
-                </SelectItem>
-              ))}
+              {[...teams]
+                .sort((a, b) => {
+                  const aliasA = a.team_alias || '';
+                  const aliasB = b.team_alias || '';
+                  return aliasA.localeCompare(aliasB);
+                })
+                .map((team: any, index) => (
+                  <SelectItem
+                    key={index}
+                    value={String(index)}
+                    onClick={() => {
+                      setSelectedTeam(team);
+                    }}
+                  >
+                    {team.team_alias || 'Unnamed Team'}
+                  </SelectItem>
+                ))}
             </Select>
           ) : (
             <Paragraph>
@@ -1112,7 +1090,7 @@ const Team: React.FC<TeamProps> = ({
               </div>
             </Form>
           </Modal>
-        </Col>
+        </Col> */}
       </Grid>
       </TabPanel>
       <TabPanel>  
@@ -1123,7 +1101,7 @@ const Team: React.FC<TeamProps> = ({
       </TabPanel>
       </TabPanels>
 
-    </TabGroup>
+      </TabGroup>)}
     </div>
   );
 };
