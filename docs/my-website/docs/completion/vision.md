@@ -118,9 +118,11 @@ response = client.chat.completions.create(
 Use `litellm.supports_vision(model="")` -> returns `True` if model supports `vision` and `False` if not
 
 ```python
-assert litellm.supports_vision(model="gpt-4-vision-preview") == True
-assert litellm.supports_vision(model="gemini-1.0-pro-vision") == True
-assert litellm.supports_vision(model="gpt-3.5-turbo") == False
+assert litellm.supports_vision(model="openai/gpt-4-vision-preview") == True
+assert litellm.supports_vision(model="vertex_ai/gemini-1.0-pro-vision") == True
+assert litellm.supports_vision(model="openai/gpt-3.5-turbo") == False
+assert litellm.supports_vision(model="xai/grok-2-vision-latest") == True
+assert litellm.supports_vision(model="xai/grok-2-latest") == False
 ```
 </TabItem>
 
