@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
-import TeamMemberModal, { TeamMember } from "@/components/team/edit_membership";
+import TeamMemberModal from "@/components/team/edit_membership";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -139,7 +139,6 @@ const Team: React.FC<TeamProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
-  const [selectedEditMember, setSelectedEditMember] = useState<null | TeamMember>(null);
   
 
 
@@ -521,13 +520,7 @@ const Team: React.FC<TeamProps> = ({
     setLastRefreshed(currentDate.toLocaleString());
   };
 
-  const handleMemberCreate = async (formValues: Record<string, any>) => {
-    _common_member_update_call(formValues, "add");
-  };
 
-  const handleMemberUpdate = async (formValues: Record<string, any>) => {
-    _common_member_update_call(formValues, "edit");
-  }
   return (
     <div className="w-full mx-4">
       {selectedTeamId ? (
@@ -559,7 +552,7 @@ const Team: React.FC<TeamProps> = ({
       <TabPanels>
       <TabPanel>
       <Text>
-        Click on "Team ID" to view team details <b>and</b> manage team members.
+        Click on &ldquo;Team ID&rdquo; to view team details <b>and</b> manage team members.
       </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
@@ -937,160 +930,6 @@ const Team: React.FC<TeamProps> = ({
           </Modal>
           </Col>
         ) : null}
-        {/* <Col numColSpan={1}>
-          <Title level={4}>Team Members</Title>
-          <Paragraph>
-            If you belong to multiple teams, this setting controls which teams' members you see.
-          </Paragraph>
-          {teams && teams.length > 0 ? (
-            <Select defaultValue="0">
-              {[...teams]
-                .sort((a, b) => {
-                  const aliasA = a.team_alias || '';
-                  const aliasB = b.team_alias || '';
-                  return aliasA.localeCompare(aliasB);
-                })
-                .map((team: any, index) => (
-                  <SelectItem
-                    key={index}
-                    value={String(index)}
-                    onClick={() => {
-                      setSelectedTeam(team);
-                    }}
-                  >
-                    {team.team_alias || 'Unnamed Team'}
-                  </SelectItem>
-                ))}
-            </Select>
-          ) : (
-            <Paragraph>
-              No team created. <b>Defaulting to personal account.</b>
-            </Paragraph>
-          )}
-        </Col>
-        <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Member Name</TableHeaderCell>
-                  <TableHeaderCell>Role</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {selectedTeam
-                  ? selectedTeam["members_with_roles"].map(
-                      (member: any, index: number) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            {member["user_email"]
-                              ? member["user_email"]
-                              : member["user_id"]
-                                ? member["user_id"]
-                                : null}
-                          </TableCell>
-                          <TableCell>{member["role"]}</TableCell>
-                          <TableCell>
-                          {userRole == "Admin" ? (
-                            <>
-                            <Icon
-                              icon={PencilAltIcon}
-                              size="sm"
-                              onClick={() => {
-                                setIsEditMemberModalVisible(true);
-                                setSelectedEditMember({
-                                  "id": member["user_id"],
-                                  "email": member["user_email"],
-                                  "role": member["role"]
-                                })
-                              }}
-                            />
-                            <Icon
-                              onClick={() => {}}
-                              icon={TrashIcon}
-                              size="sm"
-                            />
-                            </>
-                          ) : null}
-                        </TableCell>
-                        </TableRow>
-                      )
-                    )
-                  : null}
-              </TableBody>
-            </Table>
-          </Card>
-          <TeamMemberModal
-            visible={isEditMemberModalVisible}
-            onCancel={handleMemberCancel}
-            onSubmit={handleMemberUpdate}
-            initialData={selectedEditMember}
-            mode="edit"
-          />
-          {selectedTeam && (
-            <EditTeamModal
-              visible={editModalVisible}
-              onCancel={handleEditCancel}
-              team={selectedTeam}
-              onSubmit={handleEditSubmit}
-            />
-          )}
-        </Col>
-        <Col numColSpan={1}>
-          {userRole == "Admin" || (selectedTeam && is_team_admin(selectedTeam)) ? (
-            <Button
-              className="mx-auto mb-5"
-              onClick={() => setIsAddMemberModalVisible(true)}
-            >
-              + Add member
-            </Button>
-          ) : null}
-          <Modal
-            title="Add member"
-            visible={isAddMemberModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleMemberOk}
-            onCancel={handleMemberCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleMemberCreate}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-              initialValues={{
-                role: "user",
-              }}
-            >
-              <>
-                <Form.Item label="Email" name="user_email" className="mb-4">
-                  <Input
-                    name="user_email"
-                    className="px-3 py-2 border rounded-md w-full"
-                  />
-                </Form.Item>
-                <div className="text-center mb-4">OR</div>
-                <Form.Item label="User ID" name="user_id" className="mb-4">
-                  <Input
-                    name="user_id"
-                    className="px-3 py-2 border rounded-md w-full"
-                  />
-                </Form.Item>
-                <Form.Item label="Member Role" name="role" className="mb-4">
-                  <Select2 defaultValue="user">
-                    <Select2.Option value="admin">admin</Select2.Option>
-                    <Select2.Option value="user">user</Select2.Option>
-                  </Select2>
-                </Form.Item>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Add member</Button2>
-              </div>
-            </Form>
-          </Modal>
-        </Col> */}
       </Grid>
       </TabPanel>
       <TabPanel>  
