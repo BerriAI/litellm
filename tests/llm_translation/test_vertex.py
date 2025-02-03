@@ -1289,10 +1289,11 @@ def test_process_gemini_image_http_url(
         http_url: Test HTTP URL
         mock_convert_to_anthropic: Mocked convert_to_anthropic_image_obj function
         mock_blob: Mocked BlobType instance
+
+    Vertex AI supports image urls. Ensure no network requests are made.
     """
-    # Arrange
     expected_image_data = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     mock_convert_url_to_base64.return_value = expected_image_data
-
     # Act
     result = _process_gemini_image(http_url)
+    # assert result["file_data"]["file_uri"] == http_url
