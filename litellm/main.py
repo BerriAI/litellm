@@ -2206,7 +2206,7 @@ def completion(  # type: ignore # noqa: PLR0915
             data = {"model": model, "messages": messages, **optional_params}
 
             ## COMPLETION CALL
-            response = openai_chat_completions.completion(
+            response = openai_like_chat_completion.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -2221,6 +2221,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 acompletion=acompletion,
                 timeout=timeout,  # type: ignore
                 custom_llm_provider="openrouter",
+                custom_prompt_dict=custom_prompt_dict,
+                encoding=encoding,
             )
             ## LOGGING
             logging.post_call(
