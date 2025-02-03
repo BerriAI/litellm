@@ -8393,6 +8393,26 @@
         "supports_function_calling": true,
         "mode": "chat"
     },
+    "nebius/Qwen/QVQ-72B-preview": {
+        "max_tokens": 32000,
+        "max_input_tokens": 24000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
+    "nebius/Qwen/Qwen2-VL-72B-Instruct": {
+        "max_tokens": 32000,
+        "max_input_tokens": 24000,
+        "max_output_tokens": 8000,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "nebius",
+        "supports_function_calling": true,
+        "mode": "chat"
+    },
     "nebius/BAAI/bge-en-icl": {
         "max_tokens": 32000,
         "max_input_tokens": 32000,
