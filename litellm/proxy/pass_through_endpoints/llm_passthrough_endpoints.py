@@ -333,7 +333,6 @@ async def assemblyai_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": "{}".format(assemblyai_api_key)},
-        _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
