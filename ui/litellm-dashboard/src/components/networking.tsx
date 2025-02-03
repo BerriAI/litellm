@@ -1510,6 +1510,36 @@ export const allEndUsersCall = async (accessToken: String) => {
   }
 };
 
+export const userFilterUICall = async (accessToken: String, params: URLSearchParams) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
+
+    if (params.get("user_email")) {
+      url += `?user_email=${params.get("user_email")}`;
+    }
+    if (params.get("user_id")) {
+      url += `?user_id=${params.get("user_id")}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+  return await response.json();
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
 export const userSpendLogsCall = async (
   accessToken: String,
   token: String,
@@ -2382,6 +2412,47 @@ export const teamMemberUpdateCall = async (
         team_id: teamId,
         role: formValues.role,  
         user_id: formValues.user_id,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+}
+
+export const teamMemberDeleteCall = async (
+  accessToken: string,
+  teamId: string,
+  formValues: Member // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/member_delete`
+      : `/team/member_delete`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        team_id: teamId,
+        ...(formValues.user_email && { user_email: formValues.user_email }),
+        ...(formValues.user_id && { user_id: formValues.user_id })
       }),
     });
 
