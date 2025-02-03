@@ -1756,6 +1756,7 @@ all_litellm_params = [
     "max_fallbacks",
     "max_budget",
     "budget_duration",
+    "use_in_pass_through",
 ] + list(StandardCallbackDynamicParams.__annotations__.keys())
 
 
@@ -1915,3 +1916,8 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+
+
+class SelectTokenizerResponse(TypedDict):
+    type: Literal["openai_tokenizer", "huggingface_tokenizer"]
+    tokenizer: Any

@@ -75,6 +75,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     Usage,
+    add_openai_metadata,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
     create_pretrained_tokenizer,
@@ -1200,7 +1201,8 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if litellm.AzureOpenAIO1Config().is_o1_model(model=model):
+            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():
@@ -1616,6 +1618,11 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+
+            if (
+                litellm.enable_preview_features and metadata is not None
+            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+                optional_params["metadata"] = add_openai_metadata(metadata)
 
             ## LOAD CONFIG - if set
             config = litellm.OpenAIConfig.get_config()
@@ -2582,6 +2589,25 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
+                )
+            elif "converse_like" in model:
+                model = model.replace("converse_like/", "")
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    custom_llm_provider="bedrock",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                    client=client,
                 )
             else:
                 model = model.replace("invoke/", "")

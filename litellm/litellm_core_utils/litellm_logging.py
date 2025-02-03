@@ -625,10 +625,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     masked_api_base = api_base
                 self.model_call_details["litellm_params"]["api_base"] = masked_api_base
 
-                verbose_logger.debug(
-                    "PRE-API-CALL ADDITIONAL ARGS: %s", additional_args
-                )
-
                 curl_command = self._get_request_curl_command(
                     api_base=api_base,
                     headers=headers,
@@ -871,6 +867,26 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
+    def should_run_callback(
+        self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str
+    ) -> bool:
+
+        if litellm.global_disable_no_log_param:
+            return True
+
+        if litellm_params.get("no-log", False) is True:
+            # proxy cost tracking cal backs should run
+
+            if not (
+                isinstance(callback, CustomLogger)
+                and "_PROXY_" in callback.__class__.__name__
+            ):
+                verbose_logger.debug(
+                    f"no-log request, skipping logging for {event_hook} event"
+                )
+                return False
+        return True
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -1013,21 +1029,13 @@ class Logging(LiteLLMLoggingBaseClass):
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
-            if self.stream and (
-                isinstance(result, litellm.ModelResponse)
-                or isinstance(result, TextCompletionResponse)
-                or isinstance(result, ModelResponseStream)
-            ):
-                complete_streaming_response: Optional[
-                    Union[ModelResponse, TextCompletionResponse]
-                ] = _assemble_complete_response_from_streaming_chunks(
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    request_kwargs=self.model_call_details,
-                    streaming_chunks=self.sync_streaming_chunks,
-                    is_async=False,
-                )
+            complete_streaming_response = self._get_assembled_streaming_response(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_async=False,
+                streaming_chunks=self.sync_streaming_chunks,
+            )
             if complete_streaming_response is not None:
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
@@ -1076,14 +1084,13 @@ class Logging(LiteLLMLoggingBaseClass):
             for callback in callbacks:
                 try:
                     litellm_params = self.model_call_details.get("litellm_params", {})
-                    if litellm_params.get("no-log", False) is True:
-                        # proxy cost tracking cal backs should run
-                        if not (
-                            isinstance(callback, CustomLogger)
-                            and "_PROXY_" in callback.__class__.__name__
-                        ):
-                            verbose_logger.info("no-log request, skipping logging")
-                            continue
+                    should_run = self.should_run_callback(
+                        callback=callback,
+                        litellm_params=litellm_params,
+                        event_hook="success_handler",
+                    )
+                    if not should_run:
+                        continue
                     if callback == "promptlayer" and promptLayerLogger is not None:
                         print_verbose("reaches promptlayer for logging!")
                         promptLayerLogger.log_event(
@@ -1527,22 +1534,13 @@ class Logging(LiteLLMLoggingBaseClass):
             return  # break out of this.
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = None
-        if self.stream is True and (
-            isinstance(result, litellm.ModelResponse)
-            or isinstance(result, litellm.ModelResponseStream)
-            or isinstance(result, TextCompletionResponse)
-        ):
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse]
-            ] = _assemble_complete_response_from_streaming_chunks(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                request_kwargs=self.model_call_details,
-                streaming_chunks=self.streaming_chunks,
-                is_async=True,
-            )
+        ] = self._get_assembled_streaming_response(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_async=True,
+            streaming_chunks=self.streaming_chunks,
+        )
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
@@ -1630,18 +1628,14 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
-            if litellm_params.get("no-log", False) is True:
-                # proxy cost tracking cal backs should run
-                if not (
-                    isinstance(callback, CustomLogger)
-                    and "_PROXY_" in callback.__class__.__name__
-                ):
-                    print_verbose("no-log request, skipping logging")
-                    continue
+            should_run = self.should_run_callback(
+                callback=callback,
+                litellm_params=litellm_params,
+                event_hook="async_success_handler",
+            )
+            if not should_run:
+                continue
             try:
-                if kwargs.get("no-log", False) is True:
-                    print_verbose("no-log request, skipping logging")
-                    continue
                 if callback == "openmeter" and openMeterLogger is not None:
                     if self.stream is True:
                         if (
@@ -2247,6 +2241,32 @@ class Logging(LiteLLMLoggingBaseClass):
                 continue
             _new_callbacks.append(_c)
         return _new_callbacks
+
+    def _get_assembled_streaming_response(
+        self,
+        result: Union[ModelResponse, TextCompletionResponse, ModelResponseStream, Any],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        is_async: bool,
+        streaming_chunks: List[Any],
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+        if isinstance(result, ModelResponse):
+            return result
+        elif isinstance(result, TextCompletionResponse):
+            return result
+        elif isinstance(result, ModelResponseStream):
+            complete_streaming_response: Optional[
+                Union[ModelResponse, TextCompletionResponse]
+            ] = _assemble_complete_response_from_streaming_chunks(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                request_kwargs=self.model_call_details,
+                streaming_chunks=streaming_chunks,
+                is_async=is_async,
+            )
+            return complete_streaming_response
+        return None
 
 
 def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915

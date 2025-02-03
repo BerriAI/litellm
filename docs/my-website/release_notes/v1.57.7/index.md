@@ -6,7 +6,7 @@ authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
     url: https://www.linkedin.com/in/krish-d/
-    image_url: https://media.licdn.com/dms/image/v2/C5103AQHYMXJfHTf4Ng/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1517455593871?e=1741824000&v=beta&t=udmat6jS-s3EQZp1DTykf7NZmf-3sefD_I9B1aMjE5Y
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1743638400&v=beta&t=39KOXMUFedvukiWWVPHf3qI45fuQD7lNglICwN31DrI
   - name: Ishaan Jaffer
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/

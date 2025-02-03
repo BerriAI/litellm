@@ -116,6 +116,16 @@ Removes any field with `user_api_key_*` from metadata.
 
 For some use cases, you may want to turn off all tracking/logging. You can do this by passing `no-log=True` in the request body.
 
+:::info
+
+Disable this by setting `global_disable_no_log_param:true` in your config.yaml file.
+
+```yaml
+litellm_settings:
+  global_disable_no_log_param: True
+```
+:::
+
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
 
@@ -1494,9 +1504,6 @@ class MyCustomHandler(CustomLogger):
     
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         print(f"Post-API Call")
-
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print("On Success")

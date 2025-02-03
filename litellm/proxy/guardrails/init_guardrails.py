@@ -157,7 +157,7 @@ def init_guardrails_v2(
                 event_hook=litellm_params["mode"],
                 default_on=litellm_params["default_on"],
             )
-            litellm.callbacks.append(_guardrail_callback)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
