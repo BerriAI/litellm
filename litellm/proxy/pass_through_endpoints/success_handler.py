@@ -39,7 +39,9 @@ class PassThroughEndpointLogging:
         self,
         logging_obj: LiteLLMLoggingObj,
         standard_logging_response_object: Union[
-            StandardPassThroughResponseObject, PassThroughEndpointLoggingResultValues
+            StandardPassThroughResponseObject,
+            PassThroughEndpointLoggingResultValues,
+            dict,
         ],
         result: str,
         start_time: datetime,
