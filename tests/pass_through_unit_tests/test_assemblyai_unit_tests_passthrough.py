@@ -33,6 +33,9 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthr
     AssemblyAIPassthroughLoggingHandler,
     AssemblyAITranscriptResponse,
 )
+from litellm.proxy.pass_through_endpoints.success_handler import (
+    PassThroughEndpointLogging,
+)
 
 
 @pytest.fixture
@@ -195,3 +198,25 @@ async def test_assemblyai_proxy_route_get_transcript(
         target="https://api.assemblyai.com/v2/transcript/test-transcript-id",
         custom_headers={"Authorization": "test-assemblyai-key"},
     )
+
+
+def test_is_assemblyai_route():
+    """
+    Test that the is_assemblyai_route method correctly identifies AssemblyAI routes
+    """
+    handler = PassThroughEndpointLogging()
+
+    # Test positive cases
+    assert (
+        handler.is_assemblyai_route("https://api.assemblyai.com/v2/transcript") == True
+    )
+    assert handler.is_assemblyai_route("https://api.assemblyai.com/other/path") == True
+    assert handler.is_assemblyai_route("https://api.assemblyai.com/transcript") == True
+
+    # Test negative cases
+    assert handler.is_assemblyai_route("https://example.com/other") == False
+    assert (
+        handler.is_assemblyai_route("https://api.openai.com/v1/chat/completions")
+        == False
+    )
+    assert handler.is_assemblyai_route("") == False
