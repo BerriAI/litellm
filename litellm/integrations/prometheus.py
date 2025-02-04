@@ -21,8 +21,8 @@ class PrometheusMetricManager:
         metric: Any,
         metric_name: DEFINED_PROMETHEUS_METRICS,
         enum_values: UserAPIKeyLabelValues,
-        value: float = 1.0,
-        action: Literal["inc", "observe"] = "inc",
+        value: Optional[float] = None,
+        action: Literal["inc", "observe", "set"] = "inc",
     ) -> None:
         """
         Update a metric by getting the correct labels from the factory
@@ -33,6 +33,9 @@ class PrometheusMetricManager:
             enum_values: Values for the labels
             value: Value to update the metric with
         """
+        if value is None:
+            return
+
         labels = prometheus_label_factory(
             supported_enum_labels=PrometheusMetricLabels.get_labels(
                 label_name=metric_name
@@ -42,6 +45,8 @@ class PrometheusMetricManager:
         # Update metric with labels
         if action == "observe":
             metric.labels(**labels).observe(value)
+        elif action == "set":
+            metric.labels(**labels).set(value)
         else:
             metric.labels(**labels).inc(value)
 
@@ -509,6 +514,7 @@ class PrometheusLogger(CustomLogger):
             user_api_key_alias=user_api_key_alias,
             litellm_params=litellm_params,
             response_cost=response_cost,
+            enum_values=enum_values,
         )
 
         # set proxy virtual key rpm/tpm metrics
@@ -603,6 +609,7 @@ class PrometheusLogger(CustomLogger):
         user_api_key_alias: Optional[str],
         litellm_params: dict,
         response_cost: float,
+        enum_values: UserAPIKeyLabelValues,
     ):
         _team_spend = litellm_params.get("metadata", {}).get(
             "user_api_key_team_spend", None
@@ -623,6 +630,7 @@ class PrometheusLogger(CustomLogger):
             response_cost=response_cost,
             key_max_budget=_api_key_max_budget,
             key_spend=_api_key_spend,
+            enum_values=enum_values,
         )
 
         await self._set_team_budget_metrics_after_api_request(
@@ -1489,7 +1497,13 @@ class PrometheusLogger(CustomLogger):
         """Helper function to set budget metrics for a list of keys"""
         for key in keys:
             if isinstance(key, UserAPIKeyAuth):
-                self._set_key_budget_metrics(key)
+                self._set_key_budget_metrics(
+                    user_api_key_dict=key,
+                    enum_values=UserAPIKeyLabelValues(
+                        hashed_api_key=key.token,
+                        api_key_alias=key.key_alias or "",
+                    ),
+                )
 
     async def _set_team_list_budget_metrics(self, teams: List[LiteLLM_TeamTable]):
         """Helper function to set budget metrics for a list of teams"""
@@ -1601,7 +1615,11 @@ class PrometheusLogger(CustomLogger):
                 )
             )
 
-    def _set_key_budget_metrics(self, user_api_key_dict: UserAPIKeyAuth):
+    def _set_key_budget_metrics(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        enum_values: UserAPIKeyLabelValues,
+    ):
         """
         Set virtual key budget metrics
 
@@ -1609,14 +1627,26 @@ class PrometheusLogger(CustomLogger):
         - Max Budget
         - Budget Reset At
         """
-        self.litellm_remaining_api_key_budget_metric.labels(
-            user_api_key_dict.token,
-            user_api_key_dict.key_alias or "",
-        ).set(
-            self._safe_get_remaining_budget(
+        PrometheusMetricManager.update_metric_with_labels(
+            metric=self.litellm_remaining_api_key_budget_metric,
+            metric_name="litellm_remaining_api_key_budget_metric",
+            enum_values=enum_values,
+            value=self._safe_get_remaining_budget(
                 max_budget=user_api_key_dict.max_budget,
                 spend=user_api_key_dict.spend,
-            )
+            ),
+            action="set",
+        )
+
+        PrometheusMetricManager.update_metric_with_labels(
+            metric=self.litellm_api_key_max_budget_metric,
+            metric_name="litellm_api_key_max_budget_metric",
+            enum_values=enum_values,
+            value=self._safe_get_remaining_budget(
+                max_budget=user_api_key_dict.max_budget,
+                spend=user_api_key_dict.spend,
+            ),
+            action="set",
         )
 
         if user_api_key_dict.max_budget is not None:
@@ -1640,6 +1670,7 @@ class PrometheusLogger(CustomLogger):
         response_cost: float,
         key_max_budget: float,
         key_spend: Optional[float],
+        enum_values: UserAPIKeyLabelValues,
     ):
         if user_api_key:
             user_api_key_dict = await self._assemble_key_object(
@@ -1649,7 +1680,10 @@ class PrometheusLogger(CustomLogger):
                 key_spend=key_spend,
                 response_cost=response_cost,
             )
-            self._set_key_budget_metrics(user_api_key_dict)
+            self._set_key_budget_metrics(
+                user_api_key_dict=user_api_key_dict,
+                enum_values=enum_values,
+            )
 
     async def _assemble_key_object(
         self,
