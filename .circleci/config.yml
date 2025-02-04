@@ -1515,7 +1515,7 @@ jobs:
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name my-app \
-              -v $(pwd)/litellm/proxy/example_config_yaml/store_model_in_db_config.yaml:/app/config.yaml \
+              -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
