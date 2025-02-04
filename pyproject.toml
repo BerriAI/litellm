@@ -51,6 +51,7 @@ azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 resend = {version = "^0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
+huggingface-hub = {version = "^0.28.0", optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -77,6 +78,7 @@ extra_proxy = [
     "google-cloud-kms",
     "resend",
 ]
+huggingface = ["huggingface-hub"]
 
 [tool.isort]
 profile = "black"

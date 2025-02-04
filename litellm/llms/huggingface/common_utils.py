@@ -1,18 +1,26 @@
-from typing import Literal, Optional, Union
+from typing import Dict, Literal, Optional, Union
 
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 
-class HuggingfaceError(BaseLLMException):
+class HuggingFaceError(BaseLLMException):
     def __init__(
         self,
-        status_code: int,
-        message: str,
-        headers: Optional[Union[dict, httpx.Headers]] = None,
+        status_code,
+        message,
+        request: Optional[httpx.Request] = None,
+        response: Optional[httpx.Response] = None,
+        headers: Optional[Union[httpx.Headers, dict]] = None,
     ):
-        super().__init__(status_code=status_code, message=message, headers=headers)
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            request=request,
+            response=response,
+            headers=headers,
+        )
 
 
 hf_tasks = Literal[
@@ -43,3 +51,17 @@ def output_parser(generated_text: str):
         if generated_text.endswith(token):
             generated_text = generated_text[::-1].replace(token[::-1], "", 1)[::-1]
     return generated_text
+
+
+def _validate_environment(
+    headers: Dict,
+    api_key: Optional[str] = None,
+) -> Dict:
+    default_headers = {
+        "content-type": "application/json",
+    }
+    if api_key is not None:
+        default_headers["Authorization"] = f"Bearer {api_key}"
+
+    headers = {**headers, **default_headers}
+    return headers

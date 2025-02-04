@@ -130,7 +130,8 @@ from .llms.databricks.chat.handler import DatabricksChatCompletion
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.groq.chat.handler import GroqChatCompletion
-from .llms.huggingface.chat.handler import Huggingface
+from .llms.huggingface.chat.handler import HFCompletion
+from .llms.huggingface.embedding.handler import HFEmbedding
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
@@ -210,7 +211,8 @@ azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
 azure_text_completions = AzureTextCompletion()
 azure_audio_transcriptions = AzureAudioTranscription()
-huggingface = Huggingface()
+huggingface = HFCompletion()
+huggingface_embedding = HFEmbedding()
 predibase_chat_completions = PredibaseChatCompletion()
 codestral_text_completions = CodestralTextCompletion()
 bedrock_chat_completion = BedrockLLM()
@@ -2041,7 +2043,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             response = model_response
         elif custom_llm_provider == "huggingface":
-            custom_llm_provider = "huggingface"
             huggingface_key = (
                 api_key
                 or litellm.huggingface_key
@@ -2052,38 +2053,19 @@ def completion(  # type: ignore # noqa: PLR0915
             hf_headers = headers or litellm.headers
 
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            model_response = huggingface.completion(
+            response = huggingface.completion(
+                api_key=huggingface_key,
                 model=model,
                 messages=messages,
-                api_base=api_base,  # type: ignore
-                headers=hf_headers or {},
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=huggingface_key,
-                acompletion=acompletion,
-                logging_obj=logging,
-                custom_prompt_dict=custom_prompt_dict,
                 timeout=timeout,  # type: ignore
-                client=client,
+                logging_obj=logging,
+                optional_params=optional_params,
+                api_base=api_base,
+                acompletion=acompletion,
+                litellm_params=litellm_params,
+                client=client,  # pass huggingface_hub.AsyncInferenceClient or InferenceClient client
+                headers=hf_headers,
             )
-            if (
-                "stream" in optional_params
-                and optional_params["stream"] is True
-                and acompletion is False
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="huggingface",
-                    logging_obj=logging,
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "oobabooga":
             custom_llm_provider = "oobabooga"
             model_response = oobabooga.completion(
