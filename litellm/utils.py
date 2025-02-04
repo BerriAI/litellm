@@ -419,7 +419,6 @@ def _custom_logger_class_exists_in_failure_callbacks(
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
-
     ### NOTICES ###
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -4216,7 +4215,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and model in litellm.model_cost:
-
                 key = model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4227,7 +4225,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 _model_info is None
                 and combined_stripped_model_name in litellm.model_cost
             ):
-
                 key = combined_stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4235,7 +4232,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and stripped_model_name in litellm.model_cost:
-
                 key = stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4243,7 +4239,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ):
                     _model_info = None
             if _model_info is None and split_model in litellm.model_cost:
-
                 key = split_model
                 _model_info = _get_model_info_from_model_cost(key=key)
                 if not _check_provider_match(
@@ -4360,6 +4355,25 @@ def _get_model_info_helper(  # noqa: PLR0915
                 model, custom_llm_provider
             )
         )
+
+
+def get_model_param_support(
+    model: str, param: str, custom_llm_provider: Optional[str]
+) -> bool:
+    model_info = litellm.model_cost.get(model)
+    potential_model_names = _get_potential_model_names(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    verbose_logger.debug(
+        f"checking potential_model_names in litellm.model_cost: {potential_model_names}"
+    )
+    # iterate over potential model names to get the model cost
+    for key, value in potential_model_names.items():
+        if value in litellm.model_cost and key != "custom_llm_provider":
+            return litellm.model_cost[value].get(param, False)
+
+    return False
 
 
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
