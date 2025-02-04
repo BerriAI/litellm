@@ -633,3 +633,67 @@ async def test_get_fuzzy_user_object():
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
     )
+
+
+@pytest.mark.parametrize(
+    "token_spend, default_budget, expect_budget_error",
+    [
+        (5.0, 10.0, False),  # Under default budget
+        (10.0, 10.0, True),  # At default budget limit
+        (15.0, 10.0, True),  # Over default budget
+        (5.0, None, False),  # No default budget set
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_default_budget_check(
+    token_spend, default_budget, expect_budget_error
+):
+    """
+    Test if virtual key default budget checks work as expected:
+    1. Raises BudgetExceededError when spend >= default_budget
+    2. Allows requests when spend < default_budget
+    3. Allows all requests when no default_budget is set
+    """
+    from litellm.proxy.auth.auth_checks import _virtual_key_default_budget_check
+
+    # Set default budget for testing
+    litellm.default_key_max_budget = default_budget
+
+    # Setup test data
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=token_spend,
+        user_id="test-user",
+        key_alias="test-key",
+    )
+
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        user_email="test@email.com",
+        max_budget=None,
+    )
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=None,
+    )
+
+    try:
+        await _virtual_key_default_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+            user_obj=user_obj,
+        )
+        if expect_budget_error:
+            pytest.fail(
+                f"Expected BudgetExceededError for spend={token_spend}, default_budget={default_budget}"
+            )
+    except litellm.BudgetExceededError as e:
+        if not expect_budget_error:
+            pytest.fail(
+                f"Unexpected BudgetExceededError for spend={token_spend}, default_budget={default_budget}"
+            )
+        assert e.current_cost == token_spend
+        assert e.max_budget == default_budget
+
+    # Reset default budget after test
+    litellm.default_key_max_budget = None
