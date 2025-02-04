@@ -236,6 +236,7 @@ max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
+default_key_max_budget: Optional[float] = None  # set a default max budget for all keys
 default_soft_budget: float = (
     50.0  # by default all litellm proxy keys have a soft budget of 50.0
 )

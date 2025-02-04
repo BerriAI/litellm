@@ -87,6 +87,7 @@ async def common_checks(
     8. [OPTIONAL] If guardrails modified - is request allowed to change this
     9. Check if request body is safe
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
+    11. [OPTIONAL] Default key max budget check
     """
     _model = request_body.get("model", None)
 
@@ -187,6 +188,13 @@ async def common_checks(
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(
         user_object=user_object, route=route, request_body=request_body
+    )
+
+    # 11 [OPTIONAL] Default key max budget check
+    await _virtual_key_default_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=user_object,
     )
 
     return True
@@ -1126,6 +1134,25 @@ async def _virtual_key_soft_budget_check(
                 user_info=call_info,
             )
         )
+
+
+async def _virtual_key_default_budget_check(
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+):
+    """
+    Raises:
+        BudgetExceededError if the token is over it's litellm.default_key_max_budget
+        Triggers a budget alert if the token is over it's litellm.default_key_max_budget
+    Only runs if litellm.default_key_max_budget is set.
+    """
+    if litellm.default_key_max_budget:
+        if valid_token and valid_token.spend >= litellm.default_key_max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=valid_token.spend,
+                max_budget=litellm.default_key_max_budget,
+            )
 
 
 async def _team_max_budget_check(
