@@ -16,6 +16,7 @@ import dotenv
 from dotenv import load_dotenv
 import pytest
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletion
 
 load_dotenv()
 
@@ -27,9 +28,9 @@ async def config_update(session, routing_strategy=None):
     data = {
         "litellm_settings": {"success_callback": ["langfuse"]},
         "environment_variables": {
-            "LANGFUSE_PUBLIC_KEY": "pk-lf-e02aaea3-8668-4c9f-8c69-771a4ea1f5c9",
-            "LANGFUSE_SECRET_KEY": "sk-lf-2480d7c9-f135-4b48-bf7e-2e6af14bedda",
-            "LANGFUSE_HOST": "https://us.cloud.langfuse.com",
+            "LANGFUSE_PUBLIC_KEY": "any-public-key",
+            "LANGFUSE_SECRET_KEY": "any-secret-key",
+            "LANGFUSE_HOST": "http://localhost:8091",
         },
     }
 
@@ -45,13 +46,27 @@ async def config_update(session, routing_strategy=None):
         return await response.json()
 
 
-async def make_chat_completions_request(session):
+async def check_langfuse_request(response_id: str):
+    langfuse_base_url = os.getenv("LANGFUSE_HOST")
+    async with aiohttp.ClientSession() as session:
+        url = f"{langfuse_base_url}/langfuse/trace/{response_id}"
+        async with session.get(url) as response:
+            response_json = await response.json()
+            assert response.status == 200, f"Expected status 200, got {response.status}"
+            assert (
+                response_json["exists"] == True
+            ), f"Request {response_id} not found in Langfuse traces"
+            assert response_json["request_id"] == response_id, f"Request ID mismatch"
+
+
+async def make_chat_completions_request() -> ChatCompletion:
     client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
     response = await client.chat.completions.create(
         model="fake-openai-endpoint",
         messages=[{"role": "user", "content": "Hello, world!"}],
     )
     print(response)
+    return response
 
 
 @pytest.mark.asyncio
@@ -66,4 +81,11 @@ async def test_e2e_langfuse_callbacks_in_db():
     # await asyncio.sleep(20)
 
     # make a /chat/completions request to the proxy
-    await make_chat_completions_request(session)
+    response = await make_chat_completions_request()
+    print(response)
+    response_id = response.id
+    print("response_id: ", response_id)
+
+    await asyncio.sleep(11)
+    # check if the request is logged in Langfuse
+    await check_langfuse_request(response_id)
