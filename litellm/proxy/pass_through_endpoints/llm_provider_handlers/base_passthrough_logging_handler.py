@@ -113,6 +113,7 @@ class BasePassthroughLoggingHandler(ABC):
                 completion_response=litellm_model_response,
                 model=model,
             )
+
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore

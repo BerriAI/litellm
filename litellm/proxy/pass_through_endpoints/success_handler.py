@@ -34,7 +34,7 @@ class PassThroughEndpointLogging:
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages"]
 
         # Cohere
-        self.TRACKED_COHERE_ROUTES = ["/v1/chat", "/v2/chat"]
+        self.TRACKED_COHERE_ROUTES = ["/v2/chat"]
 
     async def pass_through_async_success_handler(
         self,
