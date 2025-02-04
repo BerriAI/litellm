@@ -20,6 +20,8 @@ from openai.types.chat import ChatCompletion
 
 load_dotenv()
 
+LANGFUSE_BASE_URL = "https://exampleopenaiendpoint-production.up.railway.app/"
+
 
 async def config_update(session, routing_strategy=None):
     url = "http://0.0.0.0:4000/config/update"
@@ -30,7 +32,7 @@ async def config_update(session, routing_strategy=None):
         "environment_variables": {
             "LANGFUSE_PUBLIC_KEY": "any-public-key",
             "LANGFUSE_SECRET_KEY": "any-secret-key",
-            "LANGFUSE_HOST": "http://localhost:8091",
+            "LANGFUSE_HOST": LANGFUSE_BASE_URL,
         },
     }
 
@@ -47,9 +49,8 @@ async def config_update(session, routing_strategy=None):
 
 
 async def check_langfuse_request(response_id: str):
-    langfuse_base_url = os.getenv("LANGFUSE_HOST")
     async with aiohttp.ClientSession() as session:
-        url = f"{langfuse_base_url}/langfuse/trace/{response_id}"
+        url = f"{LANGFUSE_BASE_URL}/langfuse/trace/{response_id}"
         async with session.get(url) as response:
             response_json = await response.json()
             assert response.status == 200, f"Expected status 200, got {response.status}"
@@ -75,10 +76,10 @@ async def test_e2e_langfuse_callbacks_in_db():
     session = aiohttp.ClientSession()
 
     # add langfuse callback to DB
-    # await config_update(session)
+    await config_update(session)
 
     # wait 20 seconds for the callback to be loaded into the instance
-    # await asyncio.sleep(20)
+    await asyncio.sleep(20)
 
     # make a /chat/completions request to the proxy
     response = await make_chat_completions_request()
