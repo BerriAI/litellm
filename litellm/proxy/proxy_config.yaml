@@ -1,11 +1,9 @@
 model_list:
-  - model_name: bedrock/*
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: bedrock/*
-
-litellm_settings:
-  callbacks: ["datadog"]
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings:
-  store_prompts_in_spend_logs: true
-
+  store_model_in_db: true
