@@ -2609,16 +2609,41 @@ def test_bedrock_top_k_param(model, expected_params):
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
-        try:
-            litellm.completion(
-                model=model,
-                messages=[{"role": "user", "content": "Hello, world!"}],
-                top_k=2,
-                client=client
-            )  
-        except Exception as e:
-            print(e)
+        mock_response = Mock()
+        
+        if ("mistral" in model):
+            mock_response.text = json.dumps({"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}) 
+        else:
+            mock_response.text = json.dumps(
+                {
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "text": "Here's a joke..."
+                                }
+                            ]
+                        }
+                    },
+                    "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
+                    "stopReason": "stop"
+                }
+            ) 
+            
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+        
 
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            top_k=2,
+            client=client
+        )  
         data = json.loads(mock_post.call_args.kwargs["data"])
         if ("mistral" in model):
             assert (data["top_k"] == 2)
