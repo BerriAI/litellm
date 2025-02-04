@@ -71,11 +71,11 @@ def test_init_clients():
             print(async_client._base_url)
             assert (
                 async_client._base_url
-                == "https://openai-gpt-4-test-v-1.openai.azure.com//openai/"
-            )  # openai python adds the extra /
+                == "https://openai-gpt-4-test-v-1.openai.azure.com/openai/"
+            )
             assert (
                 stream_async_client._base_url
-                == "https://openai-gpt-4-test-v-1.openai.azure.com//openai/"
+                == "https://openai-gpt-4-test-v-1.openai.azure.com/openai/"
             )
 
         print("PASSED !")
