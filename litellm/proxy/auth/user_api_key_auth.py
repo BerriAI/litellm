@@ -522,8 +522,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             ):
                                 api_key = request.headers.get(key=header_key)  # type: ignore
 
-        _basic_token_format_checks(api_key=api_key)
-
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
@@ -659,6 +657,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     e
                 )  # moving from .warning to .debug as it spams logs when team missing from cache.
 
+        _basic_token_format_checks(api_key=api_key)
         try:
             is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
         except Exception:
