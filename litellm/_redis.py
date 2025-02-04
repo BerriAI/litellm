@@ -12,12 +12,11 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
-import litellm
 from litellm import get_secret, get_secret_str
 
 from ._logging import verbose_logger
@@ -313,12 +312,13 @@ def get_redis_async_client(**env_overrides) -> async_redis.Redis:
 
 def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+    verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         return async_redis.BlockingConnectionPool.from_url(
             timeout=5, url=redis_kwargs["url"]
         )
     connection_class = async_redis.Connection
-    if "ssl" in redis_kwargs and redis_kwargs["ssl"] is not None:
+    if "ssl" in redis_kwargs:
         connection_class = async_redis.SSLConnection
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class

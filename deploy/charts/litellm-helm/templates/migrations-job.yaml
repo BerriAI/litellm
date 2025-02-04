@@ -1,23 +1,45 @@
+{{- if .Values.migrationJob.enabled }}
 # This job runs the prisma migrations for the LiteLLM DB.
-
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "litellm.fullname" . }}-migrations
   annotations:
     argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: Never # keep this resource so we can debug status on ArgoCD
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation # delete old migration on a new deploy in case the migration needs to make updates
     checksum/config: {{ toYaml .Values | sha256sum }}
 spec:
   template:
+    metadata:
+      annotations:
+        {{- with .Values.migrationJob.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       containers:
         - name: prisma-migrations
-          image: ghcr.io/berriai/litellm-database:main-latest
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           command: ["python", "litellm/proxy/prisma_migration.py"]
           workingDir: "/app"
           env:
             {{- if .Values.db.useExisting }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.usernameKey }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.passwordKey }}
+            - name: DATABASE_HOST
+              value: {{ .Values.db.endpoint }}
+            - name: DATABASE_NAME
+              value: {{ .Values.db.database }}
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- else }}
@@ -28,3 +50,4 @@ spec:
               value: "false" # always run the migration from the Helm PreSync hook, override the value set
       restartPolicy: OnFailure
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+{{- end }}

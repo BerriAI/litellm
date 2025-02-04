@@ -1,4 +1,15 @@
-ignore = ["F405", "E402", "F401", "E501", "F403"]
-extend-select = ["E501", "PLR0915"]
+lint.ignore = ["F405", "E402", "E501", "F403"]
+lint.extend-select = ["E501", "PLR0915", "T20"]
 line-length = 120
-exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*"]
+exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+
+
+[lint.per-file-ignores]
+"litellm/main.py" = ["F401"]
+"litellm/utils.py" = ["F401"]
+"litellm/proxy/proxy_server.py" = ["F401"]
+"litellm/caching/__init__.py" = ["F401"]
+"litellm/llms/anthropic/chat/__init__.py" = ["F401"]
+"litellm/llms/azure_ai/embed/__init__.py" = ["F401"]
+"litellm/llms/azure_ai/rerank/__init__.py" = ["F401"]
+"litellm/llms/bedrock/chat/__init__.py" = ["F401"]

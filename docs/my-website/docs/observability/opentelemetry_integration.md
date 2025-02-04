@@ -86,3 +86,20 @@ Be aware that if you are continuing an existing trace, and you set `update_trace
 ## Support
 
 For any question or issue with the integration you can reach out to the OpenLLMetry maintainers on [Slack](https://traceloop.com/slack) or via [email](mailto:dev@traceloop.com).
+
+## Troubleshooting
+
+### Trace LiteLLM Proxy user/key/org/team information on failed requests
+
+LiteLLM emits the user_api_key_metadata
+- key hash
+- key_alias
+- org_id
+- user_id
+- team_id
+
+for successful + failed requests 
+
+click under `litellm_request` in the trace
+
+<Image img={require('../../img/otel_debug_trace.png')} />

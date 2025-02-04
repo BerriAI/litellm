@@ -5,10 +5,48 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import re
 from re import Match
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from litellm import get_llm_provider
 from litellm._logging import verbose_router_logger
+
+
+class PatternUtils:
+    @staticmethod
+    def calculate_pattern_specificity(pattern: str) -> Tuple[int, int]:
+        """
+        Calculate pattern specificity based on length and complexity.
+
+        Args:
+            pattern: Regex pattern to analyze
+
+        Returns:
+            Tuple of (length, complexity) for sorting
+        """
+        complexity_chars = ["*", "+", "?", "\\", "^", "$", "|", "(", ")"]
+        ret_val = (
+            len(pattern),  # Longer patterns more specific
+            sum(
+                pattern.count(char) for char in complexity_chars
+            ),  # More regex complexity
+        )
+        return ret_val
+
+    @staticmethod
+    def sorted_patterns(
+        patterns: Dict[str, List[Dict]]
+    ) -> List[Tuple[str, List[Dict]]]:
+        """
+        Cached property for patterns sorted by specificity.
+
+        Returns:
+            Sorted list of pattern-deployment tuples
+        """
+        return sorted(
+            patterns.items(),
+            key=lambda x: PatternUtils.calculate_pattern_specificity(x[0]),
+            reverse=True,
+        )
 
 
 class PatternMatchRouter:
@@ -79,7 +117,9 @@ class PatternMatchRouter:
 
         return new_deployments
 
-    def route(self, request: Optional[str]) -> Optional[List[Dict]]:
+    def route(
+        self, request: Optional[str], filtered_model_names: Optional[List[str]] = None
+    ) -> Optional[List[Dict]]:
         """
         Route a requested model to the corresponding llm deployments based on the regex pattern
 
@@ -88,15 +128,27 @@ class PatternMatchRouter:
         if no pattern is found, return None
 
         Args:
-            request: Optional[str]
-
+            request: str - the received model name from the user (can be a wildcard route). If none, No deployments will be returned.
+            filtered_model_names: Optional[List[str]] - if provided, only return deployments that match the filtered_model_names
         Returns:
             Optional[List[Deployment]]: llm deployments
         """
         try:
             if request is None:
                 return None
-            for pattern, llm_deployments in self.patterns.items():
+
+            sorted_patterns = PatternUtils.sorted_patterns(self.patterns)
+            regex_filtered_model_names = (
+                [self._pattern_to_regex(m) for m in filtered_model_names]
+                if filtered_model_names is not None
+                else []
+            )
+            for pattern, llm_deployments in sorted_patterns:
+                if (
+                    filtered_model_names is not None
+                    and pattern not in regex_filtered_model_names
+                ):
+                    continue
                 pattern_match = re.match(pattern, request)
                 if pattern_match:
                     return self._return_pattern_matched_deployments(

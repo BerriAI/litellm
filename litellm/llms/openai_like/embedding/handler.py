@@ -2,26 +2,18 @@
 ## Handler file for OpenAI-like endpoints.
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
-import copy
 import json
-import os
-import time
-import types
-from enum import Enum
-from functools import partial
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Optional
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 
@@ -44,13 +36,15 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
     ) -> EmbeddingResponse:
         response = None
         try:
-            if client is None or isinstance(client, AsyncHTTPHandler):
-                self.async_client = AsyncHTTPHandler(timeout=timeout)  # type: ignore
+            if client is None or not isinstance(client, AsyncHTTPHandler):
+                async_client = get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.OPENAI,
+                    params={"timeout": timeout},
+                )
             else:
-                self.async_client = client
-
+                async_client = client
             try:
-                response = await self.async_client.post(
+                response = await async_client.post(
                     api_base,
                     headers=headers,
                     data=json.dumps(data),
@@ -62,7 +56,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
-                    message=response.text if response else str(e),
+                    message=e.response.text if e.response else str(e),
                 )
             except httpx.TimeoutException:
                 raise OpenAILikeError(
@@ -97,7 +91,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         api_key: Optional[str],
         api_base: Optional[str],
         optional_params: dict,
-        model_response: Optional[litellm.utils.EmbeddingResponse] = None,
+        model_response: Optional[EmbeddingResponse] = None,
         client=None,
         aembedding=None,
         custom_endpoint: Optional[bool] = None,

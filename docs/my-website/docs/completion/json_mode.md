@@ -51,6 +51,9 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ## Check Model Support 
 
+
+### 1. Check if model supports `response_format`
+
 Call `litellm.get_supported_openai_params` to check if a model/provider supports `response_format`. 
 
 ```python
@@ -60,6 +63,20 @@ params = get_supported_openai_params(model="anthropic.claude-3", custom_llm_prov
 
 assert "response_format" in params
 ```
+
+### 2. Check if model supports `json_schema`
+
+This is used to check if you can pass 
+- `response_format={ "type": "json_schema", "json_schema": … , "strict": true }`
+- `response_format=<Pydantic Model>`
+
+```python
+from litellm import supports_response_schema
+
+assert supports_response_schema(model="gemini-1.5-pro-preview-0215", custom_llm_provider="bedrock")
+```
+
+Check out [model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) for a full list of models and their support for `response_schema`.
 
 ## Pass in 'json_schema' 
 
@@ -72,10 +89,14 @@ response_format: { "type": "json_schema", "json_schema": … , "strict": true }
 Works for:
 - OpenAI models 
 - Azure OpenAI models
+- xAI models (Grok-2 or later)
 - Google AI Studio - Gemini models
 - Vertex AI models (Gemini + Anthropic)
 - Bedrock Models
 - Anthropic API Models
+- Groq Models
+- Ollama Models
+- Databricks Models
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

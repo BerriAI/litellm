@@ -67,7 +67,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="openai/gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -83,13 +83,27 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2",
+  model="anthropic/claude-3-sonnet-20240229",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -101,7 +115,25 @@ os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
 os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="nvidia" label="NVIDIA">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -180,6 +212,42 @@ response = completion(
 
 </Tabs>
 
+### Response Format (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
+    "created": 1734366691,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 43,
+        "prompt_tokens": 13,
+        "total_tokens": 56,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+            "audio_tokens": null,
+            "cached_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+    }
+}
+```
+
 ### Streaming
 Set `stream=True` in the `completion` args. 
 
@@ -194,7 +262,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="openai/gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -211,14 +279,29 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2",
+  model="anthropic/claude-3-sonnet-20240229",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -230,12 +313,30 @@ os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
 os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
 ```
 
+</TabItem>
+
+<TabItem value="nvidia" label="NVIDIA">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+  stream=True,
+)
+```
 </TabItem>
 
 <TabItem value="hugging" label="HuggingFace">
@@ -314,6 +415,32 @@ response = completion(
 
 </Tabs>
 
+### Streaming Response Format (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
+    "created": 1734366925,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion.chunk",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": null,
+            "index": 0,
+            "delta": {
+                "content": "Hello",
+                "role": "assistant",
+                "function_call": null,
+                "tool_calls": null,
+                "audio": null
+            },
+            "logprobs": null
+        }
+    ]
+}
+```
+
 ### Exception handling 
 
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
@@ -331,21 +458,21 @@ except OpenAIError as e:
 ```
 
 ### Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+LiteLLM exposes pre defined callbacks to send data to Lunary, MLflow, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 
 ```python
 from litellm import completion
 
-## set env variables for logging tools
+## set env variables for logging tools (API key set up is not required when using MLflow)
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key" # get your public key at https://app.lunary.ai/settings
 os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
-os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse", "helicone"] # log input/output to lunary, langfuse, supabase, helicone
+litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to lunary, mlflow, langfuse, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])

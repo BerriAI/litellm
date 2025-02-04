@@ -13,16 +13,18 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import httpx
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -217,14 +219,27 @@ class lakeraAI_Moderation(CustomGuardrail):
                     "Skipping lakera prompt injection, no roles with messages found"
                 )
                 return
-            data = {"input": lakera_input}
-            _json_data = json.dumps(data)
+            _data = {"input": lakera_input}
+            _json_data = json.dumps(
+                _data,
+                **self.get_guardrail_dynamic_request_body_params(request_data=data),
+            )
         elif "input" in data and isinstance(data["input"], str):
             text = data["input"]
-            _json_data = json.dumps({"input": text})
+            _json_data = json.dumps(
+                {
+                    "input": text,
+                    **self.get_guardrail_dynamic_request_body_params(request_data=data),
+                }
+            )
         elif "input" in data and isinstance(data["input"], list):
             text = "\n".join(data["input"])
-            _json_data = json.dumps({"input": text})
+            _json_data = json.dumps(
+                {
+                    "input": text,
+                    **self.get_guardrail_dynamic_request_body_params(request_data=data),
+                }
+            )
 
         verbose_proxy_logger.debug("Lakera AI Request Args %s", _json_data)
 
@@ -282,6 +297,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             """
             self._check_response_flagged(response=response.json())
 
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -318,6 +334,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
         )
 
+    @log_guardrail_information
     async def async_moderation_hook(  ### 👈 KEY CHANGE ###
         self,
         data: dict,

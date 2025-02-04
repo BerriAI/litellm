@@ -13,29 +13,30 @@ Requires:
 * `pip install boto3>=1.28.57`
 """
 
-import ast
-import asyncio
-import base64
 import json
 import os
-import re
-import sys
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.custom_httpx.types import httpxSpecialProvider
 from litellm.proxy._types import KeyManagementSystem
+from litellm.types.llms.custom_http import httpxSpecialProvider
+
+from .base_secret_manager import BaseSecretManager
 
 
-class AWSSecretsManagerV2(BaseAWSLLM):
+class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
+    def __init__(self, **kwargs):
+        BaseSecretManager.__init__(self, **kwargs)
+        BaseAWSLLM.__init__(self, **kwargs)
+
     @classmethod
     def validate_environment(cls):
         if "AWS_REGION_NAME" not in os.environ:
@@ -49,7 +50,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         if use_aws_secret_manager is None or use_aws_secret_manager is False:
             return
         try:
-            import boto3
 
             cls.validate_environment()
             litellm.secret_manager_client = cls()
@@ -133,10 +133,14 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             response = sync_client.post(
                 url=endpoint_url, headers=headers, data=body.decode("utf-8")
             )
-            response.raise_for_status()
             return response.json()["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
+        except httpx.HTTPStatusError as e:
+            verbose_logger.exception(
+                "Error reading secret from AWS Secrets Manager: %s",
+                str(e.response.text),
+            )
         except Exception as e:
             verbose_logger.exception(
                 "Error reading secret from AWS Secrets Manager: %s", str(e)
@@ -148,7 +152,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
         secret_name: str,
         secret_value: str,
         description: Optional[str] = None,
-        client_request_token: Optional[str] = None,
         optional_params: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
@@ -159,7 +162,6 @@ class AWSSecretsManagerV2(BaseAWSLLM):
             secret_name: Name of the secret
             secret_value: Value to store (can be a JSON string)
             description: Optional description for the secret
-            client_request_token: Optional unique identifier to ensure idempotency
             optional_params: Additional AWS parameters
             timeout: Request timeout
         """
@@ -254,10 +256,8 @@ class AWSSecretsManagerV2(BaseAWSLLM):
     ) -> tuple[str, Any, bytes]:
         """Prepare the AWS Secrets Manager request"""
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}

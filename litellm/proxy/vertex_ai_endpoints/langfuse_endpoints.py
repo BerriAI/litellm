@@ -8,35 +8,15 @@ Logging Pass-Through Endpoints
 1. Create pass-through endpoints for any LITELLM_BASE_URL/langfuse/<endpoint> map to LANGFUSE_BASE_URL/<endpoint>
 """
 
-import ast
-import asyncio
 import base64
-import traceback
+import os
 from base64 import b64encode
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-from urllib.parse import urlencode
+from typing import Optional
 
-import fastapi
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
-from starlette.datastructures import QueryParams
+from fastapi import APIRouter, Request, Response
 
 import litellm
-from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
-from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
@@ -58,12 +38,23 @@ def create_request_copy(request: Request):
     }
 
 
-@router.api_route("/langfuse/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"])
+@router.api_route(
+    "/langfuse/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Langfuse Pass-through", "pass-through"],
+)
 async def langfuse_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
 ):
+    """
+    Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/langfuse)
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
     api_key = request.headers.get("Authorization") or ""
 
@@ -79,7 +70,9 @@ async def langfuse_proxy_route(
     )
 
     callback_settings_obj: Optional[TeamCallbackMetadata] = (
-        _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict)
+        _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
     )
 
     dynamic_langfuse_public_key: Optional[str] = None

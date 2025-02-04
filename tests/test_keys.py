@@ -300,6 +300,7 @@ async def test_key_update(metadata):
             get_key=key,
             metadata=metadata,
         )
+        print(f"updated_key['metadata']: {updated_key['metadata']}")
         assert updated_key["metadata"] == metadata
         await update_proxy_budget(session=session)  # resets proxy spend
         await chat_completion(session=session, key=key)

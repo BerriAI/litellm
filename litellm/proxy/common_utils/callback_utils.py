@@ -1,8 +1,7 @@
-import sys
-from typing import Any, Dict, List, Optional, get_args
+from typing import Any, Dict, List, Optional
 
 import litellm
-from litellm import get_secret, get_secret_str
+from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.utils import get_instance_fn
@@ -18,7 +17,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     litellm_settings: dict,
     callback_specific_params: dict = {},
 ):
-    from litellm.proxy.proxy_server import callback_settings, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     verbose_proxy_logger.debug(
         f"{blue_color_code}initializing callbacks={value} on proxy{reset_color_code}"
@@ -31,24 +30,8 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
                 imported_list.append(callback)
-            elif isinstance(callback, str) and callback == "otel":
-                from litellm.integrations.opentelemetry import OpenTelemetry
-                from litellm.proxy import proxy_server
-
-                _otel_settings = {}
-                if isinstance(callback_settings, dict) and "otel" in callback_settings:
-                    _otel_settings = callback_settings["otel"]
-
-                open_telemetry_logger = OpenTelemetry(**_otel_settings)
-
-                # Add Otel as a service callback
-                if "otel" not in litellm.service_callback:
-                    litellm.service_callback.append("otel")
-
-                imported_list.append(open_telemetry_logger)
-                setattr(proxy_server, "open_telemetry_logger", open_telemetry_logger)
             elif isinstance(callback, str) and callback == "presidio":
-                from litellm.proxy.hooks.presidio_pii_masking import (
+                from litellm.proxy.guardrails.guardrail_hooks.presidio import (
                     _OPTIONAL_PresidioPIIMasking,
                 )
 
@@ -242,7 +225,9 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
         if "prometheus" in value:
             if premium_user is not True:
-                raise Exception(CommonProxyErrors.not_premium_user.value)
+                verbose_proxy_logger.warning(
+                    f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
+                )
             from litellm.proxy.proxy_server import app
 
             verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics")

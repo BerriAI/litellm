@@ -306,6 +306,8 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         super().__init__(
             self.message, response=self.response, body=None
         )  # Call the base class constructor with the parameters it needs
+        self.code = "429"
+        self.type = "throttling_error"
 
     def __str__(self):
         _message = self.message
@@ -335,19 +337,21 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
     ):
         self.status_code = 400
-        self.message = "litellm.ContextWindowExceededError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
-            message=self.message,
+            message=message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=self.response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
+
+        # set after, to make it clear the raised error is a context window exceeded error
+        self.message = "litellm.ContextWindowExceededError: {}".format(self.message)
 
     def __str__(self):
         _message = self.message

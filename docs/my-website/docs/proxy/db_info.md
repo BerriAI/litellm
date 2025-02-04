@@ -50,18 +50,43 @@ You can see the full DB Schema [here](https://github.com/BerriAI/litellm/blob/ma
 | LiteLLM_ErrorLogs | Captures failed requests and errors. Stores exception details and request information. Helps with debugging and monitoring. | **Medium - on errors only** |
 | LiteLLM_AuditLog | Tracks changes to system configuration. Records who made changes and what was modified. Maintains history of updates to teams, users, and models. | **Off by default**, **High - when enabled** |
 
-## How to Disable `LiteLLM_SpendLogs`
+## Disable `LiteLLM_SpendLogs` & `LiteLLM_ErrorLogs`
 
-You can disable spend_logs by setting `disable_spend_logs` to `True` on the `general_settings` section of your proxy_config.yaml file.
+You can disable spend_logs and error_logs by setting `disable_spend_logs` and `disable_error_logs` to `True` on the `general_settings` section of your proxy_config.yaml file.
 
 ```yaml
 general_settings:
-  disable_spend_logs: True
+  disable_spend_logs: True   # Disable writing spend logs to DB
+  disable_error_logs: True   # Disable writing error logs to DB
 ```
 
+### What is the impact of disabling these logs?
 
-### What is the impact of disabling `LiteLLM_SpendLogs`?
-
+When disabling spend logs (`disable_spend_logs: True`):
 - You **will not** be able to view Usage on the LiteLLM UI
 - You **will** continue seeing cost metrics on s3, Prometheus, Langfuse (any other Logging integration you are using)
+
+When disabling error logs (`disable_error_logs: True`):
+- You **will not** be able to view Errors on the LiteLLM UI
+- You **will** continue seeing error logs in your application logs and any other logging integrations you are using
+
+
+## Migrating Databases 
+
+If you need to migrate Databases the following Tables should be copied to ensure continuation of services and no downtime
+
+
+| Table Name | Description | 
+|------------|-------------|
+| LiteLLM_VerificationToken | **Required** to ensure existing virtual keys continue working |
+| LiteLLM_UserTable | **Required** to ensure existing virtual keys continue working |
+| LiteLLM_TeamTable | **Required** to ensure Teams are migrated |
+| LiteLLM_TeamMembership | **Required** to ensure Teams member budgets are migrated |
+| LiteLLM_BudgetTable | **Required** to migrate existing budgeting settings |
+| LiteLLM_OrganizationTable | **Optional** Only migrate if you use Organizations in DB |
+| LiteLLM_OrganizationMembership | **Optional** Only migrate if you use Organizations in DB | 
+| LiteLLM_ProxyModelTable | **Optional** Only migrate if you store your LLMs in the DB (i.e you set `STORE_MODEL_IN_DB=True`) |
+| LiteLLM_SpendLogs | **Optional** Only migrate if you want historical data on LiteLLM UI |
+| LiteLLM_ErrorLogs | **Optional** Only migrate if you want historical data on LiteLLM UI |
+
 

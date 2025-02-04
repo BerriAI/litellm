@@ -67,7 +67,8 @@ def test_ollama_json_mode():
         assert converted_params == {
             "temperature": 0.5,
             "format": "json",
-        }, f"{converted_params} != {'temperature': 0.5, 'format': 'json'}"
+            "stream": False,
+        }, f"{converted_params} != {'temperature': 0.5, 'format': 'json', 'stream': False}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -79,7 +80,7 @@ mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-tex
 
 
 @mock.patch(
-    "litellm.llms.ollama.ollama_embeddings",
+    "litellm.llms.ollama.completion.handler.ollama_embeddings",
     return_value=mock_ollama_embedding_response,
 )
 def test_ollama_embeddings(mock_embeddings):
@@ -106,7 +107,7 @@ def test_ollama_embeddings(mock_embeddings):
 
 
 @mock.patch(
-    "litellm.llms.ollama.ollama_aembeddings",
+    "litellm.llms.ollama.completion.handler.ollama_aembeddings",
     return_value=mock_ollama_embedding_response,
 )
 def test_ollama_aembeddings(mock_aembeddings):
@@ -173,3 +174,67 @@ def test_ollama_chat_function_calling():
     print(json.loads(tool_calls[0].function.arguments))
 
     print(response)
+
+
+def test_ollama_ssl_verify():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import ssl
+    import httpx
+
+    try:
+        response = litellm.completion(
+            model="ollama/llama3.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in San Francisco?",
+                }
+            ],
+            ssl_verify=False,
+        )
+    except Exception as e:
+        print(e)
+
+    client: HTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
+        "httpx_clientssl_verify_False"
+    )
+
+    test_client = httpx.Client(verify=False)
+    print(client)
+    assert (
+        client.client._transport._pool._ssl_context.verify_mode
+        == test_client._transport._pool._ssl_context.verify_mode
+    )
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_async_ollama_ssl_verify(stream):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    import httpx
+
+    try:
+        response = await litellm.acompletion(
+            model="ollama/llama3.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather like in San Francisco?",
+                }
+            ],
+            ssl_verify=False,
+            stream=stream,
+        )
+    except Exception as e:
+        print(e)
+
+    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
+        "async_httpx_clientssl_verify_Falseollama"
+    )
+
+    test_client = httpx.AsyncClient(verify=False)
+    print(client)
+    assert (
+        client.client._transport._pool._ssl_context.verify_mode
+        == test_client._transport._pool._ssl_context.verify_mode
+    )

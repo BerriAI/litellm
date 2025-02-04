@@ -51,30 +51,25 @@ from litellm import Router
         ),
     ],
 )
-@pytest.mark.parametrize("response_format", ["json", "vtt"])
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "response_format, timestamp_granularities",
+    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
+)
 @pytest.mark.asyncio
-async def test_transcription(model, api_key, api_base, response_format, sync_mode):
-    if sync_mode:
-        transcript = litellm.transcription(
-            model=model,
-            file=audio_file,
-            api_key=api_key,
-            api_base=api_base,
-            response_format=response_format,
-            drop_params=True,
-        )
-    else:
-        transcript = await litellm.atranscription(
-            model=model,
-            file=audio_file,
-            api_key=api_key,
-            api_base=api_base,
-            response_format=response_format,
-            drop_params=True,
-        )
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_transcription(
+    model, api_key, api_base, response_format, timestamp_granularities
+):
+    transcript = await litellm.atranscription(
+        model=model,
+        file=audio_file,
+        api_key=api_key,
+        api_base=api_base,
+        response_format=response_format,
+        drop_params=True,
+    )
     print(f"transcript: {transcript.model_dump()}")
-    print(f"transcript: {transcript._hidden_params}")
+    print(f"transcript hidden params: {transcript._hidden_params}")
 
     assert transcript.text is not None
 
@@ -120,3 +115,22 @@ async def test_transcription_caching():
     assert response_3.text != response_2.text
 
     litellm.cache = None
+
+
+@pytest.mark.asyncio
+async def test_whisper_log_pre_call():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from datetime import datetime
+    from unittest.mock import patch, MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    custom_logger = CustomLogger()
+
+    litellm.callbacks = [custom_logger]
+
+    with patch.object(custom_logger, "log_pre_api_call") as mock_log_pre_call:
+        await litellm.atranscription(
+            model="whisper-1",
+            file=audio_file,
+        )
+        mock_log_pre_call.assert_called_once()

@@ -30,10 +30,17 @@ import TabItem from '@theme/TabItem';
 6. [**litellm.completion() / litellm.embedding()**:](../index#litellm-python-sdk) The litellm Python SDK is used to call the LLM in the OpenAI API format (Translation and parameter mapping)
 
 7. **Post-Request Processing**: After the response is sent back to the client, the following **asynchronous** tasks are performed:
-   - [Logging to LangFuse (logging destination is configurable)](./logging)
+   - [Logging to Lunary, MLflow, LangFuse or other logging destinations](./logging)
    - The [MaxParallelRequestsHandler](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py) updates the rpm/tpm usage for the 
         - Global Server Rate Limit
         - Virtual Key Rate Limit
         - User Rate Limit
         - Team Limit
     - The `_PROXY_track_cost_callback` updates spend / usage in the LiteLLM database. [Here is everything tracked in the DB per request](https://github.com/BerriAI/litellm/blob/ba41a72f92a9abf1d659a87ec880e8e319f87481/schema.prisma#L172)
+
+## Frequently Asked Questions
+
+1. Is a db transaction tied to the lifecycle of request?
+    - No, a db transaction is not tied to the lifecycle of a request.
+    - The check if a virtual key is valid relies on a DB read if it's not in cache.
+    - All other DB transactions are async in background tasks

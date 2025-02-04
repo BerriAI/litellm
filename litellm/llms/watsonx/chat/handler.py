@@ -3,60 +3,22 @@ from typing import Callable, Optional, Union
 import httpx
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
-from ..common_utils import WatsonXAIError, _get_api_params
+from ..common_utils import _get_api_params
+from .transformation import IBMWatsonXChatConfig
+
+watsonx_chat_transformation = IBMWatsonXChatConfig()
 
 
 class WatsonXChatHandler(OpenAILikeChatHandler):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def _prepare_url(
-        self, model: str, api_params: WatsonXAPIParams, stream: Optional[bool]
-    ) -> str:
-        if model.startswith("deployment/"):
-            if api_params.get("space_id") is None:
-                raise WatsonXAIError(
-                    status_code=401,
-                    url=api_params["url"],
-                    message="Error: space_id is required for models called using the 'deployment/' endpoint. Pass in the space_id as a parameter or set it in the WX_SPACE_ID environment variable.",
-                )
-            deployment_id = "/".join(model.split("/")[1:])
-            endpoint = (
-                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value
-                if stream is True
-                else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
-            )
-            endpoint = endpoint.format(deployment_id=deployment_id)
-        else:
-            endpoint = (
-                WatsonXAIEndpoint.CHAT_STREAM.value
-                if stream is True
-                else WatsonXAIEndpoint.CHAT.value
-            )
-        base_url = httpx.URL(api_params["url"])
-        base_url = base_url.join(endpoint)
-        full_url = str(
-            base_url.copy_add_param(key="version", value=api_params["api_version"])
-        )
-
-        return full_url
-
-    def _prepare_payload(
-        self, model: str, api_params: WatsonXAPIParams, stream: Optional[bool]
-    ) -> dict:
-        payload: dict = {}
-        if model.startswith("deployment/"):
-            return payload
-        payload["model_id"] = model
-        payload["project_id"] = api_params["project_id"]
-        return payload
-
     def completion(
         self,
+        *,
         model: str,
         messages: list,
         api_base: str,
@@ -70,35 +32,39 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         optional_params: dict,
         acompletion=None,
         litellm_params=None,
-        logger_fn=None,
         headers: Optional[dict] = None,
+        logger_fn=None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         custom_endpoint: Optional[bool] = None,
-        streaming_decoder: Optional[
-            CustomStreamingDecoder
-        ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
+        streaming_decoder: Optional[CustomStreamingDecoder] = None,
+        fake_stream: bool = False,
     ):
-        api_params = _get_api_params(optional_params, print_verbose=print_verbose)
+        api_params = _get_api_params(params=optional_params)
 
-        if headers is None:
-            headers = {}
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_params['token']}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
+        ## UPDATE HEADERS
+        headers = watsonx_chat_transformation.validate_environment(
+            headers=headers or {},
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
         )
 
-        stream: Optional[bool] = optional_params.get("stream", False)
-
-        ## get api url and payload
-        api_base = self._prepare_url(model=model, api_params=api_params, stream=stream)
-        watsonx_auth_payload = self._prepare_payload(
-            model=model, api_params=api_params, stream=stream
+        ## UPDATE PAYLOAD (optional params)
+        watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
+            model=model,
+            api_params=api_params,
         )
         optional_params.update(watsonx_auth_payload)
+
+        ## GET API URL
+        api_base = watsonx_chat_transformation.get_complete_url(
+            api_base=api_base,
+            model=model,
+            optional_params=optional_params,
+            stream=optional_params.get("stream", False),
+        )
 
         return super().completion(
             model=model,

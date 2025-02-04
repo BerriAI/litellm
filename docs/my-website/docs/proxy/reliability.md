@@ -2,15 +2,61 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Fallbacks, Load Balancing, Retries
+# Fallbacks
 
-- Quick Start [load balancing](#test---load-balancing)
-- Quick Start [client side fallbacks](#test---client-side-fallbacks)
+If a call fails after num_retries, fallback to another model group. 
 
-## Quick Start - Load Balancing
-#### Step 1 - Set deployments on config
+- Quick Start [load balancing](./load_balancing.md)
+- Quick Start [client side fallbacks](#client-side-fallbacks)
 
-**Example config below**. Here requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
+
+Fallbacks are typically done from one `model_name` to another `model_name`. 
+
+## Quick Start 
+
+### 1. Setup fallbacks
+
+Key change: 
+
+```python
+fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+router = Router(
+	model_list=[
+    {
+      "model_name": "gpt-3.5-turbo",
+      "litellm_params": {
+        "model": "azure/<your-deployment-name>",
+        "api_base": "<your-azure-endpoint>",
+        "api_key": "<your-azure-api-key>",
+        "rpm": 6
+      }
+    },
+    {
+      "model_name": "gpt-4",
+      "litellm_params": {
+        "model": "azure/gpt-4-ca",
+        "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/",
+        "api_key": "<your-azure-api-key>",
+        "rpm": 6
+      }
+    }
+	],
+	fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}] # 👈 KEY CHANGE
+)
+
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -19,147 +65,93 @@ model_list:
       api_base: <your-azure-endpoint>
       api_key: <your-azure-api-key>
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4
     litellm_params:
-      model: azure/gpt-turbo-small-ca
+      model: azure/gpt-4-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
       rpm: 6
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-large
-      api_base: https://openai-france-1234.openai.azure.com/
-      api_key: <your-azure-api-key>
-      rpm: 1440
 
 router_settings:
-  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
-  model_group_alias: {"gpt-4": "gpt-3.5-turbo"} # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
-  num_retries: 2
-  timeout: 30                                  # 30 seconds
-  redis_host: <your redis host>                # set this when using multiple litellm proxy deployments, load balancing state stored in redis
-  redis_password: <your redis password>
-  redis_port: 1992
+  fallbacks: [{"gpt-3.5-turbo": ["gpt-4"]}]
 ```
 
-:::info
-Detailed information about [routing strategies can be found here](../routing)
-:::
-
-#### Step 2: Start Proxy with config
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-### Test - Simple Call
-
-Here requests with model=gpt-3.5-turbo will be routed across multiple instances of azure/gpt-3.5-turbo
-
-👉 Key Change: `model="gpt-3.5-turbo"`
-
-**Check the `model_id` in Response Headers to make sure the requests are being load balanced**
-
-<Tabs>
-
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ]
-)
-
-print(response)
-```
-</TabItem>
-
-<TabItem value="Curl" label="Curl Request">
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-}'
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-import os 
-
-os.environ["OPENAI_API_KEY"] = "anything"
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model="gpt-3.5-turbo",
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
 
 </TabItem>
-
 </Tabs>
 
 
-### Test - Loadbalancing
+### 2. Start Proxy
 
-In this request, the following will occur:
-1. A rate limit exception will be raised 
-2. LiteLLM proxy will retry the request on the model group (default is 3).
+```bash
+litellm --config /path/to/config.yaml
+```
+
+### 3. Test Fallbacks
+
+Pass `mock_testing_fallbacks=true` in request body, to trigger fallbacks.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+
+```python
+
+from litellm import Router
+
+model_list = [{..}, {..}] # defined in Step 1.
+
+router = Router(model_list=model_list, fallbacks=[{"bad-model": ["my-good-model"]}])
+
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True,
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--d '{
-  "model": "gpt-3.5-turbo",
+-D '{
+  "model": "my-bad-model",
   "messages": [
-        {"role": "user", "content": "Hi there!"}
-    ],
-    "mock_testing_rate_limit_error": true
-}'
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true # 👈 KEY CHANGE
+}
+'
 ```
 
-[**See Code**](https://github.com/BerriAI/litellm/blob/6b8806b45f970cb2446654d2c379f8dcaa93ce3c/litellm/router.py#L2535)
+</TabItem>
+</Tabs>
 
-### Test - Client Side Fallbacks
+
+
+
+### Explanation
+
+Fallbacks are done in-order - ["gpt-3.5-turbo, "gpt-4", "gpt-4-32k"], will do 'gpt-3.5-turbo' first, then 'gpt-4', etc.
+
+You can also set [`default_fallbacks`](#default-fallbacks), in case a specific model group is misconfigured / bad.
+
+There are 3 types of fallbacks: 
+- `content_policy_fallbacks`: For litellm.ContentPolicyViolationError - LiteLLM maps content policy violation errors across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8495C27-L8495C54)
+- `context_window_fallbacks`: For litellm.ContextWindowExceededErrors - LiteLLM maps context window error messages across providers [**See Code**](https://github.com/BerriAI/litellm/blob/89a43c872a1e3084519fb9de159bf52f5447c6c4/litellm/utils.py#L8469)
+- `fallbacks`: For all remaining errors - e.g. litellm.RateLimitError
+
+
+## Client Side Fallbacks
+
+Set fallbacks in the `.completion()` call for SDK and client-side for proxy. 
+
 In this request the following will occur:
 1. The request to `model="zephyr-beta"` will fail
 2. litellm proxy will loop through all the model_groups specified in `fallbacks=["gpt-3.5-turbo"]`
@@ -168,7 +160,32 @@ In this request the following will occur:
 👉 Key Change: `"fallbacks": ["gpt-3.5-turbo"]`
 
 <Tabs>
+<TabItem value="sdk" label="SDK">
 
+```python
+from litellm import Router
+
+router = Router(model_list=[..]) # defined in Step 1.
+
+resp = router.completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    mock_testing_fallbacks=True, # 👈 trigger fallbacks
+    fallbacks=[
+        {
+            "model": "claude-3-haiku",
+            "messages": [{"role": "user", "content": "What is LiteLLM?"}],
+        }
+    ],
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
 <TabItem value="openai" label="OpenAI Python v1.0.0+">
 
 ```python
@@ -196,8 +213,6 @@ print(response)
 </TabItem>
 
 <TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
@@ -252,24 +267,282 @@ print(response)
 </TabItem>
 
 </Tabs>
+</TabItem>
 
+</Tabs>
 
+### Control Fallback Prompts  
 
-<!-- 
-### Test it!
+Pass in messages/temperature/etc. per model in fallback (works for embedding/image generation/etc. as well).
 
+Key Change:
+
+```
+fallbacks = [
+  {
+    "model": <model_name>,
+    "messages": <model-specific-messages>
+    ... # any other model-specific parameters
+  }
+]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router
+
+router = Router(model_list=[..]) # defined in Step 1.
+
+resp = router.completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    mock_testing_fallbacks=True, # 👈 trigger fallbacks
+    fallbacks=[
+        {
+            "model": "claude-3-haiku",
+            "messages": [{"role": "user", "content": "What is LiteLLM?"}],
+        }
+    ],
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="zephyr-beta",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+      "fallbacks": [{
+          "model": "claude-3-haiku",
+          "messages": [{"role": "user", "content": "What is LiteLLM?"}]
+      }]
+    }
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="Curl" label="Curl Request">
 
 ```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-     --header 'Content-Type: application/json' \
-     --data-raw '{
-        "model": "zephyr-beta", # 👈 MODEL NAME to fallback from
-        "messages": [
-            {"role": "user", "content": "what color is red"}
-        ],
-        "mock_testing_fallbacks": true
-     }'
-``` -->
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hi, how are you ?"
+          }
+        ]
+      }
+    ],
+    "fallbacks": [{
+        "model": "claude-3-haiku",
+        "messages": [{"role": "user", "content": "What is LiteLLM?"}]
+    }],
+    "mock_testing_fallbacks": true
+}'
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+import os 
+
+os.environ["OPENAI_API_KEY"] = "anything"
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:4000",
+    model="zephyr-beta",
+    extra_body={
+      "fallbacks": [{
+          "model": "claude-3-haiku",
+          "messages": [{"role": "user", "content": "What is LiteLLM?"}]
+      }]
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+</Tabs>
+
+## Content Policy Violation Fallback
+
+Key change: 
+
+```python
+content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("content filtering policy"),
+			},
+		},
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
+		},
+	],
+	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# fallbacks=[..], # [OPTIONAL]
+	# context_window_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
+
+## Context Window Exceeded Fallback
+
+Key change: 
+
+```python
+context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "claude-2",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": Exception("prompt is too long"),
+			},
+		},
+		{
+			"model_name": "my-fallback-model",
+			"litellm_params": {
+				"model": "claude-2",
+				"api_key": "",
+				"mock_response": "This works!",
+			},
+		},
+	],
+	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}], # 👈 KEY CHANGE
+	# fallbacks=[..], # [OPTIONAL]
+	# content_policy_fallbacks=[..], # [OPTIONAL]
+)
+
+response = router.completion(
+	model="claude-2",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+In your proxy config.yaml just add this line 👇
+
+```yaml
+router_settings:
+	context_window_fallbacks=[{"claude-2": ["my-fallback-model"]}]
+```
+
+Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+</TabItem>
+</Tabs>
 
 ## Advanced
 ### Fallbacks + Retries + Timeouts + Cooldowns
@@ -315,6 +588,64 @@ litellm_settings:
   cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
 ```
 
+### Fallback to Specific Model ID
+
+If all models in a group are in cooldown (e.g. rate limited), LiteLLM will fallback to the model with the specific model ID.
+
+This skips any cooldown check for the fallback model.
+
+1. Specify the model ID in `model_info`
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+    model_info:
+      id: my-specific-model-id # 👈 KEY CHANGE
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: anthropic-claude
+    litellm_params:
+      model: anthropic/claude-3-opus-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+**Note:** This will only fallback to the model with the specific model ID. If you want to fallback to another model group, you can set `fallbacks=[{"gpt-4": ["anthropic-claude"]}]`
+
+2. Set fallbacks in config
+
+```yaml
+litellm_settings:
+  fallbacks: [{"gpt-4": ["my-specific-model-id"]}]
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-D '{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "ping"
+    }
+  ],
+  "mock_testing_fallbacks": true
+}'
+```
+
+Validate it works, by checking the response header `x-litellm-model-id`
+
+```bash
+x-litellm-model-id: my-specific-model-id
+```
+
 ### Test Fallbacks! 
 
 Check if your fallbacks are working as expected. 
@@ -336,6 +667,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 '
 ```
+
 
 #### **Content Policy Fallbacks**
 ```bash
@@ -625,81 +957,6 @@ print(response)
 print(f"response.headers.get('x-litellm-model-api-base')")
 ```
 
-### Custom Timeouts, Stream Timeouts - Per Model
-For each model you can set `timeout` & `stream_timeout` under `litellm_params`
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-small-eu
-      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
-      api_key: <your-key>
-      timeout: 0.1                      # timeout in (seconds)
-      stream_timeout: 0.01              # timeout for stream requests (seconds)
-      max_retries: 5
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-small-ca
-      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
-      api_key: 
-      timeout: 0.1                      # timeout in (seconds)
-      stream_timeout: 0.01              # timeout for stream requests (seconds)
-      max_retries: 5
-
-```
-
-#### Start Proxy 
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-
-### Setting Dynamic Timeouts - Per Request
-
-LiteLLM Proxy supports setting a `timeout` per request 
-
-**Example Usage**
-<Tabs>
-<TabItem value="Curl" label="Curl Request">
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-     --header 'Content-Type: application/json' \
-     --data-raw '{
-        "model": "gpt-3.5-turbo",
-        "messages": [
-            {"role": "user", "content": "what color is red"}
-        ],
-        "logit_bias": {12481: 100},
-        "timeout": 1
-     }'
-```
-</TabItem>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-```python
-import openai
-
-
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages=[
-        {"role": "user", "content": "what color is red"}
-    ],
-    logit_bias={12481: 100},
-    timeout=1
-)
-
-print(response)
-```
-</TabItem>
-</Tabs>
-
 ### Setting Fallbacks for Wildcard Models
 
 You can set fallbacks for wildcard models (e.g. `azure/*`) in your config file.
@@ -750,7 +1007,34 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 
-### Disable Fallbacks per key
+### Disable Fallbacks (Per Request/Key)
+
+
+<Tabs>
+
+<TabItem value="request" label="Per Request">
+
+You can disable fallbacks per key by setting `disable_fallbacks: true` in your request body.
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "List 5 important events in the XIX century"
+        }
+    ],
+    "model": "gpt-3.5-turbo",
+    "disable_fallbacks": true # 👈 DISABLE FALLBACKS
+}'
+```
+
+</TabItem>
+
+<TabItem value="key" label="Per Key">
 
 You can disable fallbacks per key by setting `disable_fallbacks: true` in your key metadata.
 
@@ -764,3 +1048,6 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
     }
 }'
 ```
+
+</TabItem>
+</Tabs>

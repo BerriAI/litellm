@@ -10,6 +10,7 @@ import litellm.proxy.proxy_server
 
 load_dotenv()
 import io
+import json
 import os
 
 # this file is to test litellm/proxy
@@ -1014,7 +1015,11 @@ async def test_create_team_member_add(prisma_client, new_member_method):
     with patch(
         "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
         new_callable=AsyncMock,
-    ) as mock_litellm_usertable:
+    ) as mock_litellm_usertable, patch(
+        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+        new=AsyncMock(return_value=team_obj),
+    ) as mock_team_obj:
+
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1158,10 +1163,11 @@ async def test_create_team_member_add_team_admin(
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
     user_key = "sk-12345678"
+    team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
-        user_id=user,
+        user_id=team_admin,
         token=hash_token(user_key),
         last_refreshed_at=time.time(),
     )
@@ -1171,7 +1177,7 @@ async def test_create_team_member_add_team_admin(
         team_id=_team_id,
         blocked=False,
         last_refreshed_at=time.time(),
-        members_with_roles=[Member(role=user_role, user_id=user)],
+        members_with_roles=[Member(role=user_role, user_id=team_admin)],
         metadata={"guardrails": {"modify_guardrails": False}},
     )
 
@@ -1193,7 +1199,10 @@ async def test_create_team_member_add_team_admin(
     with patch(
         "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
         new_callable=AsyncMock,
-    ) as mock_litellm_usertable:
+    ) as mock_litellm_usertable, patch(
+        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+        new=AsyncMock(return_value=team_obj),
+    ) as mock_team_obj:
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1596,7 +1605,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
                         "callback_type": callback_type,
                         "callback_vars": {
                             "gcs_bucket_name": "key-logging-project1",
-                            "gcs_path_service_account": "adroit-crow-413218-a956eef1a2a8.json",
+                            "gcs_path_service_account": "pathrise-convert-1606954137718-a956eef1a2a8.json",
                         },
                     }
                 ]
@@ -1645,7 +1654,8 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     assert new_data["gcs_bucket_name"] == "key-logging-project1"
     assert "gcs_path_service_account" in new_data
     assert (
-        new_data["gcs_path_service_account"] == "adroit-crow-413218-a956eef1a2a8.json"
+        new_data["gcs_path_service_account"]
+        == "pathrise-convert-1606954137718-a956eef1a2a8.json"
     )
 
     if expected_success_callbacks:
@@ -1794,7 +1804,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
 async def test_gemini_pass_through_endpoint():
     from starlette.datastructures import URL
 
-    from litellm.proxy.vertex_ai_endpoints.google_ai_studio_endpoints import (
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         Request,
         Response,
         gemini_proxy_route,
@@ -1906,8 +1916,10 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
+    print(f"resp: {resp}")
     models = resp["data"]
     is_model_alias_in_list = False
+    print(f"model_alias: {model_alias}, models: {models}")
     for item in models:
         if model_alias == item.model_group:
             is_model_alias_in_list = True
@@ -2057,7 +2069,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):
 
 @pytest.mark.asyncio
 async def test_proxy_server_prisma_setup():
-    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_state
     from litellm.proxy.utils import ProxyLogging
     from litellm.caching import DualCache
 
@@ -2070,6 +2082,9 @@ async def test_proxy_server_prisma_setup():
         mock_client.connect = AsyncMock()  # Mock the connect method
         mock_client.check_view_exists = AsyncMock()  # Mock the check_view_exists method
         mock_client.health_check = AsyncMock()  # Mock the health_check method
+        mock_client._set_spend_logs_row_count_in_proxy_state = (
+            AsyncMock()
+        )  # Mock the _set_spend_logs_row_count_in_proxy_state method
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -2084,6 +2099,10 @@ async def test_proxy_server_prisma_setup():
         # Note: This is REALLY IMPORTANT to check that the health check is called
         # This is how we ensure the DB is ready before proceeding
         mock_client.health_check.assert_called_once()
+
+        # check that the spend logs row count is set in proxy state
+        mock_client._set_spend_logs_row_count_in_proxy_state.assert_called_once()
+        assert proxy_state.get_proxy_state_variable("spend_logs_row_count") is not None
 
 
 @pytest.mark.asyncio
@@ -2118,3 +2137,73 @@ async def test_proxy_server_prisma_setup_invalid_db():
 
     if _old_db_url:
         os.environ["DATABASE_URL"] = _old_db_url
+
+
+@pytest.mark.asyncio
+async def test_get_ui_settings_spend_logs_threshold():
+    """
+    Test that get_ui_settings correctly sets DISABLE_EXPENSIVE_DB_QUERIES based on spend_logs_row_count threshold
+    """
+    from litellm.proxy.management_endpoints.ui_sso import get_ui_settings
+    from litellm.proxy.proxy_server import proxy_state
+    from fastapi import Request
+    from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
+
+    # Create a mock request
+    mock_request = Request(
+        scope={
+            "type": "http",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "path": "/sso/get/ui_settings",
+            "query_string": b"",
+        }
+    )
+
+    # Test case 1: When spend_logs_row_count > MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY + 1
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is True
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY + 1
+
+    # Test case 2: When spend_logs_row_count < MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY - 1
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is False
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY - 1
+
+    # Test case 3: Edge case - exactly MAX_SPENDLOG_ROWS_TO_QUERY
+    proxy_state.set_proxy_state_variable(
+        "spend_logs_row_count", MAX_SPENDLOG_ROWS_TO_QUERY
+    )
+    response = await get_ui_settings(mock_request)
+    print("response from get_ui_settings", json.dumps(response, indent=4))
+    assert response["DISABLE_EXPENSIVE_DB_QUERIES"] is False
+    assert response["NUM_SPEND_LOGS_ROWS"] == MAX_SPENDLOG_ROWS_TO_QUERY
+
+    # Clean up
+    proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+
+def test_get_timeout_from_request():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    headers = {
+        "x-litellm-timeout": "90",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90
+
+    headers = {
+        "x-litellm-timeout": "90.5",
+    }
+    timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
+    assert timeout == 90.5

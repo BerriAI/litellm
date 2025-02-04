@@ -2,12 +2,27 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # AWS Bedrock
-ALL Bedrock models (Anthropic, Meta, Mistral, Amazon, etc.) are Supported
+ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Supported
+
+| Property | Details |
+|-------|-------|
+| Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#bedrock-imported-models-deepseek) |
+| Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
+| Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
+
 
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
 pip install boto3>=1.28.57
 ```
+
+:::info
+
+For **Amazon Nova Models**: Bump to v1.53.5+
+
+:::
 
 :::info
 
@@ -706,6 +721,43 @@ print(response)
 </Tabs>
 
 
+## Set 'converse' / 'invoke' route 
+
+:::info
+
+Supported from LiteLLM Version `v1.53.5`
+
+:::
+
+LiteLLM defaults to the `invoke` route. LiteLLM uses the `converse` route for Bedrock models that support it.
+
+To explicitly set the route, do `bedrock/converse/<model>` or `bedrock/invoke/<model>`.
+
+
+E.g. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+completion(model="bedrock/converse/us.amazon.nova-pro-v1:0")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      model: bedrock/converse/us.amazon.nova-pro-v1:0
+```
+
+</TabItem>
+</Tabs>
+
 ## Alternate user/assistant messages
 
 Use `user_continue_message` to add a default user message, for cases (e.g. Autogen) where the client might not follow alternating user/assistant messages starting and ending with a user message. 
@@ -744,6 +796,184 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
     "messages": [{"role": "assistant", "content": "Hey, how's it going?"}]
 }'
 ```
+
+## Usage - PDF / Document Understanding
+
+LiteLLM supports Document Understanding for Bedrock models - [AWS Bedrock Docs](https://docs.aws.amazon.com/nova/latest/userguide/modalities-document.html).
+
+:::info
+
+LiteLLM supports ALL Bedrock document types - 
+
+E.g.: "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+
+You can also pass these as either `image_url` or `base64`
+
+:::
+
+### url 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm.utils import supports_pdf_input, completion
+
+# set aws credentials
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+
+# pdf url
+image_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+
+# model
+model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+image_content = [
+    {"type": "text", "text": "What's this file about?"},
+    {
+        "type": "image_url",
+        "image_url": image_url, # OR {"url": image_url}
+    },
+]
+
+
+if not supports_pdf_input(model, None):
+    print("Model does not support image input")
+
+response = completion(
+    model=model,
+    messages=[{"role": "user", "content": image_content}],
+)
+assert response is not None
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-model",
+    "messages": [
+        {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
+        {
+            "type": "image_url",
+            "image_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        }
+    ]
+}'
+```
+</TabItem>
+</Tabs>
+
+### base64
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm.utils import supports_pdf_input, completion
+
+# set aws credentials
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+
+# pdf url
+image_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+response = requests.get(url)
+file_data = response.content
+
+encoded_file = base64.b64encode(file_data).decode("utf-8")
+base64_url = f"data:application/pdf;base64,{encoded_file}"
+
+# model
+model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+image_content = [
+    {"type": "text", "text": "What's this file about?"},
+    {
+        "type": "image_url",
+        "image_url": base64_url, # OR {"url": base64_url}
+    },
+]
+
+
+if not supports_pdf_input(model, None):
+    print("Model does not support image input")
+
+response = completion(
+    model=model,
+    messages=[{"role": "user", "content": image_content}],
+)
+assert response is not None
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: bedrock-model
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start the proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "bedrock-model",
+    "messages": [
+        {"role": "user", "content": {"type": "text", "text": "What's this file about?"}},
+        {
+            "type": "image_url",
+            "image_url": "data:application/pdf;base64,{b64_encoded_file}",
+        }
+    ]
+}'
+```
+</TabItem>
+</Tabs>
+
 
 ## Boto3 - Authentication
 
@@ -859,11 +1089,25 @@ response = completion(
 )
 ```
 
-### STS based Auth
+### STS (Role-based Auth)
 
-- Set `aws_role_name` and `aws_session_name` in completion() / embedding() function
+- Set `aws_role_name` and `aws_session_name`
+
+
+| LiteLLM Parameter | Boto3 Parameter | Description | Boto3 Documentation |
+|------------------|-----------------|-------------|-------------------|
+| `aws_access_key_id` | `aws_access_key_id` | AWS access key associated with an IAM user or role | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_secret_access_key` | `aws_secret_access_key` | AWS secret key associated with the access key | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
+| `aws_role_name` | `RoleArn` | The Amazon Resource Name (ARN) of the role to assume | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+| `aws_session_name` | `RoleSessionName` | An identifier for the assumed role session | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+
+
 
 Make the bedrock completion call
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 from litellm import completion
 
@@ -894,6 +1138,25 @@ response = completion(
             aws_session_name="my-test-session",
         )
 ```
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+      aws_role_name: arn:aws:iam::888602223428:role/iam_local_role # AWS RoleArn
+      aws_session_name: "bedrock-session" # AWS RoleSessionName
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID # [OPTIONAL - not required if using role]
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY # [OPTIONAL - not required if using role]
+```
+
+
+</TabItem>
+
+</Tabs>
 
 
 ### Passing an external BedrockRuntime.Client as a parameter - Completion()
@@ -947,6 +1210,139 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
+## Calling via Internal Proxy
+
+Use the `bedrock/converse_like/model` endpoint to call bedrock converse model via your internal proxy.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/converse_like/some-model",
+    messages=[{"role": "user", "content": "What's AWS?"}],
+    api_key="sk-1234",
+    api_base="https://some-api-url/models",
+    extra_headers={"test": "hello world"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: anthropic-claude
+      litellm_params:
+        model: bedrock/converse_like/some-model
+        api_base: https://some-api-url/models
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "anthropic-claude",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      { "content": "Hello, how are you?", "role": "user" }
+    ]
+}'
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Output URL**
+
+```bash
+https://some-api-url/models
+```
+
+## Bedrock Imported Models (Deepseek)
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/llama/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+Use this route to call Bedrock Imported Models that follow the `llama` Invoke Request / Response spec
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # bedrock/llama/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: DeepSeek-R1-Distill-Llama-70B
+      litellm_params:
+        model: bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
 
 
 ## Provisioned throughput models
@@ -1085,3 +1481,82 @@ print(f"response: {response}")
 | Stable Diffusion 3 - v0 | `embedding(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
 | Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
 | Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
+
+
+## Rerank API 
+
+Use Bedrock's Rerank API in the Cohere `/rerank` format. 
+
+Supported Cohere Rerank Params
+- `model` - the foundation model ARN
+- `query` - the query to rerank against
+- `documents` - the list of documents to rerank
+- `top_n` - the number of results to return
+
+<Tabs>
+<TabItem label="SDK" value="sdk">
+
+```python
+from litellm import rerank
+import os 
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = rerank(
+    model="bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0", # provide the model ARN - get this here https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock/client/list_foundation_models.html
+    query="hello",
+    documents=["hello", "world"],
+    top_n=2,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem label="PROXY" value="proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: bedrock-rerank
+      litellm_params:
+        model: bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0
+        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+        aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bedrock-rerank",
+    "query": "What is the capital of the United States?",
+    "documents": [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country."
+    ],
+    "top_n": 3
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+

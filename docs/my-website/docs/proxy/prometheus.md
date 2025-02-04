@@ -6,11 +6,11 @@ import Image from '@theme/IdealImage';
 
 :::info
 
-✨ Prometheus metrics is on LiteLLM Enterprise starting at $250/mo
+✨ Prometheus metrics is on LiteLLM Enterprise
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+[Get free 7-day trial key](https://www.litellm.ai/#trial)
 
 :::
 
@@ -57,16 +57,52 @@ http://localhost:4000/metrics
 # <proxy_base_url>/metrics
 ```
 
-## Virtual Keys, Teams, Internal Users Metrics
+## Virtual Keys, Teams, Internal Users
 
 Use this for for tracking per [user, key, team, etc.](virtual_keys)
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
-| `litellm_total_tokens`         | input + output tokens per `"user", "key", "model", "team", "end-user"`     |
-| `litellm_input_tokens`         | input tokens per `"user", "key", "model", "team", "end-user"`              |
-| `litellm_output_tokens`        | output tokens per `"user", "key", "model", "team", "end-user"`             |
+| `litellm_total_tokens`         | input + output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
+| `litellm_input_tokens`         | input tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
+| `litellm_output_tokens`        | output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`             |
+
+### Team - Budget
+
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_team_max_budget_metric`                    | Max Budget for Team Labels: `"team_id", "team_alias"`|
+| `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) Labels: `"team_id", "team_alias"`|
+| `litellm_team_budget_remaining_hours_metric`        | Hours before the team budget is reset Labels: `"team_id", "team_alias"`|
+
+### Virtual Key - Budget
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_api_key_max_budget_metric`                 | Max Budget for API Key Labels: `"hashed_api_key", "api_key_alias"`|
+| `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM) Labels: `"hashed_api_key", "api_key_alias"`|
+| `litellm_api_key_budget_remaining_hours_metric`          | Hours before the API Key budget is reset Labels: `"hashed_api_key", "api_key_alias"`|
+
+### Virtual Key - Rate Limit
+
+| Metric Name          | Description                          |
+|----------------------|--------------------------------------|
+| `litellm_remaining_api_key_requests_for_model`                | Remaining Requests for a LiteLLM virtual API key, only if a model-specific rate limit (rpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
+| `litellm_remaining_api_key_tokens_for_model`                | Remaining Tokens for a LiteLLM virtual API key, only if a model-specific token limit (tpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
+
+
+### Initialize Budget Metrics on Startup
+
+If you want to initialize the key/team budget metrics on startup, you can set the `prometheus_initialize_budget_metrics` to `true` in the `config.yaml`
+
+```yaml
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_initialize_budget_metrics: true
+```
+
 
 ## Proxy Level Tracking Metrics
 
@@ -77,14 +113,13 @@ Use this to track overall LiteLLM Proxy usage.
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_proxy_failed_requests_metric`             | Total number of failed responses from proxy - the client did not get a success response from litellm proxy. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "exception_status", "exception_class"`          |
-| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "exception_status", "exception_class"`          |
+| `litellm_proxy_total_requests_metric`             | Total number of requests made to the proxy server - track number of client side requests. Labels: `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "status_code"`          |
 
-## LLM API / Provider Metrics
+## LLM Provider Metrics
 
 Use this for LLM API Error monitoring and tracking remaining rate limits and token limits
 
-### Labels Tracked for LLM API Metrics
-
+### Labels Tracked
 
 | Label | Description |
 |-------|-------------|
@@ -100,7 +135,7 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | exception_status | The status of the exception, if any |
 | exception_class | The class of the exception, if any |
 
-### Success and Failure Metrics for LLM API
+### Success and Failure
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
@@ -108,15 +143,14 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_deployment_failure_responses`              | Total number of failed LLM API calls for a specific LLM deployment. Labels: `"requested_model", "litellm_model_name", "model_id", "api_base", "api_provider", "hashed_api_key", "api_key_alias", "team", "team_alias", "exception_status", "exception_class"` |
 | `litellm_deployment_total_requests`                 | Total number of LLM API calls for deployment - success + failure. Labels: `"requested_model", "litellm_model_name", "model_id", "api_base", "api_provider", "hashed_api_key", "api_key_alias", "team", "team_alias"` |
 
-### Remaining Requests and Tokens Metrics
+### Remaining Requests and Tokens
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_remaining_requests_metric`             | Track `x-ratelimit-remaining-requests` returned from LLM API Deployment. Labels: `"model_group", "api_provider", "api_base", "litellm_model_name", "hashed_api_key", "api_key_alias"` |
 | `litellm_remaining_tokens`                | Track `x-ratelimit-remaining-tokens` return from LLM API Deployment. Labels: `"model_group", "api_provider", "api_base", "litellm_model_name", "hashed_api_key", "api_key_alias"` |
 
-### Deployment State Metrics
-
+### Deployment State 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_deployment_state`             | The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage. Labels: `"litellm_model_name", "model_id", "api_base", "api_provider"` |
@@ -134,22 +168,60 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
-| `litellm_request_total_latency_metric`             | Total latency (seconds) for a request to LiteLLM Proxy Server - tracked for labels `model`, `hashed_api_key`, `api_key_alias`, `team`, `team_alias` |
-| `litellm_llm_api_latency_metric`             | Latency (seconds) for just the LLM API call - tracked for labels `model`, `hashed_api_key`, `api_key_alias`, `team`, `team_alias` |
+| `litellm_request_total_latency_metric`             | Total latency (seconds) for a request to LiteLLM Proxy Server - tracked for labels "end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model" |
+| `litellm_overhead_latency_metric`             | Latency overhead (seconds) added by LiteLLM processing - tracked for labels "end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model" |
+| `litellm_llm_api_latency_metric`  | Latency (seconds) for just the LLM API call - tracked for labels "model", "hashed_api_key", "api_key_alias", "team", "team_alias", "requested_model", "end_user", "user" |
 | `litellm_llm_api_time_to_first_token_metric`             | Time to first token for LLM API call - tracked for labels `model`, `hashed_api_key`, `api_key_alias`, `team`, `team_alias` [Note: only emitted for streaming requests] |
 
-## Virtual Key - Budget, Rate Limit Metrics
+## [BETA] Custom Metrics
 
-Metrics used to track LiteLLM Proxy Budgeting and Rate limiting logic
+Track custom metrics on prometheus on all events mentioned above. 
 
-| Metric Name          | Description                          |
-|----------------------|--------------------------------------|
-| `litellm_remaining_team_budget_metric`             | Remaining Budget for Team (A team created on LiteLLM) Labels: `"team_id", "team_alias"`|
-| `litellm_remaining_api_key_budget_metric`                | Remaining Budget for API Key (A key Created on LiteLLM) Labels: `"hashed_api_key", "api_key_alias"`|
-| `litellm_remaining_api_key_requests_for_model`                | Remaining Requests for a LiteLLM virtual API key, only if a model-specific rate limit (rpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
-| `litellm_remaining_api_key_tokens_for_model`                | Remaining Tokens for a LiteLLM virtual API key, only if a model-specific token limit (tpm) has been set for that virtual key. Labels: `"hashed_api_key", "api_key_alias", "model"`|
+1. Define the custom metrics in the `config.yaml`
 
+```yaml
+model_list:
+  - model_name: openai/gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
 
+litellm_settings:
+  callbacks: ["prometheus"]
+  custom_prometheus_metadata_labels: ["metadata.foo", "metadata.bar"]
+```
+
+2. Make a request with the custom metadata labels
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <LITELLM_API_KEY>' \
+-d '{
+    "model": "openai/gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What's in this image?"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "metadata": {
+        "foo": "hello world"
+    }
+}'
+```
+
+3. Check your `/metrics` endpoint for the custom metrics  
+
+```
+... "metadata_foo": "hello world" ...
+```
 
 ## Monitor System Health
 
@@ -169,6 +241,7 @@ litellm_settings:
 | `litellm_redis_latency`         | histogram latency for redis calls     |
 | `litellm_redis_fails`         | Number of failed redis calls    |
 | `litellm_self_latency`         | Histogram latency for successful litellm api call    |
+
 
 ## **🔥 LiteLLM Maintained Grafana Dashboards **
 
@@ -192,3 +265,14 @@ Here is a screenshot of the metrics you can monitor with the LiteLLM Grafana Das
 |----------------------|--------------------------------------|
 | `litellm_llm_api_failed_requests_metric`             | **deprecated** use `litellm_proxy_failed_requests_metric` |
 | `litellm_requests_metric`             | **deprecated** use `litellm_proxy_total_requests_metric` |
+
+
+
+## FAQ 
+
+### What are `_created` vs. `_total` metrics?
+
+- `_created` metrics are metrics that are created when the proxy starts
+- `_total` metrics are metrics that are incremented for each request
+
+You should consume the `_total` metrics for your counting purposes

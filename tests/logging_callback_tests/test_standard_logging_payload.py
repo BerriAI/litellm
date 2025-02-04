@@ -8,8 +8,6 @@ import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-from pydantic.main import Model
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system-path
@@ -18,12 +16,21 @@ import time
 import pytest
 import litellm
 from litellm.types.utils import (
+    StandardLoggingPayload,
     Usage,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingHiddenParams,
 )
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from create_mock_standard_logging_payload import (
+    create_standard_logging_payload,
+    create_standard_logging_payload_with_long_content,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+)
+
+from litellm.integrations.custom_logger import CustomLogger
 
 
 @pytest.mark.parametrize(
@@ -319,3 +326,149 @@ def test_get_final_response_obj():
     finally:
         # Reset litellm.turn_off_message_logging to its original value
         litellm.turn_off_message_logging = False
+
+
+def test_truncate_standard_logging_payload():
+    """
+    1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
+    2. the `messages`, `response`, and `error_str` in new standard_logging_payload should be truncated
+    """
+    _custom_logger = CustomLogger()
+    standard_logging_payload: StandardLoggingPayload = (
+        create_standard_logging_payload_with_long_content()
+    )
+    original_messages = standard_logging_payload["messages"]
+    len_original_messages = len(str(original_messages))
+    original_response = standard_logging_payload["response"]
+    len_original_response = len(str(original_response))
+    original_error_str = standard_logging_payload["error_str"]
+    len_original_error_str = len(str(original_error_str))
+
+    _custom_logger.truncate_standard_logging_payload_content(standard_logging_payload)
+
+    # Original messages, response, and error_str should NOT BE MODIFIED
+    assert standard_logging_payload["messages"] != original_messages
+    assert standard_logging_payload["response"] != original_response
+    assert standard_logging_payload["error_str"] != original_error_str
+    assert len_original_messages == len(str(original_messages))
+    assert len_original_response == len(str(original_response))
+    assert len_original_error_str == len(str(original_error_str))
+
+    print(
+        "logged standard_logging_payload",
+        json.dumps(standard_logging_payload, indent=2),
+    )
+
+    # Logged messages, response, and error_str should be truncated
+    # assert len of messages is less than 10_500
+    assert len(str(standard_logging_payload["messages"])) < 10_500
+    # assert len of response is less than 10_500
+    assert len(str(standard_logging_payload["response"])) < 10_500
+    # assert len of error_str is less than 10_500
+    assert len(str(standard_logging_payload["error_str"])) < 10_500
+
+
+def test_strip_trailing_slash():
+    common_api_base = "https://api.test.com"
+    assert (
+        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base + "/")
+        == common_api_base
+    )
+    assert (
+        StandardLoggingPayloadSetup.strip_trailing_slash(common_api_base)
+        == common_api_base
+    )
+
+
+def test_get_error_information():
+    """Test get_error_information with different types of exceptions"""
+
+    # Test with None
+    result = StandardLoggingPayloadSetup.get_error_information(None)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == ""
+    assert result["error_class"] == ""
+    assert result["llm_provider"] == ""
+
+    # Test with a basic Exception
+    basic_exception = Exception("Test error")
+    result = StandardLoggingPayloadSetup.get_error_information(basic_exception)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == ""
+    assert result["error_class"] == "Exception"
+    assert result["llm_provider"] == ""
+
+    # Test with litellm exception from provider
+    litellm_exception = litellm.exceptions.RateLimitError(
+        message="Test error",
+        llm_provider="openai",
+        model="gpt-3.5-turbo",
+        response=None,
+        litellm_debug_info=None,
+        max_retries=None,
+        num_retries=None,
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
+    print("error_information", json.dumps(result, indent=2))
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "RateLimitError"
+    assert result["llm_provider"] == "openai"
+
+
+def test_get_response_time():
+    """Test get_response_time with different streaming scenarios"""
+    # Test case 1: Non-streaming response
+    start_time = 1000.0
+    end_time = 1005.0
+    completion_start_time = 1003.0
+    stream = False
+
+    response_time = StandardLoggingPayloadSetup.get_response_time(
+        start_time_float=start_time,
+        end_time_float=end_time,
+        completion_start_time_float=completion_start_time,
+        stream=stream,
+    )
+
+    # For non-streaming, should return end_time - start_time
+    assert response_time == 5.0
+
+    # Test case 2: Streaming response
+    start_time = 1000.0
+    end_time = 1010.0
+    completion_start_time = 1002.0
+    stream = True
+
+    response_time = StandardLoggingPayloadSetup.get_response_time(
+        start_time_float=start_time,
+        end_time_float=end_time,
+        completion_start_time_float=completion_start_time,
+        stream=stream,
+    )
+
+    # For streaming, should return completion_start_time - start_time
+    assert response_time == 2.0
+
+
+@pytest.mark.parametrize(
+    "metadata, expected_requester_metadata",
+    [
+        ({"metadata": {"test": "test2"}}, {"test": "test2"}),
+        ({"metadata": {"test": "test2"}, "model_id": "test-model"}, {"test": "test2"}),
+        (
+            {
+                "metadata": {
+                    "test": "test2",
+                },
+                "model_id": "test-model",
+                "requester_metadata": {"test": "test2"},
+            },
+            {"test": "test2"},
+        ),
+    ],
+)
+def test_standard_logging_metadata_requester_metadata(
+    metadata, expected_requester_metadata
+):
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    assert result["requester_metadata"] == expected_requester_metadata

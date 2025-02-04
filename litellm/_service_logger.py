@@ -7,13 +7,13 @@ from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
 
 from .integrations.custom_logger import CustomLogger
+from .integrations.datadog.datadog import DataDogLogger
+from .integrations.opentelemetry import OpenTelemetry
 from .integrations.prometheus_services import PrometheusServicesLogger
 from .types.services import ServiceLoggerPayload, ServiceTypes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-
-    from litellm.integrations.opentelemetry import OpenTelemetry
 
     Span = _Span
     OTELClass = OpenTelemetry
@@ -115,8 +115,6 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is successful
         """
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
 
@@ -134,9 +132,7 @@ class ServiceLogging(CustomLogger):
                 await self.prometheusServicesLogger.async_service_success_hook(
                     payload=payload
                 )
-            elif callback == "datadog":
-                from litellm.integrations.datadog.datadog import DataDogLogger
-
+            elif callback == "datadog" or isinstance(callback, DataDogLogger):
                 await self.init_datadog_logger_if_none()
                 await self.dd_logger.async_service_success_hook(
                     payload=payload,
@@ -191,7 +187,6 @@ class ServiceLogging(CustomLogger):
         initializes otel_logger if it is None or no attribute exists on ServiceLogging Object
 
         """
-        from litellm.integrations.opentelemetry import OpenTelemetry
         from litellm.proxy.proxy_server import open_telemetry_logger
 
         if not hasattr(self, "otel_logger"):
@@ -219,8 +214,6 @@ class ServiceLogging(CustomLogger):
         """
         - For counting if the redis, postgres call is unsuccessful
         """
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
 
@@ -237,6 +230,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
         )
+
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -244,7 +238,7 @@ class ServiceLogging(CustomLogger):
                     payload=payload,
                     error=error,
                 )
-            elif callback == "datadog":
+            elif callback == "datadog" or isinstance(callback, DataDogLogger):
                 await self.init_datadog_logger_if_none()
                 await self.dd_logger.async_service_failure_hook(
                     payload=payload,

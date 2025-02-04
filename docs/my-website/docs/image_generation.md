@@ -1,4 +1,4 @@
-# Image Generation
+# Images
 
 ## Quick Start
 

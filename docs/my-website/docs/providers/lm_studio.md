@@ -11,6 +11,14 @@ https://lmstudio.ai/docs/basics/server
 
 :::
 
+
+| Property | Details |
+|-------|-------|
+| Description | Discover, download, and run local LLMs. |
+| Provider Route on LiteLLM | `lm_studio/` |
+| Provider Doc | [LM Studio ↗](https://lmstudio.ai/docs/api/openai-api) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/embeddings`, `/completions` |
+
 ## API Key
 ```python
 # env variable
@@ -42,7 +50,7 @@ print(response)
 from litellm import completion
 import os
 
-os.environ['XAI_API_KEY'] = ""
+os.environ['LM_STUDIO_API_KEY'] = ""
 response = completion(
     model="lm_studio/llama-3-8b-instruct",
     messages=[
@@ -61,7 +69,7 @@ for chunk in response:
 
 ## Usage with LiteLLM Proxy Server
 
-Here's how to call a XAI model with the LiteLLM Proxy Server
+Here's how to call a LM Studio model with the LiteLLM Proxy Server
 
 1. Modify the config.yaml 
 
@@ -131,3 +139,17 @@ Here's how to call a XAI model with the LiteLLM Proxy Server
 ## Supported Parameters
 
 See [Supported Parameters](../completion/input.md#translated-openai-params) for supported parameters.
+
+## Embedding
+
+```python
+from litellm import embedding
+import os 
+
+os.environ['LM_STUDIO_API_BASE'] = "http://localhost:8000"
+response = embedding(
+    model="lm_studio/jina-embeddings-v3",
+    input=["Hello world"],
+)
+print(response)
+```

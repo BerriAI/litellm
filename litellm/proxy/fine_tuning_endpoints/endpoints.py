@@ -7,29 +7,15 @@
 
 import asyncio
 import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
-import fastapi
-import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
 
@@ -186,21 +172,105 @@ async def create_fine_tuning_job(
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["fine-tuning"],
+    summary="✨ (Enterprise) Retrieve Fine-Tuning Job",
+)
+@router.get(
+    "/fine_tuning/jobs/{fine_tuning_job_id:path}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["fine-tuning"],
+    summary="✨ (Enterprise) Retrieve Fine-Tuning Job",
+)
+async def retrieve_fine_tuning_job(
+    request: Request,
+    fastapi_response: Response,
+    fine_tuning_job_id: str,
+    custom_llm_provider: Literal["openai", "azure"],
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Retrieves a fine-tuning job.
+    This is the equivalent of GET https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}
+
+    Supported Query Params:
+    - `custom_llm_provider`: Name of the LiteLLM provider
+    - `fine_tuning_job_id`: The ID of the fine-tuning job to retrieve.
+    """
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        get_custom_headers,
+        premium_user,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
+
+    data: dict = {}
+    try:
+        if premium_user is not True:
+            raise ValueError(
+                f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}"
             )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+        # Include original request and headers in the data
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        # get configs for custom_llm_provider
+        llm_provider_config = get_fine_tuning_provider_config(
+            custom_llm_provider=custom_llm_provider
+        )
+
+        if llm_provider_config is not None:
+            data.update(llm_provider_config)
+
+        response = await litellm.aretrieve_fine_tuning_job(
+            **data,
+            fine_tuning_job_id=fine_tuning_job_id,
+        )
+
+        ### RESPONSE HEADERS ###
+        hidden_params = getattr(response, "_hidden_params", {}) or {}
+        model_id = hidden_params.get("model_id", None) or ""
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+
+        fastapi_response.headers.update(
+            get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id=model_id,
+                cache_key=cache_key,
+                api_base=api_base,
+                version=version,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             )
+        )
+
+        return response
+
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.list_fine_tuning_jobs(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -301,21 +371,7 @@ async def list_fine_tuning_jobs(
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
-            )
+        raise handle_exception_on_proxy(e)
 
 
 @router.post(
@@ -330,7 +386,7 @@ async def list_fine_tuning_jobs(
     tags=["fine-tuning"],
     summary="✨ (Enterprise) Cancel Fine-Tuning Jobs",
 )
-async def retrieve_fine_tuning_job(
+async def cancel_fine_tuning_job(
     request: Request,
     fastapi_response: Response,
     fine_tuning_job_id: str,
@@ -417,18 +473,4 @@ async def retrieve_fine_tuning_job(
             )
         )
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg = f"{str(e)}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
-            )
+        raise handle_exception_on_proxy(e)

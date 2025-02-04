@@ -1,10 +1,25 @@
-# Anthropic `/v1/messages`
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# Anthropic SDK
 
 Pass-through endpoints for Anthropic - call provider-specific endpoint, in native format (no translation).
 
-Just replace `https://api.anthropic.com` with `LITELLM_PROXY_BASE_URL/anthropic` 🚀
+| Feature | Supported | Notes | 
+|-------|-------|-------|
+| Cost Tracking | ✅ | supports all models on `/messages` endpoint |
+| Logging | ✅ | works across all integrations |
+| End-user Tracking | ✅ | disable prometheus tracking via `litellm.disable_end_user_cost_tracking_prometheus_only`|
+| Streaming | ✅ | |
+
+Just replace `https://api.anthropic.com` with `LITELLM_PROXY_BASE_URL/anthropic`
 
 #### **Example Usage**
+
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
 ```bash
 curl --request POST \
   --url http://0.0.0.0:4000/anthropic/v1/messages \
@@ -19,6 +34,33 @@ curl --request POST \
         ]
     }'
 ```
+
+</TabItem>
+<TabItem value="python" label="Anthropic Python SDK">
+
+```python
+from anthropic import Anthropic
+
+# Initialize client with proxy base URL
+client = Anthropic(
+    base_url="http://0.0.0.0:4000/anthropic", # <proxy-base-url>/anthropic
+    api_key="sk-anything" # proxy virtual key
+)
+
+# Make a completion request
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello, world"}
+    ]
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
 
 Supports **ALL** Anthropic Endpoints (including streaming).
 
@@ -222,14 +264,14 @@ curl https://api.anthropic.com/v1/messages/batches \
 ```
 
 
-## Advanced - Use with Virtual Keys 
+## Advanced
 
 Pre-requisites
 - [Setup proxy with DB](../proxy/virtual_keys.md#setup)
 
 Use this, to avoid giving developers the raw Anthropic API key, but still letting them use Anthropic endpoints.
 
-### Usage
+### Use with Virtual Keys 
 
 1. Setup environment
 
@@ -280,3 +322,64 @@ curl --request POST \
     ]
   }'
 ```
+
+
+### Send `litellm_metadata` (tags, end-user cost tracking)
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```bash
+curl --request POST \
+  --url http://0.0.0.0:4000/anthropic/v1/messages \
+  --header 'accept: application/json' \
+  --header 'content-type: application/json' \
+  --header "Authorization: bearer sk-anything" \
+  --data '{
+    "model": "claude-3-5-sonnet-20241022",
+    "max_tokens": 1024,
+    "messages": [
+        {"role": "user", "content": "Hello, world"}
+    ],
+    "litellm_metadata": {
+        "tags": ["test-tag-1", "test-tag-2"], 
+        "user": "test-user" # track end-user/customer cost
+    }
+  }'
+```
+
+</TabItem>
+<TabItem value="python" label="Anthropic Python SDK">
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://0.0.0.0:4000/anthropic",
+    api_key="sk-anything"
+)
+
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello, world"}
+    ],
+    extra_body={
+        "litellm_metadata": {
+            "tags": ["test-tag-1", "test-tag-2"], 
+            "user": "test-user" # track end-user/customer cost
+        }
+    }, 
+    ## OR## 
+    metadata={ # anthropic native param - https://docs.anthropic.com/en/api/messages
+        "user_id": "test-user" # track end-user/customer cost
+    }
+
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>

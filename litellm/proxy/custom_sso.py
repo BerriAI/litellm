@@ -12,15 +12,10 @@ Flow:
 - User signed in to UI
 """
 
-from fastapi import Request
 from fastapi_sso.sso.base import OpenID
 
 from litellm.proxy._types import LitellmUserRoles, SSOUserDefinedValues
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    new_user,
-    user_info,
-)
-from litellm.proxy.management_endpoints.team_endpoints import add_new_member
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
 
 
 async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:

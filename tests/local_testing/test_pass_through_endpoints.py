@@ -261,7 +261,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         pass_through_endpoints = [
             {
                 "path": "/api/public/ingestion",
-                "target": "https://cloud.langfuse.com/api/public/ingestion",
+                "target": "https://us.cloud.langfuse.com/api/public/ingestion",
                 "auth": auth,
                 "custom_auth_parser": "langfuse",
                 "headers": {

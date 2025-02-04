@@ -1,6 +1,0 @@
-streamlit
-python-dotenv
-supabase
-pandas
-plotly
-click

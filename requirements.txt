@@ -1,14 +1,16 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.4.0 # openai + http req.
-openai==1.54.0  # openai req. 
-fastapi==0.111.0 # server dep
+httpx==0.27.0 # Pin Httpx dependency
+openai==1.61.0  # openai req. 
+fastapi==0.115.5 # server dep
 backoff==2.2.1 # server dep
-pyyaml==6.0.0 # server dep
+pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
 gunicorn==22.0.0 # server dep
+uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.0.0 # caching
-numpy==1.24.3 # semantic caching
+numpy==2.1.1 # semantic caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
@@ -18,33 +20,35 @@ google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.45.0 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
-orjson==3.9.15 # fast /embedding responses
+ddtrace==2.19.0      # for advanced DD tracing / profiling
+orjson==3.10.12 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
-fastapi-sso==0.10.0 # admin UI, SSO
+fastapi-sso==0.16.0 # admin UI, SSO
 pyjwt[crypto]==2.9.0
-python-multipart==0.0.9 # admin UI
-Pillow==10.3.0
+python-multipart==0.0.18 # admin UI
+Pillow==11.0.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 # for azure content safety
+azure-storage-file-datalake==12.15.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 sentry_sdk==2.2.1 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
-cryptography==42.0.7
+cryptography==43.0.1
 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env 
-tiktoken==0.7.0 # for calculating usage
+tiktoken==0.8.0 # for calculating usage
 importlib-metadata==6.8.0 # for random utils
-tokenizers==0.14.0 # for calculating usage
+tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli 
 jinja2==3.1.4 # for prompt templates
-certifi==2024.7.4 # [TODO] clean up 
+certifi==2024.12.14 # [TODO] clean up 
 aiohttp==3.10.2 # for network calls
 aioboto3==12.3.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
-pydantic==2.7.1 # proxy + openai req.
+pydantic==2.10.0 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==10.4 # for realtime API
 ####

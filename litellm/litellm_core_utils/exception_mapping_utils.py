@@ -1,8 +1,6 @@
 import json
-import os
-import threading
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -14,17 +12,15 @@ from ..exceptions import (
     APIError,
     AuthenticationError,
     BadRequestError,
-    BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InternalServerError,
     NotFoundError,
-    OpenAIError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
-    UnsupportedParamsError,
 )
 
 
@@ -89,6 +85,41 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
     return _response_headers
 
 
+import re
+
+
+def extract_and_raise_litellm_exception(
+    response: Optional[Any],
+    error_str: str,
+    model: str,
+    custom_llm_provider: str,
+):
+    """
+    Covers scenario where litellm sdk calling proxy.
+
+    Enables raising the special errors raised by litellm, eg. ContextWindowExceededError.
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/7259
+    """
+    pattern = r"litellm\.\w+Error"
+
+    # Search for the exception in the error string
+    match = re.search(pattern, error_str)
+
+    # Extract the exception if found
+    if match:
+        exception_name = match.group(0)
+        exception_name = exception_name.strip().replace("litellm.", "")
+        raised_exception_obj = getattr(litellm, exception_name, None)
+        if raised_exception_obj:
+            raise raised_exception_obj(
+                message=error_str,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+            )
+
+
 def exception_type(  # type: ignore  # noqa: PLR0915
     model,
     original_exception,
@@ -110,7 +141,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"  # noqa
         )  # noqa
         print(  # noqa
-            "LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'."  # noqa
+            "LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'."  # noqa
         )  # noqa
         print()  # noqa
 
@@ -118,11 +149,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
+        error_str = str(original_exception)
         if model:
             if hasattr(original_exception, "message"):
                 error_str = str(original_exception.message)
-            else:
-                error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -189,15 +219,29 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             #################### Start of Provider Exception mapping ####################
             ################################################################################
 
-            if "Request Timeout Error" in error_str or "Request timed out" in error_str:
+            if (
+                "Request Timeout Error" in error_str
+                or "Request timed out" in error_str
+                or "Timed out generating response" in error_str
+            ):
                 exception_mapping_worked = True
+
                 raise Timeout(
-                    message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
+                    message=f"APITimeoutError - Request timed out. Error_str: {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
                 )
 
+            if (
+                custom_llm_provider == "litellm_proxy"
+            ):  # handle special case where calling litellm proxy + exception str contains error message
+                extract_and_raise_litellm_exception(
+                    response=getattr(original_exception, "response", None),
+                    error_str=error_str,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
             if (
                 custom_llm_provider == "openai"
                 or custom_llm_provider == "text-completion-openai"
@@ -286,7 +330,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "Web server is returning an unknown error" in error_str:
+                elif (
+                    "Web server is returning an unknown error" in error_str
+                    or "The server had an error processing your request." in error_str
+                ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{exception_provider} - {message}",
@@ -421,10 +468,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             method="POST", url="https://api.openai.com/v1/"
                         ),
                     )
-            elif custom_llm_provider == "anthropic":  # one of the anthropics
+            elif (
+                custom_llm_provider == "anthropic"
+                or custom_llm_provider == "anthropic_text"
+            ):  # one of the anthropics
                 if "prompt is too long" in error_str or "prompt: length" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
+                        message="AnthropicError - {}".format(error_str),
+                        model=model,
+                        llm_provider="anthropic",
+                    )
+                elif "overloaded_error" in error_str:
+                    exception_mapping_worked = True
+                    raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
                         model=model,
                         llm_provider="anthropic",
@@ -652,6 +709,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         model=model,
                     )
+                elif "model_no_support_for_function" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"{custom_llm_provider}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -732,6 +796,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     "too many tokens" in error_str
                     or "expected maxLength:" in error_str
                     or "Input is too long" in error_str
+                    or "prompt is too long" in error_str
                     or "prompt: length: 1.." in error_str
                     or "Too many input tokens" in error_str
                 ):

@@ -53,10 +53,17 @@ def test_async_langsmith_logging_with_metadata():
 @pytest.mark.asyncio
 async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
     try:
+        litellm.DEFAULT_BATCH_SIZE = 1
+        litellm.DEFAULT_FLUSH_INTERVAL_SECONDS = 1
         test_langsmith_logger = LangsmithLogger()
         litellm.success_callback = ["langsmith"]
         litellm.set_verbose = True
-        run_id = str(uuid.uuid4())
+        run_id = "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        run_name = "litellmRUN"
+        test_metadata = {
+            "run_name": run_name,  # langsmith run name
+            "run_id": run_id,  # langsmith run id
+        }
 
         messages = [{"role": "user", "content": "what llm are u"}]
         if sync_mode is True:
@@ -66,7 +73,7 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
                 max_tokens=10,
                 temperature=0.2,
                 stream=True,
-                metadata={"id": run_id},
+                metadata=test_metadata,
             )
             for cb in litellm.callbacks:
                 if isinstance(cb, LangsmithLogger):
@@ -82,7 +89,7 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
                 temperature=0.2,
                 mock_response="This is a mock request",
                 stream=True,
-                metadata={"id": run_id},
+                metadata=test_metadata,
             )
             for cb in litellm.callbacks:
                 if isinstance(cb, LangsmithLogger):
@@ -100,11 +107,16 @@ async def test_async_langsmith_logging_with_streaming_and_metadata(sync_mode):
 
         input_fields_on_langsmith = logged_run_on_langsmith.get("inputs")
 
-        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra").get(
+        extra_fields_on_langsmith = logged_run_on_langsmith.get("extra", {}).get(
             "invocation_params"
         )
 
-        assert logged_run_on_langsmith.get("run_type") == "llm"
+        assert (
+            logged_run_on_langsmith.get("run_type") == "llm"
+        ), f"run_type should be llm. Got: {logged_run_on_langsmith.get('run_type')}"
+        assert (
+            logged_run_on_langsmith.get("name") == run_name
+        ), f"run_type should be llm. Got: {logged_run_on_langsmith.get('run_type')}"
         print("\nLogged INPUT ON LANGSMITH", input_fields_on_langsmith)
 
         print("\nextra fields on langsmith", extra_fields_on_langsmith)

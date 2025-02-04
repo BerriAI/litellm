@@ -370,7 +370,7 @@ def test_gpt_4o_token_counter():
 )
 def test_img_url_token_counter(img_url):
 
-    from litellm.utils import get_image_dimensions
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     width, height = get_image_dimensions(data=img_url)
 
@@ -382,3 +382,91 @@ def test_img_url_token_counter(img_url):
 
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
+
+
+import unittest
+from unittest.mock import patch, MagicMock
+from litellm.utils import encoding, _select_tokenizer_helper, claude_json_str
+
+
+class TestTokenizerSelection(unittest.TestCase):
+    @patch("litellm.utils.Tokenizer.from_pretrained")
+    def test_llama3_tokenizer_api_failure(self, mock_from_pretrained):
+        # Setup mock to raise an error
+        mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
+
+        # Test with llama-3 model
+        result = _select_tokenizer_helper("llama-3-7b")
+
+        # Verify the attempt to load Llama-3 tokenizer
+        mock_from_pretrained.assert_called_once_with("Xenova/llama-3-tokenizer")
+
+        # Verify fallback to OpenAI tokenizer
+        self.assertEqual(result["type"], "openai_tokenizer")
+        self.assertEqual(result["tokenizer"], encoding)
+
+    @patch("litellm.utils.Tokenizer.from_pretrained")
+    def test_cohere_tokenizer_api_failure(self, mock_from_pretrained):
+        # Setup mock to raise an error
+        mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
+
+        # Add Cohere model to the list for testing
+        litellm.cohere_models = ["command-r-v1"]
+
+        # Test with Cohere model
+        result = _select_tokenizer_helper("command-r-v1")
+
+        # Verify the attempt to load Cohere tokenizer
+        mock_from_pretrained.assert_called_once_with(
+            "Xenova/c4ai-command-r-v01-tokenizer"
+        )
+
+        # Verify fallback to OpenAI tokenizer
+        self.assertEqual(result["type"], "openai_tokenizer")
+        self.assertEqual(result["tokenizer"], encoding)
+
+    @patch("litellm.utils.Tokenizer.from_str")
+    def test_claude_tokenizer_api_failure(self, mock_from_str):
+        # Setup mock to raise an error
+        mock_from_str.side_effect = Exception("Failed to load tokenizer")
+
+        # Add Claude model to the list for testing
+        litellm.anthropic_models = ["claude-2"]
+
+        # Test with Claude model
+        result = _select_tokenizer_helper("claude-2")
+
+        # Verify the attempt to load Claude tokenizer
+        mock_from_str.assert_called_once_with(claude_json_str)
+
+        # Verify fallback to OpenAI tokenizer
+        self.assertEqual(result["type"], "openai_tokenizer")
+        self.assertEqual(result["tokenizer"], encoding)
+
+    @patch("litellm.utils.Tokenizer.from_pretrained")
+    def test_llama2_tokenizer_api_failure(self, mock_from_pretrained):
+        # Setup mock to raise an error
+        mock_from_pretrained.side_effect = Exception("Failed to load tokenizer")
+
+        # Test with Llama-2 model
+        result = _select_tokenizer_helper("llama-2-7b")
+
+        # Verify the attempt to load Llama-2 tokenizer
+        mock_from_pretrained.assert_called_once_with(
+            "hf-internal-testing/llama-tokenizer"
+        )
+
+        # Verify fallback to OpenAI tokenizer
+        self.assertEqual(result["type"], "openai_tokenizer")
+        self.assertEqual(result["tokenizer"], encoding)
+
+    @patch("litellm.utils._return_huggingface_tokenizer")
+    def test_disable_hf_tokenizer_download(self, mock_return_huggingface_tokenizer):
+        # Use pytest.MonkeyPatch() directly instead of fixture
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+
+        result = _select_tokenizer_helper("grok-32r22r")
+        mock_return_huggingface_tokenizer.assert_not_called()
+        assert result["type"] == "openai_tokenizer"
+        assert result["tokenizer"] == encoding

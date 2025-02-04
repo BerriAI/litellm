@@ -7,26 +7,13 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 ## This provides an LLM Guard Integration for content moderation on the proxy
 
-from typing import Optional, Literal, Union
+from typing import Optional, Literal
 import litellm
-import traceback
-import sys
-import uuid
-import os
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
-from litellm.utils import (
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    StreamingChoices,
-)
-from datetime import datetime
 import aiohttp
-import asyncio
 from litellm.utils import get_formatted_prompt
 from litellm.secret_managers.main import get_secret_str
 
@@ -164,7 +151,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                 "moderation",
                 "audio_transcription",
             ]
-        except Exception as e:
+        except Exception:
             self.print_verbose(
                 f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
             )

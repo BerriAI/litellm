@@ -6,24 +6,17 @@ from typing import Optional, Union
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-class AnthropicError(Exception):
+
+class AnthropicError(BaseLLMException):
     def __init__(
         self,
         status_code: int,
         message,
         headers: Optional[httpx.Headers] = None,
     ):
-        self.status_code = status_code
-        self.message: str = message
-        self.headers = headers
-        self.request = httpx.Request(
-            method="POST", url="https://api.anthropic.com/v1/messages"
-        )
-        self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

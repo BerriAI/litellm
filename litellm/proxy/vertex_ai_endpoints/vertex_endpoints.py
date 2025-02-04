@@ -1,52 +1,75 @@
-import ast
-import asyncio
 import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
-import fastapi
 import httpx
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    Header,
-    HTTPException,
-    Request,
-    Response,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.batches.main import FileObject
 from litellm.fine_tuning.main import vertex_fine_tuning_apis_instance
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.passthrough_endpoints.vertex_ai import *
+
+from .vertex_passthrough_router import VertexPassThroughRouter
 
 router = APIRouter()
-default_vertex_config = None
+vertex_pass_through_router = VertexPassThroughRouter()
+
+default_vertex_config: VertexPassThroughCredentials = VertexPassThroughCredentials()
 
 
-def set_default_vertex_config(config):
+def _get_vertex_env_vars() -> VertexPassThroughCredentials:
+    """
+    Helper to get vertex pass through config from environment variables
+
+    The following environment variables are used:
+    - DEFAULT_VERTEXAI_PROJECT (project id)
+    - DEFAULT_VERTEXAI_LOCATION (location)
+    - DEFAULT_GOOGLE_APPLICATION_CREDENTIALS (path to credentials file)
+    """
+    return VertexPassThroughCredentials(
+        vertex_project=get_secret_str("DEFAULT_VERTEXAI_PROJECT"),
+        vertex_location=get_secret_str("DEFAULT_VERTEXAI_LOCATION"),
+        vertex_credentials=get_secret_str("DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"),
+    )
+
+
+def set_default_vertex_config(config: Optional[dict] = None):
+    """Sets vertex configuration from provided config and/or environment variables
+
+    Args:
+        config (Optional[dict]): Configuration dictionary
+        Example: {
+            "vertex_project": "my-project-123",
+            "vertex_location": "us-central1",
+            "vertex_credentials": "os.environ/GOOGLE_CREDS"
+        }
+    """
     global default_vertex_config
-    if config is None:
-        return
 
-    if not isinstance(config, dict):
-        raise ValueError("invalid config, vertex default config must be a dictionary")
+    # Initialize config dictionary if None
+    if config is None:
+        default_vertex_config = _get_vertex_env_vars()
+        return
 
     if isinstance(config, dict):
         for key, value in config.items():
             if isinstance(value, str) and value.startswith("os.environ/"):
                 config[key] = litellm.get_secret(value)
 
-    default_vertex_config = config
+    _set_default_vertex_config(VertexPassThroughCredentials(**config))
+
+
+def _set_default_vertex_config(
+    vertex_pass_through_credentials: VertexPassThroughCredentials,
+):
+    global default_vertex_config
+    default_vertex_config = vertex_pass_through_credentials
 
 
 def exception_handler(e: Exception):
@@ -113,46 +136,66 @@ def construct_target_url(
 
 
 @router.api_route(
-    "/vertex-ai/{endpoint:path}", methods=["GET", "POST", "PUT", "DELETE"]
+    "/vertex-ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
+    include_in_schema=False,
+)
+@router.api_route(
+    "/vertex_ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
 )
 async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Call LiteLLM proxy via Vertex AI SDK.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
+    """
     encoded_endpoint = httpx.URL(endpoint).path
-
-    import re
-
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: dict = {}
+    api_key_to_use = get_litellm_virtual_key(request=request)
+    user_api_key_dict = await user_api_key_auth(
+        request=request,
+        api_key=api_key_to_use,
+    )
 
-    vertex_project = None
-    vertex_location = None
-    # Use headers from the incoming request if default_vertex_config is not set
-    if default_vertex_config is None:
+    vertex_project: Optional[str] = (
+        VertexPassThroughRouter._get_vertex_project_id_from_url(endpoint)
+    )
+    vertex_location: Optional[str] = (
+        VertexPassThroughRouter._get_vertex_location_from_url(endpoint)
+    )
+    vertex_credentials = vertex_pass_through_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+    # Use headers from the incoming request if no vertex credentials are found
+    if vertex_credentials.vertex_project is None:
         headers = dict(request.headers) or {}
         verbose_proxy_logger.debug(
             "default_vertex_config  not set, incoming request headers %s", headers
         )
-        # extract location from endpoint, endpoint
-        # "v1beta1/projects/adroit-crow-413218/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent"
-        match = re.search(r"/locations/([^/]+)", endpoint)
-        vertex_location = match.group(1) if match else None
         base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
         headers.pop("content-length", None)
         headers.pop("host", None)
     else:
-        vertex_project = default_vertex_config.get("vertex_project")
-        vertex_location = default_vertex_config.get("vertex_location")
-        vertex_credentials = default_vertex_config.get("vertex_credentials")
+        vertex_project = vertex_credentials.vertex_project
+        vertex_location = vertex_credentials.vertex_location
+        vertex_credentials_str = vertex_credentials.vertex_credentials
 
+        # Construct base URL for the target endpoint
         base_target_url = f"https://{vertex_location}-aiplatform.googleapis.com/"
 
         _auth_header, vertex_project = (
             await vertex_fine_tuning_apis_instance._ensure_access_token_async(
-                credentials=vertex_credentials,
+                credentials=vertex_credentials_str,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai_beta",
             )
@@ -162,7 +205,7 @@ async def vertex_proxy_route(
             model="",
             auth_header=_auth_header,
             gemini_api_key=None,
-            vertex_credentials=vertex_credentials,
+            vertex_credentials=vertex_credentials_str,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             stream=False,
@@ -194,14 +237,16 @@ async def vertex_proxy_route(
     verbose_proxy_logger.debug("updated url %s", updated_url)
 
     ## check for streaming
+    target = str(updated_url)
     is_streaming_request = False
     if "stream" in str(updated_url):
         is_streaming_request = True
+        target += "?alt=sse"
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
-        target=str(updated_url),
+        target=target,
         custom_headers=headers,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
@@ -212,3 +257,18 @@ async def vertex_proxy_route(
     )
 
     return received_value
+
+
+def get_litellm_virtual_key(request: Request) -> str:
+    """
+    Extract and format API key from request headers.
+    Prioritizes x-litellm-api-key over Authorization header.
+
+
+    Vertex JS SDK uses `Authorization` header, we use `x-litellm-api-key` to pass litellm virtual key
+
+    """
+    litellm_api_key = request.headers.get("x-litellm-api-key")
+    if litellm_api_key:
+        return f"Bearer {litellm_api_key}"
+    return request.headers.get("Authorization", "")

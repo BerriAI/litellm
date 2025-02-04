@@ -4,30 +4,23 @@ OpenAI-like chat completion handler
 For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
-import copy
 import json
-import os
-import time
-import types
-from enum import Enum
-from functools import partial
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Union
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler,
-    get_async_httpx_client,
-)
+from litellm import LlmProviders
+from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
-from litellm.utils import CustomStreamWrapper, EmbeddingResponse
+from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
+from .transformation import OpenAILikeChatConfig
 
 
 async def make_call(
@@ -39,16 +32,22 @@ async def make_call(
     messages: list,
     logging_obj,
     streaming_decoder: Optional[CustomStreamingDecoder] = None,
+    fake_stream: bool = False,
 ):
     if client is None:
         client = litellm.module_level_aclient
 
-    response = await client.post(api_base, headers=headers, data=data, stream=True)
+    response = await client.post(
+        api_base, headers=headers, data=data, stream=not fake_stream
+    )
 
     if streaming_decoder is not None:
         completion_stream: Any = streaming_decoder.aiter_bytes(
             response.aiter_bytes(chunk_size=1024)
         )
+    elif fake_stream:
+        model_response = ModelResponse(**response.json())
+        completion_stream = MockResponseIterator(model_response=model_response)
     else:
         completion_stream = ModelResponseIterator(
             streaming_response=response.aiter_lines(), sync_stream=False
@@ -73,11 +72,15 @@ def make_sync_call(
     messages: list,
     logging_obj,
     streaming_decoder: Optional[CustomStreamingDecoder] = None,
+    fake_stream: bool = False,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     if client is None:
         client = litellm.module_level_client  # Create a new client if none provided
 
-    response = client.post(api_base, headers=headers, data=data, stream=True)
+    response = client.post(
+        api_base, headers=headers, data=data, stream=not fake_stream, timeout=timeout
+    )
 
     if response.status_code != 200:
         raise OpenAILikeError(status_code=response.status_code, message=response.read())
@@ -86,6 +89,9 @@ def make_sync_call(
         completion_stream = streaming_decoder.iter_bytes(
             response.iter_bytes(chunk_size=1024)
         )
+    elif fake_stream:
+        model_response = ModelResponse(**response.json())
+        completion_stream = MockResponseIterator(model_response=model_response)
     else:
         completion_stream = ModelResponseIterator(
             streaming_response=response.iter_lines(), sync_stream=True
@@ -126,8 +132,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
+        fake_stream: bool = False,
     ) -> CustomStreamWrapper:
-
         data["stream"] = True
         completion_stream = await make_call(
             client=client,
@@ -169,6 +175,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         logger_fn=None,
         headers={},
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        json_mode: bool = False,
     ) -> ModelResponse:
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
@@ -181,8 +188,6 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 api_base, headers=headers, data=json.dumps(data), timeout=timeout
             )
             response.raise_for_status()
-
-            response_json = response.json()
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,
@@ -193,22 +198,26 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
 
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=response_json,
-            additional_args={"complete_input_dict": data},
+        return OpenAILikeChatConfig._transform_response(
+            model=model,
+            response=response,
+            model_response=model_response,
+            stream=stream,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=data,
+            messages=messages,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            json_mode=json_mode,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
         )
-        response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + (response.model or "")
-
-        if base_model is not None:
-            response._hidden_params["model"] = base_model
-        return response
 
     def completion(
         self,
+        *,
         model: str,
         messages: list,
         api_base: str,
@@ -230,6 +239,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         streaming_decoder: Optional[
             CustomStreamingDecoder
         ] = None,  # if openai-compatible api needs custom stream decoder - e.g. sagemaker
+        fake_stream: bool = False,
     ):
         custom_endpoint = custom_endpoint or optional_params.pop(
             "custom_endpoint", None
@@ -243,13 +253,29 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             headers=headers,
         )
 
-        stream: bool = optional_params.get("stream", None) or False
-        optional_params["stream"] = stream
+        stream: bool = optional_params.pop("stream", None) or False
+        extra_body = optional_params.pop("extra_body", {})
+        json_mode = optional_params.pop("json_mode", None)
+        optional_params.pop("max_retries", None)
+        if not fake_stream:
+            optional_params["stream"] = stream
+
+        if messages is not None and custom_llm_provider is not None:
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+            if isinstance(provider_config, OpenAIGPTConfig) or isinstance(
+                provider_config, OpenAIConfig
+            ):
+                messages = provider_config._transform_messages(
+                    messages=messages, model=model
+                )
 
         data = {
             "model": model,
             "messages": messages,
             **optional_params,
+            **extra_body,
         }
 
         ## LOGGING
@@ -288,6 +314,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     client=client,
                     custom_llm_provider=custom_llm_provider,
                     streaming_decoder=streaming_decoder,
+                    fake_stream=fake_stream,
                 )
             else:
                 return self.acompletion_function(
@@ -310,6 +337,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     timeout=timeout,
                     base_model=base_model,
                     client=client,
+                    json_mode=json_mode
                 )
         else:
             ## COMPLETION CALL
@@ -327,6 +355,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     messages=messages,
                     logging_obj=logging_obj,
                     streaming_decoder=streaming_decoder,
+                    fake_stream=fake_stream,
+                    timeout=timeout,
                 )
                 # completion_stream.__iter__()
                 return CustomStreamWrapper(
@@ -340,11 +370,10 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
                     response = client.post(
-                        api_base, headers=headers, data=json.dumps(data)
+                        url=api_base, headers=headers, data=json.dumps(data)
                     )
                     response.raise_for_status()
 
-                    response_json = response.json()
                 except httpx.HTTPStatusError as e:
                     raise OpenAILikeError(
                         status_code=e.response.status_code,
@@ -356,17 +385,19 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     )
                 except Exception as e:
                     raise OpenAILikeError(status_code=500, message=str(e))
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=response_json,
-            additional_args={"complete_input_dict": data},
+        return OpenAILikeChatConfig._transform_response(
+            model=model,
+            response=response,
+            model_response=model_response,
+            stream=stream,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=data,
+            messages=messages,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            json_mode=json_mode,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
         )
-        response = ModelResponse(**response_json)
-
-        response.model = custom_llm_provider + "/" + (response.model or "")
-
-        if base_model is not None:
-            response._hidden_params["model"] = base_model
-
-        return response

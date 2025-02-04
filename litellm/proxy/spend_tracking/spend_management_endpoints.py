@@ -1,17 +1,26 @@
 #### SPEND MANAGEMENT #####
+import collections
+import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+else:
+    PrismaClient = Any
 
 router = APIRouter()
 
@@ -250,7 +259,6 @@ async def get_global_activity(
         "sum_total_tokens": 2012
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -261,7 +269,7 @@ async def get_global_activity(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -418,7 +426,6 @@ async def get_global_activity_model(
         },
     ]
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -429,7 +436,7 @@ async def get_global_activity_model(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -572,7 +579,6 @@ async def get_global_activity_exceptions_per_deployment(
         },
     ]
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -583,7 +589,7 @@ async def get_global_activity_exceptions_per_deployment(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -706,7 +712,6 @@ async def get_global_activity_exceptions(
         "sum_api_exceptions": 20,
     }
     """
-    from collections import defaultdict
 
     if start_date is None or end_date is None:
         raise HTTPException(
@@ -717,7 +722,7 @@ async def get_global_activity_exceptions(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         if prisma_client is None:
@@ -1355,7 +1360,6 @@ async def global_view_spend_tags(
     """
     import traceback
 
-    from enterprise.utils import ui_get_spend_by_tags
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -1601,6 +1605,158 @@ async def calculate_spend(request: SpendCalculateRequest):
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
+
+
+@router.get(
+    "/spend/logs/ui",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": List[LiteLLM_SpendLogs]},
+    },
+)
+async def ui_view_spend_logs(  # noqa: PLR0915
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on api key",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on user_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="request_id to get spend logs for specific request_id",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter spend logs by team_id",
+    ),
+    min_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend greater than or equal to this value",
+    ),
+    max_spend: Optional[float] = fastapi.Query(
+        default=None,
+        description="Filter logs with spend less than or equal to this value",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Number of items per page", ge=1, le=100
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    View spend logs for UI with pagination support
+
+    Returns:
+        {
+            "data": List[LiteLLM_SpendLogs],  # Paginated spend logs
+            "total": int,                      # Total number of records
+            "page": int,                       # Current page number
+            "page_size": int,                  # Number of items per page
+            "total_pages": int                 # Total number of pages
+        }
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise ProxyException(
+            message="Prisma Client is not initialized",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+
+        # Convert the date strings to datetime objects
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+
+        # Convert to ISO format strings for Prisma
+        start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
+        end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
+
+        # Build where conditions
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
+
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
+
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if min_spend is not None or max_spend is not None:
+            where_conditions["spend"] = {}
+            if min_spend is not None:
+                where_conditions["spend"]["gte"] = min_spend
+            if max_spend is not None:
+                where_conditions["spend"]["lte"] = max_spend
+        # Calculate skip value for pagination
+        skip = (page - 1) * page_size
+
+        # Get total count of records
+        total_records = await prisma_client.db.litellm_spendlogs.count(
+            where=where_conditions,
+        )
+
+        # Get paginated data
+        data = await prisma_client.db.litellm_spendlogs.find_many(
+            where=where_conditions,
+            order={
+                "startTime": "desc",
+            },
+            skip=skip,
+            take=page_size,
+        )
+
+        # Calculate total pages
+        total_pages = (total_records + page_size - 1) // page_size
+
+        verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
+
+        return {
+            "data": data,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -2452,15 +2608,199 @@ async def global_spend_models(
     return response
 
 
-@router.post(
-    "/global/predict/spend/logs",
-    tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
-)
-async def global_predict_spend_logs(request: Request):
-    from enterprise.utils import _forecast_daily_cost
+@router.get("/provider/budgets", response_model=ProviderBudgetResponse)
+async def provider_budgets() -> ProviderBudgetResponse:
+    """
+    Provider Budget Routing - Get Budget, Spend Details https://docs.litellm.ai/docs/proxy/provider_budget_routing
 
-    data = await request.json()
-    data = data.get("data")
-    return _forecast_daily_cost(data)
+    Use this endpoint to check current budget, spend and budget reset time for a provider
+
+    Example Request
+
+    ```bash
+    curl -X GET http://localhost:4000/provider/budgets \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Response
+
+    ```json
+    {
+        "providers": {
+            "openai": {
+                "budget_limit": 1e-12,
+                "time_period": "1d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "azure": {
+                "budget_limit": 100.0,
+                "time_period": "1d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "anthropic": {
+                "budget_limit": 100.0,
+                "time_period": "10d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            },
+            "vertex_ai": {
+                "budget_limit": 100.0,
+                "time_period": "12d",
+                "spend": 0.0,
+                "budget_reset_at": null
+            }
+        }
+    }
+    ```
+
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500, detail={"error": "No llm_router found"}
+            )
+
+        provider_budget_config = llm_router.provider_budget_config
+        if provider_budget_config is None:
+            raise ValueError(
+                "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
+            )
+
+        provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
+        for _provider, _budget_info in provider_budget_config.items():
+            if llm_router.router_budget_logger is None:
+                raise ValueError("No router budget logger found")
+            _provider_spend = (
+                await llm_router.router_budget_logger._get_current_provider_spend(
+                    _provider
+                )
+                or 0.0
+            )
+            _provider_budget_ttl = await llm_router.router_budget_logger._get_current_provider_budget_reset_at(
+                _provider
+            )
+            provider_budget_response_object = ProviderBudgetResponseObject(
+                budget_limit=_budget_info.max_budget,
+                time_period=_budget_info.budget_duration,
+                spend=_provider_spend,
+                budget_reset_at=_provider_budget_ttl,
+            )
+            provider_budget_response_dict[_provider] = provider_budget_response_object
+        return ProviderBudgetResponse(providers=provider_budget_response_dict)
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/provider/budgets: Exception occured - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(e)
+
+
+async def get_spend_by_tags(
+    prisma_client: PrismaClient, start_date=None, end_date=None
+):
+    response = await prisma_client.db.query_raw(
+        """
+        SELECT
+        jsonb_array_elements_text(request_tags) AS individual_request_tag,
+        COUNT(*) AS log_count,
+        SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs"
+        GROUP BY individual_request_tag;
+        """
+    )
+
+    return response
+
+
+async def ui_get_spend_by_tags(
+    start_date: str,
+    end_date: str,
+    prisma_client: Optional[PrismaClient] = None,
+    tags_str: Optional[str] = None,
+):
+    """
+    Should cover 2 cases:
+    1. When user is getting spend for all_tags. "all_tags" in tags_list
+    2. When user is getting spend for specific tags.
+    """
+
+    # tags_str is a list of strings csv of tags
+    # tags_str = tag1,tag2,tag3
+    # convert to list if it's not None
+    tags_list: Optional[List[str]] = None
+    if tags_str is not None and len(tags_str) > 0:
+        tags_list = tags_str.split(",")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    response = None
+    if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
+        # Get spend for all tags
+        sql_query = """
+        SELECT
+            individual_request_tag,
+            spend_date,
+            log_count,
+            total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+        ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+        )
+    else:
+        # filter by tags list
+        sql_query = """
+        SELECT
+            individual_request_tag,
+            SUM(log_count) AS log_count,
+            SUM(total_spend) AS total_spend
+        FROM DailyTagSpend
+        WHERE spend_date >= $1::date AND spend_date <= $2::date
+          AND individual_request_tag = ANY($3::text[])
+        GROUP BY individual_request_tag
+        ORDER BY total_spend DESC;
+        """
+        response = await prisma_client.db.query_raw(
+            sql_query,
+            start_date,
+            end_date,
+            tags_list,
+        )
+
+    # print("tags - spend")
+    # print(response)
+    # Bar Chart 1 - Spend per tag - Top 10 tags by spend
+    total_spend_per_tag: collections.defaultdict = collections.defaultdict(float)
+    total_requests_per_tag: collections.defaultdict = collections.defaultdict(int)
+    for row in response:
+        tag_name = row["individual_request_tag"]
+        tag_spend = row["total_spend"]
+
+        total_spend_per_tag[tag_name] += tag_spend
+        total_requests_per_tag[tag_name] += row["log_count"]
+
+    sorted_tags = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)
+    # convert to ui format
+    ui_tags = []
+    for tag in sorted_tags:
+        current_spend = tag[1]
+        if current_spend is not None and isinstance(current_spend, float):
+            current_spend = round(current_spend, 4)
+        ui_tags.append(
+            {
+                "name": tag[0],
+                "spend": current_spend,
+                "log_count": total_requests_per_tag[tag[0]],
+            }
+        )
+
+    return {"spend_per_tag": ui_tags}

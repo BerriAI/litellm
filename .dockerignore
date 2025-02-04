@@ -9,3 +9,4 @@ tests
 .devcontainer
 *.tgz
 log.txt
+docker/Dockerfile.*

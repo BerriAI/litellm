@@ -6,17 +6,19 @@ import os
 import sys
 import traceback
 
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
 from dotenv import load_dotenv
 from openai.types.image import Image
+from litellm.caching import InMemoryCache
 
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
 import os
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -107,10 +109,10 @@ class TestVertexImageGeneration(BaseImageGenTest):
         # comment this when running locally
         load_vertex_ai_credentials()
 
-        litellm.in_memory_llm_clients_cache = {}
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/imagegeneration@006",
-            "vertex_ai_project": "adroit-crow-413218",
+            "vertex_ai_project": "pathrise-convert-1606954137718",
             "vertex_ai_location": "us-central1",
             "n": 1,
         }
@@ -118,13 +120,13 @@ class TestVertexImageGeneration(BaseImageGenTest):
 
 class TestBedrockSd3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        litellm.in_memory_llm_clients_cache = {}
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
 class TestBedrockSd1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        litellm.in_memory_llm_clients_cache = {}
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
@@ -141,7 +143,7 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
             "api_version": "2023-09-01-preview",
             "metadata": {
                 "model_info": {
-                    "base_model": "dall-e-3",
+                    "base_model": "azure/dall-e-3",
                 }
             },
         }
@@ -157,8 +159,15 @@ def test_image_generation_azure_dall_e_3():
             api_version="2023-12-01-preview",
             api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
             api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+            metadata={
+                "model_info": {
+                    "base_model": "azure/dall-e-3",
+                }
+            },
         )
         print(f"response: {response}")
+
+        print("response", response._hidden_params)
         assert len(response.data) > 0
     except litellm.InternalServerError as e:
         pass
@@ -181,7 +190,7 @@ def test_image_generation_azure_dall_e_3():
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:
-        litellm.in_memory_llm_clients_cache = {}
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
         response = await litellm.aimage_generation(
             prompt="A cute baby sea otter",
             model="bedrock/stability.stable-diffusion-xl-v1",

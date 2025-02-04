@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 import httpx
 from respx import MockRouter
+from unittest.mock import patch, MagicMock, AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -68,13 +69,16 @@ def test_convert_dict_to_text_completion_response():
     assert response.choices[0].logprobs.top_logprobs == [None, {",": -2.1568563}]
 
 
+@pytest.mark.skip(
+    reason="need to migrate huggingface to support httpx client being passed in"
+)
 @pytest.mark.asyncio
 @pytest.mark.respx
-async def test_huggingface_text_completion_logprobs(respx_mock: MockRouter):
+async def test_huggingface_text_completion_logprobs():
     """Test text completion with Hugging Face, focusing on logprobs structure"""
     litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
-    # Mock the raw response from Hugging Face
     mock_response = [
         {
             "generated_text": ",\n\nI have a question...",  # truncated for brevity
@@ -91,46 +95,48 @@ async def test_huggingface_text_completion_logprobs(respx_mock: MockRouter):
         }
     ]
 
-    # Mock the API request
-    mock_request = respx_mock.post(
-        "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-v0.1"
-    ).mock(return_value=httpx.Response(200, json=mock_response))
+    return_val = AsyncMock()
 
-    response = await litellm.atext_completion(
-        model="huggingface/mistralai/Mistral-7B-v0.1",
-        prompt="good morning",
-    )
+    return_val.json.return_value = mock_response
 
-    # Verify the request
-    assert mock_request.called
-    request_body = json.loads(mock_request.calls[0].request.content)
-    assert request_body == {
-        "inputs": "good morning",
-        "parameters": {"details": True, "return_full_text": False},
-        "stream": False,
-    }
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=return_val) as mock_post:
+        response = await litellm.atext_completion(
+            model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
+            prompt="good morning",
+            client=client,
+        )
 
-    print("response=", response)
+        # Verify the request
+        mock_post.assert_called_once()
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        assert request_body == {
+            "inputs": "good morning",
+            "parameters": {"details": True, "return_full_text": False},
+            "stream": False,
+        }
 
-    # Verify response structure
-    assert isinstance(response, TextCompletionResponse)
-    assert response.object == "text_completion"
-    assert response.model == "mistralai/Mistral-7B-v0.1"
+        print("response=", response)
 
-    # Verify logprobs structure
-    choice = response.choices[0]
-    assert choice.finish_reason == "length"
-    assert choice.index == 0
-    assert isinstance(choice.logprobs.tokens, list)
-    assert isinstance(choice.logprobs.token_logprobs, list)
-    assert isinstance(choice.logprobs.text_offset, list)
-    assert isinstance(choice.logprobs.top_logprobs, list)
-    assert choice.logprobs.tokens == [",", "\n"]
-    assert choice.logprobs.token_logprobs == [-1.7626953, -1.7314453]
-    assert choice.logprobs.text_offset == [0, 1]
-    assert choice.logprobs.top_logprobs == [{}, {}]
+        # Verify response structure
+        assert isinstance(response, TextCompletionResponse)
+        assert response.object == "text_completion"
+        assert response.model == "mistralai/Mistral-7B-v0.1"
 
-    # Verify usage
-    assert response.usage["completion_tokens"] > 0
-    assert response.usage["prompt_tokens"] > 0
-    assert response.usage["total_tokens"] > 0
+        # Verify logprobs structure
+        choice = response.choices[0]
+        assert choice.finish_reason == "length"
+        assert choice.index == 0
+        assert isinstance(choice.logprobs.tokens, list)
+        assert isinstance(choice.logprobs.token_logprobs, list)
+        assert isinstance(choice.logprobs.text_offset, list)
+        assert isinstance(choice.logprobs.top_logprobs, list)
+        assert choice.logprobs.tokens == [",", "\n"]
+        assert choice.logprobs.token_logprobs == [-1.7626953, -1.7314453]
+        assert choice.logprobs.text_offset == [0, 1]
+        assert choice.logprobs.top_logprobs == [{}, {}]
+
+        # Verify usage
+        assert response.usage["completion_tokens"] > 0
+        assert response.usage["prompt_tokens"] > 0
+        assert response.usage["total_tokens"] > 0

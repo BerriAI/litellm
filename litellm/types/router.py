@@ -5,16 +5,16 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-from .utils import ModelResponse
+from .utils import ModelResponse, ProviderSpecificModelInfo
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -103,6 +103,7 @@ class ModelInfo(BaseModel):
         None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     )
     tier: Optional[Literal["free", "paid"]] = None
+    team_id: Optional[str] = None  # the team id that this model belongs to
 
     def __init__(self, id: Optional[Union[str, int]] = None, **params):
         if id is None:
@@ -172,6 +173,10 @@ class GenericLiteLLMParams(BaseModel):
 
     max_file_size_mb: Optional[float] = None
 
+    # Deployment budgets
+    max_budget: Optional[float] = None
+    budget_duration: Optional[str] = None
+    use_in_pass_through: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
     def __init__(
@@ -207,6 +212,11 @@ class GenericLiteLLMParams(BaseModel):
         input_cost_per_second: Optional[float] = None,
         output_cost_per_second: Optional[float] = None,
         max_file_size_mb: Optional[float] = None,
+        # Deployment budgets
+        max_budget: Optional[float] = None,
+        budget_duration: Optional[str] = None,
+        # Pass through params
+        use_in_pass_through: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -268,6 +278,8 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # OpenAI / Azure Whisper
         # set a max-size of file that can be passed to litellm proxy
         max_file_size_mb: Optional[float] = None,
+        # will use deployment on pass-through endpoints if True
+        use_in_pass_through: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -344,6 +356,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: Optional[float]
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
+    num_retries: Optional[int]
     ## MOCK RESPONSES ##
     mock_response: Optional[Union[str, ModelResponse, Exception]]
 
@@ -351,10 +364,15 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # use this for tag-based routing
     tags: Optional[List[str]]
 
+    # deployment budgets
+    max_budget: Optional[float]
+    budget_duration: Optional[str]
 
-class DeploymentTypedDict(TypedDict):
-    model_name: str
-    litellm_params: LiteLLMParamsTypedDict
+
+class DeploymentTypedDict(TypedDict, total=False):
+    model_name: Required[str]
+    litellm_params: Required[LiteLLMParamsTypedDict]
+    model_info: dict
 
 
 SPECIAL_MODEL_INFO_PARAMS = [
@@ -434,6 +452,9 @@ class RouterErrors(enum.Enum):
     no_deployments_with_tag_routing = (
         "Not allowed to access model due to tags configuration"
     )
+    no_deployments_with_provider_budget_routing = (
+        "No deployments available - crossed budget"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -493,13 +514,17 @@ class ModelGroupInfo(BaseModel):
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
     mode: Optional[
-        Literal[
-            "chat",
-            "embedding",
-            "completion",
-            "image_generation",
-            "audio_transcription",
-            "rerank",
+        Union[
+            str,
+            Literal[
+                "chat",
+                "embedding",
+                "completion",
+                "image_generation",
+                "audio_transcription",
+                "rerank",
+                "moderations",
+            ],
         ]
     ] = Field(default="chat")
     tpm: Optional[int] = None
@@ -509,6 +534,12 @@ class ModelGroupInfo(BaseModel):
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+
+    def __init__(self, **data):
+        for field_name, field_type in get_type_hints(self.__class__).items():
+            if field_type == bool and data.get(field_name) is None:
+                data[field_name] = False
+        super().__init__(**data)
 
 
 class AssistantsTypedDict(TypedDict):
@@ -628,3 +659,21 @@ class RoutingStrategy(enum.Enum):
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
+    PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
+
+
+class RouterCacheEnum(enum.Enum):
+    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
+    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
+
+
+class GenericBudgetWindowDetails(BaseModel):
+    """Details about a provider's budget window"""
+
+    budget_start: float
+    spend_key: str
+    start_time_key: str
+    ttl_seconds: int
+
+
+OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]

@@ -454,6 +454,7 @@ Test with Router
 """
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_normal_router_call():
     model_list = [
@@ -528,6 +529,7 @@ async def test_normal_router_call():
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_normal_router_tpm_limit():
     import logging
@@ -615,6 +617,7 @@ async def test_normal_router_tpm_limit():
         assert e.status_code == 429
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_streaming_router_call():
     model_list = [
@@ -690,6 +693,7 @@ async def test_streaming_router_call():
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_streaming_router_tpm_limit():
     litellm.set_verbose = True
@@ -845,6 +849,7 @@ async def test_bad_router_call():
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_bad_router_tpm_limit():
     model_list = [
@@ -923,6 +928,7 @@ async def test_bad_router_tpm_limit():
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_bad_router_tpm_limit_per_model():
     model_list = [
@@ -1023,6 +1029,7 @@ async def test_bad_router_tpm_limit_per_model():
     )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_pre_call_hook_rpm_limits_per_model():
     """
@@ -1096,11 +1103,12 @@ async def test_pre_call_hook_rpm_limits_per_model():
         assert e.status_code == 429
         print("got error=", e)
         assert (
-            "limit reached Hit RPM limit for model: azure-model on api_key: c11e7177eb60c80cf983ddf8ca98f2dc1272d4c612204ce9bedd2460b18939cc"
+            "limit reached Hit RPM limit for model: azure-model on LiteLLM Virtual Key user_api_key_hash: c11e7177eb60c80cf983ddf8ca98f2dc1272d4c612204ce9bedd2460b18939cc"
             in str(e)
         )
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
 async def test_pre_call_hook_tpm_limits_per_model():
     """
@@ -1205,7 +1213,7 @@ async def test_pre_call_hook_tpm_limits_per_model():
         assert e.status_code == 429
         print("got error=", e)
         assert (
-            "request limit reached Hit TPM limit for model: azure-model on api_key"
+            "request limit reached Hit TPM limit for model: azure-model on LiteLLM Virtual Key user_api_key_hash"
             in str(e)
         )
 

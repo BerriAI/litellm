@@ -3,7 +3,6 @@
 import base64
 import json
 import os
-import traceback
 from datetime import datetime
 from typing import Optional
 
@@ -30,8 +29,7 @@ class LicenseCheck:
 
     def read_public_key(self):
         try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import padding, rsa
+            from cryptography.hazmat.primitives import serialization
 
             # current dir
             current_dir = os.path.dirname(os.path.realpath(__file__))
@@ -129,8 +127,8 @@ class LicenseCheck:
 
     def verify_license_without_api_request(self, public_key, license_key):
         try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import padding, rsa
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
 
             # Decode the license key
             decoded = base64.b64decode(license_key)

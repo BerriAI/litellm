@@ -175,6 +175,62 @@ async def test_add_existing_deployment():
     assert init_len_list == len(llm_router.model_list)
 
 
+@pytest.mark.asyncio
+async def test_db_error_new_model_check():
+    """
+    - if error in db, don't delete existing models
+
+    Relevant issue: https://github.com/BerriAI/litellm/blob/ddfe687b13e9f31db2fb2322887804e3d01dd467/litellm/proxy/proxy_server.py#L2461
+    """
+    import base64
+
+    litellm_params = LiteLLM_Params(
+        model="gpt-3.5-turbo",
+        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_version=os.getenv("AZURE_API_VERSION"),
+    )
+    deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
+    deployment_2 = Deployment(
+        model_name="gpt-3.5-turbo-2", litellm_params=litellm_params
+    )
+
+    llm_router = litellm.Router(
+        model_list=[
+            deployment.to_json(exclude_none=True),
+            deployment_2.to_json(exclude_none=True),
+        ]
+    )
+
+    init_len_list = len(llm_router.model_list)
+    print(f"llm_router: {llm_router}")
+    master_key = "sk-1234"
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    pc = ProxyConfig()
+
+    encrypted_litellm_params = litellm_params.dict(exclude_none=True)
+
+    for k, v in encrypted_litellm_params.items():
+        if isinstance(v, str):
+            encrypted_value = encrypt_value(v, master_key)
+            encrypted_litellm_params[k] = base64.b64encode(encrypted_value).decode(
+                "utf-8"
+            )
+    db_model = DBModel(
+        model_id=deployment.model_info.id,
+        model_name="gpt-3.5-turbo",
+        litellm_params=encrypted_litellm_params,
+        model_info={"id": deployment.model_info.id},
+    )
+
+    db_models = []
+    deleted_deployments = await pc._delete_deployment(db_models=db_models)
+    assert deleted_deployments == 0
+
+    assert init_len_list == len(llm_router.model_list)
+
+
 litellm_params = LiteLLM_Params(
     model="azure/chatgpt-v-2",
     api_key=os.getenv("AZURE_API_KEY"),
@@ -288,3 +344,60 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
             assert len(llm_router.model_list) == len(model_list)
         else:
             assert len(llm_router.model_list) == len(model_list) + prev_llm_router_val
+
+
+from litellm import LITELLM_CHAT_PROVIDERS, LlmProviders
+from litellm.utils import ProviderConfigManager
+from litellm.llms.base_llm.chat.transformation import BaseConfig
+
+
+def _check_provider_config(config: BaseConfig, provider: LlmProviders):
+    assert isinstance(
+        config,
+        BaseConfig,
+    ), f"Provider {provider} is not a subclass of BaseConfig. Got={config}"
+
+    if (
+        provider != litellm.LlmProviders.OPENAI
+        and provider != litellm.LlmProviders.OPENAI_LIKE
+        and provider != litellm.LlmProviders.CUSTOM_OPENAI
+    ):
+        assert (
+            config.__class__.__name__ != "OpenAIGPTConfig"
+        ), f"Provider {provider} is an instance of OpenAIGPTConfig"
+
+    assert "_abc_impl" not in config.get_config(), f"Provider {provider} has _abc_impl"
+
+
+def test_provider_config_manager_bedrock_converse_like():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+        provider=LlmProviders.BEDROCK,
+    )
+    print(f"config: {config}")
+    assert isinstance(config, AmazonConverseConfig)
+
+
+# def test_provider_config_manager():
+#     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+#     for provider in LITELLM_CHAT_PROVIDERS:
+#         if (
+#             provider == LlmProviders.VERTEX_AI
+#             or provider == LlmProviders.VERTEX_AI_BETA
+#             or provider == LlmProviders.BEDROCK
+#             or provider == LlmProviders.BASETEN
+#             or provider == LlmProviders.PETALS
+#             or provider == LlmProviders.SAGEMAKER
+#             or provider == LlmProviders.SAGEMAKER_CHAT
+#             or provider == LlmProviders.VLLM
+#             or provider == LlmProviders.OLLAMA
+#         ):
+#             continue
+
+#         config = ProviderConfigManager.get_provider_chat_config(
+#             model="gpt-3.5-turbo", provider=LlmProviders(provider)
+#         )
+#         _check_provider_config(config, provider)

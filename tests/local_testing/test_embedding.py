@@ -642,19 +642,27 @@ def tgi_mock_post(*args, **kwargs):
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_hf_embedding_sentence_sim(sync_mode):
+@patch("litellm.llms.huggingface.chat.handler.async_get_hf_task_embedding_for_model")
+@patch("litellm.llms.huggingface.chat.handler.get_hf_task_embedding_for_model")
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_hf_embedding_sentence_sim(
+    mock_async_get_hf_task_embedding_for_model,
+    mock_get_hf_task_embedding_for_model,
+    sync_mode,
+):
     try:
         # huggingface/microsoft/codebert-base
         # huggingface/facebook/bart-large
+        mock_get_hf_task_embedding_for_model.return_value = "sentence-similarity"
+        mock_async_get_hf_task_embedding_for_model.return_value = "sentence-similarity"
         if sync_mode is True:
             client = HTTPHandler(concurrent_limit=1)
         else:
             client = AsyncHTTPHandler(concurrent_limit=1)
         with patch.object(client, "post", side_effect=tgi_mock_post) as mock_client:
             data = {
-                "model": "huggingface/TaylorAI/bge-micro-v2",
+                "model": "huggingface/sentence-transformers/TaylorAI/bge-micro-v2",
                 "input": ["good morning from litellm", "this is another item"],
                 "client": client,
             }
@@ -801,8 +809,11 @@ def test_fireworks_embeddings():
 
 
 def test_watsonx_embeddings():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    def mock_wx_embed_request(method: str, url: str, **kwargs):
+    client = HTTPHandler()
+
+    def mock_wx_embed_request(url: str, **kwargs):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
@@ -816,12 +827,14 @@ def test_watsonx_embeddings():
 
     try:
         litellm.set_verbose = True
-        with patch("requests.request", side_effect=mock_wx_embed_request):
+        with patch.object(client, "post", side_effect=mock_wx_embed_request):
             response = litellm.embedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
                 token="secret-token",
+                client=client,
             )
+
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
@@ -832,6 +845,9 @@ def test_watsonx_embeddings():
 
 @pytest.mark.asyncio
 async def test_watsonx_aembeddings():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
 
     def mock_async_client(*args, **kwargs):
 
@@ -856,12 +872,14 @@ async def test_watsonx_aembeddings():
 
     try:
         litellm.set_verbose = True
-        with patch("httpx.AsyncClient", side_effect=mock_async_client):
+        with patch.object(client, "post", side_effect=mock_async_client) as mock_client:
             response = await litellm.aembedding(
                 model="watsonx/ibm/slate-30m-english-rtrvr",
                 input=["good morning from litellm"],
                 token="secret-token",
+                client=client,
             )
+            mock_client.assert_called_once()
         print(f"response: {response}")
         assert isinstance(response.usage, litellm.Usage)
     except litellm.RateLimitError as e:
@@ -884,23 +902,6 @@ def test_voyage_embeddings():
             input=["good morning from litellm"],
         )
         print(f"response: {response}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_triton_embeddings():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.aembedding(
-            model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
-            input=["good morning from litellm"],
-        )
-        print(f"response: {response}")
-
-        # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -928,37 +929,6 @@ async def test_gemini_embeddings(sync_mode, input):
         # stubbed endpoint is setup to return this
         assert isinstance(response.data[0]["embedding"], list)
         assert response.usage.prompt_tokens > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_databricks_embeddings(sync_mode):
-    try:
-        litellm.set_verbose = True
-        litellm.drop_params = True
-
-        if sync_mode:
-            response = litellm.embedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-        else:
-            response = await litellm.aembedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-
-        print(f"response: {response}")
-
-        openai.types.CreateEmbeddingResponse.model_validate(
-            response.model_dump(), strict=True
-        )
-        # stubbed endpoint is setup to return this
-        # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1035,6 +1005,59 @@ async def test_hf_embedddings_with_optional_params(sync_mode):
         assert json_data["parameters"]["top_k"] == 10
 
 
+def test_hosted_vllm_embedding(monkeypatch):
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://localhost:8000")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            embedding(
+                model="hosted_vllm/jina-embeddings-v3",
+                input=["Hello world"],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_lm_studio_embedding(monkeypatch, sync_mode):
+    monkeypatch.setenv("LM_STUDIO_API_BASE", "http://localhost:8000")
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        try:
+            if sync_mode:
+                embedding(
+                    model="lm_studio/jina-embeddings-v3",
+                    input=["Hello world"],
+                    client=client,
+                )
+            else:
+                await litellm.aembedding(
+                    model="lm_studio/jina-embeddings-v3",
+                    input=["Hello world"],
+                    client=client,
+                )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["input"] == ["Hello world"]
+        assert json_data["model"] == "jina-embeddings-v3"
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -1080,3 +1103,34 @@ def test_cohere_img_embeddings(input, input_type):
         assert response.usage.prompt_tokens_details.image_tokens > 0
     else:
         assert response.usage.prompt_tokens_details.text_tokens > 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_embedding_with_extra_headers(sync_mode):
+
+    input = ["hello world"]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    if sync_mode:
+        client = HTTPHandler()
+    else:
+        client = AsyncHTTPHandler()
+
+    data = {
+        "model": "cohere/embed-english-v3.0",
+        "input": input,
+        "extra_headers": {"my-test-param": "hello-world"},
+        "client": client,
+    }
+    with patch.object(client, "post") as mock_post:
+        try:
+            if sync_mode:
+                embedding(**data)
+            else:
+                await litellm.aembedding(**data)
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        assert "my-test-param" in mock_post.call_args.kwargs["headers"]

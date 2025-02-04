@@ -20,14 +20,15 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
-
+from respx import MockRouter
 import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments,
     _get_cooldown_deployments,
@@ -1450,7 +1451,7 @@ async def test_mistral_on_router():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "mistral/mistral-medium",
+                "model": "mistral/mistral-small-latest",
             },
         },
     ]
@@ -2115,10 +2116,14 @@ def test_router_get_model_info(model, base_model, llm_provider):
     assert deployment is not None
 
     if llm_provider == "openai" or (base_model is not None and llm_provider == "azure"):
-        router.get_router_model_info(deployment=deployment.to_json())
+        router.get_router_model_info(
+            deployment=deployment.to_json(), received_model_name=model
+        )
     else:
         try:
-            router.get_router_model_info(deployment=deployment.to_json())
+            router.get_router_model_info(
+                deployment=deployment.to_json(), received_model_name=model
+            )
             pytest.fail("Expected this to raise model not mapped error")
         except Exception as e:
             if "This model isn't mapped yet" in str(e):
@@ -2185,6 +2190,8 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
 
 
 def test_router_cooldown_api_connection_error():
+    from litellm.router_utils.cooldown_handlers import _is_cooldown_required
+
     try:
         _ = litellm.completion(
             model="vertex_ai/gemini-1.5-pro",
@@ -2192,8 +2199,11 @@ def test_router_cooldown_api_connection_error():
         )
     except litellm.APIConnectionError as e:
         assert (
-            Router()._is_cooldown_required(
-                model_id="", exception_status=e.code, exception_str=str(e)
+            _is_cooldown_required(
+                litellm_router_instance=Router(),
+                model_id="",
+                exception_status=e.code,
+                exception_str=str(e),
             )
             is False
         )
@@ -2206,22 +2216,6 @@ def test_router_cooldown_api_connection_error():
             }
         ]
     )
-
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
-
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.APIConnectionError:
-        pass
 
     try:
         router.completion(
@@ -2338,12 +2332,6 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
             pass
 
         new_retry_after_mock_client.assert_called()
-        print(
-            f"new_retry_after_mock_client.call_args.kwargs: {new_retry_after_mock_client.call_args.kwargs}"
-        )
-        print(
-            f"new_retry_after_mock_client.call_args: {new_retry_after_mock_client.call_args[0][0]}"
-        )
 
         response_headers: httpx.Headers = new_retry_after_mock_client.call_args[0][0]
         assert int(response_headers["retry-after"]) == cooldown_time
@@ -2699,3 +2687,77 @@ def test_model_group_alias(hidden):
 #     assert int(response_headers["x-ratelimit-remaining-requests"]) > 0
 #     assert response_headers["x-ratelimit-limit-tokens"] == 100500
 #     assert int(response_headers["x-ratelimit-remaining-tokens"]) > 0
+
+
+def test_router_completion_with_model_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": "123"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router, "routing_strategy_pre_call_checks"
+    ) as mock_pre_call_checks:
+        router.completion(model="123", messages=[{"role": "user", "content": "hi"}])
+        mock_pre_call_checks.assert_not_called()
+
+
+def test_router_prompt_management_factory():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            },
+            {
+                "model_name": "chatbot_actions",
+                "litellm_params": {
+                    "model": "langfuse/openai-gpt-3.5-turbo",
+                    "tpm": 1000000,
+                    "prompt_id": "jokes",
+                },
+            },
+            {
+                "model_name": "openai-gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+    )
+
+    assert router._is_prompt_management_model("chatbot_actions") is True
+    assert router._is_prompt_management_model("openai-gpt-3.5-turbo") is False
+
+    response = router._prompt_management_factory(
+        model="chatbot_actions",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        kwargs={},
+    )
+
+    print(response)
+
+
+def test_router_get_model_list_from_model_alias():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        model_group_alias={
+            "my-special-fake-model-alias-name": "fake-openai-endpoint-3"
+        },
+    )
+
+    model_alias_list = router.get_model_list_from_model_alias(
+        model_name="gpt-3.5-turbo"
+    )
+    assert len(model_alias_list) == 0

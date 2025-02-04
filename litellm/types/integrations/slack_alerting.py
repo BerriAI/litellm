@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional, Set, TypedDict
 
 from pydantic import BaseModel, Field
 
+from litellm.types.utils import LiteLLMPydanticObjectBase
+
 
 class BaseOutageModel(TypedDict):
     alerts: List[int]
@@ -27,19 +29,6 @@ LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT = "support@berri.ai"
 
 
-class LiteLLMBase(BaseModel):
-    """
-    Implements default functions, all pydantic objects should have.
-    """
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
-
-
 class SlackAlertingArgsEnum(Enum):
     daily_report_frequency = 12 * 60 * 60
     report_check_interval = 5 * 60
@@ -51,7 +40,7 @@ class SlackAlertingArgsEnum(Enum):
     max_outage_alert_list_size = 1 * 10
 
 
-class SlackAlertingArgs(LiteLLMBase):
+class SlackAlertingArgs(LiteLLMPydanticObjectBase):
     daily_report_frequency: int = Field(
         default=int(
             os.getenv(
@@ -89,9 +78,13 @@ class SlackAlertingArgs(LiteLLMBase):
         default=SlackAlertingArgsEnum.max_outage_alert_list_size.value,
         description="Maximum number of errors to store in cache. For a given model/region. Prevents memory leaks.",
     )  # prevent memory leak
+    log_to_console: bool = Field(
+        default=False,
+        description="If true, the alerting payload will be printed to the console.",
+    )
 
 
-class DeploymentMetrics(LiteLLMBase):
+class DeploymentMetrics(LiteLLMPydanticObjectBase):
     """
     Metrics per deployment, stored in cache
 

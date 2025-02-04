@@ -20,6 +20,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import APIConnectionError, Router
+from unittest.mock import ANY
 
 
 async def test_router_init():
@@ -83,6 +84,9 @@ async def test_router_init():
     )
 
 
+@pytest.mark.skip(
+    reason="This test is not relevant to the current codebase. The default Azure AD workflow is used."
+)
 @patch("litellm.secret_managers.get_azure_ad_token_provider.os")
 def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(
     mocked_os_lib: MagicMock,
@@ -213,3 +217,48 @@ def test_router_init_azure_service_principal_with_secret_with_environment_variab
 
 
 # asyncio.run(test_router_init())
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_router():
+    """
+    Test that router uses OpenAI/Azure OpenAI Client initialized during init for litellm.aspeech
+    """
+
+    from litellm import Router
+
+    litellm.set_verbose = True
+
+    model_list = [
+        {
+            "model_name": "tts",
+            "litellm_params": {
+                "model": "azure/azure-tts",
+                "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
+                "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
+            },
+        },
+    ]
+
+    _router = Router(model_list=model_list)
+
+    expected_openai_client = _router._get_client(
+        deployment=_router.model_list[0],
+        kwargs={},
+        client_type="async",
+    )
+
+    with patch("litellm.aspeech") as mock_aspeech:
+        await _router.aspeech(
+            model="tts",
+            voice="alloy",
+            input="the quick brown fox jumped over the lazy dogs",
+        )
+
+        print(
+            "litellm.aspeech was called with kwargs = ", mock_aspeech.call_args.kwargs
+        )
+
+        # Get the actual client that was passed
+        client_passed_in_request = mock_aspeech.call_args.kwargs["client"]
+        assert client_passed_in_request == expected_openai_client

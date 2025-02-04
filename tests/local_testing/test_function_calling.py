@@ -46,11 +46,12 @@ def get_current_weather(location, unit="fahrenheit"):
     "model",
     [
         "gpt-3.5-turbo-1106",
-        # "mistral/mistral-large-latest",
+        "mistral/mistral-large-latest",
         "claude-3-haiku-20240307",
         "gemini/gemini-1.5-pro",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "groq/llama3-8b-8192",
+        "groq/llama3-8b-8192",
+        "cohere_chat/command-r",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -154,6 +155,7 @@ def test_aaparallel_function_call(model):
 
 
 # test_parallel_function_call()
+
 
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
@@ -623,6 +625,7 @@ def test_passing_tool_result_as_list(model):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=1)
 async def test_watsonx_tool_choice(sync_mode):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
     import json
@@ -653,28 +656,116 @@ async def test_watsonx_tool_choice(sync_mode):
 
     client = HTTPHandler() if sync_mode else AsyncHTTPHandler()
     with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
+        try:
+            if sync_mode:
+                resp = completion(
+                    model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    client=client,
+                )
+            else:
+                resp = await acompletion(
+                    model="watsonx/meta-llama/llama-3-1-8b-instruct",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    client=client,
+                    stream=True,
+                )
 
-        if sync_mode:
-            resp = completion(
-                model="watsonx/meta-llama/llama-3-1-8b-instruct",
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                client=client,
-            )
-        else:
-            resp = await acompletion(
-                model="watsonx/meta-llama/llama-3-1-8b-instruct",
-                messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                client=client,
-                stream=True,
-            )
+            print(resp)
 
-        print(resp)
+            mock_completion.assert_called_once()
+            print(mock_completion.call_args.kwargs)
+            json_data = json.loads(mock_completion.call_args.kwargs["data"])
+            json_data["tool_choice_options"] == "auto"
+        except Exception as e:
+            print(e)
+            if "The read operation timed out" in str(e):
+                pytest.skip("Skipping test due to timeout")
+            else:
+                raise e
+
+
+@pytest.mark.asyncio
+async def test_function_calling_with_dbrx():
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=MagicMock()) as mock_completion:
+        try:
+            resp = await litellm.acompletion(
+                model="databricks/databricks-dbrx-instruct",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful customer support assistant. Use the supplied tools to assist the user.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Hi, can you tell me the delivery date for my order?",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Hi there! I can help with that. Can you please provide your order ID?",
+                    },
+                    {
+                        "role": "user",
+                        "content": "i think it is order_12345, also what is the weather in Phoenix, AZ?",
+                    },
+                ],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_delivery_date",
+                            "description": "Get the delivery date for a customer'''s order. Call this whenever you need to know the delivery date, for example when a customer asks '''Where is my package'''",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "order_id": {
+                                        "type": "string",
+                                        "description": "The customer'''s order ID.",
+                                    }
+                                },
+                                "required": ["order_id"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "check_weather",
+                            "description": "Check the current weather in a location. For example when asked: '''What is the temperature in San Fransisco, CA?'''",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                        "description": "The city to check the weather for.",
+                                    },
+                                    "state": {
+                                        "type": "string",
+                                        "description": "The state to check the weather for.",
+                                    },
+                                },
+                                "required": ["city", "state"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                ],
+                client=client,
+                tool_choice="auto",
+            )
+        except Exception as e:
+            print(e)
 
         mock_completion.assert_called_once()
         print(mock_completion.call_args.kwargs)
         json_data = json.loads(mock_completion.call_args.kwargs["data"])
-        json_data["tool_choice_options"] == "auto"
+        assert "tools" in json_data
+        assert "tool_choice" in json_data

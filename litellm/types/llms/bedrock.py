@@ -2,6 +2,7 @@ import json
 from typing import Any, List, Literal, Optional, TypedDict, Union
 
 from typing_extensions import (
+    TYPE_CHECKING,
     Protocol,
     Required,
     Self,
@@ -14,21 +15,41 @@ from typing_extensions import (
 from .openai import ChatCompletionToolCallChunk
 
 
-class SystemContentBlock(TypedDict):
+class CachePointBlock(TypedDict, total=False):
+    type: Literal["default"]
+
+
+class SystemContentBlock(TypedDict, total=False):
     text: str
+    cachePoint: CachePointBlock
 
 
-class ImageSourceBlock(TypedDict):
+class SourceBlock(TypedDict):
     bytes: Optional[str]  # base 64 encoded string
 
 
+BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
+
+
 class ImageBlock(TypedDict):
-    format: Literal["png", "jpeg", "gif", "webp"]
-    source: ImageSourceBlock
+    format: Union[BedrockImageTypes, str]
+    source: SourceBlock
+
+
+BedrockDocumentTypes = Literal[
+    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
+]
+
+
+class DocumentBlock(TypedDict):
+    format: Union[BedrockDocumentTypes, str]
+    source: SourceBlock
+    name: str
 
 
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
+    document: DocumentBlock
     json: dict
     text: str
 
@@ -48,8 +69,10 @@ class ToolUseBlock(TypedDict):
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
+    document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
+    cachePoint: CachePointBlock
 
 
 class MessageBlock(TypedDict):
@@ -121,6 +144,7 @@ class InferenceConfig(TypedDict, total=False):
     stopSequences: List[str]
     temperature: float
     topP: float
+    topK: int
 
 
 class ToolBlockDeltaEvent(TypedDict):
@@ -145,14 +169,19 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
     toolUse: ToolBlockDeltaEvent
 
 
-class RequestObject(TypedDict, total=False):
+class CommonRequestObject(
+    TypedDict, total=False
+):  # common request object across sync + async flows
     additionalModelRequestFields: dict
     additionalModelResponseFieldPaths: List[str]
     inferenceConfig: InferenceConfig
-    messages: Required[List[MessageBlock]]
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
+
+
+class RequestObject(CommonRequestObject, total=False):
+    messages: Required[List[MessageBlock]]
 
 
 class GenericStreamingChunk(TypedDict):
@@ -304,3 +333,71 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     images: List[str]
     seeds: List[str]
     finish_reasons: List[str]
+
+
+if TYPE_CHECKING:
+    from botocore.awsrequest import AWSPreparedRequest
+else:
+    AWSPreparedRequest = Any
+
+from pydantic import BaseModel
+
+
+class BedrockPreparedRequest(TypedDict):
+    """
+    Internal/Helper class for preparing the request for bedrock image generation
+    """
+
+    endpoint_url: str
+    prepped: AWSPreparedRequest
+    body: bytes
+    data: dict
+
+
+class BedrockRerankTextQuery(TypedDict):
+    text: str
+
+
+class BedrockRerankQuery(TypedDict):
+    textQuery: BedrockRerankTextQuery
+    type: Literal["TEXT"]
+
+
+class BedrockRerankModelConfiguration(TypedDict, total=False):
+    modelArn: Required[str]
+    modelConfiguration: dict
+
+
+class BedrockRerankBedrockRerankingConfiguration(TypedDict):
+    modelConfiguration: BedrockRerankModelConfiguration
+    numberOfResults: int
+
+
+class BedrockRerankConfiguration(TypedDict):
+    bedrockRerankingConfiguration: BedrockRerankBedrockRerankingConfiguration
+    type: Literal["BEDROCK_RERANKING_MODEL"]
+
+
+class BedrockRerankTextDocument(TypedDict, total=False):
+    text: str
+
+
+class BedrockRerankInlineDocumentSource(TypedDict, total=False):
+    jsonDocument: dict
+    textDocument: BedrockRerankTextDocument
+    type: Literal["TEXT", "JSON"]
+
+
+class BedrockRerankSource(TypedDict):
+    inlineDocumentSource: BedrockRerankInlineDocumentSource
+    type: Literal["INLINE"]
+
+
+class BedrockRerankRequest(TypedDict):
+    """
+    Request for Bedrock Rerank API
+    """
+
+    queries: List[BedrockRerankQuery]
+    rerankingConfiguration: BedrockRerankConfiguration
+    sources: List[BedrockRerankSource]

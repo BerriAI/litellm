@@ -64,16 +64,52 @@ import os
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
-os.environ["COHERE_API_KEY"] = "your-cohere-key"
+os.environ["ANTHROPIC_API_KEY"] = "your-cohere-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
+response = completion(model="openai/gpt-4o", messages=messages)
 
-# cohere call
-response = completion(model="command-nightly", messages=messages)
+# anthropic call
+response = completion(model="anthropic/claude-3-sonnet-20240229", messages=messages)
 print(response)
+```
+
+### Response (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
+    "created": 1734366691,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 43,
+        "prompt_tokens": 13,
+        "total_tokens": 56,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+            "audio_tokens": null,
+            "cached_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+    }
+}
 ```
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
@@ -87,7 +123,7 @@ import asyncio
 async def test_get_response():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
-    response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+    response = await acompletion(model="openai/gpt-4o", messages=messages)
     return response
 
 response = asyncio.run(test_get_response())
@@ -101,24 +137,50 @@ Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, 
 
 ```python
 from litellm import completion
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
 
 # claude 2
-response = completion('claude-2', messages, stream=True)
+response = completion('anthropic/claude-3-sonnet-20240229', messages, stream=True)
 for part in response:
-    print(part.choices[0].delta.content or "")
+    print(part)
+```
+
+### Response chunk (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
+    "created": 1734366925,
+    "model": "claude-3-sonnet-20240229",
+    "object": "chat.completion.chunk",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": null,
+            "index": 0,
+            "delta": {
+                "content": "Hello",
+                "role": "assistant",
+                "function_call": null,
+                "tool_calls": null,
+                "audio": null
+            },
+            "logprobs": null
+        }
+    ]
+}
 ```
 
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 
-LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, DynamoDB, s3 Buckets, Helicone, Promptlayer, Traceloop, Athina, Slack, MLflow
+LiteLLM exposes pre defined callbacks to send data to Lunary, MLflow, Langfuse, DynamoDB, s3 Buckets, Helicone, Promptlayer, Traceloop, Athina, Slack
 
 ```python
 from litellm import completion
 
-## set env variables for logging tools
+## set env variables for logging tools (when using MLflow, no API key set up is required)
 os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 os.environ["HELICONE_API_KEY"] = "your-helicone-auth-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
@@ -128,10 +190,10 @@ os.environ["ATHINA_API_KEY"] = "your-athina-api-key"
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
+litellm.success_callback = ["lunary", "mlflow", "langfuse", "athina", "helicone"] # log input/output to lunary, langfuse, supabase, athina, helicone etc
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="anthropic/claude-3-sonnet-20240229", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
 # LiteLLM Proxy Server (LLM Gateway) - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
@@ -200,7 +262,7 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 
 # Add the litellm salt key - you cannot change this after adding a model
 # It is used to encrypt / decrypt your LLM API Key credentials
-# We recommned - https://1password.com/password-generator/ 
+# We recommend - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
 echo 'LITELLM_SALT_KEY="sk-1234"' > .env
 
@@ -271,6 +333,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [voyage ai](https://docs.litellm.ai/docs/providers/voyage)                          |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                             |                                                                         |
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                             |                                                                         |
 | [FriendliAI](https://docs.litellm.ai/docs/providers/friendliai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [Galadriel](https://docs.litellm.ai/docs/providers/galadriel)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
@@ -295,7 +358,7 @@ poetry install -E extra_proxy -E proxy
 Step 3: Test your change:
 
 ```
-cd litellm/tests # pwd: Documents/litellm/litellm/tests
+cd tests # pwd: Documents/litellm/litellm/tests
 poetry run flake8
 poetry run pytest .
 ```
@@ -347,6 +410,20 @@ This covers:
 - ✅ **Professional Support - Dedicated discord + slack**
 - ✅ **Custom SLAs**
 - ✅ **Secure access with Single Sign-On**
+
+# Code Quality / Linting
+
+LiteLLM follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
+
+We run: 
+- Ruff for [formatting and linting checks](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.circleci/config.yml#L320)
+- Mypy + Pyright for typing [1](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.circleci/config.yml#L90), [2](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.pre-commit-config.yaml#L4)
+- Black for [formatting](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.circleci/config.yml#L79)
+- isort for [import sorting](https://github.com/BerriAI/litellm/blob/e19bb55e3b4c6a858b6e364302ebbf6633a51de5/.pre-commit-config.yaml#L10)
+
+
+If you have suggestions on how to improve the code quality feel free to open an issue or a PR.
+
 
 # Support / talk with founders
 

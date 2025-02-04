@@ -1,19 +1,17 @@
 import json
-import os
-import time
-import traceback
-import types
-from enum import Enum
 from typing import Any, Callable, Optional, Union
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,
+)
 from litellm.types.llms.bedrock import CohereEmbeddingRequest
-from litellm.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import EmbeddingResponse
 
 from .transformation import CohereEmbeddingConfig
 
@@ -70,8 +68,12 @@ async def async_embedding(
         },
     )
     ## COMPLETION CALL
+
     if client is None:
-        client = AsyncHTTPHandler(concurrent_limit=1, timeout=timeout)
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.COHERE,
+            params={"timeout": timeout},
+        )
 
     try:
         response = await client.post(api_base, headers=headers, data=json.dumps(data))
@@ -110,7 +112,7 @@ async def async_embedding(
 def embedding(
     model: str,
     input: list,
-    model_response: litellm.EmbeddingResponse,
+    model_response: EmbeddingResponse,
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     headers: dict,
@@ -144,6 +146,11 @@ def embedding(
             api_key=api_key,
             headers=headers,
             encoding=encoding,
+            client=(
+                client
+                if client is not None and isinstance(client, AsyncHTTPHandler)
+                else None
+            ),
         )
 
     ## LOGGING

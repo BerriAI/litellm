@@ -196,6 +196,49 @@ This budget does not apply to keys created under non-default teams.
 
 [**Go Here**](./team_budgets.md)
 
+### Auto-add SSO users to teams
+
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  litellm_jwtauth:
+    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
+```
+
+This is assuming your SSO token looks like this:
+```
+{
+  ...,
+  "groups": ["team_id_1", "team_id_2"]
+}
+```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the SSO flow
+
+Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+### Restrict Users from creating personal keys 
+
+This is useful if you only want users to create keys under a specific team. 
+
+This will also prevent users from using their session tokens on the test keys chat pane. 
+
+👉 [**See this**](./virtual_keys.md#restricting-key-generation)
+
 ## **All Settings for Self Serve / SSO Flow**
 
 ```yaml
@@ -217,4 +260,10 @@ litellm_settings:
     max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
     tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
     rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
+
+  key_generation_settings: # Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation)
+    team_key_generation:
+      allowed_team_member_roles: ["admin"]
+    personal_key_generation: # maps to 'Default Team' on UI 
+      allowed_user_roles: ["proxy_admin"]
 ```

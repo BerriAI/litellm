@@ -56,6 +56,7 @@ model LiteLLM_OrganizationTable {
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     teams LiteLLM_TeamTable[] 
     users LiteLLM_UserTable[]
+    members LiteLLM_OrganizationMembership[] @relation("OrganizationToMembership")
 }
 
 // Model info for teams, just has model aliases for now.
@@ -102,6 +103,7 @@ model LiteLLM_UserTable {
 		user_id    String @id
     user_alias String? 
     team_id    String?
+    sso_user_id String? @unique
     organization_id String?
     password  String?
     teams    String[] @default([])
@@ -119,6 +121,8 @@ model LiteLLM_UserTable {
     allowed_cache_controls String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    created_at      DateTime?               @default(now()) @map("created_at")
+    updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
 
     // relations
     litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
@@ -191,6 +195,7 @@ model LiteLLM_SpendLogs {
   model               String   @default("")
   model_id            String?   @default("") // the model id stored in proxy model db
   model_group         String?   @default("") // public model_name / model_group
+  custom_llm_provider String?   @default("") // litellm used custom_llm_provider
   api_base            String?   @default("")
   user                String?   @default("")
   metadata            Json?     @default("{}")
@@ -200,6 +205,8 @@ model LiteLLM_SpendLogs {
   team_id             String? 
   end_user            String?
   requester_ip_address String?
+  messages            Json?     @default("{}")
+  response            Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
 }
@@ -250,8 +257,11 @@ model LiteLLM_OrganizationMembership {
 
   // relations
   user LiteLLM_UserTable @relation(fields: [user_id], references: [user_id])
+  organization LiteLLM_OrganizationTable @relation("OrganizationToMembership", fields: [organization_id], references: [organization_id])
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   
+  
+
   @@id([user_id, organization_id])
   @@unique([user_id, organization_id])
 }

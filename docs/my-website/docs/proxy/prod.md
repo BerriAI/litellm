@@ -23,6 +23,7 @@ general_settings:
 
   # OPTIONAL Best Practices
   disable_spend_logs: True # turn off writing each transaction to the db. We recommend doing this is you don't need to see Usage on the LiteLLM UI and are tracking metrics via Prometheus
+  disable_error_logs: True # turn off writing LLM Exceptions to DB
   allow_requests_on_db_unavailable: True # Only USE when running LiteLLM on your VPC. Allow requests to still be processed even if the DB is unavailable. We recommend doing this if you're running LiteLLM on VPC that cannot be accessed from the public internet.
 
 litellm_settings:
@@ -102,16 +103,21 @@ general_settings:
   allow_requests_on_db_unavailable: True
 ```
 
-## 6. Disable spend_logs if you're not using the LiteLLM UI
+## 6. Disable spend_logs & error_logs if not using the LiteLLM UI
 
-By default LiteLLM will write every request to the `LiteLLM_SpendLogs` table. This is used for viewing Usage on the LiteLLM UI. 
+By default, LiteLLM writes several types of logs to the database:
+- Every LLM API request to the `LiteLLM_SpendLogs` table
+- LLM Exceptions to the `LiteLLM_LogsErrors` table
 
-If you're not viewing Usage on the LiteLLM UI (most users use Prometheus when this is disabled), you can disable spend_logs by setting `disable_spend_logs` to `True`.
+If you're not viewing these logs on the LiteLLM UI (most users use Prometheus for monitoring), you can disable them by setting the following flags to `True`:
 
 ```yaml
 general_settings:
-  disable_spend_logs: True
+  disable_spend_logs: True    # Disable writing spend logs to DB
+  disable_error_logs: True    # Disable writing error logs to DB
 ```
+
+[More information about what the Database is used for here](db_info)
 
 ## 7. Use Helm PreSync Hook for Database Migrations [BETA]
 
@@ -127,7 +133,7 @@ To ensure only one service manages database migrations, use our [Helm PreSync ho
   ```yaml
   db:
     useExisting: true # use existing Postgres DB
-    url: postgresql://ishaanjaffer0324:3rnwpOBau6hT@ep-withered-mud-a5dkdpke.us-east-2.aws.neon.tech/test-argo-cd?sslmode=require # url of existing Postgres DB
+    url: postgresql://ishaanjaffer0324:... # url of existing Postgres DB
   ```
 
 2. **LiteLLM Pods**:

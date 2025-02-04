@@ -5,7 +5,6 @@ import traceback
 import uuid
 
 from dotenv import load_dotenv
-from test_rerank import assert_response_shape
 
 load_dotenv()
 import os
@@ -2132,59 +2131,6 @@ def test_logging_turn_off_message_logging_streaming():
         assert mock_client.call_args.args[0].choices[0].message.content == "hello"
 
 
-@pytest.mark.asyncio()
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize(
-    "top_n_1, top_n_2, expect_cache_hit",
-    [
-        (3, 3, True),
-        (3, None, False),
-    ],
-)
-async def test_basic_rerank_caching(sync_mode, top_n_1, top_n_2, expect_cache_hit):
-    litellm.set_verbose = True
-    litellm.cache = Cache(type="local")
-
-    if sync_mode is True:
-        for idx in range(2):
-            if idx == 0:
-                top_n = top_n_1
-            else:
-                top_n = top_n_2
-            response = litellm.rerank(
-                model="cohere/rerank-english-v3.0",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=top_n,
-            )
-    else:
-        for idx in range(2):
-            if idx == 0:
-                top_n = top_n_1
-            else:
-                top_n = top_n_2
-            response = await litellm.arerank(
-                model="cohere/rerank-english-v3.0",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=top_n,
-            )
-
-            await asyncio.sleep(1)
-
-    if expect_cache_hit is True:
-        assert "cache_key" in response._hidden_params
-    else:
-        assert "cache_key" not in response._hidden_params
-
-    print("re rank response: ", response)
-
-    assert response.id is not None
-    assert response.results is not None
-
-    assert_response_shape(response, custom_llm_provider="cohere")
-
-
 def test_basic_caching_import():
     from litellm.caching import Cache
 
@@ -2433,3 +2379,96 @@ async def test_dual_cache_caching_batch_get_cache():
         await dc.async_batch_get_cache(keys=["test_key1", "test_key2"])
 
         assert mock_async_get_cache.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_redis_increment_pipeline():
+    """Test Redis increment pipeline functionality"""
+    try:
+        from litellm.caching.redis_cache import RedisCache
+
+        litellm.set_verbose = True
+        redis_cache = RedisCache(
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+        )
+
+        # Create test increment operations
+        increment_list = [
+            {"key": "test_key1", "increment_value": 1.5, "ttl": 60},
+            {"key": "test_key1", "increment_value": 1.1, "ttl": 58},
+            {"key": "test_key1", "increment_value": 0.4, "ttl": 55},
+            {"key": "test_key2", "increment_value": 2.5, "ttl": 60},
+        ]
+
+        # Test pipeline increment
+        results = await redis_cache.async_increment_pipeline(increment_list)
+
+        # Verify results
+        assert len(results) == 8  # 4 increment operations + 4 expire operations
+
+        # Verify the values were actually set in Redis
+        value1 = await redis_cache.async_get_cache("test_key1")
+        print("result in cache for key=test_key1", value1)
+        value2 = await redis_cache.async_get_cache("test_key2")
+        print("result in cache for key=test_key2", value2)
+
+        assert float(value1) == 3.0
+        assert float(value2) == 2.5
+
+        # Clean up
+        await redis_cache.async_delete_cache("test_key1")
+        await redis_cache.async_delete_cache("test_key2")
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise e
+
+
+@pytest.mark.asyncio
+async def test_redis_get_ttl():
+    """
+    Test Redis get TTL functionality
+
+    Redis returns -2 if the key does not exist and -1 if the key exists but has no associated expire.
+
+    test that litellm redis caching wrapper handles -1 and -2 values and returns them as None
+    """
+    try:
+        from litellm.caching.redis_cache import RedisCache
+
+        redis_cache = RedisCache(
+            host=os.environ["REDIS_HOST"],
+            port=os.environ["REDIS_PORT"],
+            password=os.environ["REDIS_PASSWORD"],
+        )
+
+        # Test case 1: Key does not exist
+        result = await redis_cache.async_get_ttl("nonexistent_key")
+        print("ttl for nonexistent key: ", result)
+        assert result is None, f"Expected None for nonexistent key, got {result}"
+
+        # Test case 2: Key exists with TTL
+        test_key = "test_key_ttl"
+        test_value = "test_value"
+        ttl = 10  # 10 seconds TTL
+
+        # Set a key with TTL
+        _redis_client = await redis_cache.init_async_client()
+        async with _redis_client as redis_client:
+            await redis_client.set(test_key, test_value, ex=ttl)
+
+            # Get TTL and verify it's close to what we set
+            result = await redis_cache.async_get_ttl(test_key)
+            print("ttl for test_key: ", result)
+            assert (
+                result is not None and 0 <= result <= ttl
+            ), f"Expected TTL between 0 and {ttl}, got {result}"
+
+            # Clean up
+            await redis_client.delete(test_key)
+
+    except Exception as e:
+        print(f"Error occurred: {str(e)}")
+        raise e

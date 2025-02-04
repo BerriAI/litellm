@@ -8,33 +8,43 @@ Run checks for:
 2. If user is in budget 
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget 
 """
-
+import asyncio
+import re
 import time
 import traceback
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
-import httpx
+from fastapi import status
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
+    DB_CONNECTION_ERROR_TYPES,
+    RBAC_ROLES,
+    CallInfo,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
+    LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+from litellm.router import Router
+from litellm.types.services import ServiceTypes
 
 from .auth_checks_organization import organization_role_based_access_check
 
@@ -52,7 +62,7 @@ db_cache_expiry = 5  # refresh every 5s
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
 
-def common_checks(  # noqa: PLR0915
+async def common_checks(
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
     user_object: Optional[LiteLLM_UserTable],
@@ -60,6 +70,9 @@ def common_checks(  # noqa: PLR0915
     global_proxy_spend: Optional[float],
     general_settings: dict,
     route: str,
+    llm_router: Optional[Router],
+    proxy_logging_obj: ProxyLogging,
+    valid_token: Optional[UserAPIKeyAuth],
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -76,47 +89,35 @@ def common_checks(  # noqa: PLR0915
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     """
     _model = request_body.get("model", None)
+
+    # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise Exception(
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if your admin."
         )
+
     # 2. If team can call model
-    if (
-        _model is not None
-        and team_object is not None
-        and team_object.models is not None
-        and len(team_object.models) > 0
-        and _model not in team_object.models
-    ):
-        # this means the team has access to all models on the proxy
-        if (
-            "all-proxy-models" in team_object.models
-            or "*" in team_object.models
-            or "openai/*" in team_object.models
-        ):
-            # this means the team has access to all models on the proxy
-            pass
-        # check if the team model is an access_group
-        elif model_in_access_group(_model, team_object.models) is True:
-            pass
-        elif _model and "*" in _model:
-            pass
-        else:
-            raise Exception(
-                f"Team={team_object.team_id} not allowed to call model={_model}. Allowed team models = {team_object.models}"
-            )
-    # 3. If team is in budget
-    if (
-        team_object is not None
-        and team_object.max_budget is not None
-        and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
-    ):
-        raise litellm.BudgetExceededError(
-            current_cost=team_object.spend,
-            max_budget=team_object.max_budget,
-            message=f"Team={team_object.team_id} over budget. Spend={team_object.spend}, Budget={team_object.max_budget}",
+    _team_model_access_check(
+        team_object=team_object,
+        model=_model,
+        llm_router=llm_router,
+    )
+
+    ## 2.1 If user can call model (if personal key)
+    if team_object is None and user_object is not None:
+        await can_user_call_model(
+            model=_model,
+            llm_router=llm_router,
+            user_object=user_object,
         )
+
+    # 3. If team is in budget
+    await _team_max_budget_check(
+        team_object=team_object,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+    )
+
     # 4. If user is in budget
     ## 4.1 check personal budget, if personal key
     if (
@@ -131,6 +132,7 @@ def common_checks(  # noqa: PLR0915
                 max_budget=user_budget,
                 message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
             )
+
     ## 4.2 check team member budget, if team key
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
@@ -141,6 +143,7 @@ def common_checks(  # noqa: PLR0915
                 max_budget=end_user_budget,
                 message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
             )
+
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
         general_settings.get("enforce_user_param", None) is not None
@@ -150,40 +153,6 @@ def common_checks(  # noqa: PLR0915
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
-    if general_settings.get("enforced_params", None) is not None:
-        # Enterprise ONLY Feature
-        # we already validate if user is premium_user when reading the config
-        # Add an extra premium_usercheck here too, just incase
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                "Trying to use `enforced_params`"
-                + CommonProxyErrors.not_premium_user.value
-            )
-
-        if RouteChecks.is_llm_api_route(route=route):
-            # loop through each enforced param
-            # example enforced_params ['user', 'metadata', 'metadata.generation_name']
-            for enforced_param in general_settings["enforced_params"]:
-                _enforced_params = enforced_param.split(".")
-                if len(_enforced_params) == 1:
-                    if _enforced_params[0] not in request_body:
-                        raise ValueError(
-                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
-                        )
-                elif len(_enforced_params) == 2:
-                    # this is a scenario where user requires request['metadata']['generation_name'] to exist
-                    if _enforced_params[0] not in request_body:
-                        raise ValueError(
-                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
-                        )
-                    if _enforced_params[1] not in request_body[_enforced_params[0]]:
-                        raise ValueError(
-                            f"BadRequest please pass param=[{_enforced_params[0]}][{_enforced_params[1]}] in request body. This is a required param"
-                        )
-
-        pass
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
         litellm.max_budget > 0
@@ -301,7 +270,11 @@ def get_actual_routes(allowed_routes: list) -> list:
     for route_name in allowed_routes:
         try:
             route_value = LiteLLMRoutes[route_name].value
-            actual_routes = actual_routes + route_value
+            if isinstance(route_value, set):
+                actual_routes.extend(list(route_value))
+            else:
+                actual_routes.extend(route_value)
+
         except KeyError:
             actual_routes.append(route_name)
     return actual_routes
@@ -373,36 +346,33 @@ async def get_end_user_object(
         return None
 
 
-def model_in_access_group(model: str, team_models: Optional[List[str]]) -> bool:
+def model_in_access_group(
+    model: str, team_models: Optional[List[str]], llm_router: Optional[Router]
+) -> bool:
     from collections import defaultdict
-
-    from litellm.proxy.proxy_server import llm_router
 
     if team_models is None:
         return True
     if model in team_models:
         return True
 
-    access_groups = defaultdict(list)
+    access_groups: dict[str, list[str]] = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
+        access_groups = llm_router.get_model_access_groups(model_name=model)
 
-    models_in_current_access_groups = []
     if len(access_groups) > 0:  # check if token contains any model access groups
         for idx, m in enumerate(
             team_models
         ):  # loop token models, if any of them are an access group add the access group
             if m in access_groups:
-                # if it is an access group we need to remove it from valid_token.models
-                models_in_group = access_groups[m]
-                models_in_current_access_groups.extend(models_in_group)
+                return True
 
     # Filter out models that are access_groups
     filtered_models = [m for m in team_models if m not in access_groups]
-    filtered_models += models_in_current_access_groups
 
     if model in filtered_models:
         return True
+
     return False
 
 
@@ -432,14 +402,79 @@ def _update_last_db_access_time(
     last_db_access_time[key] = (value, time.time())
 
 
+def get_role_based_models(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+) -> Optional[List[str]]:
+    """
+    Get the models allowed for a user role.
+
+    Used by JWT Auth.
+    """
+
+    role_based_permissions = cast(
+        Optional[List[RoleBasedPermissions]],
+        general_settings.get("role_permissions", []),
+    )
+    if role_based_permissions is None:
+        return None
+
+    for role_based_permission in role_based_permissions:
+        if role_based_permission["role"] == rbac_role:
+            return role_based_permission["models"]
+
+    return None
+
+
+async def _get_fuzzy_user_object(
+    prisma_client: PrismaClient,
+    sso_user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+) -> Optional[LiteLLM_UserTable]:
+    """
+    Checks if sso user is in db.
+
+    Called when user id match is not found in db.
+
+    - Check if sso_user_id is user_id in db
+    - Check if sso_user_id is sso_user_id in db
+    - Check if user_email is user_email in db
+    - If not, create new user with user_email and sso_user_id and user_id = sso_user_id
+    """
+    response = None
+    if sso_user_id is not None:
+        response = await prisma_client.db.litellm_usertable.find_unique(
+            where={"sso_user_id": sso_user_id},
+            include={"organization_memberships": True},
+        )
+
+    if response is None and user_email is not None:
+        response = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": user_email},
+            include={"organization_memberships": True},
+        )
+
+        if response is not None and sso_user_id is not None:  # update sso_user_id
+            asyncio.create_task(  # background task to update user with sso id
+                prisma_client.db.litellm_usertable.update(
+                    where={"user_id": response.user_id},
+                    data={"sso_user_id": sso_user_id},
+                )
+            )
+
+    return response
+
+
 @log_db_metrics
 async def get_user_object(
-    user_id: str,
+    user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
     user_id_upsert: bool,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
+    sso_user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> Optional[LiteLLM_UserTable]:
     """
     - Check if user id in proxy User Table
@@ -472,6 +507,14 @@ async def get_user_object(
             response = await prisma_client.db.litellm_usertable.find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
+
+            if response is None:
+                response = await _get_fuzzy_user_object(
+                    prisma_client=prisma_client,
+                    sso_user_id=sso_user_id,
+                    user_email=user_email,
+                )
+
         else:
             response = None
 
@@ -490,7 +533,7 @@ async def get_user_object(
         ):
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
             _dumped_memberships = [
-                membership.model_dump()
+                LiteLLM_OrganizationMembershipTable(**membership.model_dump())
                 for membership in response.organization_memberships
                 if membership is not None
             ]
@@ -586,26 +629,63 @@ async def _get_team_db_check(team_id: str, prisma_client: PrismaClient):
     )
 
 
-async def get_team_object(
-    team_id: str,
-    prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
-    parent_otel_span: Optional[Span] = None,
-    proxy_logging_obj: Optional[ProxyLogging] = None,
-    check_cache_only: Optional[bool] = None,
-) -> LiteLLM_TeamTableCachedObj:
-    """
-    - Check if team id in proxy Team Table
-    - if valid, return LiteLLM_TeamTable object with defined limits
-    - if not, then raise an error
-    """
-    if prisma_client is None:
-        raise Exception(
-            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-        )
+async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
+    return await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
 
-    # check if in cache
-    key = "team_id:{}".format(team_id)
+
+async def _get_team_object_from_user_api_key_cache(
+    team_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    last_db_access_time: LimitedSizeOrderedDict,
+    db_cache_expiry: int,
+    proxy_logging_obj: Optional[ProxyLogging],
+    key: str,
+) -> LiteLLM_TeamTableCachedObj:
+    db_access_time_key = key
+    should_check_db = _should_check_db(
+        key=db_access_time_key,
+        last_db_access_time=last_db_access_time,
+        db_cache_expiry=db_cache_expiry,
+    )
+    if should_check_db:
+        response = await _get_team_db_check(
+            team_id=team_id, prisma_client=prisma_client
+        )
+    else:
+        response = None
+
+    if response is None:
+        raise Exception
+
+    _response = LiteLLM_TeamTableCachedObj(**response.dict())
+    # save the team object to cache
+    await _cache_team_object(
+        team_id=team_id,
+        team_table=_response,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # save to db access time
+    # save to db access time
+    _update_last_db_access_time(
+        key=db_access_time_key,
+        value=_response,
+        last_db_access_time=last_db_access_time,
+    )
+
+    return _response
+
+
+async def _get_team_object_from_cache(
+    key: str,
+    proxy_logging_obj: Optional[ProxyLogging],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span],
+) -> Optional[LiteLLM_TeamTableCachedObj]:
     cached_team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
 
     ## CHECK REDIS CACHE ##
@@ -613,6 +693,7 @@ async def get_team_object(
         proxy_logging_obj is not None
         and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
+
         cached_team_obj = (
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span
@@ -628,47 +709,61 @@ async def get_team_object(
         elif isinstance(cached_team_obj, LiteLLM_TeamTableCachedObj):
             return cached_team_obj
 
-    if check_cache_only:
+    return None
+
+
+async def get_team_object(
+    team_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    check_cache_only: Optional[bool] = None,
+    check_db_only: Optional[bool] = None,
+) -> LiteLLM_TeamTableCachedObj:
+    """
+    - Check if team id in proxy Team Table
+    - if valid, return LiteLLM_TeamTable object with defined limits
+    - if not, then raise an error
+
+    Raises:
+        - Exception: If team doesn't exist in db or cache
+    """
+    if prisma_client is None:
         raise Exception(
-            f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
         )
+
+    # check if in cache
+    key = "team_id:{}".format(team_id)
+
+    if not check_db_only:
+        cached_team_obj = await _get_team_object_from_cache(
+            key=key,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+        )
+
+        if cached_team_obj is not None:
+            return cached_team_obj
+
+        if check_cache_only:
+            raise Exception(
+                f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+            )
 
     # else, check db
     try:
-        db_access_time_key = "team_id:{}".format(team_id)
-        should_check_db = _should_check_db(
-            key=db_access_time_key,
-            last_db_access_time=last_db_access_time,
-            db_cache_expiry=db_cache_expiry,
-        )
-        if should_check_db:
-            response = await _get_team_db_check(
-                team_id=team_id, prisma_client=prisma_client
-            )
-        else:
-            response = None
-
-        if response is None:
-            raise Exception
-
-        _response = LiteLLM_TeamTableCachedObj(**response.dict())
-        # save the team object to cache
-        await _cache_team_object(
+        return await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
-            team_table=_response,
+            prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-        )
-
-        # save to db access time
-        # save to db access time
-        _update_last_db_access_time(
-            key=db_access_time_key,
-            value=_response,
             last_db_access_time=last_db_access_time,
+            db_cache_expiry=db_cache_expiry,
+            key=key,
         )
-
-        return _response
     except Exception:
         raise Exception(
             f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
@@ -735,9 +830,10 @@ async def get_key_object(
         )
 
         return _response
-    except httpx.ConnectError as e:
+    except DB_CONNECTION_ERROR_TYPES as e:
         return await _handle_failed_db_connection_for_get_key_object(e=e)
     except Exception:
+        traceback.print_exc()
         raise Exception(
             f"Key doesn't exist in db. key={hashed_token}. Create key via `/key/generate` call."
         )
@@ -790,7 +886,7 @@ async def get_org_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
-):
+) -> Optional[LiteLLM_OrganizationTable]:
     """
     - Check if org id in proxy Org Table
     - if valid, return LiteLLM_OrganizationTable object
@@ -805,7 +901,7 @@ async def get_org_object(
     cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
-            return cached_org_obj
+            return LiteLLM_OrganizationTable(**cached_org_obj)
         elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
             return cached_org_obj
     # else, check db
@@ -824,8 +920,10 @@ async def get_org_object(
         )
 
 
-async def can_key_call_model(
-    model: str, llm_model_list: Optional[list], valid_token: UserAPIKeyAuth
+async def _can_object_call_model(
+    model: str,
+    llm_router: Optional[Router],
+    models: List[str],
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -840,48 +938,360 @@ async def can_key_call_model(
         model = litellm.model_alias_map[model]
 
     ## check if model in allowed model names
-    verbose_proxy_logger.debug(
-        f"LLM Model List pre access group check: {llm_model_list}"
-    )
     from collections import defaultdict
 
-    from litellm.proxy.proxy_server import llm_router
+    access_groups: Dict[str, List[str]] = defaultdict(list)
 
-    access_groups = defaultdict(list)
     if llm_router:
-        access_groups = llm_router.get_model_access_groups()
-
-    models_in_current_access_groups = []
-    if len(access_groups) > 0:  # check if token contains any model access groups
+        access_groups = llm_router.get_model_access_groups(model_name=model)
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
         for idx, m in enumerate(
-            valid_token.models
+            models
         ):  # loop token models, if any of them are an access group add the access group
             if m in access_groups:
-                # if it is an access group we need to remove it from valid_token.models
-                models_in_group = access_groups[m]
-                models_in_current_access_groups.extend(models_in_group)
+                return True
 
     # Filter out models that are access_groups
-    filtered_models = [m for m in valid_token.models if m not in access_groups]
+    filtered_models = [m for m in models if m not in access_groups]
 
-    filtered_models += models_in_current_access_groups
     verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
+
+    if _model_matches_any_wildcard_pattern_in_list(
+        model=model, allowed_model_list=filtered_models
+    ):
+        return True
 
     all_model_access: bool = False
 
-    if (
-        len(filtered_models) == 0
-        or "*" in filtered_models
-        or "openai/*" in filtered_models
-    ):
+    if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:
-        raise ValueError(
-            f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+        raise ProxyException(
+            message=f"API Key not allowed to access model. This token can only access models={models}. Tried to access {model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
         )
-    valid_token.models = filtered_models
+
     verbose_proxy_logger.debug(
-        f"filtered allowed_models: {filtered_models}; valid_token.models: {valid_token.models}"
+        f"filtered allowed_models: {filtered_models}; models: {models}"
     )
     return True
+
+
+async def can_key_call_model(
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
+) -> Literal[True]:
+    """
+    Checks if token can call a given model
+
+    Returns:
+        - True: if token allowed to call model
+
+    Raises:
+        - Exception: If token not allowed to call model
+    """
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=valid_token.models,
+    )
+
+
+async def can_user_call_model(
+    model: str,
+    llm_router: Optional[Router],
+    user_object: Optional[LiteLLM_UserTable],
+) -> Literal[True]:
+
+    if user_object is None:
+        return True
+
+    return await _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=user_object.models,
+    )
+
+
+async def is_valid_fallback_model(
+    model: str,
+    llm_router: Optional[Router],
+    user_model: Optional[str],
+) -> Literal[True]:
+    """
+    Try to route the fallback model request.
+
+    Validate if it can't be routed.
+
+    Help catch invalid fallback models.
+    """
+    await route_request(
+        data={
+            "model": model,
+            "messages": [{"role": "user", "content": "Who was Alexander?"}],
+        },
+        llm_router=llm_router,
+        user_model=user_model,
+        route_type="acompletion",  # route type shouldn't affect the fallback model check
+    )
+
+    return True
+
+
+async def _virtual_key_max_budget_check(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+):
+    """
+    Raises:
+        BudgetExceededError if the token is over it's max budget.
+        Triggers a budget alert if the token is over it's max budget.
+
+    """
+    if valid_token.spend is not None and valid_token.max_budget is not None:
+        ####################################
+        # collect information for alerting #
+        ####################################
+
+        user_email = None
+        # Check if the token has any user id information
+        if user_obj is not None:
+            user_email = user_obj.user_email
+
+        call_info = CallInfo(
+            token=valid_token.token,
+            spend=valid_token.spend,
+            max_budget=valid_token.max_budget,
+            user_id=valid_token.user_id,
+            team_id=valid_token.team_id,
+            user_email=user_email,
+            key_alias=valid_token.key_alias,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="token_budget",
+                user_info=call_info,
+            )
+        )
+
+        ####################################
+        # collect information for alerting #
+        ####################################
+
+        if valid_token.spend >= valid_token.max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=valid_token.spend,
+                max_budget=valid_token.max_budget,
+            )
+
+
+async def _virtual_key_soft_budget_check(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Triggers a budget alert if the token is over it's soft budget.
+
+    """
+
+    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+        verbose_proxy_logger.debug(
+            "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+            valid_token.token,
+            valid_token.spend,
+            valid_token.soft_budget,
+        )
+        call_info = CallInfo(
+            token=valid_token.token,
+            spend=valid_token.spend,
+            max_budget=valid_token.max_budget,
+            soft_budget=valid_token.soft_budget,
+            user_id=valid_token.user_id,
+            team_id=valid_token.team_id,
+            team_alias=valid_token.team_alias,
+            user_email=None,
+            key_alias=valid_token.key_alias,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="soft_budget",
+                user_info=call_info,
+            )
+        )
+
+
+async def _team_max_budget_check(
+    team_object: Optional[LiteLLM_TeamTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Check if the team is over it's max budget.
+
+    Raises:
+        BudgetExceededError if the team is over it's max budget.
+        Triggers a budget alert if the team is over it's max budget.
+    """
+    if (
+        team_object is not None
+        and team_object.max_budget is not None
+        and team_object.spend is not None
+        and team_object.spend > team_object.max_budget
+    ):
+        if valid_token:
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=team_object.spend,
+                max_budget=team_object.max_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="team_budget",
+                    user_info=call_info,
+                )
+            )
+
+        raise litellm.BudgetExceededError(
+            current_cost=team_object.spend,
+            max_budget=team_object.max_budget,
+            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
+        )
+
+
+def _team_model_access_check(
+    model: Optional[str],
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+):
+    """
+    Access check for team models
+    Raises:
+        Exception if the team is not allowed to call the`model`
+    """
+    if (
+        model is not None
+        and team_object is not None
+        and team_object.models is not None
+        and len(team_object.models) > 0
+        and model not in team_object.models
+    ):
+        # this means the team has access to all models on the proxy
+        if "all-proxy-models" in team_object.models or "*" in team_object.models:
+            # this means the team has access to all models on the proxy
+            pass
+        # check if the team model is an access_group
+        elif (
+            model_in_access_group(
+                model=model, team_models=team_object.models, llm_router=llm_router
+            )
+            is True
+        ):
+            pass
+        elif model and "*" in model:
+            pass
+        elif _model_matches_any_wildcard_pattern_in_list(
+            model=model, allowed_model_list=team_object.models
+        ):
+            pass
+        else:
+            raise ProxyException(
+                message=f"Team not allowed to access model. Team={team_object.team_id}, Model={model}. Allowed team models = {team_object.models}",
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+
+def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
+    """
+    Check if a model matches an allowed pattern.
+    Handles exact matches and wildcard patterns.
+
+    Args:
+        model (str): The model to check (e.g., "bedrock/anthropic.claude-3-5-sonnet-20240620")
+        allowed_model_pattern (str): The allowed pattern (e.g., "bedrock/*", "*", "openai/*")
+
+    Returns:
+        bool: True if model matches the pattern, False otherwise
+    """
+    if "*" in allowed_model_pattern:
+        pattern = f"^{allowed_model_pattern.replace('*', '.*')}$"
+        return bool(re.match(pattern, model))
+
+    return False
+
+
+def _model_matches_any_wildcard_pattern_in_list(
+    model: str, allowed_model_list: list
+) -> bool:
+    """
+    Returns True if a model matches any wildcard pattern in a list.
+
+    eg.
+    - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns True
+    - model=`bedrock/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/us.*` returns True
+    - model=`bedrockzzzz/us.amazon.nova-micro-v1:0`, allowed_models=`bedrock/*` returns False
+    """
+
+    if any(
+        _is_wildcard_pattern(allowed_model_pattern)
+        and is_model_allowed_by_pattern(
+            model=model, allowed_model_pattern=allowed_model_pattern
+        )
+        for allowed_model_pattern in allowed_model_list
+    ):
+        return True
+
+    if any(
+        _is_wildcard_pattern(allowed_model_pattern)
+        and _model_custom_llm_provider_matches_wildcard_pattern(
+            model=model, allowed_model_pattern=allowed_model_pattern
+        )
+        for allowed_model_pattern in allowed_model_list
+    ):
+        return True
+
+    return False
+
+
+def _model_custom_llm_provider_matches_wildcard_pattern(
+    model: str, allowed_model_pattern: str
+) -> bool:
+    """
+    Returns True for this scenario:
+    - `model=gpt-4o`
+    - `allowed_model_pattern=openai/*`
+
+    or
+    - `model=claude-3-5-sonnet-20240620`
+    - `allowed_model_pattern=anthropic/*`
+    """
+    try:
+        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+    except Exception:
+        return False
+
+    return is_model_allowed_by_pattern(
+        model=f"{custom_llm_provider}/{model}",
+        allowed_model_pattern=allowed_model_pattern,
+    )
+
+
+def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
+    """
+    Returns True if the pattern is a wildcard pattern.
+
+    Checks if `*` is in the pattern.
+    """
+    return "*" in allowed_model_pattern
