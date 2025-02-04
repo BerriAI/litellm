@@ -247,6 +247,7 @@ class LiteLLMRoutes(enum.Enum):
         "/langfuse",
         "/azure",
         "/openai",
+        "/assemblyai",
     ]
 
     anthropic_routes = [
