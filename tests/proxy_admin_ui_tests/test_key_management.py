@@ -842,7 +842,15 @@ async def test_key_update_with_model_specific_params(prisma_client):
         "litellm_budget_table": None,
         "token": token_hash,
     }
-    await update_key_fn(request=request, data=UpdateKeyRequest(**args))
+    await update_key_fn(
+        request=request,
+        data=UpdateKeyRequest(**args),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
 
 
 @pytest.mark.asyncio
