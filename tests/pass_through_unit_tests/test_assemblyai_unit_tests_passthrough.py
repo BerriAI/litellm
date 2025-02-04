@@ -155,3 +155,43 @@ async def test_assemblyai_proxy_route_basic_post(
         target="https://api.assemblyai.com/v2/transcript",
         custom_headers={"Authorization": "test-assemblyai-key"},
     )
+
+
+@patch("litellm.utils.get_secret")
+@patch(
+    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.create_pass_through_route"
+)
+@pytest.mark.asyncio()
+async def test_assemblyai_proxy_route_get_transcript(
+    mock_create_route,
+    mock_get_secret,
+    mock_request,
+    mock_response,
+    mock_user_api_key_dict,
+):
+    """Test GET request handling for retrieving a specific transcript from AssemblyAI"""
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        assemblyai_proxy_route,
+    )
+
+    # Setup mocks
+    mock_get_secret.return_value = "test-assemblyai-key"
+    mock_request.method = "GET"
+    mock_endpoint_func = AsyncMock(
+        return_value={"id": "test-transcript-id", "status": "completed"}
+    )
+    mock_create_route.return_value = mock_endpoint_func
+
+    result = await assemblyai_proxy_route(
+        endpoint="v2/transcript/test-transcript-id",
+        request=mock_request,
+        fastapi_response=mock_response,
+        user_api_key_dict=mock_user_api_key_dict,
+    )
+
+    assert result == {"id": "test-transcript-id", "status": "completed"}
+    mock_create_route.assert_called_once_with(
+        endpoint="v2/transcript/test-transcript-id",
+        target="https://api.assemblyai.com/v2/transcript/test-transcript-id",
+        custom_headers={"Authorization": "test-assemblyai-key"},
+    )
