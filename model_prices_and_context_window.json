@@ -8401,6 +8401,8 @@
         "litellm_provider": "openai",
         "input_cost_per_token": 0.00000025,
         "output_cost_per_token": 0.00000025,
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true
     }
 }
