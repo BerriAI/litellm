@@ -126,7 +126,7 @@ class AssemblyAIPassthroughLoggingHandler:
         )
 
         verbose_proxy_logger.debug(
-            "standard_passthrough_logging_object",
+            "standard_passthrough_logging_object %s",
             json.dumps(passthrough_logging_payload, indent=4),
         )
 
