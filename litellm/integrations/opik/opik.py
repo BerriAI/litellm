@@ -147,13 +147,11 @@ class OpikLogger(CustomBatchLogger):
                     f"OpikLogger - Error: {response.status_code} - {response.text}"
                 )
             else:
-                verbose_logger.debug(
+                verbose_logger.info(
                     f"OpikLogger - {len(self.log_queue)} Opik events submitted"
                 )
         except Exception as e:
-            verbose_logger.exception(
-                f"OpikLogger failed to send batch - {str(e)}\n{traceback.format_exc()}"
-            )
+            verbose_logger.exception(f"OpikLogger failed to send batch - {str(e)}")
 
     def _create_opik_headers(self):
         headers = {}
@@ -165,7 +163,7 @@ class OpikLogger(CustomBatchLogger):
         return headers
 
     async def async_send_batch(self):
-        verbose_logger.exception("Calling async_send_batch")
+        verbose_logger.info("Calling async_send_batch")
         if not self.log_queue:
             return
 
@@ -177,10 +175,12 @@ class OpikLogger(CustomBatchLogger):
             await self._submit_batch(
                 url=self.trace_url, headers=self.headers, batch={"traces": traces}
             )
+            verbose_logger.info(f"Sent {len(traces)} traces")
         if len(spans) > 0:
             await self._submit_batch(
                 url=self.span_url, headers=self.headers, batch={"spans": spans}
             )
+            verbose_logger.info(f"Sent {len(spans)} spans")
 
     def _create_opik_payload(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
