@@ -1594,6 +1594,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
             pip install "openai==1.54.0 "
+            pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
@@ -1626,6 +1627,7 @@ jobs:
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \

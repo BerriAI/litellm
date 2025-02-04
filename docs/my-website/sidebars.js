@@ -305,6 +305,7 @@ const sidebars = {
             "pass_through/cohere",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
+            "pass_through/assembly_ai",
             "pass_through/langfuse",
             "proxy/pass_through",
           ],
