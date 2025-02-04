@@ -83,11 +83,21 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
 
     request_headers = _request_headers.get("headers", {})
 
+    possible_request_headers = [
+        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
+        "x-litellm-enable-message-redaction",  # new header
+    ]
+
+    is_redaction_enabled_via_header = False
+    for header in possible_request_headers:
+        if bool(request_headers.get(header, False)):
+            is_redaction_enabled_via_header = True
+            break
+
     # check if user opted out of logging message/response to callbacks
     if (
         litellm.turn_off_message_logging is not True
-        and bool(request_headers.get("litellm-enable-message-redaction", False))
-        is not True
+        and is_redaction_enabled_via_header is not True
         and _get_turn_off_message_logging_from_dynamic_params(model_call_details)
         is not True
     ):
