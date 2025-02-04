@@ -16,11 +16,34 @@ from litellm.utils import get_end_user_id_for_cost_tracking
 
 
 class PrometheusMetricManager:
-    def __init__(self):
-        self.prometheus_metrics = {}
+    @staticmethod
+    def update_metric_with_labels(
+        metric: Any,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        enum_values: UserAPIKeyLabelValues,
+        value: float = 1.0,
+        action: Literal["inc", "observe"] = "inc",
+    ) -> None:
+        """
+        Update a metric by getting the correct labels from the factory
 
-    def get_metric(self, metric_name: str):
-        return self.prometheus_metrics.get(metric_name)
+        Args:
+            metric: The prometheus metric (Counter/Gauge/Histogram) to update
+            metric_name: Name of the metric (used to get correct label set)
+            enum_values: Values for the labels
+            value: Value to update the metric with
+        """
+        labels = prometheus_label_factory(
+            supported_enum_labels=PrometheusMetricLabels.get_labels(
+                label_name=metric_name
+            ),
+            enum_values=enum_values,
+        )
+        # Update metric with labels
+        if action == "observe":
+            metric.labels(**labels).observe(value)
+        else:
+            metric.labels(**labels).inc(value)
 
 
 class PrometheusLogger(CustomLogger):
@@ -111,15 +134,9 @@ class PrometheusLogger(CustomLogger):
             self.litellm_tokens_metric = Counter(
                 "litellm_total_tokens",
                 "Total number of input + output tokens from LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=PrometheusMetricLabels.get_labels(
+                    label_name="litellm_tokens_metric"
+                ),
             )
 
             self.litellm_input_tokens_metric = Counter(
@@ -524,13 +541,13 @@ class PrometheusLogger(CustomLogger):
         if (
             standard_logging_payload["stream"] is True
         ):  # log successful streaming requests from logging event hook.
-            _labels = prometheus_label_factory(
-                supported_enum_labels=PrometheusMetricLabels.get_labels(
-                    label_name="litellm_proxy_total_requests_metric"
-                ),
+            PrometheusMetricManager.update_metric_with_labels(
+                metric=self.litellm_proxy_total_requests_metric,
+                metric_name="litellm_proxy_total_requests_metric",
                 enum_values=enum_values,
+                value=1.0,
+                action="inc",
             )
-            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
 
     def _increment_token_metrics(
         self,
@@ -544,16 +561,13 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str],
         enum_values: UserAPIKeyLabelValues,
     ):
-        # token metrics
-        self.litellm_tokens_metric.labels(
-            end_user_id,
-            user_api_key,
-            user_api_key_alias,
-            model,
-            user_api_team,
-            user_api_team_alias,
-            user_id,
-        ).inc(standard_logging_payload["total_tokens"])
+        PrometheusMetricManager.update_metric_with_labels(
+            metric=self.litellm_tokens_metric,
+            metric_name="litellm_tokens_metric",
+            enum_values=enum_values,
+            value=standard_logging_payload["total_tokens"],
+            action="inc",
+        )
 
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict

@@ -88,6 +88,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
+    "litellm_tokens_metric",
 ]
 
 
@@ -100,6 +101,16 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_tokens_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
     ]
 
