@@ -51,7 +51,10 @@ async def generate_key(
     session, guardrails: Optional[List] = None, team_id: Optional[str] = None
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {}
     if guardrails:
         data["guardrails"] = guardrails
@@ -81,7 +84,7 @@ async def test_llm_guard_triggered_safe_request():
     async with aiohttp.ClientSession() as session:
         response, headers = await chat_completion(
             session,
-            "sk-1234",
+            "sk-ANro6SNlQ6B0",
             model="fake-openai-endpoint",
             messages=[{"role": "user", "content": f"Hello what's the weather"}],
             guardrails=[
@@ -112,7 +115,7 @@ async def test_llm_guard_triggered():
         try:
             response, headers = await chat_completion(
                 session,
-                "sk-1234",
+                "sk-ANro6SNlQ6B0",
                 model="fake-openai-endpoint",
                 messages=[
                     {"role": "user", "content": f"Hello my name is ishaan@berri.ai"}
@@ -137,7 +140,7 @@ async def test_no_llm_guard_triggered():
     async with aiohttp.ClientSession() as session:
         response, headers = await chat_completion(
             session,
-            "sk-1234",
+            "sk-ANro6SNlQ6B0",
             model="fake-openai-endpoint",
             messages=[{"role": "user", "content": f"Hello what's the weather"}],
             guardrails=[],
@@ -206,7 +209,7 @@ async def test_bedrock_guardrail_triggered():
         try:
             response, headers = await chat_completion(
                 session,
-                "sk-1234",
+                "sk-ANro6SNlQ6B0",
                 model="fake-openai-endpoint",
                 messages=[{"role": "user", "content": "Hello do you like coffee?"}],
                 guardrails=["bedrock-pre-guard"],
@@ -228,7 +231,7 @@ async def test_custom_guardrail_during_call_triggered():
         try:
             response, headers = await chat_completion(
                 session,
-                "sk-1234",
+                "sk-ANro6SNlQ6B0",
                 model="fake-openai-endpoint",
                 messages=[{"role": "user", "content": f"Hello do you like litellm?"}],
                 guardrails=["custom-during-guard"],
@@ -241,7 +244,10 @@ async def test_custom_guardrail_during_call_triggered():
 
 async def create_team(session, guardrails: Optional[List] = None):
     url = "http://0.0.0.0:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {"guardrails": guardrails}
 
     print("request data=", data)

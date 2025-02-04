@@ -271,7 +271,7 @@ $ litellm --config /path/to/config.yaml
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "fake-openai-endpoint",
     "messages": [
@@ -437,7 +437,7 @@ LiteLLM Proxy exposes a `/cache/ping` endpoint to test if the cache is working a
 
 **Usage**
 ```shell
-curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1234"
+curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 **Expected Response - when cache healthy**
@@ -551,7 +551,7 @@ chat_completion = client.chat.completions.create(
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "cache": {"no-cache": True},
@@ -599,7 +599,7 @@ chat_completion = client.chat.completions.create(
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -651,7 +651,7 @@ chat_completion = client.chat.completions.create(
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "cache": {"ttl": 600},
@@ -706,7 +706,7 @@ chat_completion = client.chat.completions.create(
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "cache": {"s-maxage": 600},
@@ -727,7 +727,7 @@ curl http://localhost:4000/v1/chat/completions \
 
 ```bash 
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "user_id": "222",
@@ -754,7 +754,7 @@ In order to delete a cache key, send a request to `/cache/delete` with the `keys
 Example 
 ```shell
 curl -X POST "http://0.0.0.0:4000/cache/delete" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{"keys": ["586bf3f3c1bf5aecb55bd9996494d3bbc69eb58397163add6d49537762a7548d", "key2"]}'
 ```
 
@@ -766,7 +766,7 @@ curl -X POST "http://0.0.0.0:4000/cache/delete" \
 You can view the cache_key in the response headers, on cache hits the cache key is sent as the `x-litellm-cache-key` response headers
 ```shell
 curl -i --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -855,7 +855,7 @@ chat_completion = client.chat.completions.create(
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "cache": {"use-cache": True}

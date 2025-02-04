@@ -29,7 +29,10 @@ async def health(session, call_key):
 
 async def generate_key(session):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": ["gpt-4", "text-embedding-ada-002", "dall-e-2"],
         "duration": None,
@@ -54,7 +57,7 @@ async def test_health():
     """
     async with aiohttp.ClientSession() as session:
         # as admin #
-        all_healthy_models = await health(session=session, call_key="sk-1234")
+        all_healthy_models = await health(session=session, call_key="sk-ANro6SNlQ6B0")
         total_model_count = (
             all_healthy_models["healthy_count"] + all_healthy_models["unhealthy_count"]
         )

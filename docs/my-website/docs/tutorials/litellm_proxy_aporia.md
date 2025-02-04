@@ -148,7 +148,7 @@ Use this to control what guardrails run per project. In this tutorial we only wa
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     -H 'Content-Type: application/json' \
     -D '{
             "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
@@ -161,7 +161,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",

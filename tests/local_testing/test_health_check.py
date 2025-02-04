@@ -308,7 +308,7 @@ async def test_health_check_bad_model():
         {
             "model_name": "openai-gpt-4o",
             "litellm_params": {
-                "api_key": "sk-1234",
+                "api_key": "sk-ANro6SNlQ6B0",
                 "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
                 "model": "openai/my-fake-openai-endpoint",
                 "mock_timeout": True,

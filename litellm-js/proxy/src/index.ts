@@ -4,7 +4,7 @@ import { bearerAuth } from 'hono/bearer-auth'
 import OpenAI from "openai";
 
 const openai = new OpenAI({
-  apiKey: "sk-1234",
+  apiKey: "sk-ANro6SNlQ6B0",
   baseURL: "https://openai-endpoint.ishaanjaffer0324.workers.dev"
 });
 
@@ -22,7 +22,7 @@ const app = new Hono()
 // Middleware for API Key Authentication
 const apiKeyAuth = async (c: Context, next: Function) => {
   const apiKey = c.req.header('Authorization');
-  if (!apiKey || apiKey !== 'Bearer sk-1234') {
+  if (!apiKey || apiKey !== 'Bearer sk-ANro6SNlQ6B0') {
     return c.text('Unauthorized', 401);
   }
   await next();

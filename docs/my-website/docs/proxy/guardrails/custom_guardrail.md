@@ -213,7 +213,7 @@ Expect this to mask the word `litellm` before sending the request to the LLM API
 ```shell
 curl -i  -X POST http://localhost:4000/v1/chat/completions \
 -H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 -d '{
     "model": "gpt-4",
     "messages": [
@@ -294,7 +294,7 @@ Expect this to fail since since `litellm` is in the message content. [This runs 
 ```shell
 curl -i  -X POST http://localhost:4000/v1/chat/completions \
 -H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 -d '{
     "model": "gpt-4",
     "messages": [
@@ -358,7 +358,7 @@ Expect this to fail since since `coffee` will be in the response content. [This 
 ```shell
 curl -i  -X POST http://localhost:4000/v1/chat/completions \
 -H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 -d '{
     "model": "gpt-4",
     "messages": [
@@ -391,7 +391,7 @@ Expected response after running during-guard
 ```shell
  curl -i  -X POST http://localhost:4000/v1/chat/completions \
 -H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 -d '{
     "model": "gpt-4",
     "messages": [

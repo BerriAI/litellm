@@ -48,7 +48,7 @@ const requestOptions = {
     baseUrl: 'http://localhost:4000/gemini', // http://<proxy-base-url>/gemini
 };
   
-const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
+const genAI = new GoogleGenerativeAI("sk-ANro6SNlQ6B0"); // litellm proxy API key
 const model = genAI.getGenerativeModel(modelParams, requestOptions);
 
 async function main() {
@@ -257,7 +257,7 @@ litellm
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{}'
 ```
@@ -267,7 +267,7 @@ Expected Response
 ```bash
 {
     ...
-    "key": "sk-1234ewknldferwedojwojw"
+    "key": "sk-ANro6SNlQ6B0ewknldferwedojwojw"
 }
 ```
 
@@ -275,7 +275,7 @@ Expected Response
 
 
 ```bash
-http://0.0.0.0:4000/gemini/v1beta/models/gemini-1.5-flash:countTokens?key=sk-1234ewknldferwedojwojw' \
+http://0.0.0.0:4000/gemini/v1beta/models/gemini-1.5-flash:countTokens?key=sk-ANro6SNlQ6B0ewknldferwedojwojw' \
 -H 'Content-Type: application/json' \
 -d '{
     "contents": [{
@@ -330,7 +330,7 @@ const requestOptions = {
     }
 };
   
-const genAI = new GoogleGenerativeAI("sk-1234");
+const genAI = new GoogleGenerativeAI("sk-ANro6SNlQ6B0");
 const model = genAI.getGenerativeModel(modelParams, requestOptions);
 
 async function main() {

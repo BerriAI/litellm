@@ -5,7 +5,7 @@ embeddings_models = "multimodalembedding@001"
 embeddings = OpenAIEmbeddings(
     model="multimodalembedding@001",
     base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",  # type: ignore
+    api_key="sk-ANro6SNlQ6B0",  # type: ignore
 )
 
 

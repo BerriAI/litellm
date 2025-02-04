@@ -5,5 +5,5 @@ model_list:
      api_key: fake-key
      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 general_settings: 
- master_key: sk-1234 
+ master_key: sk-ANro6SNlQ6B0 
  custom_auth: custom_auth_basic.user_api_key_auth

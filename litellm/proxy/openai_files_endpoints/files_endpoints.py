@@ -136,7 +136,7 @@ async def create_file(
     Example Curl
     ```
     curl http://localhost:4000/v1/files \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
         -F purpose="batch" \
         -F file="@mydata.jsonl"
 
@@ -302,7 +302,7 @@ async def get_file_content(
     Example Curl
     ```
     curl http://localhost:4000/v1/files/file-abc123/content \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 
     ```
     """
@@ -430,7 +430,7 @@ async def get_file(
     Example Curl
     ```
     curl http://localhost:4000/v1/files/file-abc123 \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 
     ```
     """
@@ -664,7 +664,7 @@ async def list_files(
     Example Curl
     ```
     curl http://localhost:4000/v1/files\
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 
     ```
     """

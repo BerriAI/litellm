@@ -19,7 +19,10 @@ async def generate_key(
     ],
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": models,
         "duration": None,

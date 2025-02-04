@@ -668,7 +668,7 @@ file_id = batch_input_file.id
 
 ```bash
 curl http://localhost:4000/v1/files \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -F purpose="batch" \
     -F file="@mydata.jsonl"
 ```
@@ -878,7 +878,7 @@ Just set `model: batch-gpt-4o-mini` in your .jsonl.
 
 ```bash
 curl http://localhost:4000/v1/files \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -F purpose="batch" \
     -F file="@mydata.jsonl"
 ```

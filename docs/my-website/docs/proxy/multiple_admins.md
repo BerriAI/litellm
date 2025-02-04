@@ -27,7 +27,7 @@ Set the 'user_id' in request headers, when calling a management endpoint. [View 
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/team/update' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     -H 'LiteLLM-Changed-By: krrish@berri.ai' \
     -H 'Content-Type: application/json' \
     -d '{

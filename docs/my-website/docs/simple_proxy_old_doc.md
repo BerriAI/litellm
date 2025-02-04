@@ -287,7 +287,7 @@ OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
 
 Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
 ```env
-OPENAI_API_KEY=sk-1234
+OPENAI_API_KEY=sk-ANro6SNlQ6B0
 ```
 
 #### 4. Run LibreChat: 
@@ -432,7 +432,7 @@ litellm_settings:
   set_verbose: True
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  master_key: sk-ANro6SNlQ6B0 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-ANro6SNlQ6B0)
 
 
 environment_variables:
@@ -652,7 +652,7 @@ model_list:
         model: ollama/llama2
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
+  master_key: sk-ANro6SNlQ6B0 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
   database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"
 ```
 
@@ -666,7 +666,7 @@ litellm --config /path/to/config.yaml
 
 ```shell 
 curl 'http://0.0.0.0:4000/key/generate' \
---h 'Authorization: Bearer sk-1234' \
+--h 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --d '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
 ```
 
@@ -720,7 +720,7 @@ model_list:
 
 ```bash
 curl -X POST "https://0.0.0.0:4000/key/generate" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 -H "Content-Type: application/json" \
 -d '{
 	"models": ["my-free-tier"], 

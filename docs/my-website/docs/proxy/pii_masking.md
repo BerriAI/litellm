@@ -105,7 +105,7 @@ Do this by setting `permissions: {"pii": false}`, when generating a key.
 
 ```shell 
 curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "permissions": {"pii": false}
@@ -226,7 +226,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "gpt-3.5-turbo",
   "messages": [

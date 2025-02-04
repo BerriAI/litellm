@@ -56,7 +56,7 @@ files_settings:
 <TabItem value="openai" label="OpenAI Python SDK">
 
 ```python
-client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000") # base_url is your litellm proxy url
+client = AsyncOpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000") # base_url is your litellm proxy url
 
 file_name = "openai_batch_completions.jsonl"
 response = await client.files.create(
@@ -70,7 +70,7 @@ response = await client.files.create(
 
 ```shell
 curl http://localhost:4000/v1/files \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -F purpose="batch" \
     -F custom_llm_provider="azure"\
     -F file="@mydata.jsonl"
@@ -100,7 +100,7 @@ ft_job = await client.fine_tuning.jobs.create(
 ```shell
 curl http://localhost:4000/v1/fine_tuning/jobs \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -d '{
     "custom_llm_provider": "azure",
     "model": "gpt-35-turbo-1106",
@@ -224,7 +224,7 @@ print("response from cancel ft job={}".format(cancel_ft_job))
 
 ```shell
 curl -X POST http://localhost:4000/v1/fine_tuning/jobs/ftjob-abc123/cancel \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -H "Content-Type: application/json" \
   -d '{"custom_llm_provider": "azure"}'
 ```
@@ -252,7 +252,7 @@ print("list of ft jobs={}".format(list_ft_jobs))
 ```shell
 curl -X GET 'http://localhost:4000/v1/fine_tuning/jobs?custom_llm_provider=azure' \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer sk-1234"
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 </TabItem>
 

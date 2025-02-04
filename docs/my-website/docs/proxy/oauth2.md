@@ -37,7 +37,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings: 
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_oauth2_auth: true
 ```
 

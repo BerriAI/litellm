@@ -6,7 +6,7 @@ import pytest
 import anthropic
 
 client = anthropic.Anthropic(
-    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-1234"
+    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-ANro6SNlQ6B0"
 )
 
 

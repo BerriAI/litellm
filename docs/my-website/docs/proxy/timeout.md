@@ -187,7 +187,7 @@ This is currently only supported on `/chat/completions` and `/completions` endpo
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
     -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data-raw '{
         "model": "gemini/gemini-1.5-flash",
         "messages": [

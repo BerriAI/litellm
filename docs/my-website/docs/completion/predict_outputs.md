@@ -86,7 +86,7 @@ litellm --config config.yaml
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="LITELLM_PROXY_KEY", # sk-1234
+    api_key="LITELLM_PROXY_KEY", # sk-ANro6SNlQ6B0
     base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
 )
 

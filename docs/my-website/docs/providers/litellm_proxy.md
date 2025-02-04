@@ -14,7 +14,7 @@ import TabItem from '@theme/TabItem';
 ## Required Variables
 
 ```python
-os.environ["LITELLM_PROXY_API_KEY"] = "" # "sk-1234" your litellm proxy api key 
+os.environ["LITELLM_PROXY_API_KEY"] = "" # "sk-ANro6SNlQ6B0" your litellm proxy api key 
 os.environ["LITELLM_PROXY_API_BASE"] = "" # "http://localhost:4000" your litellm proxy api base
 ```
 

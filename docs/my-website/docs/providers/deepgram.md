@@ -43,7 +43,7 @@ model_list:
     mode: audio_transcription
     
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 ### Start proxy 
@@ -61,7 +61,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --form 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
 --form 'model="nova-2"'
 ```
@@ -72,7 +72,7 @@ curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
 ```python
 from openai import OpenAI
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 

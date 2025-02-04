@@ -12,14 +12,14 @@ llm = AzureOpenAI(
     engine="azure-gpt-3.5",
     temperature=0.0,
     azure_endpoint="http://0.0.0.0:4000",
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     api_version="2023-07-01-preview",
 )
 
 embed_model = AzureOpenAIEmbedding(
     deployment_name="azure-embedding-model",
     azure_endpoint="http://0.0.0.0:4000",
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     api_version="2023-07-01-preview",
 )
 

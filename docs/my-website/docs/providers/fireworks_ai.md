@@ -379,7 +379,7 @@ litellm --config config.yaml
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/audio/transcriptions' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -F 'file=@"/Users/krrishdholakia/Downloads/gettysburg.wav"' \
 -F 'model="whisper-v3"' \
 -F 'response_format="verbose_json"' \

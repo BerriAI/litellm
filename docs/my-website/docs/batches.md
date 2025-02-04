@@ -37,7 +37,7 @@ $ litellm
 
 ```shell
 curl http://localhost:4000/v1/files \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -F purpose="batch" \
     -F file="@mydata.jsonl"
 ```
@@ -46,7 +46,7 @@ curl http://localhost:4000/v1/files \
 
 ```bash
 curl http://localhost:4000/v1/batches \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
         -H "Content-Type: application/json" \
         -d '{
             "input_file_id": "file-abc123",
@@ -59,7 +59,7 @@ curl http://localhost:4000/v1/batches \
 
 ```bash
 curl http://localhost:4000/v1/batches/batch_abc123 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -H "Content-Type: application/json" \
 ```
 
@@ -68,7 +68,7 @@ curl http://localhost:4000/v1/batches/batch_abc123 \
 
 ```bash
 curl http://localhost:4000/v1/batches \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -H "Content-Type: application/json" \
 ```
 

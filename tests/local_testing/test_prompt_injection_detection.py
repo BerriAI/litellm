@@ -30,7 +30,7 @@ async def test_prompt_injection_attack_valid_attack():
     """
     prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
     try:
@@ -61,7 +61,7 @@ async def test_prompt_injection_attack_invalid_attack():
     litellm.set_verbose = True
     prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
     try:
@@ -119,7 +119,7 @@ async def test_prompt_injection_llm_eval():
         ),
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
     try:

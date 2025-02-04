@@ -2,7 +2,7 @@
 
 ## Request Format
 ```shell
-curl -X GET "http://0.0.0.0:4000/daily_metrics" -H "Authorization: Bearer sk-1234"
+curl -X GET "http://0.0.0.0:4000/daily_metrics" -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 ## Response format 

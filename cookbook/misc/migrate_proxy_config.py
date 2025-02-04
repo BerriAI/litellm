@@ -89,7 +89,7 @@ def migrate_models(config_file, proxy_base_url):
 # Usage
 config_file = "config.yaml"
 proxy_base_url = "http://0.0.0.0:4000"
-master_key = "sk-1234"
+master_key = "sk-ANro6SNlQ6B0"
 print(f"config_file: {config_file}")
 print(f"proxy_base_url: {proxy_base_url}")
 migrate_models(config_file, proxy_base_url)

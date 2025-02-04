@@ -29,7 +29,7 @@ Verify this is set correctly by
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4",
     "messages": [
@@ -51,7 +51,7 @@ Expect this to fail since gpt-4o is not in the `models` for the key generated
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -86,7 +86,7 @@ curl --location 'http://localhost:4000/team/new' \
 **2. Create a key for team**
 ```shell
 curl --location 'http://localhost:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data-raw '{"team_id": "my-unique-id"}'
 ```
@@ -304,7 +304,7 @@ model_list:
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "models": ["default-models"],

@@ -19,7 +19,7 @@ See pricing [here](https://litellm.ai/#pricing).
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/budget/new' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "budget_id": "my-test-tier",
@@ -31,7 +31,7 @@ curl -L -X POST 'http://0.0.0.0:4000/budget/new' \
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "budget_id": "my-test-tier"

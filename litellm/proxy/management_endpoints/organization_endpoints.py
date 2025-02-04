@@ -69,7 +69,7 @@ async def new_organization(
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 
     --header 'Content-Type: application/json' \
 
@@ -87,7 +87,7 @@ async def new_organization(
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 
     --header 'Content-Type: application/json' \
 
@@ -208,7 +208,7 @@ async def list_organization(
     """
     ```
     curl --location --request GET 'http://0.0.0.0:4000/organization/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0'
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -301,7 +301,7 @@ async def organization_member_add(
     Example:
     ```
     curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     -H 'Content-Type: application/json' \
     -d '{
         "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",

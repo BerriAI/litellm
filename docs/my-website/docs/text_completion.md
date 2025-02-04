@@ -65,7 +65,7 @@ print(response)
 ```shell
 curl --location 'http://0.0.0.0:4000/completions' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data '{
         "model": "gpt-3.5-turbo-instruct",
         "prompt": "Say this is a test",

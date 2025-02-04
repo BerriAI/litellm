@@ -16,7 +16,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings:
-  master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
+  master_key: sk-ANro6SNlQ6B0      # enter your own master key, ensure it starts with 'sk-'
   alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
   database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
@@ -156,7 +156,7 @@ Do not change this after adding a model. It is used to encrypt / decrypt your LL
 We recommned - https://1password.com/password-generator/ password generator to get a random hash for litellm salt key.
 
 ```bash
-export LITELLM_SALT_KEY="sk-1234"
+export LITELLM_SALT_KEY="sk-ANro6SNlQ6B0"
 ```
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/036a6821d588bd36d170713dcf5a72791a694178/litellm/proxy/common_utils/encrypt_decrypt_utils.py#L15)
@@ -222,7 +222,7 @@ spec:
             - name: AZURE_API_BASE
               value: "https://ope******"
             - name: LITELLM_MASTER_KEY
-              value: "sk-1234"
+              value: "sk-ANro6SNlQ6B0"
             - name: DATABASE_URL
               value: "po**********"
           args:

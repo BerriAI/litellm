@@ -145,7 +145,7 @@ def missing_keys_form(missing_key_names: str):
                 <h1>Environment Setup Instructions</h1>
                 <p>Please add the following variables to your environment variables:</p>
                 <pre>
-    <span class="env-var">LITELLM_MASTER_KEY="sk-1234"</span> <span class="comment"># Your master key for the proxy server. Can use this to send /chat/completion requests etc</span>
+    <span class="env-var">LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0"</span> <span class="comment"># Your master key for the proxy server. Can use this to send /chat/completion requests etc</span>
     <span class="env-var">LITELLM_SALT_KEY="sk-XXXXXXXX"</span> <span class="comment"># Can NOT CHANGE THIS ONCE SET - It is used to encrypt/decrypt credentials stored in DB. If value of 'LITELLM_SALT_KEY' changes your models cannot be retrieved from DB</span>
     <span class="env-var">DATABASE_URL="postgres://..."</span> <span class="comment"># Need a postgres database? (Check out Supabase, Neon, etc)</span>
     <span class="comment">## OPTIONAL ##</span>

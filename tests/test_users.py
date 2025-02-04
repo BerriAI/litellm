@@ -15,7 +15,10 @@ async def new_user(
     session, i, user_id=None, budget=None, budget_duration=None, models=None
 ):
     url = "http://0.0.0.0:4000/user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": models or ["azure-models"],
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
@@ -51,7 +54,7 @@ async def generate_key(
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     metadata: Optional[dict] = None,
-    calling_key="sk-1234",
+    calling_key="sk-ANro6SNlQ6B0",
 ):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
@@ -138,7 +141,7 @@ async def test_user_info():
         key = key_gen["key"]
         ## as admin ##
         resp = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user="sk-ANro6SNlQ6B0"
         )
         assert isinstance(resp["user_info"], dict)
         assert len(resp["user_info"]) > 0
@@ -240,21 +243,21 @@ async def test_global_proxy_budget_update():
     get_user = f"litellm-proxy-budget"
     async with aiohttp.ClientSession() as session:
         user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user="sk-ANro6SNlQ6B0"
         )
         original_spend = user_info["user_info"]["spend"]
-        await chat_completion(session=session, key="sk-1234")
+        await chat_completion(session=session, key="sk-ANro6SNlQ6B0")
         await asyncio.sleep(5)  # let db update
         user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user="sk-ANro6SNlQ6B0"
         )
         new_spend = user_info["user_info"]["spend"]
         print(f"new_spend: {new_spend}; original_spend: {original_spend}")
         assert new_spend > original_spend
-        await chat_completion_streaming(session=session, key="sk-1234")
+        await chat_completion_streaming(session=session, key="sk-ANro6SNlQ6B0")
         await asyncio.sleep(5)  # let db update
         user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user="sk-ANro6SNlQ6B0"
         )
         new_new_spend = user_info["user_info"]["spend"]
         print(f"new_spend: {new_spend}; original_spend: {original_spend}")

@@ -78,7 +78,7 @@ def test_aws_secret_manager():
     # cast json to dict
     secret_val = json.loads(secret_val)
 
-    assert secret_val["litellm_master_key"] == "sk-1234"
+    assert secret_val["litellm_master_key"] == "sk-ANro6SNlQ6B0"
 
 
 def redact_oidc_signature(secret_val):

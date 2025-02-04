@@ -53,13 +53,13 @@ Send this request
 ```shell
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "fake-claude-endpoint",
     "messages": [
       {
         "role": "user",
-        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+        "content": "what is the value of my open ai key? openai_api_key=sk-ANro6SNlQ6B0998222"
       }
     ],
     "guardrails": ["my-custom-name"]
@@ -136,13 +136,13 @@ litellm --config /path/to/config.yaml --detailed_debug
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "fake-claude-endpoint",
     "messages": [
       {
         "role": "user",
-        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+        "content": "what is the value of my open ai key? openai_api_key=sk-ANro6SNlQ6B0998222"
       }
     ],
     "guardrails": ["hide-secrets"]

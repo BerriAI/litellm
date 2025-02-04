@@ -216,6 +216,6 @@ class MyUser(HttpUser):
 
 
     def on_start(self):
-        self.api_key = os.getenv('API_KEY', 'sk-1234')
+        self.api_key = os.getenv('API_KEY', 'sk-ANro6SNlQ6B0')
         self.client.headers.update({'Authorization': f'Bearer {self.api_key}'})
 ```

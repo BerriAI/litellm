@@ -9,7 +9,7 @@ async def test_openai_fine_tuning():
     """
     [PROD Test] e2e tests for /fine_tuning/jobs endpoints
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client = AsyncOpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 
     file_name = "openai_fine_tuning.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))

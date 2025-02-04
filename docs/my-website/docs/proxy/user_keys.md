@@ -133,14 +133,14 @@ llm = AzureOpenAI(
     engine="azure-gpt-3.5",               # model_name on litellm proxy
     temperature=0.0,
     azure_endpoint="http://0.0.0.0:4000", # litellm proxy endpoint
-    api_key="sk-1234",                    # litellm proxy API Key
+    api_key="sk-ANro6SNlQ6B0",                    # litellm proxy API Key
     api_version="2023-07-01-preview",
 )
 
 embed_model = AzureOpenAIEmbedding(
     deployment_name="azure-embedding-model",
     azure_endpoint="http://0.0.0.0:4000",
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     api_version="2023-07-01-preview",
 )
 
@@ -230,7 +230,7 @@ import { ChatOpenAI } from "@langchain/openai";
 
 const model = new ChatOpenAI({
   modelName: "gpt-4",
-  openAIApiKey: "sk-1234",
+  openAIApiKey: "sk-ANro6SNlQ6B0",
   modelKwargs: {"metadata": "hello world"} // 👈 PASS Additional params here
 }, {
   basePath: "http://0.0.0.0:4000",
@@ -249,7 +249,7 @@ console.log(message);
 const { OpenAI } = require('openai');
 
 const openai = new OpenAI({
-  apiKey: "sk-1234", // This is the default and can be omitted
+  apiKey: "sk-ANro6SNlQ6B0", // This is the default and can be omitted
   baseURL: "http://0.0.0.0:4000"
 });
 
@@ -306,7 +306,7 @@ from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
 
 
-client = MistralClient(api_key="sk-1234", endpoint="http://0.0.0.0:4000")
+client = MistralClient(api_key="sk-ANro6SNlQ6B0", endpoint="http://0.0.0.0:4000")
 chat_response = client.chat(
     model="mistral-small-latest",
     messages=[
@@ -325,7 +325,7 @@ from openai import OpenAI
 import instructor
 from pydantic import BaseModel
 
-my_proxy_api_key = "" # e.g. sk-1234 - LITELLM KEY
+my_proxy_api_key = "" # e.g. sk-ANro6SNlQ6B0 - LITELLM KEY
 my_proxy_base_url = "" # e.g. http://0.0.0.0:4000 - LITELLM PROXY BASE URL
 
 # This enables response_model keyword
@@ -408,7 +408,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ```python 
 from openai import OpenAI
 client = OpenAI(
-    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    api_key="sk-ANro6SNlQ6B0", # [OPTIONAL] set if you set one on proxy, else set ""
     base_url="http://0.0.0.0:4000",
 )
 
@@ -479,7 +479,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 ```python 
 from openai import OpenAI
 client = OpenAI(
-    api_key="sk-1234", # [OPTIONAL] set if you set one on proxy, else set ""
+    api_key="sk-ANro6SNlQ6B0", # [OPTIONAL] set if you set one on proxy, else set ""
     base_url="http://0.0.0.0:4000",
 )
 
@@ -648,7 +648,7 @@ print(response)
 ```shell
 curl --location 'http://0.0.0.0:4000/moderations' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
 ```
 </TabItem>
@@ -747,7 +747,7 @@ OPENAI_REVERSE_PROXY=http://host.docker.internal:4000/v1/chat/completions
 
 Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
 ```env
-OPENAI_API_KEY=sk-1234
+OPENAI_API_KEY=sk-ANro6SNlQ6B0
 ```
 
 #### 4. Run LibreChat: 
@@ -881,7 +881,7 @@ This same request will be sent to the following model groups on the [litellm pro
 ```python
 import openai
 
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+client = openai.OpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 
 response = client.chat.completions.create(
     model="gpt-3.5-turbo,llama3",
@@ -964,7 +964,7 @@ Get a list of responses when `model` is passed as a list
 
 ```shell
 curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "llama3,gpt-3.5-turbo",

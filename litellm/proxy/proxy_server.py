@@ -3480,7 +3480,7 @@ async def chat_completion(  # noqa: PLR0915
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 
     -d '{
         "model": "gpt-4o",
@@ -3768,7 +3768,7 @@ async def completion(  # noqa: PLR0915
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 
     -d '{
         "model": "gpt-3.5-turbo-instruct",
@@ -3988,7 +3988,7 @@ async def embeddings(  # noqa: PLR0915
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 
     -d '{
         "model": "text-embedding-ada-002",
@@ -5403,7 +5403,7 @@ async def moderations(
     ```
     curl --location 'http://0.0.0.0:4000/moderations' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
     ```
     """
@@ -5810,7 +5810,7 @@ async def supported_openai_params(model: str):
     Example curl: 
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
-        --header 'Authorization: Bearer sk-1234'
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0'
     ```
     """
     try:
@@ -6886,7 +6886,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info' \
     -H 'accept: application/json' \
-    -H 'x-api-key: sk-1234'
+    -H 'x-api-key: sk-ANro6SNlQ6B0'
     ```
 
     Example Request (Specific Model Group):
@@ -6894,7 +6894,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0' \
     -H 'accept: application/json' \
-    -H 'Authorization: Bearer sk-1234'
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
     ```
 
     Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml) 
@@ -6902,7 +6902,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info?model_group=openai/tts-1' 
     -H 'accept: application/json' \
-    -H 'Authorization: Bearersk-1234'
+    -H 'Authorization: Bearersk-ANro6SNlQ6B0'
     ```
 
     Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)

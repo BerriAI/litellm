@@ -116,7 +116,7 @@ response = router.completion(
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "my-bad-model",
   "messages": [
@@ -348,7 +348,7 @@ print(response)
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -627,7 +627,7 @@ litellm_settings:
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "gpt-4",
   "messages": [
@@ -654,7 +654,7 @@ Check if your fallbacks are working as expected.
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "my-bad-model",
   "messages": [
@@ -673,7 +673,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "my-bad-model",
   "messages": [
@@ -692,7 +692,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "my-bad-model",
   "messages": [
@@ -988,7 +988,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "gpt-4o",
     "messages": [
@@ -1019,7 +1019,7 @@ You can disable fallbacks per key by setting `disable_fallbacks: true` in your r
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "messages": [
         {
@@ -1040,7 +1040,7 @@ You can disable fallbacks per key by setting `disable_fallbacks: true` in your k
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "metadata": {

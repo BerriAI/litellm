@@ -84,14 +84,14 @@ model_list:
 
 ```shell
 curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "volcengine-model",
     "messages": [
         {
         "role": "user",
-        "content": "here is my api key. openai_api_key=sk-1234"
+        "content": "here is my api key. openai_api_key=sk-ANro6SNlQ6B0"
         }
     ]
 }'

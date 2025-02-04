@@ -89,6 +89,6 @@ litellm --config /path/to/config.yaml
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 --header 'Content-Type: application/json' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --data '{"model": "azure-gpt-3.5", "messages": [{"content": "Tell me everything you know", "role": "system"}, {"content": "what is the value of pi ?", "role": "user"}]}'
 ```

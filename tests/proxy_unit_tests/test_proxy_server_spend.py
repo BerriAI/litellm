@@ -1,6 +1,6 @@
 # import openai, json, time, asyncio
 # client = openai.AsyncOpenAI(
-#     api_key="sk-1234",
+#     api_key="sk-ANro6SNlQ6B0",
 #     base_url="http://0.0.0.0:8000"
 # )
 

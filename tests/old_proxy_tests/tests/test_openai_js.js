@@ -4,7 +4,7 @@ const openai = require('openai');
 process.env.DEBUG=false;
 async function runOpenAI() {
   const client = new openai.OpenAI({
-    apiKey: 'sk-1234',
+    apiKey: 'sk-ANro6SNlQ6B0',
     baseURL: 'http://0.0.0.0:4000'
   });
 

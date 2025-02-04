@@ -61,14 +61,14 @@ def load_vertex_ai_credentials():
 async def call_spend_logs_endpoint():
     """
     Call this
-    curl -X GET "http://0.0.0.0:4000/spend/logs" -H "Authorization: Bearer sk-1234"
+    curl -X GET "http://0.0.0.0:4000/spend/logs" -H "Authorization: Bearer sk-ANro6SNlQ6B0"
     """
     import datetime
     import requests
 
     todays_date = datetime.datetime.now().strftime("%Y-%m-%d")
     url = f"http://0.0.0.0:4000/global/spend/logs?api_key=best-api-key-ever"
-    headers = {"Authorization": f"Bearer sk-1234"}
+    headers = {"Authorization": f"Bearer sk-ANro6SNlQ6B0"}
     response = requests.get(url, headers=headers)
     print("response from call_spend_logs_endpoint", response)
 

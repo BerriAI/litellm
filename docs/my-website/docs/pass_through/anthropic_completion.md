@@ -291,7 +291,7 @@ litellm
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{}'
 ```
@@ -301,7 +301,7 @@ Expected Response
 ```bash
 {
     ...
-    "key": "sk-1234ewknldferwedojwojw"
+    "key": "sk-ANro6SNlQ6B0ewknldferwedojwojw"
 }
 ```
 
@@ -313,7 +313,7 @@ curl --request POST \
   --url http://0.0.0.0:4000/anthropic/v1/messages \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
-  --header "Authorization: bearer sk-1234ewknldferwedojwojw" \
+  --header "Authorization: bearer sk-ANro6SNlQ6B0ewknldferwedojwojw" \
   --data '{
     "model": "claude-3-5-sonnet-20241022",
     "max_tokens": 1024,

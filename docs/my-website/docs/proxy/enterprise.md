@@ -59,7 +59,7 @@ Start the litellm proxy with this config
 
 ```shell
 curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "max_budget": 2
@@ -109,7 +109,7 @@ Requirements:
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "metadata": {
@@ -125,7 +125,7 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/team/new' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "metadata": {
@@ -176,7 +176,7 @@ const openai = require('openai');
 
 async function runOpenAI() {
   const client = new openai.OpenAI({
-    apiKey: 'sk-1234',
+    apiKey: 'sk-ANro6SNlQ6B0',
     baseURL: 'http://0.0.0.0:4000'
   });
 
@@ -268,7 +268,7 @@ print(response)
 #### `/spend/tags` Request Format 
 ```shell
 curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 #### `/spend/tags`Response Format
@@ -308,7 +308,7 @@ Requirements:
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "metadata": {
@@ -326,7 +326,7 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/team/new' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "metadata": {
@@ -382,7 +382,7 @@ const openai = require('openai');
 
 async function runOpenAI() {
   const client = new openai.OpenAI({
-    apiKey: 'sk-1234',
+    apiKey: 'sk-ANro6SNlQ6B0',
     baseURL: 'http://0.0.0.0:4000'
   });
 
@@ -483,7 +483,7 @@ print(response)
 
 ```bash
 curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 #### `/spend/logs` Response Format
@@ -522,7 +522,7 @@ This means `["user"]` and `["metadata]["generation_name"]` are required in all L
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enforced_params:  
     - user
     - metadata.generation_name
@@ -533,7 +533,7 @@ general_settings:
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "enforced_params": ["user", "metadata.generation_name"]
@@ -656,7 +656,7 @@ Expected Response
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]     # routes that can be accessed without any auth
   admin_only_routes: ["/key/generate"]  # Optional - routes that can only be accessed by Proxy Admin
   allowed_routes: ["/chat/completions", "/spend/calculate", "LiteLLMRoutes.public_routes"] # Optional - routes that can be accessed by anyone after Authentication
@@ -734,7 +734,7 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 ```shell
 curl http://localhost:4000/chat/completions \
 -H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 -d '{
 "model": "fake-openai-endpoint",
 "messages": [
@@ -749,7 +749,7 @@ curl http://localhost:4000/chat/completions \
 ```shell
 curl --location 'http://0.0.0.0:4000/embeddings' \
 --header 'Content-Type: application/json' \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \
 --data ' {
 "model": "text-embedding-ada-002",
 "input": ["write a litellm poem"]
@@ -829,14 +829,14 @@ litellm --config config.yaml --detailed_debug
 Send this request
 ```shell
 curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "llama3",
     "messages": [
         {
         "role": "user",
-        "content": "what is the value of my open ai key? openai_api_key=sk-1234998222"
+        "content": "what is the value of my open ai key? openai_api_key=sk-ANro6SNlQ6B0998222"
         }
     ]
 }'
@@ -884,7 +884,7 @@ This means the `hide_secrets` guardrail is off for all requests from this API Ke
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "permissions": {"hide_secrets": false}
@@ -900,7 +900,7 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
@@ -926,13 +926,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     "messages": [
         {
         "role": "user",
-        "content": "does my openai key look well formatted OpenAI_API_KEY=sk-1234777"
+        "content": "does my openai key look well formatted OpenAI_API_KEY=sk-ANro6SNlQ6B0777"
         }
     ]
 }'
 ```
 
-Expect to see `sk-1234777` in your server logs on your callback. 
+Expect to see `sk-ANro6SNlQ6B0777` in your server logs on your callback. 
 
 :::info
 The `hide_secrets` guardrail check did not run on this request because api key=sk-jNm1Zar7XfNdZXp49Z1kSQ has `"permissions": {"hide_secrets": false}`
@@ -979,7 +979,7 @@ litellm_settings:
 
 ```bash
 curl --location 'http://localhost:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "models": ["fake-openai-endpoint"],
@@ -1017,7 +1017,7 @@ litellm_settings:
 
 ```bash
 curl --location 'http://localhost:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "models": ["fake-openai-endpoint"],
@@ -1034,7 +1034,7 @@ curl --location 'http://localhost:4000/key/generate' \
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -1221,7 +1221,7 @@ Set `user=<user_id>` to the user id of the user who might have opted out.
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -1275,7 +1275,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ```
 curl -X POST "http://0.0.0.0:4000/customer/block" \
--H "Authorization: Bearer sk-1234" \ 
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
 }'
@@ -1285,7 +1285,7 @@ curl -X POST "http://0.0.0.0:4000/customer/block" \
 
 ```
 curl -X POST "http://0.0.0.0:4000/user/unblock" \
--H "Authorization: Bearer sk-1234" \ 
+-H "Authorization: Bearer sk-ANro6SNlQ6B0" \ 
 -D '{
 "user_ids": [<user_id>, ...] 
 }'
@@ -1379,7 +1379,7 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 general_settings: 
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 
   # Security controls
   max_request_size_mb: 0.000000001 # 👈 Key Change - Max Request Size in MB. Set this very low for testing 
@@ -1391,7 +1391,7 @@ general_settings:
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "fake-openai-endpoint",
     "messages": [

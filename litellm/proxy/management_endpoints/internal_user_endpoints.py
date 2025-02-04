@@ -130,7 +130,7 @@ async def new_user(
     ```shell
      curl -X POST "http://localhost:4000/user/new" \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
      -d '{
          "username": "new_user",
          "email": "new_user@example.com"
@@ -295,7 +295,7 @@ async def user_info(
     Example request
     ```
     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
-    --header 'Authorization: Bearer sk-1234'
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0'
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -555,7 +555,7 @@ async def user_update(
 
     ```
     curl --location 'http://0.0.0.0:4000/user/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
@@ -802,7 +802,7 @@ async def delete_user(
     ```
     curl --location 'http://0.0.0.0:4000/user/delete' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 
     --header 'Content-Type: application/json' \
 

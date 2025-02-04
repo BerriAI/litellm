@@ -35,8 +35,8 @@ async def test_openai_moderation_error_raising():
 
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
     litellm.openai_moderations_model_name = "text-moderation-latest"
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 

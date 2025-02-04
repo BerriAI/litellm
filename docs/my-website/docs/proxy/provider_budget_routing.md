@@ -46,7 +46,7 @@ router_settings:
   redis_password: os.environ/REDIS_PASSWORD
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 #### Make a test request
@@ -62,7 +62,7 @@ We expect the first request to succeed, and the second request to fail since we 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -79,7 +79,7 @@ Expect this to fail since since we cross the budget for provider `openai`
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -142,7 +142,7 @@ Example Request
 ```bash
 curl -X GET http://localhost:4000/provider/budgets \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 Example Response
@@ -228,7 +228,7 @@ We expect the first request to succeed, and the second request to fail since we 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -245,7 +245,7 @@ Expect this to fail since since we cross the budget for `openai/gpt-4o`
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -314,7 +314,7 @@ We expect the first request to succeed, and the second request to fail since we 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -332,7 +332,7 @@ Expect this to fail since since we cross the budget for tag=`product:chat-bot`
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4o",
     "messages": [
@@ -383,7 +383,7 @@ router_settings:
   redis_password: os.environ/REDIS_PASSWORD
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 ## Spec for provider_budget_config

@@ -18,13 +18,13 @@ git clone https://github.com/BerriAI/litellm
 cd litellm
 
 # Add the master key - you can change this after setup
-echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+echo 'LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0"' > .env
 
 # Add the litellm salt key - you cannot change this after adding a model
 # It is used to encrypt / decrypt your LLM API Key credentials
 # We recommned - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
-echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
+echo 'LITELLM_SALT_KEY="sk-ANro6SNlQ6B0"' >> .env
 
 source .env
 
@@ -337,7 +337,7 @@ docker pull ghcr.io/berriai/litellm-database:main-latest
 ```shell
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
-    -e LITELLM_MASTER_KEY=sk-1234 \
+    -e LITELLM_MASTER_KEY=sk-ANro6SNlQ6B0 \
     -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
     -e AZURE_API_KEY=d6*********** \
     -e AZURE_API_BASE=https://openai-***********/ \
@@ -378,7 +378,7 @@ spec:
             - name: AZURE_API_BASE
               value: "https://ope******"
             - name: LITELLM_MASTER_KEY
-              value: "sk-1234"
+              value: "sk-ANro6SNlQ6B0"
             - name: DATABASE_URL
               value: "po**********"
           args:
@@ -468,11 +468,11 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### Step 2. Deploy with Helm
 
-Run the following command in the root of your `litellm` repo. This will set the litellm proxy master key as `sk-1234`
+Run the following command in the root of your `litellm` repo. This will set the litellm proxy master key as `sk-ANro6SNlQ6B0`
 
 ```bash
 helm install \
-  --set masterkey=sk-1234 \
+  --set masterkey=sk-ANro6SNlQ6B0 \
   mydeploy \
   deploy/charts/litellm-helm
 ```
@@ -702,7 +702,7 @@ docker run \
     -e LITELLM_LOG="DEBUG"\
     -e SERVER_ROOT_PATH="/api/v1"\
     -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
-    -e LITELLM_MASTER_KEY="sk-1234"\
+    -e LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0"\
     litellm-prod-build \
     --config /app/config.yaml
 ```
@@ -770,7 +770,7 @@ docker run \
     -e LITELLM_LOG="DEBUG"\
     -e SERVER_ROOT_PATH="/api/v1"\
     -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
-    -e LITELLM_MASTER_KEY="sk-1234"\
+    -e LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0"\
     your_custom_docker_image \
     --config /app/config.yaml
     --run_hypercorn

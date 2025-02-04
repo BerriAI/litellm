@@ -118,7 +118,7 @@ async def test_create_audit_log_in_db(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "premium_user", True)
     setattr(litellm, "store_audit_logs", True)
 

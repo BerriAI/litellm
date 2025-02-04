@@ -54,7 +54,7 @@ LiteLLM provides an openai-compatible `/audio/speech` endpoint for Text-to-speec
 
 ```bash
 curl http://0.0.0.0:4000/v1/audio/speech \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "tts-1",
@@ -103,7 +103,7 @@ Use this when you want to limit the file size for requests sent to `audio/transc
 Make a test Request with a valid file
 ```shell
 curl --location 'http://localhost:4000/v1/audio/transcriptions' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --form 'file=@"/Users/ishaanjaffer/Github/litellm/tests/gettysburg.wav"' \
 --form 'model="whisper"'
 ```

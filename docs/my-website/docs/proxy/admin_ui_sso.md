@@ -203,7 +203,7 @@ Set `default_team_disabled: true` on your litellm config.yaml
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   default_team_disabled: true # OR you can set env var PROXY_DEFAULT_TEAM_DISABLED="true"
 ```
 

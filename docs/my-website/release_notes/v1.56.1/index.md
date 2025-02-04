@@ -39,7 +39,7 @@ Use this to control access and budgets across a lot of keys.
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/budget/new' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "budget_id": "high-usage-tier",

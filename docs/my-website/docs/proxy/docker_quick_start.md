@@ -125,7 +125,7 @@ Loaded config YAML (api_key and environment_variables are not shown):
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -199,7 +199,7 @@ model_list:
       api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
 
 general_settings: 
-  master_key: sk-1234 
+  master_key: sk-ANro6SNlQ6B0 
   database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # 👈 KEY CHANGE
 ```
 
@@ -218,7 +218,7 @@ See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-set
      - Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
    - **Usage**: 
      - ** Set on config.yaml** set your master key under `general_settings:master_key`, example - 
-        `master_key: sk-1234`
+        `master_key: sk-ANro6SNlQ6B0`
      - ** Set env variable** set `LITELLM_MASTER_KEY`
 
 2. **`database_url`** (str)
@@ -248,7 +248,7 @@ Create a key with `rpm_limit: 1`. This will only allow 1 request per minute for 
 
 ```bash 
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "rpm_limit": 1

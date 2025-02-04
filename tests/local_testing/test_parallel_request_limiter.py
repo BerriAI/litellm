@@ -43,8 +43,8 @@ async def test_global_max_parallel_requests():
     data["metadata"]["global_max_parallel_requests"]
     """
     global_max_parallel_requests = 0
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=100)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler(
@@ -73,8 +73,8 @@ async def test_pre_call_hook():
     """
     Test if cache updated on call being received
     """
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler(
@@ -110,7 +110,7 @@ async def test_pre_call_hook_rpm_limits():
     """
     Test if error raised on hitting rpm limits
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
@@ -153,7 +153,7 @@ async def test_pre_call_hook_rpm_limits_retry_after():
     """
     Test if rate limit error, returns 'retry_after'
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=1
@@ -199,7 +199,7 @@ async def test_pre_call_hook_team_rpm_limits():
     Test if error raised on hitting team rpm limits
     """
     litellm.set_verbose = True
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _team_id = "unique-team-id"
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
@@ -253,7 +253,7 @@ async def test_pre_call_hook_tpm_limits():
     """
     Test if error raised on hitting tpm limits
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=1, tpm_limit=9, rpm_limit=10
@@ -309,7 +309,7 @@ async def test_pre_call_hook_user_tpm_limits():
 
     local_cache.set_cache(key=user_id, value=user_obj)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, user_id=user_id, user_rpm_limit=10, user_tpm_limit=9
@@ -360,8 +360,8 @@ async def test_success_call_hook():
     """
     Test if on success, cache correctly decremented
     """
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     parallel_request_handler = MaxParallelRequestsHandler(
@@ -404,7 +404,7 @@ async def test_failure_call_hook():
     """
     Test if on failure, cache correctly decremented
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
@@ -485,7 +485,7 @@ async def test_normal_router_call():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
@@ -565,8 +565,8 @@ async def test_normal_router_tpm_limit():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
@@ -648,8 +648,8 @@ async def test_streaming_router_call():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
     pl = ProxyLogging(user_api_key_cache=local_cache)
@@ -725,8 +725,8 @@ async def test_streaming_router_tpm_limit():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
     )
@@ -805,7 +805,7 @@ async def test_bad_router_call():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     local_cache = DualCache()
@@ -880,7 +880,7 @@ async def test_bad_router_tpm_limit():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key, max_parallel_requests=10, tpm_limit=10
@@ -959,7 +959,7 @@ async def test_bad_router_tpm_limit_per_model():
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     model = "azure-model"
 
@@ -1047,7 +1047,7 @@ async def test_pre_call_hook_rpm_limits_per_model():
     verbose_proxy_logger.setLevel(logging.DEBUG)
     verbose_router_logger.setLevel(logging.DEBUG)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
@@ -1126,7 +1126,7 @@ async def test_pre_call_hook_tpm_limits_per_model():
     verbose_proxy_logger.setLevel(logging.DEBUG)
     verbose_router_logger.setLevel(logging.DEBUG)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
@@ -1237,7 +1237,7 @@ async def test_post_call_success_hook_rpm_limits_per_model():
     verbose_proxy_logger.setLevel(logging.DEBUG)
     verbose_router_logger.setLevel(logging.DEBUG)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,

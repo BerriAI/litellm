@@ -7,7 +7,7 @@ from vertexai.vision_models import (
     VideoSegmentConfig,
 )
 
-LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_API_KEY = "sk-ANro6SNlQ6B0"
 LITELLM_PROXY_BASE = "http://0.0.0.0:4000/vertex-ai"
 
 import datetime

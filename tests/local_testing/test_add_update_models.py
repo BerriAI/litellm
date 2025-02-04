@@ -62,7 +62,7 @@ def prisma_client():
 @pytest.mark.skip(reason="new feature, tests passing locally")
 async def test_add_new_model(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -87,7 +87,7 @@ async def test_add_new_model(prisma_client):
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN.value,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -140,7 +140,7 @@ def test_can_add_model(team_id, key_team_id, user_role, expected_result):
         "team_id": team_id,
         "user_api_key_dict": UserAPIKeyAuth(
             user_role=user_role,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             team_id=key_team_id,
         ),
     }
@@ -154,7 +154,7 @@ async def test_add_update_model(prisma_client):
     # test that existing litellm_params are not updated
     # only new / updated params get updated
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
 
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -179,7 +179,7 @@ async def test_add_update_model(prisma_client):
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN.value,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -210,7 +210,7 @@ async def test_add_update_model(prisma_client):
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN.value,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )

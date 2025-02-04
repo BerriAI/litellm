@@ -8,7 +8,7 @@ from large_text import text
 from dotenv import load_dotenv
 from statistics import mean, median
 
-litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000/", api_key="sk-1234")
+litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:4000/", api_key="sk-ANro6SNlQ6B0")
 
 
 async def litellm_completion():

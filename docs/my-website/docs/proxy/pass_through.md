@@ -27,7 +27,7 @@ curl --request POST \
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
       target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
@@ -104,7 +104,7 @@ This request got forwarded from LiteLLM Proxy -> Defined Target URL (with header
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   pass_through_endpoints:
     - path: "/api/public/ingestion"                                # route you want to add to LiteLLM Proxy Server
       target: "https://us.cloud.langfuse.com/api/public/ingestion" # URL this route should forward 
@@ -162,7 +162,7 @@ This also enforces the key's rpm limits on pass-through endpoints.
 Usage - set `auth: true` on the config
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   pass_through_endpoints:
     - path: "/v1/rerank"
       target: "https://api.cohere.com/v1/rerank"
@@ -179,7 +179,7 @@ Test Request with LiteLLM Key
 curl --request POST \
   --url http://localhost:4000/v1/rerank \
   --header 'accept: application/json' \
-  --header 'Authorization: Bearer sk-1234'\
+  --header 'Authorization: Bearer sk-ANro6SNlQ6B0'\
   --header 'content-type: application/json' \
   --data '{
     "model": "rerank-english-v3.0",
@@ -201,7 +201,7 @@ curl --request POST \
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   pass_through_endpoints:
     - path: "/api/public/ingestion"                                # route you want to add to LiteLLM Proxy Server
       target: "https://us.cloud.langfuse.com/api/public/ingestion" # URL this route should forward 
@@ -227,7 +227,7 @@ from langfuse import Langfuse
 
 langfuse = Langfuse(
     host="http://localhost:4000", # your litellm proxy endpoint
-    public_key="sk-1234",        # your litellm proxy api key 
+    public_key="sk-ANro6SNlQ6B0",        # your litellm proxy api key 
     secret_key="anything",        # no key required since this is a pass through
 )
 
@@ -382,7 +382,7 @@ model_list:
 
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   pass_through_endpoints:
     - path: "/v1/messages"                 # route you want to add to LiteLLM Proxy Server
       target: custom_callbacks.anthropic_adapter          # Adapter to use for this route
@@ -402,7 +402,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/v1/messages' \
--H 'x-api-key: sk-1234' \
+-H 'x-api-key: sk-ANro6SNlQ6B0' \
 -H 'anthropic-version: 2023-06-01' \ # ignored
 -H 'content-type: application/json' \
 -D '{

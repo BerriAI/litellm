@@ -58,7 +58,7 @@ Expect this to mask `Jane Doe` since it's PII
 ```shell
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -105,7 +105,7 @@ Expected response on failure
 ```shell
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -132,7 +132,7 @@ The Presidio API [supports passing the `language` param](https://microsoft.githu
 ```shell
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -316,7 +316,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "gpt-3.5-turbo",
   "messages": [

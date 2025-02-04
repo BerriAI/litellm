@@ -21,7 +21,7 @@ End-users can be tracked / id'ed by passing the 'user' param to litellm in an op
 
 ```bash
 curl -X POST --location 'http://0.0.0.0:4000/end_user/new' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "user_id" : "ishaan-jaff-45",
@@ -68,7 +68,7 @@ Make a simple chat completions call to the proxy. In the response headers, you s
 ```bash
 curl -X POST --location 'http://localhost:4000/chat/completions' \
 --header 'Content-Type: application/json' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --data '{
     "model": "gpt-3.5-turbo", 
     "messages": [

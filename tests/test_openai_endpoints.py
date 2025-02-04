@@ -7,7 +7,7 @@ from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 import uuid
 
-LITELLM_MASTER_KEY = "sk-1234"
+LITELLM_MASTER_KEY = "sk-ANro6SNlQ6B0"
 
 
 def response_header_check(response):
@@ -29,7 +29,10 @@ async def generate_key(
     ],
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": models,
         "duration": None,
@@ -54,7 +57,10 @@ async def generate_key(
 
 async def new_user(session):
     url = "http://0.0.0.0:4000/user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "models": ["gpt-4", "text-embedding-ada-002", "dall-e-2"],
         "duration": None,
@@ -306,7 +312,7 @@ async def test_chat_completion_ratelimit():
     """
     async with aiohttp.ClientSession() as session:
         # key_gen = await generate_key(session=session)
-        key = "sk-1234"
+        key = "sk-ANro6SNlQ6B0"
         tasks = []
         tasks.append(
             chat_completion(session=session, key=key, model="fake-openai-endpoint-2")
@@ -334,7 +340,7 @@ async def test_chat_completion_different_deployments():
     """
     async with aiohttp.ClientSession() as session:
         # key_gen = await generate_key(session=session)
-        key = "sk-1234"
+        key = "sk-ANro6SNlQ6B0"
         results = []
         for _ in range(20):
             results.append(
@@ -360,7 +366,7 @@ async def test_chat_completion_streaming():
     """
     [PROD Test] Ensures logprobs are returned correctly
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client = AsyncOpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 
     response = await client.chat.completions.create(
         model="gpt-3.5-turbo-large",
@@ -397,7 +403,7 @@ async def test_chat_completion_anthropic_structured_output():
         {"role": "user", "content": "List 5 important events in the XIX century"}
     ]
 
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client = AsyncOpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 
     res = await client.beta.chat.completions.parse(
         model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
@@ -540,7 +546,7 @@ async def test_batch_chat_completions():
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await chat_completion(
             session=session,
-            key="sk-1234",
+            key="sk-ANro6SNlQ6B0",
             model="gpt-3.5-turbo,fake-openai-endpoint",
         )
 
@@ -561,7 +567,7 @@ async def test_moderations_endpoint():
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await moderation(
             session=session,
-            key="sk-1234",
+            key="sk-ANro6SNlQ6B0",
         )
 
         print(f"response: {response}")

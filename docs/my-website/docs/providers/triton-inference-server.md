@@ -83,7 +83,7 @@ response = completion(
     ```shell
     curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data ' {
     "model": "my-triton-model",
     "messages": [{"role": "user", "content": "who are u?"}]
@@ -169,7 +169,7 @@ response = completion(
     ```shell
     curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data ' {
     "model": "my-triton-model",
     "messages": [{"role": "user", "content": "who are u?"}]
@@ -254,7 +254,7 @@ response = await litellm.aembedding(
     ```shell
     curl --location 'http://0.0.0.0:4000/embeddings' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data ' {
     "model": "my-triton-model",
     "input": ["write a litellm poem"]

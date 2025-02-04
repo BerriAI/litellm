@@ -35,7 +35,7 @@ litellm
 Let's call the Assembly AI `/v2/transcripts` endpoint
 
 ```python
-LITELLM_VIRTUAL_KEY = "sk-1234" # <your-virtual-key>
+LITELLM_VIRTUAL_KEY = "sk-ANro6SNlQ6B0" # <your-virtual-key>
 LITELLM_PROXY_BASE_URL = "http://0.0.0.0:4000/assemblyai" # <your-proxy-base-url>/assemblyai
 
 aai.settings.api_key = f"Bearer {LITELLM_VIRTUAL_KEY}"

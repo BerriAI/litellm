@@ -66,7 +66,7 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   ```python
   import openai
   client = openai.OpenAI(
-      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
+      api_key="sk-ANro6SNlQ6B0",             # pass litellm proxy key, if you're using virtual keys
       base_url="http://0.0.0.0:4000" # litellm-proxy-base url
   )
 
@@ -88,7 +88,7 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 
   ```shell
   curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
+      --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
       --header 'Content-Type: application/json' \
       --data '{
       "model": "my-model",
@@ -147,7 +147,7 @@ $ litellm --config /path/to/config.yaml
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{"input": ["hello world"], "model": "my-model"}'
 ```

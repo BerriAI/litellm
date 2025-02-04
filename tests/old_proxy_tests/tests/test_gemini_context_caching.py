@@ -5,7 +5,7 @@ import openai
 
 # Set Litellm proxy variables here
 LITELLM_BASE_URL = "http://0.0.0.0:4000"
-LITELLM_PROXY_API_KEY = "sk-1234"
+LITELLM_PROXY_API_KEY = "sk-ANro6SNlQ6B0"
 
 client = openai.OpenAI(api_key=LITELLM_PROXY_API_KEY, base_url=LITELLM_BASE_URL)
 httpx_client = httpx.Client(timeout=30)

@@ -23,7 +23,7 @@ Track spend for keys, users, and teams across 100+ LLMs.
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -54,7 +54,7 @@ Pass `metadata` as part of the request body
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data '{
     "model": "llama3",
     "messages": [
@@ -82,7 +82,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 import os
 
-os.environ["OPENAI_API_KEY"] = "sk-1234"
+os.environ["OPENAI_API_KEY"] = "sk-ANro6SNlQ6B0"
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
@@ -129,8 +129,8 @@ The following spend gets tracked in Table `LiteLLM_SpendLogs`
 ```json
 {
   "api_key": "fe6b0cab4ff5a5a8df823196cc8a450*****",                            # Hash of API Key used
-  "user": "default_user",                                                       # Internal User (LiteLLM_UserTable) that owns `api_key=sk-1234`. 
-  "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32",                            # Team (LiteLLM_TeamTable) that owns `api_key=sk-1234`
+  "user": "default_user",                                                       # Internal User (LiteLLM_UserTable) that owns `api_key=sk-ANro6SNlQ6B0`. 
+  "team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32",                            # Team (LiteLLM_TeamTable) that owns `api_key=sk-ANro6SNlQ6B0`
   "request_tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"],# Tags sent in request
   "end_user": "palantir",                                                       # Customer - the `user` sent in the request
   "model_group": "llama3",                                                      # "model" passed to LiteLLM
@@ -165,7 +165,7 @@ Use the `/global/spend/report` endpoint to get spend reports
 
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=team' \
-  -H 'Authorization: Bearer sk-1234'
+  -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 #### Example Response
@@ -227,7 +227,7 @@ params = {
 }
 
 headers = {
-    'Authorization': 'Bearer sk-1234'
+    'Authorization': 'Bearer sk-ANro6SNlQ6B0'
 }
 
 # Make the GET request
@@ -297,7 +297,7 @@ Customer [this is `user` passed to `/chat/completions` request](#how-to-track-sp
 
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&group_by=customer' \
-  -H 'Authorization: Bearer sk-1234'
+  -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 #### Example Response
@@ -349,12 +349,12 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 <TabItem value="per key" label="Spend for Specific API Key">
 
 
-👉 Key Change: Specify `api_key=sk-1234`
+👉 Key Change: Specify `api_key=sk-ANro6SNlQ6B0`
 
 
 ```shell
-curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&api_key=sk-1234' \
-  -H 'Authorization: Bearer sk-1234'
+curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-06-30&api_key=sk-ANro6SNlQ6B0' \
+  -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 #### Example Response
@@ -401,7 +401,7 @@ Internal User (Key Owner): This is the value of `user_id` passed when calling [`
 
 ```shell
 curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end_date=2024-12-30&internal_user_id=ishaan' \
-  -H 'Authorization: Bearer sk-1234'
+  -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 #### Example Response
@@ -484,7 +484,7 @@ Schedule a [meeting with us to get your Enterprise License](https://calendly.com
 Create Key with with `permissions={"get_spend_routes": true}` 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"get_spend_routes": true}
@@ -513,7 +513,7 @@ Only the `LITELLM_MASTER_KEY` you set can access this route
 ```shell
 curl -X POST \
   'http://localhost:4000/global/spend/reset' \
-  -H 'Authorization: Bearer sk-1234' \
+  -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
   -H 'Content-Type: application/json'
 ```
 

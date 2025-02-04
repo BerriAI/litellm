@@ -11,7 +11,7 @@ const requestOptions = {
     }
 };
   
-const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
+const genAI = new GoogleGenerativeAI("sk-ANro6SNlQ6B0"); // litellm proxy API key
 const model = genAI.getGenerativeModel(modelParams, requestOptions);
 
 const testPrompt = "Explain how AI works";

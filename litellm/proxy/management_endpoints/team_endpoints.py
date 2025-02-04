@@ -159,7 +159,7 @@ async def new_team(  # noqa: PLR0915
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
       "team_alias": "my-new-team_2",
@@ -171,7 +171,7 @@ async def new_team(  # noqa: PLR0915
 
      ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
                 "team_alias": "QA Prod Bot", 
@@ -430,7 +430,7 @@ async def update_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -441,7 +441,7 @@ async def update_team(
     Example - Update Team `max_budget` budget
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -642,7 +642,7 @@ async def team_member_add(
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     -H 'Content-Type: application/json' \
     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
 
@@ -835,7 +835,7 @@ async def team_member_delete(
     ```
     curl -X POST 'http://0.0.0.0:8000/team/member_delete' \
 
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 
     -H 'Content-Type: application/json' \
 
@@ -1117,7 +1117,7 @@ async def delete_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
@@ -1343,7 +1343,7 @@ async def block_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -1392,7 +1392,7 @@ async def unblock_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -1487,7 +1487,7 @@ async def list_team(
     """
     ```
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0'
     ```
 
     Parameters:

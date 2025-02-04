@@ -41,7 +41,7 @@ Your Proxy Swagger is available on the root of the Proxy: e.g.: `http://localhos
 Set the following in your .env on the Proxy
 
 ```shell
-LITELLM_MASTER_KEY="sk-1234" # this is your master key for using the proxy server
+LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0" # this is your master key for using the proxy server
 UI_USERNAME=ishaan-litellm   # username to sign in on UI
 UI_PASSWORD=langchain        # password to sign in on UI
 ```

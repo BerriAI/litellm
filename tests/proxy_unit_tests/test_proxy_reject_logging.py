@@ -88,7 +88,7 @@ router = Router(
             "litellm_params": {
                 "model": "openai/fake",
                 "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
-                "api_key": "sk-12345",
+                "api_key": "sk-ANro6SNlQ6B05",
             },
         }
     ]
@@ -105,7 +105,7 @@ router = Router(
                 "messages": [
                     {
                         "role": "user",
-                        "content": "Hello here is my OPENAI_API_KEY = sk-12345",
+                        "content": "Hello here is my OPENAI_API_KEY = sk-ANro6SNlQ6B05",
                     }
                 ],
             },
@@ -163,7 +163,9 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await chat_completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0
+                    api_key="sk-ANro6SNlQ6B05",
+                    token="hashed_sk-ANro6SNlQ6B05",
+                    rpm_limit=0,
                 ),
                 fastapi_response=Response(),
             )
@@ -171,7 +173,9 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0
+                    api_key="sk-ANro6SNlQ6B05",
+                    token="hashed_sk-ANro6SNlQ6B05",
+                    rpm_limit=0,
                 ),
                 fastapi_response=Response(),
             )
@@ -179,7 +183,9 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await embeddings(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0
+                    api_key="sk-ANro6SNlQ6B05",
+                    token="hashed_sk-ANro6SNlQ6B05",
+                    rpm_limit=0,
                 ),
                 fastapi_response=Response(),
             )

@@ -95,7 +95,7 @@ litellm
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{}'
 ```
@@ -105,7 +105,7 @@ Expected Response
 ```bash
 {
     ...
-    "key": "sk-1234ewknldferwedojwojw"
+    "key": "sk-ANro6SNlQ6B0ewknldferwedojwojw"
 }
 ```
 
@@ -118,7 +118,7 @@ from langfuse import Langfuse
 langfuse = Langfuse(
     host="http://localhost:4000/langfuse", # your litellm proxy endpoint
     public_key="anything",        # no key required since this is a pass through
-    secret_key="sk-1234ewknldferwedojwojw",        # no key required since this is a pass through
+    secret_key="sk-ANro6SNlQ6B0ewknldferwedojwojw",        # no key required since this is a pass through
 )
 
 print("sending langfuse trace request")

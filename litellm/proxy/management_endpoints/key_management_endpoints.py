@@ -358,7 +358,7 @@ async def generate_key_fn(  # noqa: PLR0915
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -689,10 +689,10 @@ async def update_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-1234",
+        "key": "sk-ANro6SNlQ6B0",
         "key_alias": "my-key",
         "user_id": "user-1234",
         "team_id": "team-1234",
@@ -818,7 +818,7 @@ async def delete_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
@@ -927,7 +927,7 @@ async def info_key_fn_v2(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
@@ -986,7 +986,7 @@ async def info_key_fn(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -1547,8 +1547,8 @@ async def regenerate_key_fn(
 
     Example:
     ```bash
-    curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
-    --header 'Authorization: Bearer sk-1234' \
+    curl --location --request POST 'http://localhost:4000/key/sk-ANro6SNlQ6B0/regenerate' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "max_budget": 100,
@@ -1858,7 +1858,7 @@ async def block_key(
      Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -1965,7 +1965,7 @@ async def unblock_key(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -2073,7 +2073,7 @@ async def key_health(
 
     ```bash
     curl -X POST "http://localhost:4000/key/health" \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
      -H "Content-Type: application/json"
     ```
 

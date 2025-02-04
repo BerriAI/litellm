@@ -136,14 +136,14 @@ def prisma_client():
 async def test_view_daily_spend_ui(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
 
     await litellm.proxy.proxy_server.prisma_client.connect()
     from litellm.proxy.proxy_server import user_api_key_cache
 
     spend_logs_for_admin = await global_spend_logs(
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_role=LitellmUserRoles.PROXY_ADMIN,
         ),
         api_key=None,
@@ -153,7 +153,9 @@ async def test_view_daily_spend_ui(prisma_client):
 
     spend_logs_for_internal_user = await global_spend_logs(
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-1234", user_role=LitellmUserRoles.INTERNAL_USER, user_id="1234"
+            api_key="sk-ANro6SNlQ6B0",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="1234",
         ),
         api_key=None,
     )
@@ -180,7 +182,7 @@ async def test_view_daily_spend_ui(prisma_client):
 async def test_global_spend_models(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -188,7 +190,7 @@ async def test_global_spend_models(prisma_client):
     models_spend_for_admin = await global_spend_models(
         limit=10,
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_role=LitellmUserRoles.PROXY_ADMIN,
         ),
     )
@@ -199,7 +201,9 @@ async def test_global_spend_models(prisma_client):
     models_spend_for_internal_user = await global_spend_models(
         limit=10,
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-1234", user_role=LitellmUserRoles.INTERNAL_USER, user_id="1234"
+            api_key="sk-ANro6SNlQ6B0",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="1234",
         ),
     )
 
@@ -272,7 +276,7 @@ async def test_global_spend_models(prisma_client):
 async def test_global_spend_keys(prisma_client):
     print("prisma client=", prisma_client)
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
 
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -280,7 +284,7 @@ async def test_global_spend_keys(prisma_client):
     keys_spend_for_admin = await global_spend_keys(
         limit=10,
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_role=LitellmUserRoles.PROXY_ADMIN,
         ),
     )
@@ -291,7 +295,9 @@ async def test_global_spend_keys(prisma_client):
     keys_spend_for_internal_user = await global_spend_keys(
         limit=10,
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-1234", user_role=LitellmUserRoles.INTERNAL_USER, user_id="1234"
+            api_key="sk-ANro6SNlQ6B0",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="1234",
         ),
     )
 

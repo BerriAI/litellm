@@ -61,7 +61,7 @@ user_config = {
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -129,7 +129,7 @@ const userConfig = {
 const { OpenAI } = require('openai');
 
 const openai = new OpenAI({
-  apiKey: "sk-1234",
+  apiKey: "sk-ANro6SNlQ6B0",
   baseURL: "http://0.0.0.0:4000"
 });
 
@@ -179,7 +179,7 @@ Specify any/all auth params you want the user to be able to configure:
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -204,7 +204,7 @@ Pass in the litellm_params (E.g. api_key, api_base, etc.) via the `extra_body` p
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -234,7 +234,7 @@ For JS, the OpenAI client accepts passing params in the `create(..)` body as nor
 const { OpenAI } = require('openai');
 
 const openai = new OpenAI({
-  apiKey: "sk-1234",
+  apiKey: "sk-ANro6SNlQ6B0",
   baseURL: "http://0.0.0.0:4000"
 });
 

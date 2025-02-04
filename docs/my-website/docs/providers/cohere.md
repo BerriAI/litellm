@@ -169,7 +169,7 @@ Test request
 
 ```bash
 curl http://0.0.0.0:4000/rerank \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rerank-english-v3.0",

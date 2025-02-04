@@ -28,7 +28,7 @@ $ litellm
 **Upload a File**
 ```bash
 curl http://localhost:4000/v1/files \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -F purpose="fine-tune" \
   -F file="@mydata.jsonl"
 ```
@@ -36,26 +36,26 @@ curl http://localhost:4000/v1/files \
 **List Files**
 ```bash
 curl http://localhost:4000/v1/files \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 **Retrieve File Information**
 ```bash
 curl http://localhost:4000/v1/files/file-abc123 \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 **Delete File**
 ```bash
 curl http://localhost:4000/v1/files/file-abc123 \
   -X DELETE \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 **Get File Content**
 ```bash
 curl http://localhost:4000/v1/files/file-abc123/content \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 </TabItem>

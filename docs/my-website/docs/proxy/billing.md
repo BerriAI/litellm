@@ -34,7 +34,7 @@ litellm_settings:
   callbacks: ["lago"] # 👈 KEY CHANGE
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 Add your Lago keys to the environment
@@ -56,7 +56,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data-raw '{"team_id": "my-unique-id"}' # 👈 Internal Team's ID
 ```

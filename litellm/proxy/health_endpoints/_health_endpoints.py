@@ -74,7 +74,7 @@ async def health_services_endpoint(  # noqa: PLR0915
     Example:
     ```
     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
-    -H 'Authorization: Bearer sk-1234'
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
     ```
     """
     try:

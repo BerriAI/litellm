@@ -19,7 +19,7 @@ global.fetch = async function patchedFetch(url, options) {
 
 describe('Gemini AI Tests', () => {
     test('should successfully generate non-streaming content with tags', async () => {
-        const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
+        const genAI = new GoogleGenerativeAI("sk-ANro6SNlQ6B0"); // litellm proxy API key
 
         const requestOptions = {
             baseUrl: 'http://127.0.0.1:4000/gemini',
@@ -49,7 +49,7 @@ describe('Gemini AI Tests', () => {
             `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
             {
                 headers: {
-                    'Authorization': 'Bearer sk-1234'
+                    'Authorization': 'Bearer sk-ANro6SNlQ6B0'
                 }
             }
         );
@@ -66,7 +66,7 @@ describe('Gemini AI Tests', () => {
     }, 25000);
 
     test('should successfully generate streaming content with tags', async () => {
-        const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
+        const genAI = new GoogleGenerativeAI("sk-ANro6SNlQ6B0"); // litellm proxy API key
 
         const requestOptions = {
             baseUrl: 'http://127.0.0.1:4000/gemini',
@@ -105,7 +105,7 @@ describe('Gemini AI Tests', () => {
             `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
             {
                 headers: {
-                    'Authorization': 'Bearer sk-1234'
+                    'Authorization': 'Bearer sk-ANro6SNlQ6B0'
                 }
             }
         );

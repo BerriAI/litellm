@@ -61,8 +61,8 @@ async def test_lakera_prompt_injection_detection():
     """
 
     lakera_ai = lakeraAI_Moderation()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
 
     try:
@@ -107,8 +107,8 @@ async def test_lakera_safe_prompt():
     """
 
     lakera_ai = lakeraAI_Moderation()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
 
     await lakera_ai.async_moderation_hook(
@@ -166,7 +166,7 @@ async def test_moderations_on_embeddings():
         response = await embeddings(
             request=request,
             fastapi_response=temp_response,
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-ANro6SNlQ6B0"),
         )
         print(response)
     except Exception as e:

@@ -50,7 +50,10 @@ async def generate_key(
     max_budget=None,
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "max_budget": max_budget,
     }
@@ -77,7 +80,10 @@ async def chat_completion(session, key: str, model: str):
 async def update_key_budget(session, key: str, max_budget: float):
     """Helper function to update a key's max budget"""
     url = "http://0.0.0.0:4000/key/update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "key": key,
         "max_budget": max_budget,
@@ -223,7 +229,7 @@ async def test_key_limit_modifications(field):
     # Create initial key
     client = AsyncClient(base_url="http://0.0.0.0:4000")
     key_data = {"max_budget": None, "rpm_limit": None, "tpm_limit": None}
-    headers = {"Authorization": "Bearer sk-1234"}
+    headers = {"Authorization": "Bearer sk-ANro6SNlQ6B0"}
     response = await client.post("/key/generate", json=key_data, headers=headers)
     assert response.status_code == 200
     generate_key_response = response.json()
@@ -258,7 +264,7 @@ async def test_team_limit_modifications(field):
     # Create initial team
     client = AsyncClient(base_url="http://0.0.0.0:4000")
     team_data = {"max_budget": None, "rpm_limit": None, "tpm_limit": None}
-    headers = {"Authorization": "Bearer sk-1234"}
+    headers = {"Authorization": "Bearer sk-ANro6SNlQ6B0"}
     response = await client.post("/team/new", json=team_data, headers=headers)
     print("response: ", json.dumps(response.json(), indent=4))
     assert response.status_code == 200
@@ -288,7 +294,10 @@ async def generate_team_key(
 ):
     """Helper function to generate a key for a specific team"""
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data: dict[str, Any] = {"team_id": team_id}
     if max_budget is not None:
         data["max_budget"] = max_budget
@@ -302,7 +311,10 @@ async def create_team(
 ):
     """Helper function to create a new team"""
     url = "http://0.0.0.0:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "max_budget": max_budget,
     }
@@ -391,7 +403,10 @@ async def test_team_and_key_budget_enforcement():
 async def update_team_budget(session, team_id: str, max_budget: float):
     """Helper function to update a team's max budget"""
     url = "http://0.0.0.0:4000/team/update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "team_id": team_id,
         "max_budget": max_budget,

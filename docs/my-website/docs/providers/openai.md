@@ -524,7 +524,7 @@ litellm --config config.yaml --detailed_debug
 ```python
 from openai import OpenAI
 client = OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     organization="my-special-org",
     base_url="http://0.0.0.0:4000"
 )

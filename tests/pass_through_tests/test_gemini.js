@@ -1,6 +1,6 @@
 // const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// const genAI = new GoogleGenerativeAI("sk-1234");
+// const genAI = new GoogleGenerativeAI("sk-ANro6SNlQ6B0");
 // const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // const prompt = "Explain how AI works in 2 pages";

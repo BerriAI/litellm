@@ -76,7 +76,7 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="sk-1234", # your litellm proxy api key
+    api_key="sk-ANro6SNlQ6B0", # your litellm proxy api key
 )
 
 response = client.chat.completions.create(
@@ -158,7 +158,7 @@ litellm --config config.yaml
 curl -X 'GET' \
   'http://localhost:4000/model_group/info' \
   -H 'accept: application/json' \
-  -H 'x-api-key: sk-1234'
+  -H 'x-api-key: sk-ANro6SNlQ6B0'
 ```
 
 Expected Response 

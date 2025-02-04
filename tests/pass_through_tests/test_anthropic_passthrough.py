@@ -8,7 +8,7 @@ import aiohttp
 import asyncio
 
 client = anthropic.Anthropic(
-    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-1234"
+    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-ANro6SNlQ6B0"
 )
 
 
@@ -55,7 +55,7 @@ async def test_anthropic_basic_completion_with_headers():
     print("making basic completion request to anthropic passthrough with aiohttp")
 
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer sk-ANro6SNlQ6B0",
         "Content-Type": "application/json",
         "Anthropic-Version": "2023-06-01",
     }
@@ -88,7 +88,7 @@ async def test_anthropic_basic_completion_with_headers():
             # Check spend logs for this specific request
             async with session.get(
                 f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-ANro6SNlQ6B0"},
             ) as spend_response:
                 print("text spend response")
                 print(f"Spend response: {spend_response}")
@@ -159,7 +159,7 @@ async def test_anthropic_streaming_with_headers():
     print("making streaming request to anthropic passthrough with aiohttp")
 
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer sk-ANro6SNlQ6B0",
         "Content-Type": "application/json",
         "Anthropic-Version": "2023-06-01",
     }
@@ -204,7 +204,7 @@ async def test_anthropic_streaming_with_headers():
             # Check spend logs for this specific request
             async with session.get(
                 f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-ANro6SNlQ6B0"},
             ) as spend_response:
                 spend_data = await spend_response.json()
                 print(f"Spend data: {spend_data}")

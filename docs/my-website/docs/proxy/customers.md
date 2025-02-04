@@ -15,7 +15,7 @@ Make a /chat/completions call, pass 'user' - First call Works
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
         --header 'Content-Type: application/json' \
-        --header 'Authorization: Bearer sk-1234' \ # 👈 YOUR PROXY KEY
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \ # 👈 YOUR PROXY KEY
         --data ' {
         "model": "azure-gpt-3.5",
         "user": "ishaan3", # 👈 CUSTOMER ID
@@ -41,7 +41,7 @@ Call `/customer/info` to get a customer's all up spend
 
 ```bash
 curl -X GET 'http://0.0.0.0:4000/customer/info?end_user_id=ishaan3' \ # 👈 CUSTOMER ID
-        -H 'Authorization: Bearer sk-1234' \ # 👈 YOUR PROXY KEY
+        -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \ # 👈 YOUR PROXY KEY
 ```
 
 Expected Response:
@@ -83,7 +83,7 @@ general_settings:
 ```bash
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
     "model": "mistral",
     "messages": [
@@ -134,7 +134,7 @@ Create / Update a customer with budget
 **Create New Customer w/ budget**
 ```bash
 curl -X POST 'http://0.0.0.0:4000/customer/new'         
-    -H 'Authorization: Bearer sk-1234'         
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0'         
     -H 'Content-Type: application/json'         
     -D '{
         "user_id" : "my-customer-id",
@@ -147,7 +147,7 @@ curl -X POST 'http://0.0.0.0:4000/customer/new'
 ```bash
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
     "model": "mistral",
     "messages": [
@@ -183,7 +183,7 @@ Use the `/budget/new` endpoint for creating a new budget. [API Reference](https:
 ```bash
 curl -X POST 'http://localhost:4000/budget/new' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
     "budget_id": "my-free-tier", 
     "max_budget": 4 
@@ -203,7 +203,7 @@ Just use the `budget_id` used when creating the budget. In our example, this is 
 ```bash
 curl -X POST 'http://localhost:4000/customer/new' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
     "user_id": "my-customer-id",
     "budget_id": "my-free-tier" # 👈 KEY CHANGE
@@ -218,7 +218,7 @@ curl -X POST 'http://localhost:4000/customer/new' \
 ```bash
 curl -X POST 'http://localhost:4000/customer/new' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
     "user_id": "my-customer-id",
     "budget_id": "my-free-tier" # 👈 KEY CHANGE

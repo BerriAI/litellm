@@ -8,7 +8,7 @@ import aiohttp
 import asyncio
 import time
 
-TEST_MASTER_KEY = "sk-1234"
+TEST_MASTER_KEY = "sk-ANro6SNlQ6B0"
 TEST_BASE_URL = "http://0.0.0.0:4000/assemblyai"
 
 

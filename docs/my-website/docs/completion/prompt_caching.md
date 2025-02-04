@@ -119,7 +119,7 @@ from openai import OpenAI
 import os
 
 client = OpenAI(
-    api_key="LITELLM_PROXY_KEY", # sk-1234
+    api_key="LITELLM_PROXY_KEY", # sk-ANro6SNlQ6B0
     base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
 )
 
@@ -248,7 +248,7 @@ from openai import OpenAI
 import os
 
 client = OpenAI(
-    api_key="LITELLM_PROXY_KEY", # sk-1234
+    api_key="LITELLM_PROXY_KEY", # sk-ANro6SNlQ6B0
     base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
 )
 
@@ -414,7 +414,7 @@ LiteLLM returns the calculated cost in the response headers - `x-litellm-respons
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="LITELLM_PROXY_KEY", # sk-1234..
+    api_key="LITELLM_PROXY_KEY", # sk-ANro6SNlQ6B0..
     base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
 )
 response = client.chat.completions.with_raw_response.create(
@@ -473,7 +473,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl -L -X GET 'http://0.0.0.0:4000/v1/model/info' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 ```
 
 **Expected Response**

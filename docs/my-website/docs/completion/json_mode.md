@@ -184,7 +184,7 @@ math_reasoning = completion.choices[0].message.parsed
 ```bash
 curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "gpt-4o",
     "messages": [

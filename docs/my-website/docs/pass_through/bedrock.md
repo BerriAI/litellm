@@ -212,7 +212,7 @@ litellm
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{}'
 ```
@@ -222,7 +222,7 @@ Expected Response
 ```bash
 {
     ...
-    "key": "sk-1234ewknldferwedojwojw"
+    "key": "sk-ANro6SNlQ6B0ewknldferwedojwojw"
 }
 ```
 
@@ -231,7 +231,7 @@ Expected Response
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/bedrock/model/cohere.command-r-v1:0/converse' \
--H 'Authorization: Bearer sk-1234ewknldferwedojwojw' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0ewknldferwedojwojw' \
 -H 'Content-Type: application/json' \
 -d '{
     "messages": [
@@ -257,7 +257,7 @@ proxy_endpoint = "http://0.0.0.0:4000/bedrock" # 👈 your proxy base url
 # # Create a Config object with the proxy
 # Custom headers
 custom_headers = {
-    'litellm_user_api_key': 'sk-1234', # 👈 your proxy api key
+    'litellm_user_api_key': 'sk-ANro6SNlQ6B0', # 👈 your proxy api key
 }
 
 
@@ -275,7 +275,7 @@ runtime_client = boto3.client(
 # Custom header injection
 def inject_custom_headers(request, **kwargs):
     request.headers.update({
-        'litellm_user_api_key': 'sk-1234',
+        'litellm_user_api_key': 'sk-ANro6SNlQ6B0',
     })
 
 # Attach the event to inject custom headers before the request is sent

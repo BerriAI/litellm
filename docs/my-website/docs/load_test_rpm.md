@@ -175,11 +175,11 @@ import time, asyncio, litellm
 # logging.basicConfig(level=logging.DEBUG)
 #### LITELLM PROXY #### 
 litellm_client = AsyncOpenAI(
-    api_key="sk-1234", # [CHANGE THIS]
+    api_key="sk-ANro6SNlQ6B0", # [CHANGE THIS]
     base_url="http://0.0.0.0:4000"
 )
 litellm_client_2 = AsyncOpenAI(
-    api_key="sk-1234", # [CHANGE THIS]
+    api_key="sk-ANro6SNlQ6B0", # [CHANGE THIS]
     base_url="http://0.0.0.0:4001"
 )
 

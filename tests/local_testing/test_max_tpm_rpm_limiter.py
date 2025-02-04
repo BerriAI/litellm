@@ -30,7 +30,7 @@
 #     Test if error raised on hitting rpm limits
 #     """
 #     litellm.set_verbose = True
-#     _api_key = hash_token("sk-12345")
+#     _api_key = hash_token("sk-ANro6SNlQ6B05")
 #     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=9, rpm_limit=1)
 #     local_cache = DualCache()
 #     # redis_usage_cache = RedisCache()
@@ -77,7 +77,7 @@
 #     Test if error raised on hitting team rpm limits
 #     """
 #     litellm.set_verbose = True
-#     _api_key = "sk-12345"
+#     _api_key = "sk-ANro6SNlQ6B05"
 #     _team_id = "unique-team-id"
 #     _user_api_key_dict = {
 #         "api_key": _api_key,

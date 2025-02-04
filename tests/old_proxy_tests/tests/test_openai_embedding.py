@@ -14,7 +14,9 @@ async def async_request(client, model, input_data):
 
 
 async def main():
-    client = openai.AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client = openai.AsyncOpenAI(
+        api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000"
+    )
     models = [
         "text-embedding-ada-002",
         "text-embedding-ada-002",

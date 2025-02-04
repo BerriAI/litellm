@@ -27,7 +27,7 @@ model_list:
       api_version: "2023-07-01-preview"
 
 general_settings:
-  master_key: sk-1234 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
+  master_key: sk-ANro6SNlQ6B0 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
 ```
 
 2. Start the proxy
@@ -39,7 +39,7 @@ $ litellm --config /path/to/config.yaml
 
 ```shell
 curl --location 'http://0.0.0.0:4000/v1/embeddings' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "input": "The food was delicious and the waiter..",

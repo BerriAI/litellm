@@ -1,6 +1,6 @@
 import openai
 
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+client = openai.OpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 
 # # request sent to model set on litellm proxy, `litellm --model`
 response = client.embeddings.create(

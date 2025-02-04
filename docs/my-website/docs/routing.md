@@ -129,7 +129,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
   "model": "gpt-3.5-turbo",
   "messages": [
@@ -248,7 +248,7 @@ router_settings:
   enable_pre_call_check: true
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 **2. Start proxy**
@@ -262,7 +262,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl --location 'http://localhost:4000/v1/chat/completions' \
 --header 'Content-Type: application/json' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --data '{
     "model": "gpt-3.5-turbo", 
     "messages": [{"role": "user", "content": "Hey, how's it going?"}]

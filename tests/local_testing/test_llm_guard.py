@@ -39,8 +39,8 @@ async def test_llm_guard_valid_response():
         mock_testing=True, mock_redacted_text=input_a_anonymizer_results
     )
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -76,8 +76,8 @@ async def test_llm_guard_error_raising():
         mock_testing=True, mock_redacted_text=input_b_anonymizer_results
     )
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-ANro6SNlQ6B05"
+    _api_key = hash_token("sk-ANro6SNlQ6B05")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -107,7 +107,7 @@ def test_llm_guard_key_specific_mode():
 
     llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     # NOT ENABLED
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
@@ -142,7 +142,7 @@ def test_llm_guard_request_specific_mode():
 
     llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     # NOT ENABLED
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,

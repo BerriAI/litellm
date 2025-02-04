@@ -73,7 +73,7 @@ litellm_settings: # module level litellm settings - https://github.com/BerriAI/l
   success_callback: ["langfuse"] # OPTIONAL - if you want to start sending LLM Logs to Langfuse. Make sure to set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in your env
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  master_key: sk-ANro6SNlQ6B0 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-ANro6SNlQ6B0)
   alerting: ["slack"] # [OPTIONAL] If you want Slack Alerts for Hanging LLM requests, Slow llm responses, Budget Alerts. Make sure to set `SLACK_WEBHOOK_URL` in your env
 ```
 :::info
@@ -218,7 +218,7 @@ model_list:
       api_version: "2023-07-01-preview"
 
 general_settings:
-  master_key: sk-1234 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
+  master_key: sk-ANro6SNlQ6B0 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
 ```
 
 </TabItem>

@@ -212,7 +212,7 @@ class KeyManagementEventHooks:
 
         Args:
             secret_name: Name of the virtual key
-            secret_token: Value of the virtual key (example: sk-1234)
+            secret_token: Value of the virtual key (example: sk-ANro6SNlQ6B0)
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
@@ -238,7 +238,7 @@ class KeyManagementEventHooks:
 
         Args:
             secret_name: Name of the virtual key
-            secret_token: Value of the virtual key (example: sk-1234)
+            secret_token: Value of the virtual key (example: sk-ANro6SNlQ6B0)
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:

@@ -109,7 +109,7 @@ async def test_check_blocked_team():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     _team_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-ANro6SNlQ6B05678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -127,7 +127,7 @@ async def test_check_blocked_team():
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     request = Request(scope={"type": "http"})
@@ -185,7 +185,7 @@ async def test_aaauser_personal_budgets(key_ownership):
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     _user_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-ANro6SNlQ6B05678"
 
     if key_ownership == "user_key":
         valid_token = UserAPIKeyAuth(
@@ -211,7 +211,7 @@ async def test_aaauser_personal_budgets(key_ownership):
     user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     request = Request(scope={"type": "http"})
@@ -242,9 +242,9 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
     from fastapi import Request
 
     # Setup
-    user_key = "sk-1234"
+    user_key = "sk-ANro6SNlQ6B0"
 
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
 
     # Create request with prohibited parameter in body
     request = Request(scope={"type": "http"})
@@ -279,7 +279,7 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
 )
 async def test_auth_with_allowed_routes(route, should_raise_error):
     # Setup
-    user_key = "sk-1234"
+    user_key = "sk-ANro6SNlQ6B0"
 
     general_settings = {"allowed_routes": ["/embeddings"]}
     from fastapi import Request
@@ -288,7 +288,7 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
 
     initial_general_settings = getattr(proxy_server, "general_settings")
 
-    setattr(proxy_server, "master_key", "sk-1234")
+    setattr(proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(proxy_server, "general_settings", general_settings)
 
     request = Request(scope={"type": "http"})
@@ -409,10 +409,10 @@ async def test_auth_not_connected_to_db():
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
-    user_key = "sk-12345678"
+    user_key = "sk-ANro6SNlQ6B05678"
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", None)
     setattr(
         litellm.proxy.proxy_server,
@@ -433,15 +433,27 @@ async def test_auth_not_connected_to_db():
     "headers, custom_header_name, expected_api_key",
     [
         # Test with valid Bearer token
-        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
+        (
+            {"x-custom-api-key": "Bearer sk-ANro6SNlQ6B05678"},
+            "x-custom-api-key",
+            "sk-ANro6SNlQ6B05678",
+        ),
         # Test with raw token (no Bearer prefix)
-        ({"x-custom-api-key": "Bearer sk-12345678"}, "x-custom-api-key", "sk-12345678"),
+        (
+            {"x-custom-api-key": "Bearer sk-ANro6SNlQ6B05678"},
+            "x-custom-api-key",
+            "sk-ANro6SNlQ6B05678",
+        ),
         # Test with empty header value
         ({"x-custom-api-key": ""}, "x-custom-api-key", ""),
         # Test with missing header
         ({}, "X-Custom-API-Key", ""),
         # Test with different header casing
-        ({"X-CUSTOM-API-KEY": "Bearer sk-12345678"}, "X-Custom-API-Key", "sk-12345678"),
+        (
+            {"X-CUSTOM-API-KEY": "Bearer sk-ANro6SNlQ6B05678"},
+            "X-Custom-API-Key",
+            "sk-ANro6SNlQ6B05678",
+        ),
     ],
 )
 def test_get_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
@@ -518,7 +530,7 @@ async def test_auth_with_form_data_and_model():
     )
 
     # Setup
-    user_key = "sk-12345678"
+    user_key = "sk-ANro6SNlQ6B05678"
 
     # Create a virtual key with a specific model
     valid_token = UserAPIKeyAuth(
@@ -530,7 +542,7 @@ async def test_auth_with_form_data_and_model():
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     # Create request with form data
@@ -572,7 +584,7 @@ async def test_soft_budget_alert():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     # Setup
-    user_key = "sk-12345"
+    user_key = "sk-ANro6SNlQ6B05"
     soft_budget = 10
     current_spend = 15  # Spend exceeds soft budget
 
@@ -589,7 +601,7 @@ async def test_soft_budget_alert():
 
     # Mock proxy server settings
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
 
     # Create request
@@ -869,7 +881,7 @@ def test_user_api_key_auth_end_user_str():
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     user_api_key_args = {
-        "api_key": "sk-1234",
+        "api_key": "sk-ANro6SNlQ6B0",
         "parent_otel_span": None,
         "user_role": LitellmUserRoles.PROXY_ADMIN,
         "end_user_id": "1",

@@ -64,7 +64,7 @@ async def generate_key(
     max_parallel_requests: Optional[int] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
-    calling_key="sk-1234",
+    calling_key="sk-ANro6SNlQ6B0",
 ):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
@@ -107,7 +107,10 @@ async def new_end_user(
     budget_id=None,
 ):
     url = "http://0.0.0.0:4000/end_user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "user_id": user_id,
         "allowed_model_region": model_region,
@@ -134,7 +137,10 @@ async def new_end_user(
 
 async def new_budget(session, i, budget_id=None):
     url = "http://0.0.0.0:4000/budget/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "budget_id": budget_id,
         "tpm_limit": 2,
@@ -268,7 +274,7 @@ async def test_enduser_tpm_limits_with_master_key():
 
     # chat completion 1
     client = AsyncOpenAI(
-        api_key="sk-1234", base_url="http://0.0.0.0:4000", max_retries=0
+        api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000", max_retries=0
     )
 
     # chat completion 2

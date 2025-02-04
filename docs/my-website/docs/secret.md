@@ -177,7 +177,7 @@ For example, for `AZURE_API_KEY`, the secret should be stored as:
 
 ```json
 {
-  "key": "sk-1234"
+  "key": "sk-ANro6SNlQ6B0"
 }
 ```
 
@@ -292,7 +292,7 @@ Step 2: Update Config
 general_settings:
   key_management_system: "google_kms"
   database_url: "os.environ/PROXY_DATABASE_URL_ENCRYPTED"
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 Step 3: Start + test proxy

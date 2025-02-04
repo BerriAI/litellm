@@ -153,7 +153,7 @@ async def test_new_user_response(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
 
         await litellm.proxy.proxy_server.prisma_client.connect()
         from litellm.proxy.proxy_server import user_api_key_cache
@@ -166,7 +166,7 @@ async def test_new_user_response(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -178,7 +178,7 @@ async def test_new_user_response(prisma_client):
                 tpm_limit=20,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -238,7 +238,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -247,7 +247,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
 
             user_api_key_dict = UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             )
             request = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER)
@@ -295,7 +295,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
 def test_call_with_invalid_key(prisma_client):
     # 2. Make a call with invalid key, expect it to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -323,7 +323,7 @@ def test_call_with_invalid_model(prisma_client):
     litellm.set_verbose = True
     # 3. Make a call to a key with an invalid model - expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -333,7 +333,7 @@ def test_call_with_invalid_model(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -369,7 +369,7 @@ def test_call_with_invalid_model(prisma_client):
 def test_call_with_valid_model(prisma_client):
     # 4. Make a call to a key with a valid model - expect to pass
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -379,7 +379,7 @@ def test_call_with_valid_model(prisma_client):
                 request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -416,7 +416,7 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
     """
     # Make a call to a key with model = `all-proxy-models` this is an Alias from LiteLLM Admin UI
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         await litellm.proxy.proxy_server.prisma_client.connect()
@@ -441,7 +441,7 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
             data=request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -478,7 +478,7 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
 def test_call_with_user_over_budget(prisma_client):
     # 5. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -488,7 +488,7 @@ def test_call_with_user_over_budget(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -570,7 +570,7 @@ def test_call_with_end_user_over_budget(prisma_client):
     import random
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm, "max_end_user_budget", 0.00001)
     try:
 
@@ -584,14 +584,14 @@ def test_call_with_end_user_over_budget(prisma_client):
                 request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
-            bearer_token = "Bearer sk-1234"
+            bearer_token = "Bearer sk-ANro6SNlQ6B0"
 
             async def return_body():
                 return_string = f'{{"model": "gemini-pro-vision", "user": "{user}"}}'
@@ -628,7 +628,7 @@ def test_call_with_end_user_over_budget(prisma_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": "sk-1234",
+                            "user_api_key": "sk-ANro6SNlQ6B0",
                             "user_api_key_end_user_id": user,
                         },
                         "proxy_server_request": {
@@ -669,7 +669,7 @@ def test_call_with_end_user_over_budget(prisma_client):
 def test_call_with_proxy_over_budget(prisma_client):
     # 5.1 Make a call with a proxy over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     setattr(
         litellm.proxy.proxy_server,
@@ -692,7 +692,7 @@ def test_call_with_proxy_over_budget(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -767,7 +767,7 @@ def test_call_with_proxy_over_budget(prisma_client):
 def test_call_with_user_over_budget_stream(prisma_client):
     # 6. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     import logging
 
     from litellm._logging import verbose_proxy_logger
@@ -783,7 +783,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -855,7 +855,7 @@ def test_call_with_user_over_budget_stream(prisma_client):
 def test_call_with_proxy_over_budget_stream(prisma_client):
     # 6.1 Make a call with a global proxy over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     litellm_proxy_budget_name = f"litellm-proxy-budget-{time.time()}"
     setattr(
         litellm.proxy.proxy_server,
@@ -889,7 +889,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -962,7 +962,7 @@ def test_generate_and_call_with_valid_key_never_expires(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -972,7 +972,7 @@ def test_generate_and_call_with_valid_key_never_expires(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -999,7 +999,7 @@ def test_generate_and_call_with_expired_key(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -1009,7 +1009,7 @@ def test_generate_and_call_with_expired_key(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1042,7 +1042,7 @@ def test_delete_key(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
     try:
 
@@ -1055,7 +1055,7 @@ def test_delete_key(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1066,7 +1066,7 @@ def test_delete_key(prisma_client):
 
             delete_key_request = KeyRequest(keys=[generated_key])
 
-            bearer_token = "Bearer sk-1234"
+            bearer_token = "Bearer sk-ANro6SNlQ6B0"
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/key/delete")
@@ -1099,7 +1099,7 @@ def test_delete_key_auth(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -1111,7 +1111,7 @@ def test_delete_key_auth(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1123,7 +1123,7 @@ def test_delete_key_auth(prisma_client):
             delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
-            bearer_token = "Bearer sk-1234"
+            bearer_token = "Bearer sk-ANro6SNlQ6B0"
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/key/delete")
@@ -1169,7 +1169,7 @@ def test_generate_and_call_key_info(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -1181,7 +1181,7 @@ def test_generate_and_call_key_info(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1207,7 +1207,7 @@ def test_generate_and_call_key_info(prisma_client):
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
-            bearer_token = "Bearer sk-1234"
+            bearer_token = "Bearer sk-ANro6SNlQ6B0"
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/key/delete")
@@ -1235,7 +1235,7 @@ def test_generate_and_update_key(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -1250,7 +1250,7 @@ def test_generate_and_update_key(prisma_client):
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
                 http_request=Request(scope={"type": "http"}),
@@ -1263,7 +1263,7 @@ def test_generate_and_update_key(prisma_client):
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
                 http_request=Request(scope={"type": "http"}),
@@ -1278,7 +1278,7 @@ def test_generate_and_update_key(prisma_client):
                 data=request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1316,7 +1316,7 @@ def test_generate_and_update_key(prisma_client):
                 ),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1329,7 +1329,7 @@ def test_generate_and_update_key(prisma_client):
                 data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1368,7 +1368,7 @@ def test_generate_and_update_key(prisma_client):
             delete_key_request = KeyRequest(keys=[generated_key])
 
             # delete the key
-            bearer_token = "Bearer sk-1234"
+            bearer_token = "Bearer sk-ANro6SNlQ6B0"
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/key/delete")
@@ -1435,7 +1435,7 @@ def test_key_generate_with_custom_auth(prisma_client):
             }
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(
         litellm.proxy.proxy_server, "user_custom_key_generate", custom_generate_key_fn
     )
@@ -1449,7 +1449,7 @@ def test_key_generate_with_custom_auth(prisma_client):
                     request,
                     user_api_key_dict=UserAPIKeyAuth(
                         user_role=LitellmUserRoles.PROXY_ADMIN,
-                        api_key="sk-1234",
+                        api_key="sk-ANro6SNlQ6B0",
                         user_id="1234",
                     ),
                 )
@@ -1472,7 +1472,7 @@ def test_key_generate_with_custom_auth(prisma_client):
                 request_2,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1489,7 +1489,7 @@ def test_key_generate_with_custom_auth(prisma_client):
 def test_call_with_key_over_budget(prisma_client):
     # 12. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -1499,7 +1499,7 @@ def test_call_with_key_over_budget(prisma_client):
                 request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1608,7 +1608,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
     # ✅  Tests if spend trackign works when the key does not exist in memory
     # Related to this: https://github.com/BerriAI/litellm/issues/3920
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
 
         async def test():
@@ -1618,7 +1618,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
                 request,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -1742,7 +1742,7 @@ async def test_call_with_key_over_model_budget(
 ):
     # 12. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     verbose_proxy_logger.setLevel(logging.DEBUG)
 
@@ -1778,7 +1778,7 @@ async def test_call_with_key_over_model_budget(
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -1844,7 +1844,7 @@ async def test_call_with_key_over_model_budget(
 async def test_call_with_key_never_over_budget(prisma_client):
     # Make a call with a key with budget=None, it should never fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     try:
         await litellm.proxy.proxy_server.prisma_client.connect()
         request = GenerateKeyRequest(max_budget=None)
@@ -1852,7 +1852,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -1929,7 +1929,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
 async def test_call_with_key_over_budget_stream(prisma_client):
     # 14. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     import logging
 
     from litellm._logging import verbose_proxy_logger
@@ -1943,7 +1943,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2024,7 +2024,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 @pytest.mark.asyncio()
 async def test_aview_spend_per_user(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
         user_by_spend = await spend_user_fn(user_id=None)
@@ -2042,7 +2042,7 @@ async def test_aview_spend_per_user(prisma_client):
 @pytest.mark.asyncio()
 async def test_view_spend_per_key(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
         key_by_spend = await spend_key_fn()
@@ -2065,7 +2065,7 @@ async def test_key_name_null(prisma_client):
     - assert key_name is null
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     os.environ["DISABLE_KEY_NAME"] = "True"
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
@@ -2074,7 +2074,7 @@ async def test_key_name_null(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2101,7 +2101,7 @@ async def test_key_name_set(prisma_client):
     - assert key_name is not null
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True})
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
@@ -2110,7 +2110,7 @@ async def test_key_name_set(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2134,7 +2134,7 @@ async def test_default_key_params(prisma_client):
     - assert key_name is not null
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True})
     litellm.default_key_generate_params = {"max_budget": 0.000122}
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -2144,7 +2144,7 @@ async def test_default_key_params(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2168,7 +2168,7 @@ async def test_upperbound_key_param_larger_budget(prisma_client):
     - assert key_name is not null
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
         max_budget=0.001, budget_duration="1m"
     )
@@ -2182,7 +2182,7 @@ async def test_upperbound_key_param_larger_budget(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2194,7 +2194,7 @@ async def test_upperbound_key_param_larger_budget(prisma_client):
 @pytest.mark.asyncio()
 async def test_upperbound_key_param_larger_duration(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
         max_budget=100, duration="14d"
     )
@@ -2208,7 +2208,7 @@ async def test_upperbound_key_param_larger_duration(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2223,7 +2223,7 @@ async def test_upperbound_key_param_none_duration(prisma_client):
     from datetime import datetime, timedelta
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
         max_budget=100, duration="14d"
     )
@@ -2234,7 +2234,7 @@ async def test_upperbound_key_param_none_duration(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2277,9 +2277,9 @@ def test_get_bearer_token():
     assert result == "", f"Expected '', got '{result}'"
 
     # Test API key with Bearer prefix and no token
-    api_key = "Bearer sk-1234"
+    api_key = "Bearer sk-ANro6SNlQ6B0"
     result = _get_bearer_token(api_key)
-    assert result == "sk-1234", f"Expected 'valid_token', got '{result}'"
+    assert result == "sk-ANro6SNlQ6B0", f"Expected 'valid_token', got '{result}'"
 
 
 def test_update_logs_with_spend_logs_url(prisma_client):
@@ -2309,7 +2309,7 @@ async def test_user_api_key_auth(prisma_client):
     from litellm.proxy.proxy_server import ProxyException
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True})
     await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -2380,7 +2380,7 @@ async def test_key_with_no_permissions(prisma_client):
     - assert key_name is null
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": False})
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
@@ -2456,7 +2456,7 @@ async def test_proxy_load_test_db(prisma_client):
     Run 1500 req./s against track_cost_callback function
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     import logging
     import time
 
@@ -2472,7 +2472,7 @@ async def test_proxy_load_test_db(prisma_client):
             request,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2520,7 +2520,7 @@ async def test_master_key_hashing(prisma_client):
 
         print("prisma client=", prisma_client)
 
-        master_key = "sk-1234"
+        master_key = "sk-ANro6SNlQ6B0"
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
         setattr(litellm.proxy.proxy_server, "master_key", master_key)
@@ -2531,14 +2531,14 @@ async def test_master_key_hashing(prisma_client):
         _team_id = "ishaans-special-team_{}".format(uuid.uuid4())
         user_api_key_dict = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         )
         await new_team(
             NewTeamRequest(team_id=_team_id),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
             http_request=Request(scope={"type": "http"}),
@@ -2584,7 +2584,7 @@ async def test_reset_spend_authentication(prisma_client):
 
     print("prisma client=", prisma_client)
 
-    master_key = "sk-1234"
+    master_key = "sk-ANro6SNlQ6B0"
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
@@ -2658,7 +2658,7 @@ async def test_create_update_team(prisma_client):
     """
     print("prisma client=", prisma_client)
 
-    master_key = "sk-1234"
+    master_key = "sk-ANro6SNlQ6B0"
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
@@ -2679,7 +2679,7 @@ async def test_create_update_team(prisma_client):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -2708,7 +2708,7 @@ async def test_create_update_team(prisma_client):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -2742,7 +2742,7 @@ async def test_create_update_team(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -2773,7 +2773,7 @@ async def test_update_user_role(prisma_client):
     -> access an Admin only route -> expect to succeed
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     key = await new_user(
         data=NewUserRequest(
@@ -2826,7 +2826,7 @@ async def test_update_user_unit_test(prisma_client):
     Ensure that params are updated for UpdateUserRequest
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     key = await new_user(
         data=NewUserRequest(
@@ -2872,7 +2872,7 @@ async def test_update_user_unit_test(prisma_client):
 async def test_custom_api_key_header_name(prisma_client):
     """ """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -2887,7 +2887,7 @@ async def test_custom_api_key_header_name(prisma_client):
             "route": api_route,
             "path": api_route.path,
             "headers": [
-                (b"x-litellm-key", b"Bearer sk-1234"),
+                (b"x-litellm-key", b"Bearer sk-ANro6SNlQ6B0"),
             ],
         }
     )
@@ -2905,7 +2905,9 @@ async def test_custom_api_key_header_name(prisma_client):
         }
     )
     try:
-        result = await user_api_key_auth(request=request, api_key="Bearer sk-1234")
+        result = await user_api_key_auth(
+            request=request, api_key="Bearer sk-ANro6SNlQ6B0"
+        )
         pytest.fail(f"This should have failed!. invalid Auth on this request")
     except Exception as e:
         print("failed with error", e)
@@ -2922,7 +2924,7 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     request = GenerateKeyRequest(
         metadata={
@@ -2935,7 +2937,7 @@ async def test_generate_key_with_model_tpm_limit(prisma_client):
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -2990,7 +2992,7 @@ async def test_generate_key_with_guardrails(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     request = GenerateKeyRequest(
         guardrails=["aporia-pre-call"],
@@ -3002,7 +3004,7 @@ async def test_generate_key_with_guardrails(prisma_client):
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -3059,7 +3061,7 @@ async def test_team_guardrails(prisma_client):
     """
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     _new_team = NewTeamRequest(
@@ -3122,7 +3124,7 @@ async def test_team_access_groups(prisma_client):
     """
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     # create router with access groups
     litellm_router = litellm.Router(
@@ -3168,7 +3170,7 @@ async def test_team_access_groups(prisma_client):
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -3231,7 +3233,7 @@ async def test_team_tags(prisma_client):
     """
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     _new_team = NewTeamRequest(
@@ -3289,7 +3291,7 @@ async def test_aadmin_only_routes(prisma_client):
     """
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
     general_settings = {
         "allowed_routes": ["/embeddings", "/key/generate"],
@@ -3361,7 +3363,7 @@ async def test_list_keys(prisma_client):
     from litellm.proxy.proxy_server import hash_token
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     # Test basic listing
@@ -3430,7 +3432,7 @@ async def test_key_list_unsupported_params(prisma_client):
     from litellm.proxy.proxy_server import hash_token
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     request = Request(scope={"type": "http", "query_string": b"alias=foo"})
@@ -3453,15 +3455,15 @@ async def test_auth_vertex_ai_route(prisma_client):
     litellm.set_verbose = True
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "premium_user", True)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     route = "/vertex-ai/publishers/google/models/gemini-1.5-flash-001:generateContent"
     request = Request(scope={"type": "http"})
     request._url = URL(url=route)
-    request._headers = {"Authorization": "Bearer sk-12345"}
+    request._headers = {"Authorization": "Bearer sk-ANro6SNlQ6B05"}
     try:
-        await user_api_key_auth(request=request, api_key="Bearer " + "sk-12345")
+        await user_api_key_auth(request=request, api_key="Bearer " + "sk-ANro6SNlQ6B05")
         pytest.fail("Expected this call to fail. User is over limit.")
     except Exception as e:
         print(vars(e))
@@ -3505,7 +3507,7 @@ async def test_user_api_key_auth_db_unavailable():
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -3519,7 +3521,7 @@ async def test_user_api_key_auth_db_unavailable():
     # Run test with a sample API key
     result = await user_api_key_auth(
         request=request,
-        api_key="Bearer sk-123456789",
+        api_key="Bearer sk-ANro6SNlQ6B056789",
     )
 
     # Verify results
@@ -3562,7 +3564,7 @@ async def test_user_api_key_auth_db_unavailable_not_allowed():
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
     setattr(litellm.proxy.proxy_server, "general_settings", {})
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
 
     # Create test request
     request = Request(scope={"type": "http"})
@@ -3572,7 +3574,7 @@ async def test_user_api_key_auth_db_unavailable_not_allowed():
     with pytest.raises(litellm.proxy._types.ProxyException):
         await user_api_key_auth(
             request=request,
-            api_key="Bearer sk-123456789",
+            api_key="Bearer sk-ANro6SNlQ6B056789",
         )
 
 
@@ -3612,7 +3614,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     }
 
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     await litellm.proxy.proxy_server.prisma_client.connect()
     ############################################################################
@@ -3628,7 +3630,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
         ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         ),
     )
@@ -3653,7 +3655,9 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     await delete_key_fn(
         data=KeyRequest(keys=[generated_key]),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-ANro6SNlQ6B0",
+            user_id="1234",
         ),
     )
 
@@ -3682,7 +3686,7 @@ async def test_key_alias_uniqueness(prisma_client):
     3. We can update a key while keeping its existing alias
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     try:
@@ -3692,7 +3696,7 @@ async def test_key_alias_uniqueness(prisma_client):
             data=GenerateKeyRequest(key_alias=unique_alias),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -3703,7 +3707,7 @@ async def test_key_alias_uniqueness(prisma_client):
                 data=GenerateKeyRequest(key_alias=unique_alias),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -3718,7 +3722,7 @@ async def test_key_alias_uniqueness(prisma_client):
             data=GenerateKeyRequest(key_alias=another_alias),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -3730,7 +3734,7 @@ async def test_key_alias_uniqueness(prisma_client):
                 request=Request(scope={"type": "http"}),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key="sk-ANro6SNlQ6B0",
                     user_id="1234",
                 ),
             )
@@ -3744,7 +3748,7 @@ async def test_key_alias_uniqueness(prisma_client):
             request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -3785,7 +3789,7 @@ async def test_enforce_unique_key_alias(prisma_client):
             data=GenerateKeyRequest(key_alias=unique_alias),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -3812,7 +3816,7 @@ async def test_enforce_unique_key_alias(prisma_client):
             data=GenerateKeyRequest(key_alias=f"test-alias-{uuid.uuid4()}"),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-ANro6SNlQ6B0",
                 user_id="1234",
             ),
         )
@@ -3859,7 +3863,7 @@ async def test_get_paginated_teams(prisma_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_paginated_teams
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     try:

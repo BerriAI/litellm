@@ -17,7 +17,7 @@ Make a GET Request to `/health` on the proxy
 :::
 
 ```shell
-curl --location 'http://0.0.0.0:4000/health' -H "Authorization: Bearer sk-1234"
+curl --location 'http://0.0.0.0:4000/health' -H "Authorization: Bearer sk-ANro6SNlQ6B0"
 ```
 
 You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:4000/health` for you
@@ -319,7 +319,7 @@ Example Response:
 Use this admin-only endpoint to check if a connected service (datadog/slack/langfuse/etc.) is healthy.
 
 ```bash
-curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-1234'
+curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 [**API Reference**](https://litellm-api.up.railway.app/#/health/health_services_endpoint_health_services_get)
@@ -333,7 +333,7 @@ To check health of specific models, here's how to call them:
 
 ```bash
 curl -X GET 'http://0.0.0.0:4000/v1/model/info' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 ```
 
 **Expected Response**
@@ -354,7 +354,7 @@ curl -X GET 'http://0.0.0.0:4000/v1/model/info' \
 ```bash
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
   "model": "634b87c444.." # 👈 UNIQUE MODEL ID
   "messages": [

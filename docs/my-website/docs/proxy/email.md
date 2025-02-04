@@ -25,7 +25,7 @@ Add `email` to your proxy config.yaml under `general_settings`
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   alerting: ["email"]
 ```
 

@@ -70,7 +70,7 @@ $ litellm --config /path/to/config.yaml
 
 ```bash
 curl -X GET 'http://0.0.0.0:4000/health/services?service=slack' \
--H 'Authorization: Bearer sk-1234'
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 ## Advanced
@@ -101,7 +101,7 @@ Set the `soft_budget` to 0.001
 curl -X 'POST' \
   'http://localhost:4000/key/generate' \
   -H 'accept: application/json' \
-  -H 'x-goog-api-key: sk-1234' \
+  -H 'x-goog-api-key: sk-ANro6SNlQ6B0' \
   -H 'Content-Type: application/json' \
   -d '{
   "key_alias": "prod-app1",
@@ -211,7 +211,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings: 
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   alerting: ["slack"]
   alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
   alert_to_webhook_url: {
@@ -245,7 +245,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
 general_settings: 
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   alerting: ["slack"]
   alerting_threshold: 0.0001 # (Seconds) set an artifically low threshold for testing alerting
   alert_to_webhook_url: {
@@ -274,7 +274,7 @@ Test it - send a valid llm request - expect to see a `llm_too_slow` alert in it'
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4",
     "messages": [
@@ -318,7 +318,7 @@ Call the proxy `/health/services` endpoint to test if your alerting connection i
 
 ```bash
 curl --location 'http://0.0.0.0:4000/health/services?service=slack' \
---header 'Authorization: Bearer sk-1234'
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 
@@ -390,7 +390,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
---header 'Authorization: Bearer sk-1234'
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0'
 ```
 
 **Expected Response**

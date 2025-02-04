@@ -94,7 +94,7 @@ async def test_proxy_failure_metrics():
     async with aiohttp.ClientSession() as session:
         # Make a bad chat completion call
         status, response_text = await make_bad_chat_completion_request(
-            session, "sk-1234"
+            session, "sk-ANro6SNlQ6B0"
         )
 
         # Check if the request failed as expected
@@ -137,7 +137,7 @@ async def test_proxy_success_metrics():
     async with aiohttp.ClientSession() as session:
         # Make a good chat completion call
         status, response_text = await make_good_chat_completion_request(
-            session, "sk-1234"
+            session, "sk-ANro6SNlQ6B0"
         )
 
         # Check if the request succeeded as expected
@@ -219,7 +219,7 @@ async def test_proxy_fallback_metrics():
 
     async with aiohttp.ClientSession() as session:
         # Make a good chat completion call
-        await make_chat_completion_request_with_fallback(session, "sk-1234")
+        await make_chat_completion_request_with_fallback(session, "sk-ANro6SNlQ6B0")
 
         # Get metrics
         async with session.get("http://0.0.0.0:4000/metrics") as response:
@@ -246,7 +246,7 @@ async def create_test_team(
     """Create a new team and return the team_id"""
     url = "http://0.0.0.0:4000/team/new"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
         "Content-Type": "application/json",
     }
 
@@ -293,7 +293,7 @@ async def create_test_key(session: aiohttp.ClientSession, team_id: str) -> str:
     """Generate a new key for the team and return it"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
         "Content-Type": "application/json",
     }
     data = {
@@ -312,7 +312,7 @@ async def get_team_info(session: aiohttp.ClientSession, team_id: str) -> Dict[st
     """Fetch team info and return the response"""
     url = f"http://0.0.0.0:4000/team/info?team_id={team_id}"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
     }
 
     async with session.get(url, headers=headers) as response:
@@ -401,7 +401,7 @@ async def create_test_key_with_budget(
     """Generate a new key with budget constraints and return it"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
         "Content-Type": "application/json",
     }
     print("budget_data", budget_data)

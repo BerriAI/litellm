@@ -258,13 +258,13 @@ git clone https://github.com/BerriAI/litellm
 cd litellm
 
 # Add the master key - you can change this after setup
-echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+echo 'LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0"' > .env
 
 # Add the litellm salt key - you cannot change this after adding a model
 # It is used to encrypt / decrypt your LLM API Key credentials
 # We recommend - https://1password.com/password-generator/ 
 # password generator to get a random hash for litellm salt key
-echo 'LITELLM_SALT_KEY="sk-1234"' > .env
+echo 'LITELLM_SALT_KEY="sk-ANro6SNlQ6B0"' > .env
 
 source .env
 
@@ -283,7 +283,7 @@ Set budgets and rate limits across multiple projects
 
 ```shell
 curl 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
 ```
@@ -392,7 +392,7 @@ Make sure config.yaml is present in the root directory. This is your litellm pro
 docker run \
     -v $(pwd)/proxy_config.yaml:/app/config.yaml \
     -e DATABASE_URL="postgresql://xxxxxxxx" \
-    -e LITELLM_MASTER_KEY="sk-1234" \
+    -e LITELLM_MASTER_KEY="sk-ANro6SNlQ6B0" \
     -p 4000:4000 \
     litellm_test_image \
     --config /app/config.yaml --detailed_debug

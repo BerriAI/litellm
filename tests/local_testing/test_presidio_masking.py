@@ -152,7 +152,7 @@ async def test_presidio_pii_masking_input_a():
         mock_testing=True, mock_redacted_text=input_a_anonymizer_results
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -184,7 +184,7 @@ async def test_presidio_pii_masking_input_b():
         mock_testing=True, mock_redacted_text=input_b_anonymizer_results
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -216,7 +216,7 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
         mock_redacted_text=input_b_anonymizer_results,
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-ANro6SNlQ6B05"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 

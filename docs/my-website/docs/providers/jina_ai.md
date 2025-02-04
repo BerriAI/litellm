@@ -54,7 +54,7 @@ litellm --config /path/to/config.yaml
 
 ```bash 
 curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{"input": ["hello world"], "model": "embedding-model"}'
 ```
@@ -111,7 +111,7 @@ litellm --config /path/to/config.yaml
 
 ```bash 
 curl -L -X POST 'http://0.0.0.0:4000/rerank' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{
     "model": "rerank-model",
@@ -162,7 +162,7 @@ response = embedding(
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{"input": ["good morning from litellm"], "model": "jina_ai/jina-embeddings-v3", "dimensions": 1536, "my_custom_param": "my_custom_value"}'
 ```

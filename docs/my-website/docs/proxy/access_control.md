@@ -34,7 +34,7 @@ Any user with role=`proxy_admin` can create a new organization
 
 ```shell
 curl --location 'http://0.0.0.0:4000/organization/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "organization_alias": "marketing_department",
@@ -72,7 +72,7 @@ Users with the following roles can call `/organization/member_add`
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     -H 'Content-Type: application/json' \
     -d '{"organization_id": "ad15e8ca-12ae-46f4-8659-d02debef1b23", "member": {"role": "org_admin", "user_id": "ishaan@berri.ai"}}'
 ```
@@ -83,7 +83,7 @@ Create a Virtual Key for user_id = `ishaan@berri.ai`. The User can then use the 
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
         --header 'Content-Type: application/json' \
         --data '{
             "user_id": "ishaan@berri.ai"
@@ -137,7 +137,7 @@ The organization admin will use the virtual key created in [step 2](#2-adding-an
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/team/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     -H 'Content-Type: application/json' \
     -d '{"team_id": "01044ee8-441b-45f4-be7d-c70e002722d8", "member": {"role": "internal_user", "user_id": "krrish@berri.ai"}}'
 

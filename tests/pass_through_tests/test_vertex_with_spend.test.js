@@ -75,7 +75,7 @@ describe('Vertex AI Tests', () => {
         });
 
         const customHeaders = new Headers({
-            "x-litellm-api-key": "sk-1234",
+            "x-litellm-api-key": "sk-ANro6SNlQ6B0",
             "tags": "vertex-js-sdk,pass-through-endpoint"
         });
 
@@ -107,7 +107,7 @@ describe('Vertex AI Tests', () => {
             `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
             {
                 headers: {
-                    'Authorization': 'Bearer sk-1234'
+                    'Authorization': 'Bearer sk-ANro6SNlQ6B0'
                 }
             }
         );
@@ -131,7 +131,7 @@ describe('Vertex AI Tests', () => {
         });
 
         const customHeaders = new Headers({
-            "x-litellm-api-key": "sk-1234",
+            "x-litellm-api-key": "sk-ANro6SNlQ6B0",
             "tags": "vertex-js-sdk,pass-through-endpoint"
         });
 
@@ -176,7 +176,7 @@ describe('Vertex AI Tests', () => {
             `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
             {
                 headers: {
-                    'Authorization': 'Bearer sk-1234'
+                    'Authorization': 'Bearer sk-ANro6SNlQ6B0'
                 }
             }
         );

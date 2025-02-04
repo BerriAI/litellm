@@ -31,7 +31,7 @@ export JWT_PUBLIC_KEY_URL="" # "https://demo.duendesoftware.com/.well-known/open
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
 
 model_list:
@@ -108,7 +108,7 @@ Change the string in JWT 'scopes', that litellm evaluates to see if a user has a
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
@@ -120,7 +120,7 @@ Set the field in the jwt token, which corresponds to a litellm user / team / org
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
@@ -184,7 +184,7 @@ general_settings:
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   litellm_jwtauth:
     user_id_jwt_field: "sub"
     team_ids_jwt_field: "groups" 
@@ -240,7 +240,7 @@ By default:
 **Admin Routes**
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
@@ -250,7 +250,7 @@ general_settings:
 **Team Routes**
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     ...
@@ -264,7 +264,7 @@ Control how long public keys are cached for (in seconds).
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
@@ -278,7 +278,7 @@ Set a custom field in which the team_id exists. By default, the 'client_id' fiel
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     team_id_jwt_field: "client_id" # 👈 KEY CHANGE
@@ -324,7 +324,7 @@ Allow users who belong to a specific email domain, automatic access to the proxy
  
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   enable_jwt_auth: True
   litellm_jwtauth:
     user_email_jwt_field: "email" # 👈 checks 'email' field in jwt payload

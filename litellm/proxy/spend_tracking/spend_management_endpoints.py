@@ -38,7 +38,7 @@ async def spend_key_fn():
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/keys" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
     """
 
@@ -78,13 +78,13 @@ async def spend_user_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     View User Table row for user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -138,13 +138,13 @@ async def view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
     """
 
@@ -934,7 +934,7 @@ async def get_global_spend_report(
     ),
     api_key: Optional[str] = fastapi.Query(
         default=None,
-        description="View spend for a specific api_key. Example api_key='sk-1234",
+        description="View spend for a specific api_key. Example api_key='sk-ANro6SNlQ6B0",
     ),
     internal_user_id: Optional[str] = fastapi.Query(
         default=None,
@@ -1349,13 +1349,13 @@ async def global_view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
     """
     import traceback
@@ -1479,7 +1479,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0'
     --header 'Content-Type: application/json'
     --data '{
         "model": "anthropic.claude-v2",
@@ -1491,7 +1491,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0'
     --header 'Content-Type: application/json'
     --data '{
         "completion_response": {
@@ -1796,25 +1796,25 @@ async def view_spend_logs(  # noqa: PLR0915
     Example Request for all logs
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Example Request for specific request_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Example Request for specific api_key
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -2620,7 +2620,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
     ```bash
     curl -X GET http://localhost:4000/provider/budgets \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer sk-ANro6SNlQ6B0"
     ```
 
     Example Response

@@ -202,7 +202,7 @@ This budget does not apply to keys created under non-default teams.
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
   litellm_jwtauth:
     team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
 ```

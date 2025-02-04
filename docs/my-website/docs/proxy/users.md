@@ -18,7 +18,7 @@ Apply a budget across all calls on the proxy
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 
 litellm_settings:
   # other litellm settings
@@ -36,7 +36,7 @@ litellm /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Autherization: Bearer sk-1234' \
+    --header 'Autherization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "gpt-3.5-turbo",
@@ -129,7 +129,7 @@ Create a user with `user_id=ishaan`
 
 ```shell
 curl --location 'http://0.0.0.0:4000/user/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "ishaan"
@@ -142,7 +142,7 @@ Set `max_budget_in_team` when adding a User to a team. We use the same `user_id`
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/team/member_add' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{"team_id": "e8d1460f-846c-45d7-9b43-55f3cc52ac32", "max_budget_in_team": 0.000000000001, "member": {"role": "user", "user_id": "ishaan"}}'
 ```
@@ -153,7 +153,7 @@ Set `user_id=ishaan` from step 1
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "ishaan",
@@ -327,8 +327,8 @@ curl 'http://0.0.0.0:4000/key/generate' \
 ### ✨ Virtual Key (Model Specific)
 
 Apply model specific budgets on a key. Example: 
-- Budget for `gpt-4o` is $0.0000001, for time period `1d` for `key = "sk-12345"`
-- Budget for `gpt-4o-mini` is $10, for time period `30d` for `key = "sk-12345"`
+- Budget for `gpt-4o` is $0.0000001, for time period `1d` for `key = "sk-ANro6SNlQ6B05"`
+- Budget for `gpt-4o-mini` is $10, for time period `30d` for `key = "sk-ANro6SNlQ6B05"`
 
 :::info
 
@@ -420,7 +420,7 @@ Use this to budget `user` passed to `/chat/completions`, **without needing to cr
 Define `litellm.max_end_user_budget`
 ```yaml
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 
 litellm_settings:
   max_end_user_budget: 0.0001 # budget for 'user' passed to /chat/completions
@@ -539,7 +539,7 @@ Use `/team/new` or `/team/update`, to persist rate limits across multiple keys f
 
 ```shell
 curl --location 'http://0.0.0.0:4000/team/new' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{"team_id": "my-prod-team", "max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
 ```
@@ -564,7 +564,7 @@ Use `/user/new` or `/user/update`, to persist rate limits across multiple keys f
 
 ```shell
 curl --location 'http://0.0.0.0:4000/user/new' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{"user_id": "krrish@berri.ai", "max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
 ```
@@ -588,7 +588,7 @@ Use `/key/generate`, if you want them for just that key.
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{"max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
 ```
@@ -614,7 +614,7 @@ Here `gpt-4` is the `model_name` set on the [litellm config.yaml](configs.md)
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{"model_rpm_limit": {"gpt-4": 2}, "model_tpm_limit": {"gpt-4":}}' 
 ```
@@ -674,7 +674,7 @@ Set a `tpm_limit` on the budget (You can also pass `rpm_limit` if needed)
 
 ```shell
 curl --location 'http://0.0.0.0:4000/budget/new' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "budget_id" : "free-tier",
@@ -689,7 +689,7 @@ We use `budget_id="free-tier"` from Step 1 when creating this new customers
 
 ```shell
 curl --location 'http://0.0.0.0:4000/customer/new' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{
     "user_id" : "palantir",
@@ -704,7 +704,7 @@ Pass the `user_id` from Step 2 as `user="palantir"`
 
 ```shell
 curl --location 'http://localhost:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "llama3",
@@ -748,7 +748,7 @@ litellm_settings:
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -H 'Content-Type: application/json' \
 -d '{}'
 ```

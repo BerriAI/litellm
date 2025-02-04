@@ -101,7 +101,7 @@ Test with `anthropic/` - all models with `anthropic/` prefix will get routed to 
 ```bash
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "anthropic/claude-3-sonnet-20240229",
     "messages": [
@@ -114,7 +114,7 @@ Test with `groq/` - all models with `groq/` prefix will get routed to `groq/*`
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "groq/llama3-8b-8192",
     "messages": [
@@ -127,7 +127,7 @@ Test with `fo::*::static::*` - all requests matching this pattern will be routed
 ```shell
 curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "fo::hi::static::hi",
     "messages": [

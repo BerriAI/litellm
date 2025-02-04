@@ -62,7 +62,7 @@ import base64
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="LITELLM_PROXY_KEY", # sk-1234
+    api_key="LITELLM_PROXY_KEY", # sk-ANro6SNlQ6B0
     base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
 )
 
@@ -160,7 +160,7 @@ import base64
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="LITELLM_PROXY_KEY", # sk-1234
+    api_key="LITELLM_PROXY_KEY", # sk-ANro6SNlQ6B0
     base_url="LITELLM_PROXY_BASE" # http://0.0.0.0:4000
 )
 
@@ -254,7 +254,7 @@ litellm --config config.yaml
 curl -X 'GET' \
   'http://localhost:4000/model_group/info' \
   -H 'accept: application/json' \
-  -H 'x-api-key: sk-1234'
+  -H 'x-api-key: sk-ANro6SNlQ6B0'
 ```
 
 Expected Response 

@@ -9,7 +9,10 @@ from openai import AsyncOpenAI
 
 async def new_organization(session, i, organization_alias, max_budget=None):
     url = "http://0.0.0.0:4000/organization/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "organization_alias": organization_alias,
         "models": ["azure-models"],
@@ -32,7 +35,10 @@ async def new_organization(session, i, organization_alias, max_budget=None):
 
 async def list_organization(session, i):
     url = "http://0.0.0.0:4000/organization/list"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
 
     async with session.get(url, headers=headers) as response:
         status = response.status

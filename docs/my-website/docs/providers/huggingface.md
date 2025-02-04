@@ -69,7 +69,7 @@ $ litellm --config /path/to/config.yaml --debug
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "llama-3.1-8B-instruct",
@@ -137,7 +137,7 @@ $ litellm --config /path/to/config.yaml --debug
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "bert-classifier",
@@ -204,7 +204,7 @@ $ litellm --config /path/to/config.yaml --debug
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
     "model": "glaive-coder",

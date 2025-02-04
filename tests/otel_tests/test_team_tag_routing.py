@@ -7,7 +7,7 @@ from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 import uuid
 
-LITELLM_MASTER_KEY = "sk-1234"
+LITELLM_MASTER_KEY = "sk-ANro6SNlQ6B0"
 
 
 async def chat_completion(

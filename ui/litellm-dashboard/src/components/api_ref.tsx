@@ -95,14 +95,14 @@ llm = AzureOpenAI(
     engine="azure-gpt-3.5",               # model_name on litellm proxy
     temperature=0.0,
     azure_endpoint="${base_url}", # litellm proxy endpoint
-    api_key="sk-1234",                    # litellm proxy API Key
+    api_key="sk-ANro6SNlQ6B0",                    # litellm proxy API Key
     api_version="2023-07-01-preview",
 )
 
 embed_model = AzureOpenAIEmbedding(
     deployment_name="azure-embedding-model",
     azure_endpoint="${base_url}",
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     api_version="2023-07-01-preview",
 )
 

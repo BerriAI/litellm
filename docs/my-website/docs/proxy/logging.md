@@ -26,7 +26,7 @@ mentioned in this page.
 
 ```shell
 curl -i -sSL --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --header 'Content-Type: application/json' \
     --data '{
       "model": "gpt-3.5-turbo",
@@ -359,7 +359,7 @@ Set `tags` as part of your request body
 ```python
 import openai
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 
@@ -390,7 +390,7 @@ Pass `metadata` as part of the request body
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data '{
     "model": "llama3",
     "messages": [
@@ -418,7 +418,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 import os
 
-os.environ["OPENAI_API_KEY"] = "sk-1234"
+os.environ["OPENAI_API_KEY"] = "sk-ANro6SNlQ6B0"
 
 chat = ChatOpenAI(
     openai_api_base="http://0.0.0.0:4000",
@@ -902,7 +902,7 @@ Example Usage
 import openai
 import uuid
 
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+client = openai.OpenAI(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 example_traceparent = f"00-80e1afed08e019fc1110464cfa66635c-02e80198930058d4-01"
 extra_headers = {
     "traceparent": example_traceparent
@@ -1615,7 +1615,7 @@ litellm --config proxy_config.yaml
 
 ```shell
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
     --data ' {
     "model": "gpt-3.5-turbo",
     "messages": [
@@ -1639,7 +1639,7 @@ On Success
     Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
     Cost: 3.65e-05,
     Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
-    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
+    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:4000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-ANro6SNlQ6B0', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
 
 #### Logging Proxy Request Object, Header, Url

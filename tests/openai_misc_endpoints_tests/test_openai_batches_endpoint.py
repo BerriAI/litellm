@@ -12,7 +12,7 @@ import time
 
 
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
-API_KEY = "sk-1234"  # Replace with your actual API key
+API_KEY = "sk-ANro6SNlQ6B0"  # Replace with your actual API key
 
 from openai import OpenAI
 

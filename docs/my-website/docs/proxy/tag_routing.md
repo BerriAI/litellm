@@ -36,7 +36,7 @@ model_list:
 router_settings:
   enable_tag_filtering: True # 👈 Key Change
 general_settings: 
-  master_key: sk-1234 
+  master_key: sk-ANro6SNlQ6B0 
 ```
 
 ### 2. Make Request with `tags=["free"]`
@@ -46,7 +46,7 @@ This request includes "tags": ["free"], which routes it to `openai/fake`
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4",
     "messages": [
@@ -98,7 +98,7 @@ This request includes "tags": ["paid"], which routes it to `openai/gpt-4`
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "gpt-4",
     "messages": [
@@ -169,7 +169,7 @@ $ litellm --config /path/to/config.yaml
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -d '{
     "model": "fake-openai-endpoint",
     "messages": [
@@ -228,7 +228,7 @@ Here's how to set up and use team-based tag routing using curl commands:
     enable_tag_filtering: True # 👈 Key Change
 
   general_settings: 
-    master_key: sk-1234 
+    master_key: sk-ANro6SNlQ6B0 
     ```
 
 2. **Create teams with tags:**
@@ -238,7 +238,7 @@ Here's how to set up and use team-based tag routing using curl commands:
    ```shell
    # Create Team A
    curl -X POST http://0.0.0.0:4000/team/new \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
      -H "Content-Type: application/json" \
      -d '{"tags": ["teamA"]}'
    ```
@@ -246,7 +246,7 @@ Here's how to set up and use team-based tag routing using curl commands:
    ```shell
    # Create Team B
    curl -X POST http://0.0.0.0:4000/team/new \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
      -H "Content-Type: application/json" \
      -d '{"tags": ["teamB"]}'
    ```
@@ -260,7 +260,7 @@ Here's how to set up and use team-based tag routing using curl commands:
    ```shell
    # Generate key for Team A
    curl -X POST http://0.0.0.0:4000/key/generate \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
      -H "Content-Type: application/json" \
      -d '{"team_id": "team_a_id_here"}'
    ```
@@ -268,7 +268,7 @@ Here's how to set up and use team-based tag routing using curl commands:
    ```shell
    # Generate key for Team B
    curl -X POST http://0.0.0.0:4000/key/generate \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
      -H "Content-Type: application/json" \
      -d '{"team_id": "team_b_id_here"}'
    ```

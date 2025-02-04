@@ -27,7 +27,7 @@ model_list:
     model: vertex_ai/textembedding-gecko
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-ANro6SNlQ6B0
 ```
 
 ### Start proxy 
@@ -45,7 +45,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/embeddings' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 --header 'Content-Type: application/json' \
 --data '{"input": ["Academia.edu uses"], "model": "textembedding-gecko", "encoding_format": "base64"}'
 ```
@@ -56,7 +56,7 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 ```python
 from openai import OpenAI
 client = OpenAI(
-  api_key="sk-1234",
+  api_key="sk-ANro6SNlQ6B0",
   base_url="http://0.0.0.0:4000"
 )
 
@@ -72,7 +72,7 @@ client.embeddings.create(
 ```python
 from langchain_openai import OpenAIEmbeddings
 
-embeddings = OpenAIEmbeddings(model="textembedding-gecko", openai_api_base="http://0.0.0.0:4000", openai_api_key="sk-1234")
+embeddings = OpenAIEmbeddings(model="textembedding-gecko", openai_api_base="http://0.0.0.0:4000", openai_api_key="sk-ANro6SNlQ6B0")
 
 text = "This is a test document."
 

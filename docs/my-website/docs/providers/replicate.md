@@ -62,7 +62,7 @@ response = completion(
   ```python
   import openai
   client = openai.OpenAI(
-      api_key="sk-1234",             # pass litellm proxy key, if you're using virtual keys
+      api_key="sk-ANro6SNlQ6B0",             # pass litellm proxy key, if you're using virtual keys
       base_url="http://0.0.0.0:4000" # litellm-proxy-base url
   )
 
@@ -89,7 +89,7 @@ response = completion(
 
   ```shell
   curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
+      --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
       --header 'Content-Type: application/json' \
       --data '{
       "model": "llama-3",

@@ -337,7 +337,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if request.headers.get(key=header_key) is not None:
                             api_key = request.headers.get(key=header_key)
 
-        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
+        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-ANro6SNlQ6B0
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
             api_key = get_api_key_from_custom_header(

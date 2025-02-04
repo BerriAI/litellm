@@ -168,7 +168,7 @@ async def test_pass_through_endpoint_rpm_limit(
     proxy_logging_obj._init_litellm_callbacks()
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
@@ -253,7 +253,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         proxy_logging_obj._init_litellm_callbacks()
 
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
         setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
         setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 

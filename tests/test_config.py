@@ -14,7 +14,10 @@ load_dotenv()
 
 async def config_update(session):
     url = "http://0.0.0.0:4000/config/update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": "Bearer sk-ANro6SNlQ6B0",
+        "Content-Type": "application/json",
+    }
     data = {
         "litellm_settings": {
             "success_callback": ["langfuse"],
@@ -92,7 +95,7 @@ async def test_team_logging():
 
             await chat_completion(
                 session,
-                key="sk-1234",
+                key="sk-ANro6SNlQ6B0",
                 model="fake-openai-endpoint",
                 request_metadata=_request_metadata,
             )

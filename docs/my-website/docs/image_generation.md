@@ -45,7 +45,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -D '{
     "model": "dall-e-2",
     "prompt": "A cute baby sea otter",
@@ -60,7 +60,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 ```python
 from openai import OpenAI
 client = openai.OpenAI(
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     base_url="http://0.0.0.0:4000"
 )
 

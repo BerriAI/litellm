@@ -90,7 +90,7 @@ Just pass a comma-separated string of model names and the flag `fastest_response
 
 curl -X POST 'http://localhost:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \ 
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \ 
 -D '{
     "model": "gpt-4o, groq-llama", # 👈 Comma-separated models
     "messages": [

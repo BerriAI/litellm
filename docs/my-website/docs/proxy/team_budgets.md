@@ -19,7 +19,7 @@ Track spend, set budgets for your Internal Team
 Create a new team and set `max_budget` and `budget_duration`
 ```shell
 curl -X POST 'http://0.0.0.0:4000/team/new' \
-     -H 'Authorization: Bearer sk-1234' \
+     -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
      -H 'Content-Type: application/json' \
      -d '{
             "team_alias": "QA Prod Bot", 
@@ -71,7 +71,7 @@ Create a key for Team=`QA Prod Bot` and `team_id="de35b29e-6ca8-4f47-b804-2b79d0
 
 ```shell
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
-     -H 'Authorization: Bearer sk-1234' \
+     -H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
      -H 'Content-Type: application/json' \
      -d '{"team_id": "de35b29e-6ca8-4f47-b804-2b79d07aa99a"}'
 ```
@@ -173,7 +173,7 @@ litellm_settings:
   callbacks: ["dynamic_rate_limiter"]
 
 general_settings:
-  master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
+  master_key: sk-ANro6SNlQ6B0 # OR set `LITELLM_MASTER_KEY=".."` in your .env
   database_url: postgres://.. # OR set `DATABASE_URL=".."` in your .env
 ```
 
@@ -209,8 +209,8 @@ def create_key(api_key: str, base_url: str):
 
     return _response["key"]
 
-key_1 = create_key(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-key_2 = create_key(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+key_1 = create_key(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
+key_2 = create_key(api_key="sk-ANro6SNlQ6B0", base_url="http://0.0.0.0:4000")
 
 # call proxy with key 1 - works
 openai_client_1 = OpenAI(api_key=key_1, base_url="http://0.0.0.0:4000")
@@ -275,7 +275,7 @@ litellm_settings:
   priority_reservation: {"dev": 0, "prod": 1}
 
 general_settings:
-  master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
+  master_key: sk-ANro6SNlQ6B0 # OR set `LITELLM_MASTER_KEY=".."` in your .env
   database_url: postgres://.. # OR set `DATABASE_URL=".."` in your .env
 ```
 

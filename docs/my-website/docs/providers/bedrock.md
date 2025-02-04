@@ -790,7 +790,7 @@ Test it!
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "bedrock-claude",
     "messages": [{"role": "assistant", "content": "Hey, how's it going?"}]
@@ -875,7 +875,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "bedrock-model",
     "messages": [
@@ -959,7 +959,7 @@ litellm --config /path/to/config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "bedrock-model",
     "messages": [
@@ -1044,7 +1044,7 @@ litellm --config /path/to/config.yaml --detailed_debug
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "bedrock-model",
     "messages": [
@@ -1223,7 +1223,7 @@ from litellm import completion
 response = completion(
     model="bedrock/converse_like/some-model",
     messages=[{"role": "user", "content": "What's AWS?"}],
-    api_key="sk-1234",
+    api_key="sk-ANro6SNlQ6B0",
     api_base="https://some-api-url/models",
     extra_headers={"test": "hello world"},
 )
@@ -1255,7 +1255,7 @@ litellm --config config.yaml
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
     "model": "anthropic-claude",
     "messages": [
@@ -1327,7 +1327,7 @@ litellm --config /path/to/config.yaml
 
 ```bash
 curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
+      --header 'Authorization: Bearer sk-ANro6SNlQ6B0' \
       --header 'Content-Type: application/json' \
       --data '{
             "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
@@ -1541,7 +1541,7 @@ litellm --config config.yaml
 
 ```bash
 curl http://0.0.0.0:4000/rerank \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer sk-ANro6SNlQ6B0" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "bedrock-rerank",

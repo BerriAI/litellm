@@ -138,7 +138,7 @@ async def test_create_new_user_in_organization(prisma_client, user_role):
 
     Add a member to an organization and assert the user object is created with the correct organization memberships / roles
     """
-    master_key = "sk-1234"
+    master_key = "sk-ANro6SNlQ6B0"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
@@ -200,7 +200,7 @@ async def test_org_admin_create_team_permissions(prisma_client):
     """
     import json
 
-    master_key = "sk-1234"
+    master_key = "sk-ANro6SNlQ6B0"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
@@ -271,7 +271,7 @@ async def test_org_admin_create_user_permissions(prisma_client):
     """
     import json
 
-    master_key = "sk-1234"
+    master_key = "sk-ANro6SNlQ6B0"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
@@ -342,7 +342,7 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
     """
     import json
 
-    master_key = "sk-1234"
+    master_key = "sk-ANro6SNlQ6B0"
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
@@ -487,13 +487,13 @@ async def test_user_role_permissions(prisma_client, route, user_role, expected_r
     try:
         # Setup
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", "sk-ANro6SNlQ6B0")
         await litellm.proxy.proxy_server.prisma_client.connect()
 
         # Admin - admin creates a new user
         user_api_key_dict = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-ANro6SNlQ6B0",
             user_id="1234",
         )
 

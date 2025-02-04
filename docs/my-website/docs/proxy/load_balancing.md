@@ -153,7 +153,7 @@ In this request, the following will occur:
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+-H 'Authorization: Bearer sk-ANro6SNlQ6B0' \
 -d '{
   "model": "gpt-3.5-turbo",
   "messages": [
