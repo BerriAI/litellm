@@ -1295,3 +1295,12 @@ def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
     Checks if `*` is in the pattern.
     """
     return "*" in allowed_model_pattern
+
+
+def _basic_token_format_checks(api_key: str):
+    """
+    Raises:
+        Exception if the token is not in the correct format.
+    """
+    assert api_key.startswith("sk-"), "API key must start with 'sk-'"
+    assert len(api_key) >= 10, "API key must be at least 10 characters long"

@@ -22,6 +22,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching import DualCache
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
+    _basic_token_format_checks,
     _cache_key_object,
     _handle_failed_db_connection_for_get_key_object,
     _virtual_key_max_budget_check,
@@ -520,6 +521,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 and request.headers.get(key=header_key) is not None  # type: ignore
                             ):
                                 api_key = request.headers.get(key=header_key)  # type: ignore
+
+        _basic_token_format_checks(api_key=api_key)
+
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
