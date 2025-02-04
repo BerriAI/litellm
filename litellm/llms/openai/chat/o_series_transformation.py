@@ -130,7 +130,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                         pass
                     else:
                         raise litellm.utils.UnsupportedParamsError(
-                            message="O-1 doesn't support temperature={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
+                            message="O-series models don't support temperature={}. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
                                 temperature_value
                             ),
                             status_code=400,

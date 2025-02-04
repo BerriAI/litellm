@@ -524,7 +524,7 @@ guardrails:
   - guardrail_name: string     # Required: Name of the guardrail
     litellm_params:            # Required: Configuration parameters
       guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
-      mode: string             # Required: One of "pre_call", "post_call", "during_call", "logging_only"
+      mode: Union[string, List[string]]             # Required: One or more of "pre_call", "post_call", "during_call", "logging_only"
       api_key: string          # Required: API key for the guardrail service
       api_base: string         # Optional: Base URL for the guardrail service
       default_on: boolean      # Optional: Default False. When set to True, will run on every request, does not need client to specify guardrail in request
