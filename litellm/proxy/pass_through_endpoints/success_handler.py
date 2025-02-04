@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from typing import Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -173,8 +174,9 @@ class PassThroughEndpointLogging:
         return False
 
     def is_assemblyai_route(self, url_route: str):
-        if "api.assemblyai.com" in url_route:
+        parsed_url = urlparse(url_route)
+        if parsed_url.hostname == "api.assemblyai.com":
             return True
-        elif "/transcript" in url_route:
+        elif "/transcript" in parsed_url.path:
             return True
         return False
