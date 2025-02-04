@@ -3,23 +3,36 @@ model_list:
     litellm_params:
       model: openai/gpt-4
       api_key: os.environ/OPENAI_API_KEY
-      #api_base: os.environ/AZURE_API_BASE
-      #api_key: "os.environ/AZURE_API_KEY"
-      #api_version: "2024-07-01-preview" # [OPTIONAL] litellm uses the latest azure api_version by default
-
 guardrails:
   - guardrail_name: "acuvity-pre-guard"
     litellm_params:
       guardrail: acuvity
       mode: "pre_call"
       api_key: os.environ/ACUVITY_TOKEN
+      analyzer_names:
+        - "en-text-prompt_injection-detector"
   - guardrail_name: "acuvity-during-guard"
     litellm_params:
       guardrail: acuvity
       mode: "during_call"
       api_key: os.environ/ACUVITY_TOKEN
+      analyzer_names:
+        - "en-text-prompt_injection-detector"
   - guardrail_name: "acuvity-post-guard"
     litellm_params:
       guardrail: acuvity
       mode: "post_call"
       api_key: os.environ/ACUVITY_TOKEN
+      analyzer_names:
+        - "en-text-prompt_injection-detector"
+  - guardrail_name: "acuvity-ner-guard"
+    litellm_params:
+      guardrail: acuvity
+      mode: "post_call"
+      api_key: os.environ/ACUVITY_TOKEN
+      analyzer_names:
+        - "en-text-ner-detector"
+      # this will be kick in only for the ner
+      redact_entities:
+        - "person"
+        - "address"

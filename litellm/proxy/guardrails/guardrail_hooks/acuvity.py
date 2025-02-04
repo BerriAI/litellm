@@ -22,6 +22,7 @@ class AcuvityGuardrail(CustomGuardrail):
     def __init__(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None,
         analyzer_names: Optional[List[str]] = None,
+        redact_entities: Optional[List[str]] = None,
         **kwargs,
     ):
         # store kwargs as optional_params
@@ -29,6 +30,7 @@ class AcuvityGuardrail(CustomGuardrail):
         self.acuvity_client = Acuvity(Security(token=(api_key or os.environ["ACUVITY_TOKEN"])))
         # Extract 'analyzer_name' and store it
         self.analyzer_names = analyzer_names
+        self.redact_entities = redact_entities
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
@@ -59,7 +61,7 @@ class AcuvityGuardrail(CustomGuardrail):
             msgs = [message.get("content") for message in _messages if message.get("content") is not None]
 
             verbose_proxy_logger.debug("**** ACUVITY ANALYZER: %s", self.analyzer_names)
-            resp = await self.acuvity_client.apex.scan_async(*msgs, analyzers=self.analyzer_names)
+            resp = await self.acuvity_client.apex.scan_async(*msgs, analyzers=self.analyzer_names, redactions=self.redact_entities)
             if resp.extractions is not None:
                 resp_msgs = [extr.data for extr in resp.extractions if extr.data is not None]
                 for (message, resp_message) in zip(_messages, resp_msgs):
@@ -114,17 +116,14 @@ class AcuvityGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("********************  ACUVITY: async_post_call_hook response: %s", response)
         event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            verbose_proxy_logger.debug("SKIPPING GUARDRAIL CHECK")
             return
 
         response_str: Optional[str] = convert_litellm_response_object_to_str(response)
         if response_str is not None:
-            await self.acuvity_client.apex.scan_async(response_str, analyzers=self.analyzer_names)
-
+            verbose_proxy_logger.debug("\n calling with analyzer %s and redactions %s", self.analyzer_names, self.redact_entities)
+            resp = await self.acuvity_client.apex.scan_async(response_str, analyzers=self.analyzer_names, redactions=self.redact_entities)
+            print("\n\n *** RESP: ", resp)
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=self.guardrail_name
-            )
-
-
-        verbose_proxy_logger.debug(
-                "********************  ACUVITY: async_post_call_hook: Response",
             )

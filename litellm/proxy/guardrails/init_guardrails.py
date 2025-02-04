@@ -130,12 +130,19 @@ def init_guardrails_v2(  # noqa: PLR0915
             from litellm.proxy.guardrails.guardrail_hooks.acuvity import (
                 AcuvityGuardrail,
             )
+            if not litellm_params:
+                raise ValueError("litellm_params cannot be None for acuvity guardrail")
+
+            vendor_params = litellm_params.get("vendor_specific_params") or {}
+            analyzer_names = vendor_params.get("analyzer_names", [])
+            redact_entities = vendor_params.get("redact_entities", [])
 
             _acuvity_callback = AcuvityGuardrail(
                 api_base=litellm_params["api_base"],
                 api_key=litellm_params["api_key"],
                 guardrail_name=guardrail["guardrail_name"],
-                analyzer_names=litellm_params.get("analyzer_names", []),
+                analyzer_names=analyzer_names,
+                redact_entities=redact_entities,
                 event_hook=litellm_params["mode"],
             )
             litellm.callbacks.append(_acuvity_callback)  # type: ignore
