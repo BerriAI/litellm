@@ -65,7 +65,7 @@ def _get_user_in_team(
     return None
 
 
-def _is_allowed_to_create_key(
+def _is_allowed_to_make_key_request(
     user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
 ) -> bool:
     """
@@ -266,6 +266,40 @@ def key_generation_check(
         )
 
 
+def common_key_access_checks(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    llm_router: Optional[Router],
+    premium_user: bool,
+) -> Literal[True]:
+    """
+    Check if user is allowed to make a key request, for this key
+    """
+    try:
+        _is_allowed_to_make_key_request(
+            user_api_key_dict=user_api_key_dict,
+            user_id=data.user_id,
+            team_id=data.team_id,
+        )
+    except AssertionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e),
+        )
+
+    _check_model_access_group(
+        models=data.models,
+        llm_router=llm_router,
+        premium_user=premium_user,
+    )
+    return True
+
+
 router = APIRouter()
 
 
@@ -381,25 +415,9 @@ async def generate_key_fn(  # noqa: PLR0915
             data=data,
         )
 
-        try:
-            _is_allowed_to_create_key(
-                user_api_key_dict=user_api_key_dict,
-                user_id=data.user_id,
-                team_id=data.team_id,
-            )
-        except AssertionError as e:
-            raise HTTPException(
-                status_code=403,
-                detail=str(e),
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=str(e),
-            )
-
-        _check_model_access_group(
-            models=data.models,
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
             llm_router=llm_router,
             premium_user=premium_user,
         )
@@ -684,6 +702,8 @@ async def update_key_fn(
     ```
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
+        premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -692,9 +712,17 @@ async def update_key_fn(
     try:
         data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
+
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
 
         existing_key_row = await prisma_client.get_data(
             token=data.key, table_name="key", query_type="find_unique"
@@ -1412,6 +1440,13 @@ async def delete_verification_tokens(
                         ):
                             await prisma_client.delete_data(tokens=[key.token])
                             deleted_tokens.append(key.token)
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail={
+                                    "error": "You are not authorized to delete this key"
+                                },
+                            )
 
                     tasks.append(_delete_key(key))
                 await asyncio.gather(*tasks)

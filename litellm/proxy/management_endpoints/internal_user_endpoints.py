@@ -142,7 +142,6 @@ async def new_user(
     data_json = data.json()  # type: ignore
     data_json = _update_internal_new_user_params(data_json, data)
     response = await generate_key_helper_fn(request_type="user", **data_json)
-
     # Admin UI Logic
     # Add User to Team and Organization
     # if team_id passed add this user to the team
@@ -220,6 +219,7 @@ async def new_user(
         tpm_limit=response.get("tpm_limit", None),
         rpm_limit=response.get("rpm_limit", None),
         budget_duration=response.get("budget_duration", None),
+        model_max_budget=response.get("model_max_budget", None),
     )
 
 
