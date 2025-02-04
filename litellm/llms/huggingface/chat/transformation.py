@@ -19,10 +19,6 @@ else:
     LoggingClass = Any
 
 
-tgi_models_cache = None
-conv_models_cache = None
-
-
 @dataclass
 class HFRequestParameters:
     inputs: Union[str, Dict]
@@ -145,7 +141,7 @@ class HFChatConfig(OpenAIGPTConfig):
         )
 
     def transform_stream_chunk(self, chunk: Any) -> ModelResponse:
-        """Transform HF stream chunk to ModelResponse with streaming properties"""
+        """Transform HF's ChatCompletionStreamOutput to ModelResponse"""
         # Create streaming choices
         streaming_choices = []
         for choice in chunk.choices:
