@@ -1594,6 +1594,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install aiohttp
             pip install "openai==1.54.0 "
+            pip install "assemblyai==0.37.0"
             python -m pip install --upgrade pip
             pip install "pydantic==2.7.1"
             pip install "pytest==7.3.1"
