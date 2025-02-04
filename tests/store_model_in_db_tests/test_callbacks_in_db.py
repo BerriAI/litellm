@@ -20,6 +20,7 @@ from openai.types.chat import ChatCompletion
 
 load_dotenv()
 
+# used for testing
 LANGFUSE_BASE_URL = "https://exampleopenaiendpoint-production-c715.up.railway.app"
 
 
