@@ -72,3 +72,21 @@ def test_guardrail_masking_logging_only():
             mock_call.call_args.kwargs["kwargs"]["messages"][0]["content"]
             == "Hey, my name is [NAME]."
         )
+
+
+def test_guardrail_list_of_event_hooks():
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    cg = CustomGuardrail(
+        guardrail_name="custom-guard", event_hook=["pre_call", "post_call"]
+    )
+
+    data = {"model": "gpt-3.5-turbo", "metadata": {"guardrails": ["custom-guard"]}}
+    assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+
+    assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call)
+
+    assert not cg.should_run_guardrail(
+        data=data, event_type=GuardrailEventHooks.during_call
+    )
