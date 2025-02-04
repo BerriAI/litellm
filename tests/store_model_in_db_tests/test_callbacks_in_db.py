@@ -20,7 +20,7 @@ from openai.types.chat import ChatCompletion
 
 load_dotenv()
 
-LANGFUSE_BASE_URL = "https://exampleopenaiendpoint-production.up.railway.app/"
+LANGFUSE_BASE_URL = "https://exampleopenaiendpoint-production.up.railway.app"
 
 
 async def config_update(session, routing_strategy=None):
