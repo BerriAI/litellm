@@ -15,6 +15,14 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
+class PrometheusMetricManager:
+    def __init__(self):
+        self.prometheus_metrics = {}
+
+    def get_metric(self, metric_name: str):
+        return self.prometheus_metrics.get(metric_name)
+
+
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
     def __init__(
