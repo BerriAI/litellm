@@ -1152,6 +1152,7 @@ async def _virtual_key_default_budget_check(
             raise litellm.BudgetExceededError(
                 current_cost=valid_token.spend,
                 max_budget=litellm.default_key_max_budget,
+                message=f"Default key max budget has been exceeded! Current cost: {valid_token.spend}, Max budget: {litellm.default_key_max_budget}",
             )
 
 
