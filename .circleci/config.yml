@@ -1470,10 +1470,6 @@ jobs:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
-        machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
-    working_directory: ~/project
     steps:
       - checkout
       - run:
