@@ -69,10 +69,12 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_CLASS = EXCEPTION_CLASS
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
+    OLD_REQUESTED_MODEL_LABEL = "model_group"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_latency_metric",
+    "litellm_llm_api_time_to_first_token_metric",
     "litellm_request_total_latency_metric",
     "litellm_proxy_total_requests_metric",
     "litellm_proxy_failed_requests_metric",
@@ -89,6 +91,19 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
     "litellm_tokens_metric",
+    "litellm_spend_metric",
+    "litellm_remaining_api_key_requests_for_model",
+    "litellm_remaining_api_key_tokens_for_model",
+    "litellm_llm_api_failed_requests_metric",
+    "litellm_deployment_failure_responses",
+    "litellm_deployment_total_requests",
+    "litellm_overhead_latency_metric",
+    "litellm_remaining_requests_metric",
+    "litellm_deployment_success_responses",
+    "litellm_remaining_tokens_metric",
+    "litellm_deployment_state",
+    "litellm_deployment_cooled_down",
+    "litellm_provider_remaining_budget_metric",
 ]
 
 
@@ -102,6 +117,129 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_remaining_requests_metric = [
+        UserAPIKeyLabelNames.OLD_REQUESTED_MODEL_LABEL.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_deployment_state = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_deployment_cooled_down = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+    ]
+
+    litellm_remaining_tokens_metric = [
+        UserAPIKeyLabelNames.OLD_REQUESTED_MODEL_LABEL.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_deployment_success_responses = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+    ]
+
+    litellm_deployment_total_requests = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_overhead_latency_metric = [
+        UserAPIKeyLabelNames.OLD_REQUESTED_MODEL_LABEL.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_llm_api_time_to_first_token_metric = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_success_responses = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_deployment_failure_responses = [
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
+        UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_llm_api_failed_requests_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_spend_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_remaining_api_key_requests_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_remaining_api_key_tokens_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
     ]
 
     litellm_tokens_metric = [
@@ -297,3 +435,12 @@ class UserAPIKeyLabelValues(BaseModel):
     fallback_model: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.FALLBACK_MODEL.value)
     ] = None
+    model_group: Annotated[
+        Optional[str],
+        Field(..., alias=UserAPIKeyLabelNames.OLD_REQUESTED_MODEL_LABEL.value),
+    ] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if self.requested_model is not None:
+            self.model_group = self.requested_model
