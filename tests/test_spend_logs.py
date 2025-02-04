@@ -184,6 +184,7 @@ async def test_spend_logs_with_org_id():
             "spend_logs_response: ",
             json.dumps(spend_logs_response, indent=4, default=str),
         )
+        spend_logs_response = spend_logs_response[0]
         assert spend_logs_response["metadata"]["user_api_key_org_id"] == org_id
         assert spend_logs_response["metadata"]["user_api_key_team_id"] == team_id
         assert spend_logs_response["team_id"] == team_id
