@@ -259,10 +259,34 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     returned.
     """
 
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
 
 class ChoiceLogprobs(OpenAIObject):
     content: Optional[List[ChatCompletionTokenLogprob]] = None
     """A list of message content tokens with log probability information."""
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
 
 
 class FunctionCall(OpenAIObject):
@@ -600,7 +624,10 @@ class Choices(OpenAIObject):
             elif isinstance(message, dict):
                 self.message = Message(**message)
         if logprobs is not None:
-            self.logprobs = logprobs
+            if isinstance(logprobs, dict):
+                self.logprobs = ChoiceLogprobs(**logprobs)
+            else:
+                self.logprobs = logprobs
         if enhancements is not None:
             self.enhancements = enhancements
 
@@ -1544,7 +1571,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
-    guardrail_mode: Optional[GuardrailEventHooks]
+    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
     guardrail_response: Optional[Union[dict, str]]
     guardrail_status: Literal["success", "failure"]
 
