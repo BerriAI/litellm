@@ -1725,7 +1725,7 @@ def _format_type(props, indent):
 
 def token_counter(
     model="",
-    custom_tokenizer: Optional[dict] = None,
+    custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
     count_response_tokens: Optional[bool] = False,

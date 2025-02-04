@@ -73,12 +73,9 @@ def perform_redaction(model_call_details: dict, result):
         return {"text": "redacted-by-litellm"}
 
 
-def redact_message_input_output_from_logging(
-    model_call_details: dict, result, input: Optional[Any] = None
-):
+def should_redact_message_logging(model_call_details: dict) -> bool:
     """
-    Removes messages, prompts, input, response from logging. This modifies the data in-place
-    only redacts when litellm.turn_off_message_logging == True
+    Determine if message logging should be redacted.
     """
     _request_headers = (
         model_call_details.get("litellm_params", {}).get("metadata", {}) or {}
@@ -89,22 +86,35 @@ def redact_message_input_output_from_logging(
     # check if user opted out of logging message/response to callbacks
     if (
         litellm.turn_off_message_logging is not True
-        and request_headers.get("litellm-enable-message-redaction", False) is not True
+        and bool(request_headers.get("litellm-enable-message-redaction", False))
+        is not True
         and _get_turn_off_message_logging_from_dynamic_params(model_call_details)
         is not True
     ):
-        return result
+        return False
 
-    if request_headers and request_headers.get(
-        "litellm-disable-message-redaction", False
+    if request_headers and bool(
+        request_headers.get("litellm-disable-message-redaction", False)
     ):
-        return result
+        return False
 
     # user has OPTED OUT of message redaction
     if _get_turn_off_message_logging_from_dynamic_params(model_call_details) is False:
-        return result
+        return False
 
-    return perform_redaction(model_call_details, result)
+    return True
+
+
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result, input: Optional[Any] = None
+) -> Any:
+    """
+    Removes messages, prompts, input, response from logging. This modifies the data in-place
+    only redacts when litellm.turn_off_message_logging == True
+    """
+    if should_redact_message_logging(model_call_details):
+        return perform_redaction(model_call_details, result)
+    return result
 
 
 def _get_turn_off_message_logging_from_dynamic_params(
