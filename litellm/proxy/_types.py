@@ -787,6 +787,7 @@ class NewUserResponse(GenerateKeyResponse):
     ] = None
     teams: Optional[list] = None
     user_alias: Optional[str] = None
+    model_max_budget: Optional[dict] = None
 
 
 class UpdateUserRequest(GenerateRequestBase):
