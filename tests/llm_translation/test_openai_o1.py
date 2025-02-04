@@ -195,3 +195,12 @@ def test_o1_supports_vision():
     for k, v in litellm.model_cost.items():
         if k.startswith("o1") and v.get("litellm_provider") == "openai":
             assert v.get("supports_vision") is True, f"{k} does not support vision"
+
+
+def test_o3_reasoning_effort():
+    resp = litellm.completion(
+        model="o3-mini",
+        messages=[{"role": "user", "content": "Hello!"}],
+        reasoning_effort="high",
+    )
+    assert resp.choices[0].message.content is not None
