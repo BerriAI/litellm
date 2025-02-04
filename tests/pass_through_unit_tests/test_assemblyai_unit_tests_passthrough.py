@@ -98,3 +98,60 @@ def test_poll_assembly_for_transcript_response(
             "test-transcript-id"
         )
         assert transcript == AssemblyAITranscriptResponse(**mock_transcript_response)
+
+
+@pytest.fixture
+def mock_request():
+    request = Mock()
+    request.method = "POST"
+    request.headers = {}
+    request.url = httpx.URL("http://test.com/test")
+    return request
+
+
+@pytest.fixture
+def mock_response():
+    return Mock()
+
+
+@pytest.fixture
+def mock_user_api_key_dict():
+    return {"api_key": "test-key"}
+
+
+@patch("litellm.utils.get_secret")
+@patch(
+    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.create_pass_through_route"
+)
+@pytest.mark.asyncio()
+async def test_assemblyai_proxy_route_basic_post(
+    mock_create_route,
+    mock_get_secret,
+    mock_request,
+    mock_response,
+    mock_user_api_key_dict,
+):
+    """Test basic POST request handling for AssemblyAI proxy route"""
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        assemblyai_proxy_route,
+    )
+
+    # Setup mocks
+    mock_get_secret.return_value = "test-assemblyai-key"
+    mock_request.json = AsyncMock(return_value={"text": "test"})
+    mock_endpoint_func = AsyncMock(return_value={"result": "success"})
+    mock_create_route.return_value = mock_endpoint_func
+
+    result = await assemblyai_proxy_route(
+        endpoint="v2/transcript",
+        request=mock_request,
+        fastapi_response=mock_response,
+        user_api_key_dict=mock_user_api_key_dict,
+    )
+
+    assert result == {"result": "success"}
+    mock_create_route.assert_called_once_with(
+        endpoint="v2/transcript",
+        target="https://api.assemblyai.com/v2/transcript",
+        custom_headers={"Authorization": "test-assemblyai-key"},
+    )
