@@ -573,6 +573,20 @@ class Router:
             litellm.amoderation, call_type="moderation"
         )
 
+    def discard(self):
+        """
+        Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
+        For now, unhook router's callbacks from all lists
+        """
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.failure_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
+
+
     def initialize_assistants_endpoint(self):
         ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
         self.acreate_assistants = self.factory_function(litellm.acreate_assistants)
