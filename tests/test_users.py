@@ -315,3 +315,85 @@ async def test_user_model_access():
                 key=key,
                 model="groq/claude-3-5-haiku-20241022",
             )
+
+
+@pytest.mark.asyncio
+async def test_key_update_user_isolation():
+    """
+    Test that a user cannot update their key to belong to another user
+    """
+    import json
+    import uuid
+
+    # Create two test users
+
+    async with aiohttp.ClientSession() as session:
+        user1 = await new_user(
+            session=session,
+            i=0,
+            budget=100,
+            budget_duration="30d",
+            models=["anthropic.claude-3-5-sonnet-20240620-v1:0"],
+        )
+
+        user2 = await new_user(
+            session=session,
+            i=1,
+            budget=100,
+            budget_duration="30d",
+            models=["anthropic.claude-3-5-sonnet-20240620-v1:0"],
+        )
+
+        print("\nCreated two test users:")
+        print(f"User 1 ID: {user1['user_id']}")
+        print(f"User 2 ID: {user2['user_id']}")
+
+        # Create an additional key for user1 that we'll try to update
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {user1['key']}",
+        }
+
+        key_payload = {
+            "user_id": user1["user_id"],
+            "duration": "7d",
+            "key_alias": f"test_key_{uuid.uuid4()}",
+            "models": ["anthropic.claude-3-5-sonnet-20240620-v1:0"],
+        }
+
+        print("\nGenerating additional key for user1...")
+        key_response = await session.post(
+            f"http://0.0.0.0:4000/key/generate", headers=headers, json=key_payload
+        )
+
+        assert key_response.status == 200, "Failed to generate additional key for user1"
+        user1_additional_key = await key_response.json()
+
+        print(f"\nGenerated key details:")
+        print(json.dumps(user1_additional_key, indent=2))
+
+        # Try to update the key to belong to user2
+        update_payload = {
+            "key": user1_additional_key["key"],
+            "user_id": user2["user_id"],  # Attempting to change ownership to user2
+            "metadata": {"purpose": "testing_user_isolation", "environment": "test"},
+        }
+
+        print("\nAttempting to update key ownership to user2...")
+        update_response = await session.post(
+            f"http://0.0.0.0:4000/key/update", headers=headers, json=update_payload
+        )
+
+        print("\nUpdate Attempt Response Details:")
+        print(f"Status Code: {update_response.status}")
+        print("\nResponse Content:")
+        try:
+            formatted_json = json.dumps(await update_response.json(), indent=2)
+            print(formatted_json)
+        except json.JSONDecodeError:
+            print(update_response.text)
+
+        # Verify update attempt was rejected
+        assert (
+            update_response.status == 403
+        ), "Request should have been rejected with 403 status code"
