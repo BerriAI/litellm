@@ -1440,6 +1440,13 @@ async def delete_verification_tokens(
                         ):
                             await prisma_client.delete_data(tokens=[key.token])
                             deleted_tokens.append(key.token)
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail={
+                                    "error": "You are not authorized to delete this key"
+                                },
+                            )
 
                     tasks.append(_delete_key(key))
                 await asyncio.gather(*tasks)
