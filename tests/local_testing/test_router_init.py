@@ -71,11 +71,11 @@ def test_init_clients():
             print(async_client._base_url)
             assert (
                 async_client._base_url
-                == "https://openai-gpt-4-test-v-1.openai.azure.com//openai/"
-            )  # openai python adds the extra /
+                == "https://openai-gpt-4-test-v-1.openai.azure.com/openai/"
+            )
             assert (
                 stream_async_client._base_url
-                == "https://openai-gpt-4-test-v-1.openai.azure.com//openai/"
+                == "https://openai-gpt-4-test-v-1.openai.azure.com/openai/"
             )
 
         print("PASSED !")
@@ -448,7 +448,9 @@ async def test_openai_with_organization(sync_mode):
                 )
             except Exception as e:
                 print("Got exception: " + str(e))
-                assert "header should match organization for API key" in str(e)
+                assert "header should match organization for API key" in str(
+                    e
+                ) or "No such organization" in str(e)
 
             # good org works
             response = router.completion(
@@ -478,7 +480,9 @@ async def test_openai_with_organization(sync_mode):
                 )
             except Exception as e:
                 print("Got exception: " + str(e))
-                assert "header should match organization for API key" in str(e)
+                assert "header should match organization for API key" in str(
+                    e
+                ) or "No such organization" in str(e)
 
             # good org works
             response = await router.acompletion(
@@ -581,7 +585,9 @@ async def test_aaaaatext_completion_with_organization():
             pytest.fail("Request should have failed - This organization does not exist")
         except Exception as e:
             print("Got exception: " + str(e))
-            assert "header should match organization for API key" in str(e)
+            assert "header should match organization for API key" in str(
+                e
+            ) or "No such organization" in str(e)
 
         # good org works
         response = await router.atext_completion(
