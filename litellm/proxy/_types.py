@@ -1856,6 +1856,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key: Optional[str]
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_org_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]
     spend_logs_metadata: Optional[

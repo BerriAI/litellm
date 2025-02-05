@@ -38,6 +38,7 @@ def _get_spend_logs_metadata(metadata: Optional[dict]) -> SpendLogsMetadata:
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
