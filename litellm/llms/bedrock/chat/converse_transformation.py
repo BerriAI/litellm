@@ -223,7 +223,9 @@ class AmazonConverseConfig(BaseConfig):
                     json_schema=json_schema,
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
                 )
-                optional_params["tools"] = [_tool]
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=[_tool]
+                )
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(
                         name=schema_name if schema_name != "" else "json_tool_call"
@@ -247,7 +249,9 @@ class AmazonConverseConfig(BaseConfig):
             if param == "top_p":
                 optional_params["topP"] = value
             if param == "tools":
-                optional_params["tools"] = value
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=value  # type: ignore
+                )
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model, tool_choice=value, drop_params=drop_params  # type: ignore
@@ -721,3 +725,15 @@ class AmazonConverseConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+
+    def _add_tools_to_optional_params(
+        self, optional_params: dict, tools: List[ChatCompletionToolParam]
+    ) -> dict:
+        if "tools" not in optional_params:
+            optional_params["tools"] = tools
+        else:
+            optional_params["tools"] = [
+                *optional_params["tools"],
+                *tools,
+            ]
+        return optional_params
