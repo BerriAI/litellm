@@ -83,6 +83,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
     ) -> dict:
         try:
             from botocore.auth import SigV4Auth
@@ -120,6 +122,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
+
+        if stream is True and fake_stream is not True:
+            request_data["stream"] = True
         request = AWSRequest(
             method="POST",
             url=api_base,
