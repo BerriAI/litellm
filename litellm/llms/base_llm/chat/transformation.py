@@ -176,6 +176,8 @@ class BaseConfig(ABC):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
     ) -> dict:
         """
         Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
