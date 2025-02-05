@@ -425,7 +425,6 @@ async def proxy_startup_event(app: FastAPI):
     import json
 
     init_verbose_loggers()
-
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
     master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
@@ -691,12 +690,18 @@ try:
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
             if request.url.path.startswith("/ui"):
-                new_path = request.url.path.replace("/ui", f"{server_root_path}/ui", 1)
-                return RedirectResponse(new_path)
+                new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
+                return RedirectResponse(new_url)
             return await call_next(request)
 
 except Exception:
     pass
+# current_dir = os.path.dirname(os.path.abspath(__file__))
+# ui_path = os.path.join(current_dir, "_experimental", "out")
+# # Mount this test directory instead
+# app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
