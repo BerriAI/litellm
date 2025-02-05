@@ -12,6 +12,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
 
@@ -210,7 +211,36 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed response.
         """
-        raise NotImplementedError
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=raw_response.text,
+            additional_args={"complete_input_dict": request_data},
+        )
+
+        ## RESPONSE OBJECT
+        try:
+            completion_response = raw_response.json()
+        except Exception as e:
+            response_headers = getattr(raw_response, "headers", None)
+            raise OpenAIError(
+                message="Unable to get json response - {}, Original Response: {}".format(
+                    str(e), raw_response.text
+                ),
+                status_code=raw_response.status_code,
+                headers=response_headers,
+            )
+        raw_response_headers = dict(raw_response.headers)
+        final_response_obj = convert_to_model_response_object(
+            response_object=completion_response,
+            model_response_object=model_response,
+            hidden_params={"headers": raw_response_headers},
+            _response_headers=raw_response_headers,
+        )
+
+        return cast(ModelResponse, final_response_obj)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -230,7 +260,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        raise NotImplementedError
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
