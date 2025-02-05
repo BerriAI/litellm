@@ -171,7 +171,7 @@ async def make_call(
     client: Optional[AsyncHTTPHandler],
     api_base: str,
     headers: dict,
-    data: dict,
+    data: str,
     model: str,
     messages: list,
     logging_obj: Logging,
@@ -187,7 +187,7 @@ async def make_call(
         response = await client.post(
             api_base,
             headers=headers,
-            data=json.dumps(data),
+            data=data,
             stream=not fake_stream,
             logging_obj=logging_obj,
         )

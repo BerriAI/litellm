@@ -498,7 +498,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=json.dumps(data),
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
