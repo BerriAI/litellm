@@ -69,18 +69,6 @@ model_list = [{ # list of model deployments
 		"model": "gpt-4", 
 		"api_key": os.getenv("OPENAI_API_KEY"),
 	}
-}, {
-    "model_name": "grok", 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "xai/grok-2-latest", 
-		"api_key": os.getenv("XAI_API_KEY"),
-	}
-}, {
-    "model_name": "grok", 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "xai/grok-2-1212",
-		"api_key": os.getenv("XAI_API_KEY"),
-	}
 },
 
 ]
