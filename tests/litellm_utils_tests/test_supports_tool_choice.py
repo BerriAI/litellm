@@ -31,10 +31,24 @@ def test_supports_tool_choice_simple_tests():
     )
 
     assert (
+        litellm.utils.supports_tool_choice(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            custom_llm_provider="bedrock_converse",
+        )
+        is True
+    )
+
+    assert (
         litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
     )
     assert (
         litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
+        is False
+    )
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse"
+        )
         is False
     )
 
