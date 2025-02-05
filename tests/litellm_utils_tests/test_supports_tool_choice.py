@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
-from litellm.utils import get_llm_provider, ProviderConfigManager
+from litellm.utils import get_llm_provider, ProviderConfigManager, _check_provider_match
 from litellm import LlmProviders
 
 
@@ -51,6 +51,25 @@ def test_supports_tool_choice_simple_tests():
         )
         is False
     )
+
+
+def test_check_provider_match():
+    """
+    Test the _check_provider_match function for various provider scenarios
+    """
+    # Test bedrock and bedrock_converse cases
+    model_info = {"litellm_provider": "bedrock"}
+    assert litellm.utils._check_provider_match(model_info, "bedrock") is True
+    assert litellm.utils._check_provider_match(model_info, "bedrock_converse") is True
+
+    # Test bedrock_converse provider
+    model_info = {"litellm_provider": "bedrock_converse"}
+    assert litellm.utils._check_provider_match(model_info, "bedrock") is True
+    assert litellm.utils._check_provider_match(model_info, "bedrock_converse") is True
+
+    # Test non-matching provider
+    model_info = {"litellm_provider": "bedrock"}
+    assert litellm.utils._check_provider_match(model_info, "openai") is False
 
 
 # Models that should be skipped during testing
