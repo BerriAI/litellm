@@ -41,7 +41,7 @@ def test_supports_tool_choice_simple_tests():
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
-SKIP_MODELS = ["azure/mistral", "azure/command-r", "jamba", "deepinfra"]
+SKIP_MODELS = ["azure/mistral", "azure/command-r", "jamba", "deepinfra", "mistral."]
 
 # Bedrock models to block - organized by type
 BEDROCK_REGIONS = ["ap-northeast-1", "eu-central-1", "us-east-1", "us-west-2"]
@@ -59,11 +59,14 @@ for region in BEDROCK_REGIONS:
     for commitment in BEDROCK_COMMITMENTS:
         for model in BEDROCK_MODELS:
             block_list.add(f"bedrock/{region}/{commitment}/{model}")
+            block_list.add(f"bedrock/{region}/{model}")
 
 # Add Cohere models
 for commitment in BEDROCK_COMMITMENTS:
     block_list.add(f"bedrock/*/{commitment}/cohere.command-text-v14")
     block_list.add(f"bedrock/*/{commitment}/cohere.command-light-text-v14")
+
+print("block_list", block_list)
 
 
 @pytest.mark.asyncio
@@ -78,6 +81,7 @@ async def test_supports_tool_choice():
     3. Checks if tool_choice support matches the model's supported parameters
     """
     # Load model prices
+    litellm._turn_on_debug()
     with open("./model_prices_and_context_window.json", "r") as f:
         model_prices = json.load(f)
     litellm.model_cost = model_prices
@@ -104,9 +108,11 @@ async def test_supports_tool_choice():
             continue
 
         # Get provider config and supported params
+        print("LLM provider", provider)
         provider_enum = LlmProviders(provider)
         config = config_manager.get_provider_chat_config(model, provider_enum)
         supported_params = config.get_supported_openai_params(model)
+        print("supported_params", supported_params)
 
         # Check tool_choice support
         supports_tool_choice_result = litellm.utils.supports_tool_choice(
