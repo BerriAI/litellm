@@ -164,7 +164,9 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
             )
         except HTTPException as e:
-            if e.status_code == 400 and "already exists" in str(e):
+            if e.status_code == 400 and (
+                "already exists" in str(e) or "doesn't exist" in str(e)
+            ):
                 verbose_proxy_logger.debug(
                     "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
                         str(e)
@@ -176,6 +178,15 @@ async def new_user(
                         str(e)
                     )
                 )
+        except Exception as e:
+            if "already exists" in str(e) or "doesn't exist" in str(e):
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                        str(e)
+                    )
+                )
+            else:
+                raise e
 
     if data.send_invite_email is True:
         # check if user has setup email alerting

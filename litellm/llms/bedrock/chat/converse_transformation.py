@@ -68,6 +68,10 @@ class AmazonConverseConfig(BaseConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock_converse"
+
     @classmethod
     def get_config(cls):
         return {
@@ -112,7 +116,9 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("tools")
 
-        if base_model.startswith("anthropic") or base_model.startswith("mistral"):
+        if litellm.utils.supports_tool_choice(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
@@ -224,11 +230,14 @@ class AmazonConverseConfig(BaseConfig):
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
                 )
                 optional_params["tools"] = [_tool]
-                optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                    tool=SpecificToolChoiceBlock(
-                        name=schema_name if schema_name != "" else "json_tool_call"
+                if litellm.utils.supports_tool_choice(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ):
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                        tool=SpecificToolChoiceBlock(
+                            name=schema_name if schema_name != "" else "json_tool_call"
+                        )
                     )
-                )
                 optional_params["json_mode"] = True
                 if non_default_params.get("stream", False) is True:
                     optional_params["fake_stream"] = True
@@ -332,9 +341,27 @@ class AmazonConverseConfig(BaseConfig):
         if "top_k" in inference_params:
             inference_params["topK"] = inference_params.pop("top_k")
         return InferenceConfig(**inference_params)
+    
+    def _handle_top_k_value(self, model: str, inference_params: dict) -> dict:
+        base_model = self._get_base_model(model)
+
+        val_top_k = None
+        if "topK" in inference_params:
+            val_top_k = inference_params.pop("topK")
+        elif "top_k" in inference_params:
+            val_top_k = inference_params.pop("top_k")
+
+        if val_top_k:
+            if (base_model.startswith("anthropic")):
+                return {"top_k": val_top_k}
+            if base_model.startswith("amazon.nova"):
+                return {'inferenceConfig': {"topK": val_top_k}}                
+                
+        return {}
 
     def _transform_request_helper(
         self,
+        model: str,
         system_content_blocks: List[SystemContentBlock],
         optional_params: dict,
         messages: Optional[List[AllMessageValues]] = None,
@@ -361,35 +388,20 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         inference_params = copy.deepcopy(optional_params)
-        additional_request_keys = []
-        additional_request_params = {}
         supported_converse_params = list(
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
+        total_supported_params = supported_converse_params + supported_tool_call_params + supported_guardrail_params
         inference_params.pop("json_mode", None)  # used for handling json_schema
 
-        # send all model-specific params in 'additional_request_params'
-        for k, v in inference_params.items():
-            if (
-                k not in supported_converse_params
-                and k not in supported_tool_call_params
-                and k not in supported_guardrail_params
-            ):
-                additional_request_params[k] = v
-                additional_request_keys.append(k)
-        for key in additional_request_keys:
-            inference_params.pop(key, None)
+        # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
+        additional_request_params = {k: v for k, v in inference_params.items() if k not in total_supported_params}
+        inference_params = {k: v for k, v in inference_params.items() if k in total_supported_params}
 
-        if "topK" in inference_params:
-            additional_request_params["inferenceConfig"] = {
-                "topK": inference_params.pop("topK")
-            }
-        elif "top_k" in inference_params:
-            additional_request_params["inferenceConfig"] = {
-                "topK": inference_params.pop("top_k")
-            }
+        # Only set the topK value in for models that support it
+        additional_request_params.update(self._handle_top_k_value(model, inference_params))
 
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
@@ -437,6 +449,7 @@ class AmazonConverseConfig(BaseConfig):
         ## TRANSFORMATION ##
 
         _data: CommonRequestObject = self._transform_request_helper(
+            model=model,
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
@@ -483,6 +496,7 @@ class AmazonConverseConfig(BaseConfig):
         messages, system_content_blocks = self._transform_system_message(messages)
 
         _data: CommonRequestObject = self._transform_request_helper(
+            model=model,
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
