@@ -19,8 +19,10 @@ import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 from ..base_utils import (
     map_developer_role_to_system_role,
@@ -251,6 +253,23 @@ class BaseConfig(ABC):
     ) -> Any:
         pass
 
+    def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> CustomStreamWrapper:
+        raise NotImplementedError
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return None
+
+    @property
+    def has_async_custom_stream_wrapper(self) -> bool:
+        return False
