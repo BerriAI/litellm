@@ -3909,7 +3909,7 @@
         "mode": "chat",
         "supports_function_calling": true
     },
-    "vertex_ai/codestral@2405": {
+    "vertex_ai/codestral@2501": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
