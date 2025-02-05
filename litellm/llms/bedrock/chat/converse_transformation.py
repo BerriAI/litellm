@@ -116,7 +116,9 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("tools")
 
-        if litellm.utils.supports_tool_choice(model=model):
+        if litellm.utils.supports_tool_choice(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
@@ -228,7 +230,9 @@ class AmazonConverseConfig(BaseConfig):
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
                 )
                 optional_params["tools"] = [_tool]
-                if litellm.utils.supports_tool_choice(model=model):
+                if litellm.utils.supports_tool_choice(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(
                         tool=SpecificToolChoiceBlock(
                             name=schema_name if schema_name != "" else "json_tool_call"

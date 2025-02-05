@@ -4027,7 +4027,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             "litellm_provider"
         ].startswith("fireworks_ai"):
             return True
-        elif custom_llm_provider == "bedrock" and model_info[
+        elif custom_llm_provider.startswith("bedrock") and model_info[
             "litellm_provider"
         ].startswith("bedrock"):
             return True
