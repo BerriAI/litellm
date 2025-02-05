@@ -45,3 +45,28 @@ def test_deepseek_mock_completion(stream):
             print(chunk)
     else:
         assert response is not None
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.asyncio
+async def test_deepseek_mock_async_completion(stream):
+    """
+    Deepseek API is hanging. Mock the call, to a fake endpoint, so we can confirm our integration is working.
+    """
+    import litellm
+    from litellm import completion, acompletion
+
+    litellm._turn_on_debug()
+
+    response = await acompletion(
+        model="deepseek/deepseek-reasoner",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
+        stream=stream,
+    )
+    print(f"response: {response}")
+    if stream:
+        async for chunk in response:
+            print(chunk)
+    else:
+        assert response is not None
