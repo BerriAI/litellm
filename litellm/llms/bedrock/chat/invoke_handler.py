@@ -187,7 +187,7 @@ async def make_call(
         response = await client.post(
             api_base,
             headers=headers,
-            data=data,
+            data=json.dumps(data),
             stream=not fake_stream,
             logging_obj=logging_obj,
         )
