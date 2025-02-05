@@ -1,5 +1,4 @@
 import json
-import traceback
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
@@ -16,7 +15,6 @@ from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
-from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
