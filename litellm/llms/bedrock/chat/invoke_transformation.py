@@ -3,7 +3,7 @@ import json
 import time
 import urllib.parse
 import uuid
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast, get_args
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
 
@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_secret
@@ -58,7 +58,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
         api_base = optional_params.pop("api_base", None)
-        custom_prompt_dict = optional_params.pop("custom_prompt_dict", None)
+        custom_prompt_dict: dict = optional_params.pop("custom_prompt_dict", None) or {}
         extra_headers = optional_params.pop("extra_headers", None)
 
         provider = self.get_bedrock_invoke_provider(model)
@@ -453,6 +453,22 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         setattr(model_response, "usage", usage)
 
         return model_response
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        return {}
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return BedrockError(status_code=status_code, message=error_message)
 
     @staticmethod
     def get_bedrock_invoke_provider(

@@ -853,6 +853,9 @@ from .llms.bedrock.chat.invoke_handler import (
 )
 
 from .llms.bedrock.common_utils import (
+    AmazonBedrockGlobalConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.bedrock_transformations import (
     AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
@@ -860,8 +863,8 @@ from .llms.bedrock.common_utils import (
     AmazonCohereConfig,
     AmazonLlamaConfig,
     AmazonMistralConfig,
-    AmazonBedrockGlobalConfig,
 )
+
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
