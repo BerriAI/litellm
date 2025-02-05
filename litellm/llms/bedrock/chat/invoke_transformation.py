@@ -21,13 +21,17 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..common_utils import BedrockError
-from .invoke_handler import make_call
+from .invoke_handler import make_call, make_sync_call
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -510,8 +514,41 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         )
         return streaming_response
 
+    @track_llm_api_timing()
+    def get_sync_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> CustomStreamWrapper:
+        if client is None or isinstance(client, AsyncHTTPHandler):
+            client = _get_httpx_client(params={})
+        streaming_response = CustomStreamWrapper(
+            completion_stream=None,
+            make_call=partial(
+                make_sync_call,
+                client=client,
+                api_base=api_base,
+                headers=headers,
+                data=json.dumps(data),
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                fake_stream=True if "ai21" in api_base else False,
+            ),
+            model=model,
+            custom_llm_provider="bedrock",
+            logging_obj=logging_obj,
+        )
+        return streaming_response
+
     @property
-    def has_async_custom_stream_wrapper(self) -> bool:
+    def has_custom_stream_wrapper(self) -> bool:
         return True
 
     @staticmethod
