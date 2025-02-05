@@ -163,6 +163,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             model, messages, provider, custom_prompt_dict
         )
         inference_params = copy.deepcopy(optional_params)
+        inference_params = {
+            k: v
+            for k, v in inference_params.items()
+            if k not in self.aws_authentication_params
+        }
         json_schemas: dict = {}
         request_data: dict = {}
         if provider == "cohere":
