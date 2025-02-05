@@ -2280,6 +2280,7 @@ RBAC_ROLES = Literal[
 class RoleBasedPermissions(TypedDict):
     role: Required[RBAC_ROLES]
     models: Required[List[str]]
+    routes: Required[List[str]]
 
 
 class RoleMapping(BaseModel):
