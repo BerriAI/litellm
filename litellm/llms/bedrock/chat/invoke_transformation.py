@@ -153,7 +153,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        custom_prompt_dict: dict = optional_params.pop("custom_prompt_dict", None) or {}
+        custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
 
         provider = self.get_bedrock_invoke_provider(model)
 
