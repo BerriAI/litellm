@@ -19,7 +19,11 @@ import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
+)
 from litellm.types.utils import ModelResponse
 
 from ..base_utils import (
@@ -147,6 +151,23 @@ class BaseConfig(ABC):
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
+
+    def _add_response_format_to_tools(
+        self,
+        optional_params: dict,
+        _tool: ChatCompletionToolParam,
+        _tool_choice: ChatCompletionToolChoiceObjectParam,
+    ) -> dict:
+        """
+        Add response format to tools
+
+        This is used to translate response_format to a tool call, for models/APIs that don't support response_format directly.
+        """
+        optional_params.setdefault("tools", [])
+        optional_params["tools"].append(_tool)
+        optional_params["tool_choice"] = _tool_choice
+        optional_params["json_mode"] = True
+        return optional_params
 
     @abstractmethod
     def map_openai_params(

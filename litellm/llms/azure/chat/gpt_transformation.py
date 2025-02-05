@@ -176,13 +176,10 @@ class AzureOpenAIConfig(BaseConfig):
                     optional_params["tool_choice"] = value
             elif param == "response_format" and isinstance(value, dict):
                 json_schema: Optional[dict] = None
-                schema_name: str = ""
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
-                    schema_name = "json_tool_call"
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
-                    schema_name = value["json_schema"]["name"]
                 """
                 Follow similar approach to anthropic - translate to a single tool call. 
 
@@ -213,11 +210,14 @@ class AzureOpenAIConfig(BaseConfig):
                         ),
                     )
 
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
+                    optional_params = self._add_response_format_to_tools(
+                        optional_params, _tool, _tool_choice
+                    )
                 else:
                     optional_params["response_format"] = value
+            elif param == "tools" and isinstance(value, list):
+                optional_params.setdefault("tools", [])
+                optional_params["tools"].extend(value)
             elif param in supported_openai_params:
                 optional_params[param] = value
 

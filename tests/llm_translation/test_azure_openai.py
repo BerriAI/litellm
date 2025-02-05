@@ -341,3 +341,98 @@ def test_azure_gpt_4o_with_tool_call_and_response_format():
     assert response.choices[0].finish_reason == "tool_calls"
 
     print(response.to_json())
+
+
+def test_map_openai_params():
+    """
+    Ensure response_format does not override tools
+    """
+    from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+
+    azure_openai_config = AzureOpenAIConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Returns the current date and time",
+                "strict": True,
+                "parameters": {
+                    "properties": {
+                        "timezone": {
+                            "type": "string",
+                            "description": "The timezone to get the current time for (e.g., 'UTC', 'America/New_York')",
+                        }
+                    },
+                    "required": ["timezone"],
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    received_args = {
+        "non_default_params": {
+            "temperature": 1e-08,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "alert_explanation": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "Alert Explanation",
+                            },
+                            "investigation": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "Investigation",
+                            },
+                            "conclusions_and_possible_root_causes": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "Conclusions And Possible Root Causes",
+                            },
+                            "next_steps": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "Next Steps",
+                            },
+                            "related_logs": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "Related Logs",
+                            },
+                            "app_or_infra": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "App Or Infra",
+                            },
+                            "external_links": {
+                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "title": "External Links",
+                            },
+                        },
+                        "title": "InvestigationOutput",
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "alert_explanation",
+                            "investigation",
+                            "conclusions_and_possible_root_causes",
+                            "next_steps",
+                            "related_logs",
+                            "app_or_infra",
+                            "external_links",
+                        ],
+                    },
+                    "name": "InvestigationOutput",
+                    "strict": True,
+                },
+            },
+            "tools": tools,
+            "tool_choice": "auto",
+        },
+        "optional_params": {},
+        "model": "gpt-4o",
+        "drop_params": True,
+        "api_version": "2024-02-15-preview",
+    }
+    optional_params = azure_openai_config.map_openai_params(**received_args)
+    assert "tools" in optional_params
+    assert len(optional_params["tools"]) > 1
