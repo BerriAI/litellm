@@ -51,7 +51,6 @@ def initialize_acuvity(litellm_params, guardrail):
     _acuvity_callback = AcuvityGuardrail(
         api_base=litellm_params["api_base"],
         api_key=litellm_params["api_key"],
-        guardrails=guardrail["vendor_specific_params"],
         event_hook=litellm_params["mode"],
         default_on=litellm_params["default_on"],
     )

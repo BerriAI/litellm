@@ -26,7 +26,6 @@ class AcuvityGuardrail(CustomGuardrail):
         # store kwargs as optional_params
         self.optional_params = kwargs
         self.acuvity_client = Acuvity(Security(token=(api_key or os.environ["ACUVITY_TOKEN"])))
-        # Extract 'analyzer_name' and store it
         super().__init__(**kwargs)
 
     async def async_pre_call_hook(
