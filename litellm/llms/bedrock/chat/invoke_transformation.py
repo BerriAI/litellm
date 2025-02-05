@@ -1,20 +1,26 @@
 import copy
 import json
+import time
 import urllib.parse
+import uuid
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast, get_args
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     construct_tool_use_system_prompt,
+    contains_tag,
     custom_prompt,
+    extract_between_tags,
+    parse_xml_params,
     prompt_factory,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_secret
 
 from ..common_utils import BedrockError
@@ -278,7 +284,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             request.headers["Authorization"] = extra_headers["Authorization"]
         return request_data
 
-    def transform_response(
+    def transform_response(  # noqa: PLR0915
         self,
         model: str,
         raw_response: httpx.Response,
@@ -294,12 +300,158 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> ModelResponse:
 
         try:
-            raw_response_json = raw_response.json()
-            model_response.choices[0].message.content = raw_response_json["text"]  # type: ignore
+            completion_response = raw_response.json()
         except Exception:
             raise BedrockError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
+        provider = self.get_bedrock_invoke_provider(model)
+        outputText: Optional[str] = None
+        try:
+            if provider == "cohere":
+                if "text" in completion_response:
+                    outputText = completion_response["text"]  # type: ignore
+                elif "generations" in completion_response:
+                    outputText = completion_response["generations"][0]["text"]
+                    model_response.choices[0].finish_reason = map_finish_reason(
+                        completion_response["generations"][0]["finish_reason"]
+                    )
+            elif provider == "anthropic":
+                if model.startswith("anthropic.claude-3"):
+                    json_schemas: dict = {}
+                    _is_function_call = False
+                    ## Handle Tool Calling
+                    if "tools" in optional_params:
+                        _is_function_call = True
+                        for tool in optional_params["tools"]:
+                            json_schemas[tool["function"]["name"]] = tool[
+                                "function"
+                            ].get("parameters", None)
+                    outputText = completion_response.get("content")[0].get("text", None)
+                    if outputText is not None and contains_tag(
+                        "invoke", outputText
+                    ):  # OUTPUT PARSE FUNCTION CALL
+                        function_name = extract_between_tags("tool_name", outputText)[0]
+                        function_arguments_str = extract_between_tags(
+                            "invoke", outputText
+                        )[0].strip()
+                        function_arguments_str = (
+                            f"<invoke>{function_arguments_str}</invoke>"
+                        )
+                        function_arguments = parse_xml_params(
+                            function_arguments_str,
+                            json_schema=json_schemas.get(
+                                function_name, None
+                            ),  # check if we have a json schema for this function name)
+                        )
+                        _message = litellm.Message(
+                            tool_calls=[
+                                {
+                                    "id": f"call_{uuid.uuid4()}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": function_name,
+                                        "arguments": json.dumps(function_arguments),
+                                    },
+                                }
+                            ],
+                            content=None,
+                        )
+                        model_response.choices[0].message = _message  # type: ignore
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
+                    model_response.choices[0].finish_reason = map_finish_reason(
+                        completion_response.get("stop_reason", "")
+                    )
+                    _usage = litellm.Usage(
+                        prompt_tokens=completion_response["usage"]["input_tokens"],
+                        completion_tokens=completion_response["usage"]["output_tokens"],
+                        total_tokens=completion_response["usage"]["input_tokens"]
+                        + completion_response["usage"]["output_tokens"],
+                    )
+                    setattr(model_response, "usage", _usage)
+                else:
+                    outputText = completion_response["completion"]
+
+                    model_response.choices[0].finish_reason = completion_response[
+                        "stop_reason"
+                    ]
+            elif provider == "ai21":
+                outputText = (
+                    completion_response.get("completions")[0].get("data").get("text")
+                )
+            elif provider == "meta" or provider == "llama":
+                outputText = completion_response["generation"]
+            elif provider == "mistral":
+                outputText = completion_response["outputs"][0]["text"]
+                model_response.choices[0].finish_reason = completion_response[
+                    "outputs"
+                ][0]["stop_reason"]
+            else:  # amazon titan
+                outputText = completion_response.get("results")[0].get("outputText")
+        except Exception as e:
+            raise BedrockError(
+                message="Error processing={}, Received error={}".format(
+                    raw_response.text, str(e)
+                ),
+                status_code=422,
+            )
+
+        try:
+            if (
+                outputText is not None
+                and len(outputText) > 0
+                and hasattr(model_response.choices[0], "message")
+                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
+                is None
+            ):
+                model_response.choices[0].message.content = outputText  # type: ignore
+            elif (
+                hasattr(model_response.choices[0], "message")
+                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
+                is not None
+            ):
+                pass
+            else:
+                raise Exception()
+        except Exception as e:
+            raise BedrockError(
+                message="Error parsing received text={}.\nError-{}".format(
+                    outputText, str(e)
+                ),
+                status_code=raw_response.status_code,
+            )
+
+        ## CALCULATING USAGE - bedrock returns usage in the headers
+        bedrock_input_tokens = raw_response.headers.get(
+            "x-amzn-bedrock-input-token-count", None
+        )
+        bedrock_output_tokens = raw_response.headers.get(
+            "x-amzn-bedrock-output-token-count", None
+        )
+
+        prompt_tokens = int(
+            bedrock_input_tokens or litellm.token_counter(messages=messages)
+        )
+
+        completion_tokens = int(
+            bedrock_output_tokens
+            or litellm.token_counter(
+                text=model_response.choices[0].message.content,  # type: ignore
+                count_response_tokens=True,
+            )
+        )
+
+        model_response.created = int(time.time())
+        model_response.model = model
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        setattr(model_response, "usage", usage)
+
         return model_response
 
     @staticmethod
