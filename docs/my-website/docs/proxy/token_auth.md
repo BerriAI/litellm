@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # OIDC - JWT-based Auth 
 
-Use JWT's to auth admins / projects into the proxy.
+Use JWT's to auth admins / users / projects into the proxy.
 
 :::info
 
@@ -155,27 +155,6 @@ scope: ["litellm-proxy-admin",...]
 ```
 scope: "litellm-proxy-admin ..."
 ```
-
-## Control Model Access with Roles
-
-Reject a JWT token if it's valid but doesn't have the required scopes / fields.
-
-Only tokens which with valid Admin (`admin_jwt_scope`), User (`user_id_jwt_field`), Team (`team_id_jwt_field`) are allowed.
-
-```yaml
-general_settings:
-  enable_jwt_auth: True 
-  litellm_jwtauth:
-    user_roles_jwt_field: "resource_access.litellm-test-client-id.roles"
-    user_allowed_roles: ["basic_user"] # roles that map to an 'internal_user' role on LiteLLM 
-    enforce_rbac: true # if true, will check if the user has the correct role to access the model + endpoint
-  
-  role_permissions: # control what models + endpointsare allowed for each role
-    - role: internal_user
-      models: ["anthropic-claude"]
-```
-
-**[Architecture Diagram (Control Model Access)](./jwt_auth_arch)**
 
 ## Control model access with Teams
 
@@ -331,3 +310,64 @@ general_settings:
     user_allowed_email_domain: "my-co.com" # allows user@my-co.com to call proxy
     user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
 ```
+
+## [BETA] Control Access with OIDC Roles
+
+Allow JWT tokens with supported roles to access the proxy.
+
+Let users and teams access the proxy, without needing to add them to the DB.
+
+
+Very important, set `enforce_rbac: true` to ensure that the RBAC system is enabled.
+
+**Note:** This is in beta and might change unexpectedly.
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    object_id_jwt_field: "oid" # can be either user / team, inferred from the role mapping
+    roles_jwt_field: "roles"
+    role_mappings:
+      - role: litellm.api.consumer
+        internal_role: "team"
+    enforce_rbac: true # 👈 VERY IMPORTANT
+
+  role_permissions: # default model + endpoint permissions for a role. 
+    - role: team
+      models: ["anthropic-claude"]
+      routes: ["/v1/chat/completions"]
+
+environment_variables:
+  JWT_AUDIENCE: "api://LiteLLM_Proxy" # ensures audience is validated
+```
+
+- `object_id_jwt_field`: The field in the JWT token that contains the object id. This id can be either a user id or a team id. Use this instead of `user_id_jwt_field` and `team_id_jwt_field`. If the same field could be both. 
+
+- `roles_jwt_field`: The field in the JWT token that contains the roles. This field is a list of roles that the user has. To index into a nested field, use dot notation - eg. `resource_access.litellm-test-client-id.roles`.
+
+- `role_mappings`: A list of role mappings. Map the received role in the JWT token to an internal role on LiteLLM.
+
+- `JWT_AUDIENCE`: The audience of the JWT token. This is used to validate the audience of the JWT token. Set via an environment variable.
+
+### Example Token 
+
+```
+{
+  "aud": "api://LiteLLM_Proxy",
+  "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
+  "roles": ["litellm.api.consumer"]
+}
+```
+
+### Role Mapping Spec 
+
+- `role`: The expected role in the JWT token. 
+- `internal_role`: The internal role on LiteLLM that will be used to control access. 
+
+Supported internal roles:
+- `team`: Team object will be used for RBAC spend tracking. Use this for tracking spend for a 'use case'. 
+- `internal_user`: User object will be used for RBAC spend tracking. Use this for tracking spend for an 'individual user'.
+- `proxy_admin`: Proxy admin will be used for RBAC spend tracking. Use this for granting admin access to a token.
+
+### [Architecture Diagram (Control Model Access)](./jwt_auth_arch)
