@@ -68,6 +68,10 @@ class AmazonConverseConfig(BaseConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock_converse"
+
     @classmethod
     def get_config(cls):
         return {
@@ -112,7 +116,9 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("tools")
 
-        if base_model.startswith("anthropic") or base_model.startswith("mistral"):
+        if litellm.utils.supports_tool_choice(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
@@ -224,11 +230,14 @@ class AmazonConverseConfig(BaseConfig):
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
                 )
                 optional_params["tools"] = [_tool]
-                optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                    tool=SpecificToolChoiceBlock(
-                        name=schema_name if schema_name != "" else "json_tool_call"
+                if litellm.utils.supports_tool_choice(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ):
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                        tool=SpecificToolChoiceBlock(
+                            name=schema_name if schema_name != "" else "json_tool_call"
+                        )
                     )
-                )
                 optional_params["json_mode"] = True
                 if non_default_params.get("stream", False) is True:
                     optional_params["fake_stream"] = True
