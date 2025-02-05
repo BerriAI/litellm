@@ -175,46 +175,17 @@ class AzureOpenAIConfig(BaseConfig):
                 else:
                     optional_params["tool_choice"] = value
             elif param == "response_format" and isinstance(value, dict):
-                json_schema: Optional[dict] = None
-                if "response_schema" in value:
-                    json_schema = value["response_schema"]
-                elif "json_schema" in value:
-                    json_schema = value["json_schema"]["schema"]
-                """
-                Follow similar approach to anthropic - translate to a single tool call. 
-
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
                 _is_response_format_supported_model = (
                     self._is_response_format_supported_model(model)
                 )
-                if json_schema is not None and (
-                    (api_version_year <= "2024" and api_version_month < "08")
-                    or not _is_response_format_supported_model
-                ):  # azure api version "2024-08-01-preview" onwards supports 'json_schema' only for gpt-4o/3.5 models
-
-                    _tool_choice = ChatCompletionToolChoiceObjectParam(
-                        type="function",
-                        function=ChatCompletionToolChoiceFunctionParam(
-                            name=RESPONSE_FORMAT_TOOL_NAME
-                        ),
-                    )
-
-                    _tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=RESPONSE_FORMAT_TOOL_NAME, parameters=json_schema
-                        ),
-                    )
-
-                    optional_params = self._add_response_format_to_tools(
-                        optional_params, _tool, _tool_choice
-                    )
-                else:
-                    optional_params["response_format"] = value
+                should_convert_response_format_to_tool = (
+                    api_version_year <= "2024" and api_version_month < "08"
+                ) or not _is_response_format_supported_model
+                optional_params = self._add_response_format_to_tools(
+                    optional_params=optional_params,
+                    value=value,
+                    should_convert_response_format_to_tool=should_convert_response_format_to_tool,
+                )
             elif param == "tools" and isinstance(value, list):
                 optional_params.setdefault("tools", [])
                 optional_params["tools"].extend(value)
