@@ -73,7 +73,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     cell: (info: any) => <CountryCell ipAddress={info.getValue()} />,
   },
   {
-    header: "Team",
+    header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
     cell: (info: any) => <span>{String(info.getValue() || "-")}</span>,
   },
