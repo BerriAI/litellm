@@ -515,9 +515,13 @@ class BaseLLMChatTest(ABC):
                     ],
                 }
             ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
+        try:
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
         assert response is not None
 
     @pytest.mark.flaky(retries=4, delay=1)
