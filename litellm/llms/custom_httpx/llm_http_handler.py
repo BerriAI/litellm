@@ -262,8 +262,11 @@ class BaseLLMHTTPHandler:
 
         if acompletion is True:
             if stream is True:
-                if fake_stream is not True:
-                    data["stream"] = stream
+                data = self._add_stream_param_to_request_body(
+                    data=data,
+                    provider_config=provider_config,
+                    fake_stream=fake_stream,
+                )
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
@@ -307,8 +310,11 @@ class BaseLLMHTTPHandler:
                 )
 
         if stream is True:
-            if fake_stream is not True:
-                data["stream"] = stream
+            data = self._add_stream_param_to_request_body(
+                data=data,
+                provider_config=provider_config,
+                fake_stream=fake_stream,
+            )
             if provider_config.has_custom_stream_wrapper is True:
                 return provider_config.get_sync_custom_stream_wrapper(
                     model=model,
@@ -538,6 +544,21 @@ class BaseLLMHTTPHandler:
         )
 
         return completion_stream, response.headers
+
+    def _add_stream_param_to_request_body(
+        self,
+        data: dict,
+        provider_config: BaseConfig,
+        fake_stream: bool,
+    ) -> dict:
+        """
+        Some providers like Bedrock invoke do not support the stream parameter in the request body, we only pass `stream` in the request body the provider supports it.
+        """
+        if fake_stream is True:
+            return data
+        if provider_config.supports_stream_param_in_request_body is True:
+            data["stream"] = True
+        return data
 
     def embedding(
         self,

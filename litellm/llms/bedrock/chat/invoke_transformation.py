@@ -131,8 +131,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
 
-        if stream is True and fake_stream is not True:
-            request_data["stream"] = True
         request = AWSRequest(
             method="POST",
             url=api_base,
@@ -550,6 +548,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     @property
     def has_custom_stream_wrapper(self) -> bool:
         return True
+
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        """
+        Bedrock invoke does not allow passing `stream` in the request body.
+        """
+        return False
 
     @staticmethod
     def get_bedrock_invoke_provider(
