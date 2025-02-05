@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
@@ -201,14 +202,14 @@ class AzureOpenAIConfig(BaseConfig):
                     _tool_choice = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(
-                            name=schema_name
+                            name=RESPONSE_FORMAT_TOOL_NAME
                         ),
                     )
 
                     _tool = ChatCompletionToolParam(
                         type="function",
                         function=ChatCompletionToolParamFunctionChunk(
-                            name=schema_name, parameters=json_schema
+                            name=RESPONSE_FORMAT_TOOL_NAME, parameters=json_schema
                         ),
                     )
 
