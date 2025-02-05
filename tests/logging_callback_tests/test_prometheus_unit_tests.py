@@ -308,7 +308,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
         )
 
         prometheus_logger.litellm_remaining_api_key_budget_metric.labels.assert_called_once_with(
-            "key1", "alias1"
+            hashed_api_key="key1", api_key_alias="alias1"
         )
         prometheus_logger.litellm_remaining_api_key_budget_metric.labels().set.assert_called_once_with(
             40  # 75 - (25 + 10)
@@ -323,7 +323,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
         )
 
         prometheus_logger.litellm_api_key_max_budget_metric.labels.assert_called_once_with(
-            "key1", "alias1"
+            hashed_api_key="key1", api_key_alias="alias1"
         )
         prometheus_logger.litellm_api_key_max_budget_metric.labels().set.assert_called_once_with(
             75
@@ -342,7 +342,7 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
         assert 9.9 <= remaining_hours_call <= 10.0
 
         prometheus_logger.litellm_api_key_budget_remaining_hours_metric.labels.assert_called_once_with(
-            "key1", "alias1"
+            hashed_api_key="key1", api_key_alias="alias1"
         )
         # The remaining hours should be approximately 10 (with some small difference due to test execution time)
         remaining_hours_call = prometheus_logger.litellm_api_key_budget_remaining_hours_metric.labels().set.call_args[
