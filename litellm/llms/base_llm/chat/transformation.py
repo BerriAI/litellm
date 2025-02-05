@@ -227,3 +227,7 @@ class BaseConfig(ABC):
         json_mode: Optional[bool] = False,
     ) -> Any:
         pass
+
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return None
