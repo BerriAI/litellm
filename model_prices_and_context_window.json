@@ -5676,7 +5676,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "us.amazon.nova-micro-v1:0": {
         "max_tokens": 4096, 
@@ -5687,7 +5688,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "amazon.nova-lite-v1:0": {
         "max_tokens": 4096, 
@@ -5700,7 +5702,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "us.amazon.nova-lite-v1:0": {
         "max_tokens": 4096, 
@@ -5713,7 +5716,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "amazon.nova-pro-v1:0": {
         "max_tokens": 4096, 
@@ -5726,7 +5730,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "us.amazon.nova-pro-v1:0": {
         "max_tokens": 4096, 
@@ -5739,7 +5744,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096, 
