@@ -78,6 +78,37 @@ class JWTHandler:
         parts = token.split(".")
         return len(parts) == 3
 
+    def _rbac_role_from_role_mapping(self, token: dict) -> Optional[RBAC_ROLES]:
+        """
+        Returns the RBAC role the token 'belongs' to based on role mappings.
+
+        Args:
+            token (dict): The JWT token containing role information
+
+        Returns:
+            Optional[RBAC_ROLES]: The mapped internal RBAC role if a mapping exists,
+                                None otherwise
+
+        Note:
+            The function handles both single string roles and lists of roles from the JWT.
+            If multiple mappings match the JWT roles, the first matching mapping is returned.
+        """
+        if self.litellm_jwtauth.role_mappings is None:
+            return None
+
+        jwt_role = self.get_jwt_role(token=token, default_value=None)
+        if not jwt_role:
+            return None
+
+        jwt_role_set = set(jwt_role)
+
+        for role_mapping in self.litellm_jwtauth.role_mappings:
+            # Check if the mapping role matches any of the JWT roles
+            if role_mapping.role in jwt_role_set:
+                return role_mapping.internal_role
+
+        return None
+
     def get_rbac_role(self, token: dict) -> Optional[RBAC_ROLES]:
         """
         Returns the RBAC role the token 'belongs' to.
@@ -109,6 +140,8 @@ class JWTHandler:
             user_roles=user_roles
         ):
             return LitellmUserRoles.INTERNAL_USER
+        elif rbac_role := self._rbac_role_from_role_mapping(token=token):
+            return rbac_role
 
         return None
 
@@ -204,6 +237,29 @@ class JWTHandler:
                 user_roles = get_nested_value(
                     data=token,
                     key_path=self.litellm_jwtauth.user_roles_jwt_field,
+                    default=default_value,
+                )
+            else:
+                user_roles = default_value
+        except KeyError:
+            user_roles = default_value
+        return user_roles
+
+    def get_jwt_role(
+        self, token: dict, default_value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        """
+        Generic implementation of `get_user_roles` that can be used for both user and team roles.
+
+        Returns the jwt role from the token.
+
+        Set via 'roles_jwt_field' in the config.
+        """
+        try:
+            if self.litellm_jwtauth.roles_jwt_field is not None:
+                user_roles = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.roles_jwt_field,
                     default=default_value,
                 )
             else:
@@ -441,7 +497,7 @@ class JWTAuthManager:
         if model not in role_based_models:
             raise HTTPException(
                 status_code=403,
-                detail=f"User role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+                detail=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
             )
 
         return True
