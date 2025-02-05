@@ -298,6 +298,16 @@ class JWTHandler:
             user_email = default_value
         return user_email
 
+    def get_object_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        try:
+            if self.litellm_jwtauth.object_id_jwt_field is not None:
+                object_id = token[self.litellm_jwtauth.object_id_jwt_field]
+            else:
+                object_id = default_value
+        except KeyError:
+            object_id = default_value
+        return object_id
+
     def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.org_id_jwt_field is not None:
@@ -540,10 +550,10 @@ class JWTAuthManager:
         general_settings: dict,
         request_data: dict,
         route: str,
+        rbac_role: Optional[RBAC_ROLES],
     ) -> None:
         """Validate RBAC role and model access permissions"""
         if jwt_handler.litellm_jwtauth.enforce_rbac is True:
-            rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
             if rbac_role is None:
                 raise HTTPException(
                     status_code=403,
@@ -779,6 +789,21 @@ class JWTAuthManager:
         return user_object, org_object, end_user_object
 
     @staticmethod
+    def validate_object_id(
+        user_id: Optional[str],
+        team_id: Optional[str],
+        enforce_rbac: bool,
+        is_proxy_admin: bool,
+    ) -> Literal[True]:
+        """If enforce_rbac is true, validate that a valid rbac id is returned for spend tracking"""
+        if enforce_rbac and not is_proxy_admin and not user_id and not team_id:
+            raise HTTPException(
+                status_code=403,
+                detail="No user or team id found in token. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user.",
+            )
+        return True
+
+    @staticmethod
     async def auth_builder(
         api_key: str,
         jwt_handler: JWTHandler,
@@ -794,9 +819,17 @@ class JWTAuthManager:
         jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
 
         # Check RBAC
+        rbac_role = jwt_handler.get_rbac_role(token=jwt_valid_token)
         await JWTAuthManager.check_rbac_role(
-            jwt_handler, jwt_valid_token, general_settings, request_data, route
+            jwt_handler,
+            jwt_valid_token,
+            general_settings,
+            request_data,
+            route,
+            rbac_role,
         )
+
+        object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         # Get basic user info
         scopes = jwt_handler.get_scopes(token=jwt_valid_token)
@@ -809,6 +842,16 @@ class JWTAuthManager:
         end_user_id = jwt_handler.get_end_user_id(
             token=jwt_valid_token, default_value=None
         )
+        team_id: Optional[str] = None
+        team_object: Optional[LiteLLM_TeamTable] = None
+        object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
+
+        if rbac_role and object_id:
+
+            if rbac_role == LitellmUserRoles.TEAM:
+                team_id = object_id
+            elif rbac_role == LitellmUserRoles.INTERNAL_USER:
+                user_id = object_id
 
         # Check admin access
         admin_result = await JWTAuthManager.check_admin_access(
@@ -819,15 +862,20 @@ class JWTAuthManager:
 
         # Get team with model access
         ## SPECIFIC TEAM ID
-        team_id, team_object = await JWTAuthManager.find_and_validate_specific_team_id(
-            jwt_handler,
-            jwt_valid_token,
-            prisma_client,
-            user_api_key_cache,
-            parent_otel_span,
-            proxy_logging_obj,
-        )
-        if not team_object:
+
+        if not team_id:
+            team_id, team_object = (
+                await JWTAuthManager.find_and_validate_specific_team_id(
+                    jwt_handler,
+                    jwt_valid_token,
+                    prisma_client,
+                    user_api_key_cache,
+                    parent_otel_span,
+                    proxy_logging_obj,
+                )
+            )
+
+        if not team_object and not team_id:
             ## CHECK USER GROUP ACCESS
             all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
             team_id, team_object = await JWTAuthManager.find_team_with_model_access(
@@ -853,6 +901,14 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # Validate that a valid rbac id is returned for spend tracking
+        JWTAuthManager.validate_object_id(
+            user_id=user_id,
+            team_id=team_id,
+            enforce_rbac=general_settings.get("enforce_rbac", False),
+            is_proxy_admin=False,
         )
 
         return JWTAuthBuilderResult(
