@@ -397,92 +397,6 @@ class LiteLLMRoutes(enum.Enum):
     )
 
 
-# class LiteLLMAllowedRoutes(LiteLLMPydanticObjectBase):
-#     """
-#     Defines allowed routes based on key type.
-
-#     Types = ["admin", "team", "user", "unmapped"]
-#     """
-
-#     admin_allowed_routes: List[
-#         Literal["openai_routes", "info_routes", "management_routes", "spend_tracking_routes", "global_spend_tracking_routes"]
-#     ] = ["management_routes"]
-
-
-class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
-    """
-    A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
-
-    Attributes:
-    - admin_jwt_scope: The JWT scope required for proxy admin roles.
-    - admin_allowed_routes: list of allowed routes for proxy admin roles.
-    - team_jwt_scope: The JWT scope required for proxy team roles.
-    - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
-    - team_allowed_routes: list of allowed routes for proxy team roles.
-    - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
-    - user_email_jwt_field: The field in the JWT token that stores the user email (maps to `LiteLLMUserTable`). Use this for internal employees.
-    - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
-    - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
-    - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
-    - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
-    - enforce_rbac: If true, enforce RBAC for all routes.
-
-    See `auth_checks.py` for the specific routes
-    """
-
-    admin_jwt_scope: str = "litellm_proxy_admin"
-    admin_allowed_routes: List[str] = [
-        "management_routes",
-        "spend_tracking_routes",
-        "global_spend_tracking_routes",
-        "info_routes",
-    ]
-    team_id_jwt_field: Optional[str] = None
-    team_ids_jwt_field: Optional[str] = None
-    upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[
-        Literal["openai_routes", "info_routes", "management_routes"]
-    ] = ["openai_routes", "info_routes"]
-    team_id_default: Optional[str] = Field(
-        default=None,
-        description="If no team_id given, default permissions/spend-tracking to this team.s",
-    )
-    org_id_jwt_field: Optional[str] = None
-    user_id_jwt_field: Optional[str] = None
-    user_email_jwt_field: Optional[str] = None
-    user_allowed_email_domain: Optional[str] = None
-    user_roles_jwt_field: Optional[str] = None
-    user_allowed_roles: Optional[List[str]] = None
-    user_id_upsert: bool = Field(
-        default=False, description="If user doesn't exist, upsert them into the db."
-    )
-    end_user_id_jwt_field: Optional[str] = None
-    public_key_ttl: float = 600
-    public_allowed_routes: List[str] = ["public_routes"]
-    enforce_rbac: bool = False
-
-    def __init__(self, **kwargs: Any) -> None:
-        # get the attribute names for this Pydantic model
-        allowed_keys = self.__annotations__.keys()
-
-        invalid_keys = set(kwargs.keys()) - allowed_keys
-        user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
-        user_allowed_roles = kwargs.get("user_allowed_roles")
-
-        if invalid_keys:
-            raise ValueError(
-                f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
-            )
-        if (user_roles_jwt_field is not None and user_allowed_roles is None) or (
-            user_roles_jwt_field is None and user_allowed_roles is not None
-        ):
-            raise ValueError(
-                "user_allowed_roles must be provided if user_roles_jwt_field is set."
-            )
-
-        super().__init__(**kwargs)
-
-
 class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
     heuristics_check: bool = False
     vector_db_check: bool = False
@@ -2366,3 +2280,95 @@ RBAC_ROLES = Literal[
 class RoleBasedPermissions(TypedDict):
     role: Required[RBAC_ROLES]
     models: Required[List[str]]
+
+
+class RoleMapping(BaseModel):
+    role: str
+    internal_role: RBAC_ROLES
+
+
+class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
+    """
+    A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
+
+    Attributes:
+    - admin_jwt_scope: The JWT scope required for proxy admin roles.
+    - admin_allowed_routes: list of allowed routes for proxy admin roles.
+    - team_jwt_scope: The JWT scope required for proxy team roles.
+    - team_id_jwt_field: The field in the JWT token that stores the team ID. Default - `client_id`.
+    - team_allowed_routes: list of allowed routes for proxy team roles.
+    - user_id_jwt_field: The field in the JWT token that stores the user id (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - user_email_jwt_field: The field in the JWT token that stores the user email (maps to `LiteLLMUserTable`). Use this for internal employees.
+    - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
+    - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
+    - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+    - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
+    - enforce_rbac: If true, enforce RBAC for all routes.
+
+    See `auth_checks.py` for the specific routes
+    """
+
+    admin_jwt_scope: str = "litellm_proxy_admin"
+    admin_allowed_routes: List[str] = [
+        "management_routes",
+        "spend_tracking_routes",
+        "global_spend_tracking_routes",
+        "info_routes",
+    ]
+    team_id_jwt_field: Optional[str] = None
+    team_ids_jwt_field: Optional[str] = None
+    upsert_sso_user_to_team: bool = False
+    team_allowed_routes: List[
+        Literal["openai_routes", "info_routes", "management_routes"]
+    ] = ["openai_routes", "info_routes"]
+    team_id_default: Optional[str] = Field(
+        default=None,
+        description="If no team_id given, default permissions/spend-tracking to this team.s",
+    )
+
+    org_id_jwt_field: Optional[str] = None
+    user_id_jwt_field: Optional[str] = None
+    user_email_jwt_field: Optional[str] = None
+    user_allowed_email_domain: Optional[str] = None
+    user_roles_jwt_field: Optional[str] = None
+    user_allowed_roles: Optional[List[str]] = None
+    user_id_upsert: bool = Field(
+        default=False, description="If user doesn't exist, upsert them into the db."
+    )
+    end_user_id_jwt_field: Optional[str] = None
+    public_key_ttl: float = 600
+    public_allowed_routes: List[str] = ["public_routes"]
+    enforce_rbac: bool = False
+    roles_jwt_field: Optional[str] = None  # v2 on role mappings
+    role_mappings: Optional[List[RoleMapping]] = None
+    object_id_jwt_field: Optional[str] = (
+        None  # can be either user / team, inferred from the role mapping
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        # get the attribute names for this Pydantic model
+        allowed_keys = self.__annotations__.keys()
+
+        invalid_keys = set(kwargs.keys()) - allowed_keys
+        user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
+        user_allowed_roles = kwargs.get("user_allowed_roles")
+        object_id_jwt_field = kwargs.get("object_id_jwt_field")
+        role_mappings = kwargs.get("role_mappings")
+
+        if invalid_keys:
+            raise ValueError(
+                f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
+            )
+        if (user_roles_jwt_field is not None and user_allowed_roles is None) or (
+            user_roles_jwt_field is None and user_allowed_roles is not None
+        ):
+            raise ValueError(
+                "user_allowed_roles must be provided if user_roles_jwt_field is set."
+            )
+
+        if object_id_jwt_field is not None and role_mappings is None:
+            raise ValueError(
+                "if object_id_jwt_field is set, role_mappings must also be set. Needed to infer if the caller is a user or team."
+            )
+
+        super().__init__(**kwargs)
