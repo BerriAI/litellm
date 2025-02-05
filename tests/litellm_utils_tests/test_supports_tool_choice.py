@@ -11,6 +11,34 @@ import litellm
 from litellm.utils import get_llm_provider, ProviderConfigManager
 from litellm import LlmProviders
 
+
+def test_supports_tool_choice_simple_tests():
+    """
+    simple sanity checks
+    """
+    assert litellm.utils.supports_tool_choice(model="gpt-4o") == True
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+        == True
+    )
+    assert (
+        litellm.utils.supports_tool_choice(
+            model="anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+        is True
+    )
+
+    assert (
+        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
+    )
+    assert (
+        litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
+        is False
+    )
+
+
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
 SKIP_MODELS = ["azure/mistral", "azure/command-r", "jamba", "deepinfra"]
