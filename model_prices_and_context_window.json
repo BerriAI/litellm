@@ -3449,7 +3449,6 @@
         "supports_response_schema": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-1.5-flash",
         "deprecation_date": "2025-09-24",
-        "deprecation_date": "2025-09-24",
         "supports_tool_choice": true
     },
     "gemini-1.5-flash-001": {
