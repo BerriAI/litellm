@@ -19,12 +19,14 @@ from typing import (
     Tuple,
     Union,
     cast,
+    get_args,
 )
 
 import httpx  # type: ignore
 
 import litellm
 from litellm import verbose_logger
+from litellm._logging import print_verbose
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -206,7 +208,7 @@ async def make_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=litellm.print_verbose,
+                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
@@ -286,7 +288,7 @@ class BedrockLLM(BaseAWSLLM):
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
-        elif provider == "meta":
+        elif provider == "meta" or provider == "llama":
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
@@ -309,7 +311,7 @@ class BedrockLLM(BaseAWSLLM):
         model: str,
         response: httpx.Response,
         model_response: ModelResponse,
-        stream: bool,
+        stream: Optional[bool],
         logging_obj: Logging,
         optional_params: dict,
         api_key: str,
@@ -318,7 +320,7 @@ class BedrockLLM(BaseAWSLLM):
         print_verbose,
         encoding,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        provider = model.split(".")[0]
+        provider = self.get_bedrock_invoke_provider(model)
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -465,7 +467,7 @@ class BedrockLLM(BaseAWSLLM):
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
                 )
-            elif provider == "meta":
+            elif provider == "meta" or provider == "llama":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
@@ -597,13 +599,13 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        modelId = optional_params.pop("model_id", None)
-        if modelId is not None:
-            modelId = self.encode_model_id(model_id=modelId)
-        else:
-            modelId = model
 
-        provider = model.split(".")[0]
+        provider = self.get_bedrock_invoke_provider(model)
+        modelId = self.get_bedrock_model_id(
+            model=model,
+            provider=provider,
+            optional_params=optional_params,
+        )
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
@@ -785,7 +787,7 @@ class BedrockLLM(BaseAWSLLM):
                     "textGenerationConfig": inference_params,
                 }
             )
-        elif provider == "meta":
+        elif provider == "meta" or provider == "llama":
             ## LOAD CONFIG
             config = litellm.AmazonLlamaConfig.get_config()
             for k, v in config.items():
@@ -1043,6 +1045,74 @@ class BedrockLLM(BaseAWSLLM):
             logging_obj=logging_obj,
         )
         return streaming_response
+
+    @staticmethod
+    def get_bedrock_invoke_provider(
+        model: str,
+    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the bedrock provider from the model
+
+        handles 2 scenarions:
+        1. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        2. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
+        """
+        _split_model = model.split(".")[0]
+        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
+
+        # If not a known provider, check for pattern with two slashes
+        provider = BedrockLLM._get_provider_from_model_path(model)
+        if provider is not None:
+            return provider
+        return None
+
+    @staticmethod
+    def _get_provider_from_model_path(
+        model_path: str,
+    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the provider from a model path with format: provider/model-name
+
+        Args:
+            model_path (str): The model path (e.g., 'llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n' or 'anthropic/model-name')
+
+        Returns:
+            Optional[str]: The provider name, or None if no valid provider found
+        """
+        parts = model_path.split("/")
+        if len(parts) >= 1:
+            provider = parts[0]
+            if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
+        return None
+
+    def get_bedrock_model_id(
+        self,
+        optional_params: dict,
+        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        model: str,
+    ) -> str:
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = self.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
+        if provider == "llama" and "llama/" in modelId:
+            modelId = self._get_model_id_for_llama_like_model(modelId)
+
+        return modelId
+
+    def _get_model_id_for_llama_like_model(
+        self,
+        model: str,
+    ) -> str:
+        """
+        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
+        """
+        model_id = model.replace("llama/", "")
+        return self.encode_model_id(model_id=model_id)
 
 
 def get_response_stream_shape():

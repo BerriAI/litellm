@@ -94,7 +94,10 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     role="assistant",
                 )
                 choice = Choices(
-                    finish_reason=choice["finish_reason"], index=idx, message=message
+                    finish_reason=choice["finish_reason"],
+                    index=idx,
+                    message=message,
+                    logprobs=choice.get("logprobs", None),
                 )
                 choice_list.append(choice)
             model_response_object.choices = choice_list

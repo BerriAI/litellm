@@ -7,7 +7,7 @@ ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Suppor
 | Property | Details |
 |-------|-------|
 | Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
-| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy) |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#bedrock-imported-models-deepseek) |
 | Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
 | Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
 | Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
@@ -1277,6 +1277,74 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 https://some-api-url/models
 ```
 
+## Bedrock Imported Models (Deepseek)
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/llama/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+Use this route to call Bedrock Imported Models that follow the `llama` Invoke Request / Response spec
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # bedrock/llama/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: DeepSeek-R1-Distill-Llama-70B
+      litellm_params:
+        model: bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
 - `model=bedrock/<base-model>`, example `model=bedrock/anthropic.claude-v2`. Set `model` to any of the [Supported AWS models](#supported-aws-bedrock-models)
@@ -1330,65 +1398,6 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Meta Llama 2 Chat 70b      | `completion(model='bedrock/meta.llama2-70b-chat-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
-
-### Deepseek
-
-Native Deepseek support will be [available soon](https://github.com/BerriAI/litellm/pull/8132)
-
-Till then, use this: 
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-response = litellm.completion(
-    model="bedrock/meta.DeepSeek-R1-Distill-Llama-8B",
-    model_id="provisioned-model-arn",
-    messages=[{"content": "Hello, how are you?", "role": "user"}]
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-    - model_name: bedrock-deepseek
-      litellm_params:
-        model: bedrock/meta.DeepSeek-R1-Distill-Llama-8B
-        model_id: provisioned-model-arn
-```
-
-2. Start proxy server
-
-```bash
-litellm --config config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-3. Test it! 
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--d '{
-  "model": "bedrock-deepseek",
-  "messages": [
-    {
-      "role": "user",
-      "content": "What'\''s the weather like in Boston today 236589?"
-    }
-  ]
-}'
-```
-
-</TabItem>
-</Tabs>
 
 ## Bedrock Embedding
 

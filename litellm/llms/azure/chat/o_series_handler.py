@@ -1,7 +1,7 @@
 """
-Handler file for calls to Azure OpenAI's o1 family of models
+Handler file for calls to Azure OpenAI's o1/o3 family of models
 
-Written separately to handle faking streaming for o1 models.
+Written separately to handle faking streaming for o1 and o3 models.
 """
 
 from typing import Optional, Union
@@ -36,7 +36,9 @@ class AzureOpenAIO1ChatCompletion(OpenAIChatCompletion):
     ]:
 
         # Override to use Azure-specific client initialization
-        if isinstance(client, OpenAI) or isinstance(client, AsyncOpenAI):
+        if not isinstance(client, AzureOpenAI) and not isinstance(
+            client, AsyncAzureOpenAI
+        ):
             client = None
 
         return get_azure_openai_client(

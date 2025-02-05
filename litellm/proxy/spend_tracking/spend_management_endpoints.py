@@ -1,7 +1,7 @@
 #### SPEND MANAGEMENT #####
 import collections
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
@@ -1688,13 +1688,18 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
+
         # Convert the date strings to datetime objects
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
 
         # Convert to ISO format strings for Prisma
-        start_date_iso = start_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
-        end_date_iso = end_date_obj.isoformat() + "Z"  # Add Z to indicate UTC
+        start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
+        end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
 
         # Build where conditions
         where_conditions: dict[str, Any] = {

@@ -2605,6 +2605,21 @@ def test_completion_openrouter1():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_openrouter_reasoning_effort():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="openrouter/deepseek/deepseek-r1",
+            messages=messages,
+            include_reasoning=True,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_openrouter1()
 
 
@@ -4584,6 +4599,21 @@ def test_provider_specific_header(custom_llm_provider, expected_result):
         assert "anthropic-beta" in mock_post.call_args.kwargs["headers"]
 
 
+def test_qwen_text_completion():
+    # litellm._turn_on_debug()
+    resp = litellm.completion(
+        model="gpt-3.5-turbo-instruct",
+        messages=[{"content": "hello", "role": "user"}],
+        stream=False,
+        logprobs=1,
+    )
+    assert resp.choices[0].message.content is not None
+    assert resp.choices[0].logprobs.token_logprobs[0] is not None
+    print(
+        f"resp.choices[0].logprobs.token_logprobs[0]: {resp.choices[0].logprobs.token_logprobs[0]}"
+    )
+
+
 @pytest.mark.parametrize(
     "enable_preview_features",
     [True, False],
@@ -4616,3 +4646,22 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
             }
         else:
             assert "metadata" not in mock_completion.call_args.kwargs
+
+
+def test_completion_o3_mini_temperature():
+    try:
+        litellm.set_verbose = True
+        resp = litellm.completion(
+            model="o3-mini",
+            temperature=0.0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, world!",
+                }
+            ],
+            drop_params=True,
+        )
+        assert resp.choices[0].message.content is not None
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

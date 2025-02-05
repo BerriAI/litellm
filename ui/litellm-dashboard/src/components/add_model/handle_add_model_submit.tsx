@@ -1,5 +1,5 @@
 import { message } from "antd";
-import { provider_map } from "../provider_info_helpers";
+import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
 
 
@@ -12,7 +12,9 @@ export const handleAddModelSubmit = async (
       console.log("handling submit for formValues:", formValues);
       // If model_name is not provided, use provider.toLowerCase() + "/*"
       if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
-        const wildcardModel = formValues["custom_llm_provider"].toLowerCase() + "/*";
+        const customProvider: Providers = formValues["custom_llm_provider"];
+        const litellm_custom_provider = provider_map[customProvider as keyof typeof Providers];
+        const wildcardModel = litellm_custom_provider + "/*";
         formValues["model_name"] = wildcardModel;
         formValues["model"] = wildcardModel; 
       }
@@ -35,12 +37,26 @@ export const handleAddModelSubmit = async (
         console.log(`litellm_model: ${litellm_model}`);
         const litellmParamsObj: Record<string, any> = {};
         const modelInfoObj: Record<string, any> = {};
+        
+        // Handle pricing conversion before processing other fields
+        if (formValues.input_cost_per_token) {
+          formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1000000;
+        }
+        if (formValues.output_cost_per_token) {
+          formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1000000;
+        }
+        // Keep input_cost_per_second as is, no conversion needed
+        
         // Iterate through the key-value pairs in formValues
         litellmParamsObj["model"] = litellm_model;
         let modelName: string = "";
         console.log("formValues add deployment:", formValues);
         for (const [key, value] of Object.entries(formValues)) {
           if (value === "") {
+            continue;
+          }
+          // Skip the custom_pricing and pricing_model fields as they're only used for UI control
+          if (key === 'custom_pricing' || key === 'pricing_model') {
             continue;
           }
           if (key == "model_name") {
@@ -95,6 +111,16 @@ export const handleAddModelSubmit = async (
                 modelInfoObj[key] = value;
               }
             }
+          }
+  
+          // Handle the pricing fields
+          else if (key === "input_cost_per_token" || 
+                  key === "output_cost_per_token" || 
+                  key === "input_cost_per_second") {
+            if (value) {
+              litellmParamsObj[key] = Number(value);
+            }
+            continue;
           }
   
           // Check if key is any of the specified API related keys

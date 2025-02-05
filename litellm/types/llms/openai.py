@@ -442,7 +442,17 @@ class OpenAIChatCompletionSystemMessage(TypedDict, total=False):
     name: str
 
 
+class OpenAIChatCompletionDeveloperMessage(TypedDict, total=False):
+    role: Required[Literal["developer"]]
+    content: Required[Union[str, List]]
+    name: str
+
+
 class ChatCompletionSystemMessage(OpenAIChatCompletionSystemMessage, total=False):
+    cache_control: ChatCompletionCachedContent
+
+
+class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total=False):
     cache_control: ChatCompletionCachedContent
 
 
@@ -458,6 +468,7 @@ AllMessageValues = Union[
     ChatCompletionToolMessage,
     ChatCompletionSystemMessage,
     ChatCompletionFunctionMessage,
+    ChatCompletionDeveloperMessage,
 ]
 
 

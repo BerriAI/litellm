@@ -49,6 +49,7 @@ class AzureTextCompletion(BaseLLM):
         api_version: str,
         api_type: str,
         azure_ad_token: str,
+        azure_ad_token_provider: Optional[Callable],
         print_verbose: Callable,
         timeout,
         logging_obj,
@@ -170,6 +171,7 @@ class AzureTextCompletion(BaseLLM):
                     "http_client": litellm.client_session,
                     "max_retries": max_retries,
                     "timeout": timeout,
+                    "azure_ad_token_provider": azure_ad_token_provider,
                 }
                 azure_client_params = select_azure_base_url_or_endpoint(
                     azure_client_params=azure_client_params
