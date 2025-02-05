@@ -2088,6 +2088,14 @@ class ProxyConfig:
             health_check_interval = general_settings.get("health_check_interval", 300)
             health_check_details = general_settings.get("health_check_details", True)
 
+            ### RBAC ###
+            rbac_role_permissions = general_settings.get("role_permissions", None)
+            if rbac_role_permissions is not None:
+                general_settings["role_permissions"] = [  # validate role permissions
+                    RoleBasedPermissions(**role_permission)
+                    for role_permission in rbac_role_permissions
+                ]
+
             ## check if user has set a premium feature in general_settings
             if (
                 general_settings.get("enforced_params") is not None

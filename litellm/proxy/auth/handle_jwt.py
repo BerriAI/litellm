@@ -35,11 +35,13 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
+    _allowed_routes_check,
     allowed_routes_check,
     get_actual_routes,
     get_end_user_object,
     get_org_object,
     get_role_based_models,
+    get_role_based_routes,
     get_team_object,
     get_user_object,
 )
@@ -480,6 +482,35 @@ class JWTAuthManager:
     """Manages JWT authentication and authorization operations"""
 
     @staticmethod
+    def can_rbac_role_call_route(
+        rbac_role: RBAC_ROLES,
+        general_settings: dict,
+        route: str,
+    ) -> Literal[True]:
+        """
+        Checks if user is allowed to access the route, based on their role.
+        """
+        role_based_routes = get_role_based_routes(
+            rbac_role=rbac_role, general_settings=general_settings
+        )
+
+        if role_based_routes is None or route is None:
+            return True
+
+        is_allowed = _allowed_routes_check(
+            user_route=route,
+            allowed_routes=role_based_routes,
+        )
+
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Role={rbac_role} not allowed to call route={route}. Allowed routes={role_based_routes}",
+            )
+
+        return True
+
+    @staticmethod
     def can_rbac_role_call_model(
         rbac_role: RBAC_ROLES,
         general_settings: dict,
@@ -508,6 +539,7 @@ class JWTAuthManager:
         jwt_valid_token: dict,
         general_settings: dict,
         request_data: dict,
+        route: str,
     ) -> None:
         """Validate RBAC role and model access permissions"""
         if jwt_handler.litellm_jwtauth.enforce_rbac is True:
@@ -521,6 +553,11 @@ class JWTAuthManager:
                 rbac_role=rbac_role,
                 general_settings=general_settings,
                 model=request_data.get("model"),
+            )
+            JWTAuthManager.can_rbac_role_call_route(
+                rbac_role=rbac_role,
+                general_settings=general_settings,
+                route=route,
             )
 
     @staticmethod
@@ -758,7 +795,7 @@ class JWTAuthManager:
 
         # Check RBAC
         await JWTAuthManager.check_rbac_role(
-            jwt_handler, jwt_valid_token, general_settings, request_data
+            jwt_handler, jwt_valid_token, general_settings, request_data, route
         )
 
         # Get basic user info

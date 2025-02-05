@@ -2277,10 +2277,14 @@ RBAC_ROLES = Literal[
 ]
 
 
-class RoleBasedPermissions(TypedDict):
-    role: Required[RBAC_ROLES]
-    models: Required[List[str]]
-    routes: Required[List[str]]
+class RoleBasedPermissions(LiteLLMPydanticObjectBase):
+    role: RBAC_ROLES
+    models: Optional[List[str]] = None
+    routes: Optional[List[str]] = None
+
+    model_config = {
+        "extra": "forbid",
+    }
 
 
 class RoleMapping(BaseModel):
