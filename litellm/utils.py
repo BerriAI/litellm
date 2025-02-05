@@ -1938,6 +1938,15 @@ def supports_function_calling(
     )
 
 
+def supports_tool_choice(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports `tool_choice` and return a boolean value.
+    """
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_tool_choice"
+    )
+
+
 def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
@@ -4189,6 +4198,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_system_messages=None,
                 supports_response_schema=None,
                 supports_function_calling=None,
+                supports_tool_choice=None,
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_pdf_input=None,
@@ -4333,6 +4343,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_function_calling=_model_info.get(
                     "supports_function_calling", False
                 ),
+                supports_tool_choice=_model_info.get("supports_tool_choice", False),
                 supports_assistant_prefill=_model_info.get(
                     "supports_assistant_prefill", False
                 ),
@@ -4411,6 +4422,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             supports_response_schema: Optional[bool]
             supports_vision: Optional[bool]
             supports_function_calling: Optional[bool]
+            supports_tool_choice: Optional[bool]
             supports_prompt_caching: Optional[bool]
             supports_audio_input: Optional[bool]
             supports_audio_output: Optional[bool]

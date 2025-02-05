@@ -81,6 +81,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
+    supports_tool_choice: Optional[bool]
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
