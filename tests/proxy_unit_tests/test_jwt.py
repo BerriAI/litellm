@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import Request, HTTPException
 from fastapi.routing import APIRoute
 from fastapi.responses import Response
 import litellm
@@ -1164,3 +1164,22 @@ async def test_end_user_jwt_auth(monkeypatch):
         mock_client.call_args.kwargs[
             "end_user_id"
         ] == "81b3e52a-67a6-4efb-9645-70527e101479"
+
+
+def test_can_rbac_role_call_route():
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+    from litellm.proxy._types import LitellmUserRoles
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_route(
+            rbac_role=LitellmUserRoles.TEAM,
+            general_settings={
+                "role_permissions": [
+                    RoleBasedPermissions(
+                        role=LitellmUserRoles.TEAM, routes=["/v1/chat/completions"]
+                    )
+                ]
+            },
+            route="/v1/embeddings",
+        )
