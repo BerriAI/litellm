@@ -18,9 +18,11 @@ from litellm.utils import (
     get_supported_openai_params,
     get_optional_params,
 )
+from typing import Union
 
 # test_example.py
 from abc import ABC, abstractmethod
+from openai import OpenAI
 
 
 def _usage_format_tests(usage: litellm.Usage):
@@ -69,6 +71,34 @@ class BaseLLMChatTest(ABC):
     def get_base_completion_call_args(self) -> dict:
         """Must return the base completion call args"""
         pass
+
+    def test_developer_role_translation(self):
+        """
+        Test that the developer role is translated correctly for non-OpenAI providers.
+
+        Translate `developer` role to `system` role for non-OpenAI providers.
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {
+                "role": "developer",
+                "content": "Be a good bot!",
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello, how are you?"}],
+            },
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+            )
+            assert response is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+        assert response.choices[0].message.content is not None
 
     def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
@@ -431,8 +461,15 @@ class BaseLLMChatTest(ABC):
         pass
 
     @pytest.mark.parametrize("detail", [None, "low", "high"])
-    @pytest.mark.flaky(retries=4, delay=1)
-    def test_image_url(self, detail):
+    @pytest.mark.parametrize(
+        "image_url",
+        [
+            "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+        ],
+    )
+    @pytest.mark.flaky(retries=4, delay=2)
+    def test_image_url(self, detail, image_url):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
 
@@ -442,6 +479,10 @@ class BaseLLMChatTest(ABC):
         base_completion_call_args = self.get_base_completion_call_args()
         if not supports_vision(base_completion_call_args["model"], None):
             pytest.skip("Model does not support image input")
+        elif "http://" in image_url and "fireworks_ai" in base_completion_call_args.get(
+            "model"
+        ):
+            pytest.skip("Model does not support http:// input")
 
         messages = [
             {
@@ -451,7 +492,7 @@ class BaseLLMChatTest(ABC):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                            "url": image_url,
                         },
                     },
                 ],
@@ -474,9 +515,13 @@ class BaseLLMChatTest(ABC):
                     ],
                 }
             ]
-        response = self.completion_function(
-            **base_completion_call_args, messages=messages
-        )
+        try:
+            response = self.completion_function(
+                **base_completion_call_args, messages=messages
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
         assert response is not None
 
     @pytest.mark.flaky(retries=4, delay=1)
@@ -605,3 +650,111 @@ class BaseLLMChatTest(ABC):
         cost = completion_cost(response)
 
         assert cost > 0
+
+
+class BaseOSeriesModelsTest(ABC):  # test across azure/openai
+    @abstractmethod
+    def get_base_completion_call_args(self):
+        pass
+
+    @abstractmethod
+    def get_client(self) -> OpenAI:
+        pass
+
+    def test_reasoning_effort(self):
+        """Test that reasoning_effort is passed correctly to the model"""
+
+        from litellm import completion
+
+        client = self.get_client()
+
+        completion_args = self.get_base_completion_call_args()
+
+        with patch.object(
+            client.chat.completions.with_raw_response, "create"
+        ) as mock_client:
+            try:
+                completion(
+                    **completion_args,
+                    reasoning_effort="low",
+                    messages=[{"role": "user", "content": "Hello!"}],
+                    client=client,
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+            print("request_body: ", request_body)
+            assert request_body["reasoning_effort"] == "low"
+
+    def test_developer_role_translation(self):
+        """Test that developer role is translated correctly to system role for non-OpenAI providers"""
+        from litellm import completion
+
+        client = self.get_client()
+
+        completion_args = self.get_base_completion_call_args()
+
+        with patch.object(
+            client.chat.completions.with_raw_response, "create"
+        ) as mock_client:
+            try:
+                completion(
+                    **completion_args,
+                    reasoning_effort="low",
+                    messages=[
+                        {"role": "developer", "content": "Be a good bot!"},
+                        {"role": "user", "content": "Hello!"},
+                    ],
+                    client=client,
+                )
+            except Exception as e:
+                print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+            print("request_body: ", request_body)
+            assert (
+                request_body["messages"][0]["role"] == "developer"
+            ), "Got={} instead of system".format(request_body["messages"][0]["role"])
+            assert request_body["messages"][0]["content"] == "Be a good bot!"
+
+    def test_completion_o_series_models_temperature(self):
+        """
+        Test that temperature is not passed to O-series models
+        """
+        try:
+            from litellm import completion
+
+            client = self.get_client()
+
+            completion_args = self.get_base_completion_call_args()
+
+            with patch.object(
+                client.chat.completions.with_raw_response, "create"
+            ) as mock_client:
+                try:
+                    completion(
+                        **completion_args,
+                        temperature=0.0,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "Hello, world!",
+                            }
+                        ],
+                        drop_params=True,
+                        client=client,
+                    )
+                except Exception as e:
+                    print(f"Error: {e}")
+
+            mock_client.assert_called_once()
+            request_body = mock_client.call_args.kwargs
+            print("request_body: ", request_body)
+            assert (
+                "temperature" not in request_body
+            ), "temperature should not be in the request body"
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")

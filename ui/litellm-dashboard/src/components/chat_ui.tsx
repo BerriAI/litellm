@@ -190,17 +190,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-
+    // Create message object without model field for API call
     const newUserMessage = { role: "user", content: inputMessage };
-
-    const updatedChatHistory = [...chatHistory, newUserMessage];
-
-    setChatHistory(updatedChatHistory);
+    
+    // Create chat history for API call - strip out model field
+    const apiChatHistory = [...chatHistory.map(({ role, content }) => ({ role, content })), newUserMessage];
+    
+    // Update UI with full message object (including model field for display)
+    setChatHistory([...chatHistory, newUserMessage]);
 
     try {
       if (selectedModel) {
         await generateModelResponse(
-          updatedChatHistory,
+          apiChatHistory,
           (chunk, model) => updateUI("assistant", chunk, model),
           selectedModel,
           effectiveApiKey

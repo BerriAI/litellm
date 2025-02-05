@@ -2,7 +2,16 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # AWS Bedrock
-ALL Bedrock models (Anthropic, Meta, Mistral, Amazon, etc.) are Supported
+ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Supported
+
+| Property | Details |
+|-------|-------|
+| Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#bedrock-imported-models-deepseek) |
+| Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
+| Pass-through Endpoint | [Supported](../pass_through/bedrock.md) |
+
 
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
@@ -1201,11 +1210,9 @@ response = completion(
             aws_bedrock_client=bedrock,
 )
 ```
-## Calling via Proxy
+## Calling via Internal Proxy
 
-Here's how to call bedrock via your internal proxy.
-
-This example uses Cloudflare's AI Gateway.
+Use the `bedrock/converse_like/model` endpoint to call bedrock converse model via your internal proxy.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1214,10 +1221,11 @@ This example uses Cloudflare's AI Gateway.
 from litellm import completion
 
 response = completion(
-    model="anthropic.claude-3-sonnet-20240229-v1:0",
+    model="bedrock/converse_like/some-model",
     messages=[{"role": "user", "content": "What's AWS?"}],
-    extra_headers={"test": "hello world", "Authorization": "my-test-key"},
-    api_base="https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1",
+    api_key="sk-1234",
+    api_base="https://some-api-url/models",
+    extra_headers={"test": "hello world"},
 )
 ```
 
@@ -1230,8 +1238,8 @@ response = completion(
 model_list:
     - model_name: anthropic-claude
       litellm_params:
-        model: anthropic.claude-3-sonnet-20240229-v1:0
-        api_base: https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1
+        model: bedrock/converse_like/some-model
+        api_base: https://some-api-url/models
 ```
 
 2. Start proxy server
@@ -1266,8 +1274,76 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 **Expected Output URL**
 
 ```bash
-https://gateway.ai.cloudflare.com/v1/<some-id>/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse
+https://some-api-url/models
 ```
+
+## Bedrock Imported Models (Deepseek)
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/llama/{model_arn}` |
+| Provider Documentation | [Bedrock Imported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-import-model.html), [Deepseek Bedrock Imported Model](https://aws.amazon.com/blogs/machine-learning/deploy-deepseek-r1-distilled-llama-models-with-amazon-bedrock-custom-model-import/) |
+
+Use this route to call Bedrock Imported Models that follow the `llama` Invoke Request / Response spec
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+response = completion(
+    model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",  # bedrock/llama/{your-model-arn}
+    messages=[{"role": "user", "content": "Tell me a joke"}],
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: DeepSeek-R1-Distill-Llama-70B
+      litellm_params:
+        model: bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n
+
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "DeepSeek-R1-Distill-Llama-70B", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+
 
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 

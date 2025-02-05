@@ -13,7 +13,7 @@ def initialize_aporia(litellm_params, guardrail):
         event_hook=litellm_params["mode"],
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_aporia_callback)
+    litellm.logging_callback_manager.add_litellm_callback(_aporia_callback)
 
 
 def initialize_bedrock(litellm_params, guardrail):
@@ -28,7 +28,7 @@ def initialize_bedrock(litellm_params, guardrail):
         guardrailVersion=litellm_params["guardrailVersion"],
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_bedrock_callback)
+    litellm.logging_callback_manager.add_litellm_callback(_bedrock_callback)
 
 
 def initialize_lakera(litellm_params, guardrail):
@@ -42,7 +42,7 @@ def initialize_lakera(litellm_params, guardrail):
         category_thresholds=litellm_params.get("category_thresholds"),
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_lakera_callback)
+    litellm.logging_callback_manager.add_litellm_callback(_lakera_callback)
 
 
 def initialize_aim(litellm_params, guardrail):
@@ -55,7 +55,7 @@ def initialize_aim(litellm_params, guardrail):
         event_hook=litellm_params["mode"],
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_aim_callback)
+    litellm.logging_callback_manager.add_litellm_callback(_aim_callback)
 
 
 def initialize_presidio(litellm_params, guardrail):
@@ -71,7 +71,7 @@ def initialize_presidio(litellm_params, guardrail):
         mock_redacted_text=litellm_params.get("mock_redacted_text") or None,
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_presidio_callback)
+    litellm.logging_callback_manager.add_litellm_callback(_presidio_callback)
 
     if litellm_params["output_parse_pii"]:
         _success_callback = _OPTIONAL_PresidioPIIMasking(
@@ -81,7 +81,7 @@ def initialize_presidio(litellm_params, guardrail):
             presidio_ad_hoc_recognizers=litellm_params["presidio_ad_hoc_recognizers"],
             default_on=litellm_params["default_on"],
         )
-        litellm.callbacks.append(_success_callback)
+        litellm.logging_callback_manager.add_litellm_callback(_success_callback)
 
 
 def initialize_hide_secrets(litellm_params, guardrail):
@@ -93,7 +93,7 @@ def initialize_hide_secrets(litellm_params, guardrail):
         guardrail_name=guardrail["guardrail_name"],
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_secret_detection_object)
+    litellm.logging_callback_manager.add_litellm_callback(_secret_detection_object)
 
 
 def initialize_guardrails_ai(litellm_params, guardrail):
@@ -111,4 +111,4 @@ def initialize_guardrails_ai(litellm_params, guardrail):
         guardrail_name=SupportedGuardrailIntegrations.GURDRAILS_AI.value,
         default_on=litellm_params["default_on"],
     )
-    litellm.callbacks.append(_guardrails_ai_callback)
+    litellm.logging_callback_manager.add_litellm_callback(_guardrails_ai_callback)

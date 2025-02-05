@@ -1,3 +1,7 @@
+"""
+Utility functions for base LLM classes.
+"""
+
 import copy
 from abc import ABC, abstractmethod
 from typing import List, Optional, Type, Union
@@ -5,6 +9,7 @@ from typing import List, Optional, Type, Union
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
 
 
@@ -105,3 +110,18 @@ def type_to_response_format_param(
             "strict": True,
         },
     }
+
+
+def map_developer_role_to_system_role(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role for non-OpenAI providers.
+    """
+    new_messages: List[AllMessageValues] = []
+    for m in messages:
+        if m["role"] == "developer":
+            new_messages.append({"role": "system", "content": m["content"]})
+        else:
+            new_messages.append(m)
+    return new_messages

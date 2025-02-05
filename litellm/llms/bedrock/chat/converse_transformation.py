@@ -5,7 +5,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 import copy
 import time
 import types
-from typing import List, Literal, Optional, Tuple, Union, overload
+from typing import Callable, List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -30,7 +31,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
+from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
 from ..common_utils import (
     AmazonBedrockGlobalConfig,
@@ -42,7 +43,7 @@ global_config = AmazonBedrockGlobalConfig()
 all_global_regions = global_config.get_all_regions()
 
 
-class AmazonConverseConfig:
+class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
     #2 - https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html#conversation-inference-supported-models-features
@@ -66,6 +67,10 @@ class AmazonConverseConfig:
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock_converse"
 
     @classmethod
     def get_config(cls):
@@ -111,7 +116,9 @@ class AmazonConverseConfig:
         ):
             supported_params.append("tools")
 
-        if base_model.startswith("anthropic") or base_model.startswith("mistral"):
+        if litellm.utils.supports_tool_choice(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
@@ -193,9 +200,9 @@ class AmazonConverseConfig:
 
     def map_openai_params(
         self,
-        model: str,
         non_default_params: dict,
         optional_params: dict,
+        model: str,
         drop_params: bool,
         messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
@@ -223,11 +230,14 @@ class AmazonConverseConfig:
                     schema_name=schema_name if schema_name != "" else "json_tool_call",
                 )
                 optional_params["tools"] = [_tool]
-                optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                    tool=SpecificToolChoiceBlock(
-                        name=schema_name if schema_name != "" else "json_tool_call"
+                if litellm.utils.supports_tool_choice(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ):
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                        tool=SpecificToolChoiceBlock(
+                            name=schema_name if schema_name != "" else "json_tool_call"
+                        )
                     )
-                )
                 optional_params["json_mode"] = True
                 if non_default_params.get("stream", False) is True:
                     optional_params["fake_stream"] = True
@@ -254,25 +264,6 @@ class AmazonConverseConfig:
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
 
-        ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if (
-            "tools" not in non_default_params
-            and messages is not None
-            and has_tool_call_blocks(messages)
-        ):
-            if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(
-                    custom_llm_provider="bedrock_converse"
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="bedrock",
-                )
         return optional_params
 
     @overload
@@ -350,40 +341,67 @@ class AmazonConverseConfig:
         if "top_k" in inference_params:
             inference_params["topK"] = inference_params.pop("top_k")
         return InferenceConfig(**inference_params)
+    
+    def _handle_top_k_value(self, model: str, inference_params: dict) -> dict:
+        base_model = self._get_base_model(model)
+
+        val_top_k = None
+        if "topK" in inference_params:
+            val_top_k = inference_params.pop("topK")
+        elif "top_k" in inference_params:
+            val_top_k = inference_params.pop("top_k")
+
+        if val_top_k:
+            if (base_model.startswith("anthropic")):
+                return {"top_k": val_top_k}
+            if base_model.startswith("amazon.nova"):
+                return {'inferenceConfig': {"topK": val_top_k}}                
+                
+        return {}
 
     def _transform_request_helper(
-        self, system_content_blocks: List[SystemContentBlock], optional_params: dict
+        self,
+        model: str,
+        system_content_blocks: List[SystemContentBlock],
+        optional_params: dict,
+        messages: Optional[List[AllMessageValues]] = None,
     ) -> CommonRequestObject:
+
+        ## VALIDATE REQUEST
+        """
+        Bedrock doesn't support tool calling without `tools=` param specified.
+        """
+        if (
+            "tools" not in optional_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="bedrock",
+                )
+
         inference_params = copy.deepcopy(optional_params)
-        additional_request_keys = []
-        additional_request_params = {}
         supported_converse_params = list(
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
+        total_supported_params = supported_converse_params + supported_tool_call_params + supported_guardrail_params
         inference_params.pop("json_mode", None)  # used for handling json_schema
 
-        # send all model-specific params in 'additional_request_params'
-        for k, v in inference_params.items():
-            if (
-                k not in supported_converse_params
-                and k not in supported_tool_call_params
-                and k not in supported_guardrail_params
-            ):
-                additional_request_params[k] = v
-                additional_request_keys.append(k)
-        for key in additional_request_keys:
-            inference_params.pop(key, None)
+        # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
+        additional_request_params = {k: v for k, v in inference_params.items() if k not in total_supported_params}
+        inference_params = {k: v for k, v in inference_params.items() if k in total_supported_params}
 
-        if "topK" in inference_params:
-            additional_request_params["inferenceConfig"] = {
-                "topK": inference_params.pop("topK")
-            }
-        elif "top_k" in inference_params:
-            additional_request_params["inferenceConfig"] = {
-                "topK": inference_params.pop("top_k")
-            }
+        # Only set the topK value in for models that support it
+        additional_request_params.update(self._handle_top_k_value(model, inference_params))
 
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
@@ -429,14 +447,13 @@ class AmazonConverseConfig:
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
         ## TRANSFORMATION ##
-        # bedrock_messages: List[MessageBlock] = await asyncify(
-        #     _bedrock_converse_messages_pt
-        # )(
-        #     messages=messages,
-        #     model=model,
-        #     llm_provider="bedrock_converse",
-        #     user_continue_message=litellm_params.pop("user_continue_message", None),
-        # )
+
+        _data: CommonRequestObject = self._transform_request_helper(
+            model=model,
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+            messages=messages,
+        )
 
         bedrock_messages = (
             await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -447,14 +464,27 @@ class AmazonConverseConfig:
             )
         )
 
-        _data: CommonRequestObject = self._transform_request_helper(
-            system_content_blocks=system_content_blocks,
-            optional_params=optional_params,
-        )
-
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
         return data
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return cast(
+            dict,
+            self._transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+            ),
+        )
 
     def _transform_request(
         self,
@@ -464,6 +494,14 @@ class AmazonConverseConfig:
         litellm_params: dict,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        _data: CommonRequestObject = self._transform_request_helper(
+            model=model,
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+            messages=messages,
+        )
+
         ## TRANSFORMATION ##
         bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
             messages=messages,
@@ -472,14 +510,37 @@ class AmazonConverseConfig:
             user_continue_message=litellm_params.pop("user_continue_message", None),
         )
 
-        _data: CommonRequestObject = self._transform_request_helper(
-            system_content_blocks=system_content_blocks,
-            optional_params=optional_params,
-        )
-
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
         return data
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: Logging,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        return self._transform_response(
+            model=model,
+            response=raw_response,
+            model_response=model_response,
+            stream=optional_params.get("stream", False),
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=request_data,
+            messages=messages,
+            print_verbose=None,
+            encoding=encoding,
+        )
 
     def _transform_response(
         self,
@@ -489,12 +550,12 @@ class AmazonConverseConfig:
         stream: bool,
         logging_obj: Optional[Logging],
         optional_params: dict,
-        api_key: str,
+        api_key: Optional[str],
         data: Union[dict, str],
         messages: List,
-        print_verbose,
+        print_verbose: Optional[Callable],
         encoding,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
             logging_obj.post_call(
@@ -503,7 +564,7 @@ class AmazonConverseConfig:
                 original_response=response.text,
                 additional_args={"complete_input_dict": data},
             )
-        print_verbose(f"raw model_response: {response.text}")
+
         json_mode: Optional[bool] = optional_params.pop("json_mode", None)
         ## RESPONSE OBJECT
         try:
@@ -652,3 +713,25 @@ class AmazonConverseConfig:
             return model.split("/", 1)[1]
 
         return model
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return BedrockError(
+            message=error_message,
+            status_code=status_code,
+            headers=headers,
+        )
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers

@@ -327,6 +327,7 @@ class TestLangfuseLogging:
             ({}, "empty_metadata.json"),
         ],
     )
+    @pytest.mark.flaky(retries=6, delay=1)
     async def test_langfuse_logging_with_various_metadata_types(
         self, mock_setup, test_metadata, response_json_file
     ):

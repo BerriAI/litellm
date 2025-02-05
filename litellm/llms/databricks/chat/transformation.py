@@ -73,6 +73,8 @@ class DatabricksConfig(OpenAILikeChatConfig):
             "max_completion_tokens",
             "n",
             "response_format",
+            "tools",
+            "tool_choice",
         ]
 
     def _should_fake_stream(self, optional_params: dict) -> bool:

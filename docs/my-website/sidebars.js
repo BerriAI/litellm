@@ -77,6 +77,7 @@ const sidebars = {
             "proxy/token_auth",
             "proxy/service_accounts",
             "proxy/access_control",
+            "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/email",
             "proxy/multiple_admins",
@@ -95,8 +96,9 @@ const sidebars = {
           label: "Admin UI",
           items: [
             "proxy/ui",
-            "proxy/self_serve",
             "proxy/admin_ui_sso",
+            "proxy/self_serve",
+            "proxy/public_teams",
             "proxy/custom_sso"
           ],
         },
@@ -204,6 +206,7 @@ const sidebars = {
         "providers/perplexity",
         "providers/friendliai",
         "providers/galadriel",
+        "providers/topaz",
         "providers/groq",
         "providers/github",
         "providers/deepseek",
@@ -276,7 +279,14 @@ const sidebars = {
         },
         "text_completion",
         "embedding/supported_embedding",
-        "image_generation",
+        {
+          type: "category",
+          label: "Image",
+          items: [
+            "image_generation",
+            "image_variations",
+          ]
+        },
         {
           type: "category",
           label: "Audio",
@@ -295,6 +305,7 @@ const sidebars = {
             "pass_through/cohere",
             "pass_through/anthropic_completion",
             "pass_through/bedrock",
+            "pass_through/assembly_ai",
             "pass_through/langfuse",
             "proxy/pass_through",
           ],
