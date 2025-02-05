@@ -115,7 +115,7 @@ async def test_supports_tool_choice():
     """
     # Load model prices
     litellm._turn_on_debug()
-    with open("../../model_prices_and_context_window.json", "r") as f:
+    with open("./model_prices_and_context_window.json", "r") as f:
         model_prices = json.load(f)
     litellm.model_cost = model_prices
     config_manager = ProviderConfigManager()
