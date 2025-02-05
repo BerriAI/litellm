@@ -5860,7 +5860,8 @@
         "input_cost_per_token": 0.00000015,
         "output_cost_per_token": 0.0000002,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
@@ -5869,7 +5870,8 @@
         "input_cost_per_token": 0.00000045,
         "output_cost_per_token": 0.0000007,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "mistral.mistral-large-2402-v1:0": {
         "max_tokens": 8191,
@@ -5879,7 +5881,8 @@
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "mistral.mistral-large-2407-v1:0": {
         "max_tokens": 8191,
@@ -5889,7 +5892,8 @@
         "output_cost_per_token": 0.000009,
         "litellm_provider": "bedrock",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "mistral.mistral-small-2402-v1:0": {
         "max_tokens": 8191,
@@ -5899,7 +5903,8 @@
         "output_cost_per_token": 0.000003,
         "litellm_provider": "bedrock",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": {
         "max_tokens": 8191,
@@ -5969,7 +5974,8 @@
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/mistral.mistral-large-2402-v1:0": {
         "max_tokens": 8191,
@@ -5979,7 +5985,8 @@
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat",
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     },
     "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0": {
         "max_tokens": 8191,
@@ -6075,7 +6082,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "max_tokens": 4096, 
@@ -6086,7 +6094,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "max_tokens": 8192,
@@ -6100,7 +6109,8 @@
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true, 
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096, 
@@ -6111,7 +6121,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
         "max_tokens": 8192,
@@ -6123,7 +6134,8 @@
         "mode": "chat",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
     },
     "anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
@@ -6134,7 +6146,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096,
@@ -6145,7 +6158,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "max_tokens": 4096,
@@ -6156,7 +6170,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "max_tokens": 8192,
@@ -6170,7 +6185,8 @@
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -6181,7 +6197,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
         "max_tokens": 8192,
@@ -6193,7 +6210,8 @@
         "mode": "chat",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
@@ -6204,7 +6222,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-sonnet-20240229-v1:0": {
         "max_tokens": 4096,
@@ -6215,7 +6234,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "max_tokens": 4096,
@@ -6226,7 +6246,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "max_tokens": 8192,
@@ -6240,7 +6261,8 @@
         "supports_vision": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-haiku-20240307-v1:0": {
         "max_tokens": 4096,
@@ -6251,7 +6273,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
         "max_tokens": 8192,
@@ -6264,7 +6287,8 @@
         "supports_function_calling": true,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
@@ -6275,7 +6299,8 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_tool_choice": true
     },
     "anthropic.claude-v1": {
         "max_tokens": 8191, 
@@ -6293,7 +6318,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/anthropic.claude-v1": {
         "max_tokens": 8191, 
@@ -6302,7 +6328,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-v1": {
         "max_tokens": 8191, 
@@ -6311,7 +6338,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v1": {
         "max_tokens": 8191, 
@@ -6401,7 +6429,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6410,7 +6439,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6419,7 +6449,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6428,7 +6459,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6437,7 +6469,8 @@
         "input_cost_per_second": 0.0455,
         "output_cost_per_second": 0.0455,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6446,7 +6479,8 @@
         "input_cost_per_second": 0.02527,
         "output_cost_per_second": 0.02527,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6455,7 +6489,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6464,7 +6499,8 @@
         "input_cost_per_second": 0.0415,
         "output_cost_per_second": 0.0415,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6473,7 +6509,8 @@
         "input_cost_per_second": 0.02305,
         "output_cost_per_second": 0.02305,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/1-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6482,7 +6519,8 @@
         "input_cost_per_second": 0.0175,
         "output_cost_per_second": 0.0175,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/6-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6491,7 +6529,8 @@
         "input_cost_per_second": 0.00972,
         "output_cost_per_second": 0.00972,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/1-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6500,7 +6539,8 @@
         "input_cost_per_second": 0.0175,
         "output_cost_per_second": 0.0175,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/6-month-commitment/anthropic.claude-v2": {
         "max_tokens": 8191, 
@@ -6509,7 +6549,8 @@
         "input_cost_per_second": 0.00972,
         "output_cost_per_second": 0.00972,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6518,7 +6559,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6527,7 +6569,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6536,7 +6579,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6545,7 +6589,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6554,7 +6599,8 @@
         "input_cost_per_second": 0.0455,
         "output_cost_per_second": 0.0455,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6563,7 +6609,8 @@
         "input_cost_per_second": 0.02527,
         "output_cost_per_second": 0.02527,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6572,7 +6619,8 @@
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6581,7 +6629,8 @@
         "input_cost_per_second": 0.0415,
         "output_cost_per_second": 0.0415,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6590,7 +6639,8 @@
         "input_cost_per_second": 0.02305,
         "output_cost_per_second": 0.02305,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/1-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6599,7 +6649,8 @@
         "input_cost_per_second": 0.0175,
         "output_cost_per_second": 0.0175,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/6-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6608,7 +6659,8 @@
         "input_cost_per_second": 0.00972,
         "output_cost_per_second": 0.00972,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/1-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6617,7 +6669,8 @@
         "input_cost_per_second": 0.0175,
         "output_cost_per_second": 0.0175,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/6-month-commitment/anthropic.claude-v2:1": {
         "max_tokens": 8191, 
@@ -6626,7 +6679,8 @@
         "input_cost_per_second": 0.00972,
         "output_cost_per_second": 0.00972,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6635,7 +6689,8 @@
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.0000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6644,7 +6699,8 @@
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.0000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/1-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6653,7 +6709,8 @@
         "input_cost_per_second": 0.011,
         "output_cost_per_second": 0.011,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-east-1/6-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6662,7 +6719,8 @@
         "input_cost_per_second": 0.00611,
         "output_cost_per_second": 0.00611,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/1-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6671,7 +6729,8 @@
         "input_cost_per_second": 0.011,
         "output_cost_per_second": 0.011,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/6-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6680,7 +6739,8 @@
         "input_cost_per_second": 0.00611,
         "output_cost_per_second": 0.00611,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/us-west-2/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6689,7 +6749,8 @@
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.0000024,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6698,7 +6759,8 @@
         "input_cost_per_token": 0.00000223,
         "output_cost_per_token": 0.00000755,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6707,7 +6769,8 @@
         "input_cost_per_second": 0.01475,
         "output_cost_per_second": 0.01475,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6716,7 +6779,8 @@
         "input_cost_per_second": 0.008194,
         "output_cost_per_second": 0.008194,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6725,7 +6789,8 @@
         "input_cost_per_token": 0.00000248,
         "output_cost_per_token": 0.00000838,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6734,7 +6799,8 @@
         "input_cost_per_second": 0.01635,
         "output_cost_per_second": 0.01635,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "bedrock/eu-central-1/6-month-commitment/anthropic.claude-instant-v1": {
         "max_tokens": 8191, 
@@ -6743,7 +6809,8 @@
         "input_cost_per_second": 0.009083,
         "output_cost_per_second": 0.009083,
         "litellm_provider": "bedrock",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_tool_choice": true
     },
     "cohere.command-text-v14": {
         "max_tokens": 4096, 
