@@ -468,7 +468,7 @@ class BaseLLMChatTest(ABC):
             "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
         ],
     )
-    @pytest.mark.flaky(retries=4, delay=1)
+    @pytest.mark.flaky(retries=4, delay=2)
     def test_image_url(self, detail, image_url):
         litellm.set_verbose = True
         from litellm.utils import supports_vision
