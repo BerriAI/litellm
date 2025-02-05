@@ -3,12 +3,14 @@ import json
 import time
 import urllib.parse
 import uuid
+from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
     construct_tool_use_system_prompt,
@@ -19,11 +21,13 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import get_secret
+from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..common_utils import BedrockError
+from .invoke_handler import make_call
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -474,6 +478,41 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message)
+
+    @track_llm_api_timing()
+    def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> CustomStreamWrapper:
+        streaming_response = CustomStreamWrapper(
+            completion_stream=None,
+            make_call=partial(
+                make_call,
+                client=client,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                fake_stream=True if "ai21" in api_base else False,
+            ),
+            model=model,
+            custom_llm_provider="bedrock",
+            logging_obj=logging_obj,
+        )
+        return streaming_response
+
+    @property
+    def has_async_custom_stream_wrapper(self) -> bool:
+        return True
 
     @staticmethod
     def get_bedrock_invoke_provider(
