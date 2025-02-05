@@ -40,6 +40,43 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete url for the request
+        """
+        provider = self.get_bedrock_invoke_provider(model)
+        modelId = self.get_bedrock_model_id(
+            model=model,
+            provider=provider,
+            optional_params=optional_params,
+        )
+        ### SET RUNTIME ENDPOINT ###
+        aws_bedrock_runtime_endpoint = optional_params.pop(
+            "aws_bedrock_runtime_endpoint", None
+        )  # https://bedrock-runtime.{region_name}.amazonaws.com
+        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_region_name=self._get_aws_region_name(optional_params=optional_params),
+        )
+
+        if (stream is not None and stream is True) and provider != "ai21":
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            proxy_endpoint_url = (
+                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            )
+        else:
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
+
+        return endpoint_url
+
     def transform_request(  # noqa: PLR0915
         self,
         model: str,
@@ -62,45 +99,18 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         extra_headers = optional_params.pop("extra_headers", None)
 
         provider = self.get_bedrock_invoke_provider(model)
-        modelId = self.get_bedrock_model_id(
-            model=model,
-            provider=provider,
-            optional_params=optional_params,
-        )
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_session_token = optional_params.pop("aws_session_token", None)
-        aws_region_name = optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
         aws_profile_name = optional_params.pop("aws_profile_name", None)
-        aws_bedrock_runtime_endpoint = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
-
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
+        aws_region_name = self._get_aws_region_name(optional_params)
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -113,22 +123,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
         )
-
-        ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
-            api_base=api_base,
-            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=aws_region_name,
-        )
-
-        if (stream is not None and stream is True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = (
-                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            )
-        else:
-            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -273,7 +267,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             headers = {"Content-Type": "application/json", **extra_headers}
         request = AWSRequest(
             method="POST",
-            url=endpoint_url,
+            url=self.get_complete_url(
+                api_base=api_base,
+                model=model,
+                optional_params=optional_params,
+                stream=stream,
+            ),
             data=json.dumps(request_data),
             headers=headers,
         )
@@ -527,6 +526,32 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             modelId = self._get_model_id_for_llama_like_model(modelId)
 
         return modelId
+
+    def _get_aws_region_name(self, optional_params: dict) -> str:
+        """
+        Get the AWS region name from the environment variables
+        """
+        aws_region_name = optional_params.pop("aws_region_name", None)
+        ### SET REGION NAME ###
+        if aws_region_name is None:
+            # check env #
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+
+            if litellm_aws_region_name is not None and isinstance(
+                litellm_aws_region_name, str
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            if standard_aws_region_name is not None and isinstance(
+                standard_aws_region_name, str
+            ):
+                aws_region_name = standard_aws_region_name
+
+        if aws_region_name is None:
+            aws_region_name = "us-west-2"
+
+        return aws_region_name
 
     def _get_model_id_for_llama_like_model(
         self,
