@@ -23,7 +23,8 @@ class TestDeepSeekChatCompletion(BaseLLMChatTest):
         pass
 
 
-def test_deepseek_mock_completion():
+@pytest.mark.parametrize("stream", [True, False])
+def test_deepseek_mock_completion(stream):
     """
     Deepseek API is hanging. Mock the call, to a fake endpoint, so we can confirm our integration is working.
     """
@@ -36,5 +37,11 @@ def test_deepseek_mock_completion():
         model="deepseek/deepseek-reasoner",
         messages=[{"role": "user", "content": "Hello, world!"}],
         api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
+        stream=stream,
     )
-    assert response is not None
+    print(f"response: {response}")
+    if stream:
+        for chunk in response:
+            print(chunk)
+    else:
+        assert response is not None

@@ -2,16 +2,27 @@
 Support for gpt model family 
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+import json
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
@@ -304,3 +315,30 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             or get_secret_str("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return OpenAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            return ModelResponseStream(
+                id=chunk["id"],
+                object="chat.completion.chunk",
+                created=chunk["created"],
+                model=chunk["model"],
+                choices=chunk["choices"],
+            )
+        except Exception as e:
+            raise e
