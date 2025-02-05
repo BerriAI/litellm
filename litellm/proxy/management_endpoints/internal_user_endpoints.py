@@ -142,7 +142,6 @@ async def new_user(
     data_json = data.json()  # type: ignore
     data_json = _update_internal_new_user_params(data_json, data)
     response = await generate_key_helper_fn(request_type="user", **data_json)
-
     # Admin UI Logic
     # Add User to Team and Organization
     # if team_id passed add this user to the team
@@ -165,7 +164,9 @@ async def new_user(
                 user_api_key_dict=user_api_key_dict,
             )
         except HTTPException as e:
-            if e.status_code == 400 and "already exists" in str(e):
+            if e.status_code == 400 and (
+                "already exists" in str(e) or "doesn't exist" in str(e)
+            ):
                 verbose_proxy_logger.debug(
                     "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
                         str(e)
@@ -177,6 +178,15 @@ async def new_user(
                         str(e)
                     )
                 )
+        except Exception as e:
+            if "already exists" in str(e) or "doesn't exist" in str(e):
+                verbose_proxy_logger.debug(
+                    "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                        str(e)
+                    )
+                )
+            else:
+                raise e
 
     if data.send_invite_email is True:
         # check if user has setup email alerting
@@ -220,6 +230,7 @@ async def new_user(
         tpm_limit=response.get("tpm_limit", None),
         rpm_limit=response.get("rpm_limit", None),
         budget_duration=response.get("budget_duration", None),
+        model_max_budget=response.get("model_max_budget", None),
     )
 
 
