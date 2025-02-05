@@ -8954,6 +8954,7 @@
         "output_cost_per_token": 0.0000006,
         "litellm_provider": "nebius",
         "supports_function_calling": true,
+        "supports_vision": true,
         "mode": "chat"
     },
     "nebius/Qwen/Qwen2-VL-72B-Instruct": {
@@ -8964,6 +8965,7 @@
         "output_cost_per_token": 0.0000004,
         "litellm_provider": "nebius",
         "supports_function_calling": true,
+        "supports_vision": true,
         "mode": "chat"
     },
     "nebius/BAAI/bge-en-icl": {
