@@ -235,6 +235,13 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        headers = provider_config.sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=data,
+            api_base=api_base,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=messages,

@@ -170,6 +170,27 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+    ) -> dict:
+        """
+        Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
+        Args:
+            headers: dict
+            optional_params: dict
+            request_data: dict - the request body being sent in http request
+            api_base: str - the complete url being sent in http request
+        Returns:
+            dict - the signed headers
+
+        Update the headers with the signed headers in this function. The return values will be sent as headers in the http request.
+        """
+        return headers
+
     def get_complete_url(
         self,
         api_base: str,

@@ -77,13 +77,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         return endpoint_url
 
-    def transform_request(  # noqa: PLR0915
+    def sign_request(
         self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
         headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
     ) -> dict:
         try:
             from botocore.auth import SigV4Auth
@@ -92,16 +91,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        ## SETUP ##
-        stream = optional_params.pop("stream", None)
-        api_base = optional_params.pop("api_base", None)
-        custom_prompt_dict: dict = optional_params.pop("custom_prompt_dict", None) or {}
-        extra_headers = optional_params.pop("extra_headers", None)
-
-        provider = self.get_bedrock_invoke_provider(model)
-
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
+        extra_headers = optional_params.pop("extra_headers", None)
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_session_token = optional_params.pop("aws_session_token", None)
@@ -125,6 +117,36 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         )
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+        headers = {"Content-Type": "application/json"}
+        if extra_headers is not None:
+            headers = {"Content-Type": "application/json", **extra_headers}
+        request = AWSRequest(
+            method="POST",
+            url=api_base,
+            data=json.dumps(request_data),
+            headers=headers,
+        )
+        sigv4.add_auth(request)
+        if (
+            extra_headers is not None and "Authorization" in extra_headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request.headers["Authorization"] = extra_headers["Authorization"]
+
+        return dict(request.headers)
+
+    def transform_request(  # noqa: PLR0915
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        ## SETUP ##
+        stream = optional_params.pop("stream", None)
+        custom_prompt_dict: dict = optional_params.pop("custom_prompt_dict", None) or {}
+
+        provider = self.get_bedrock_invoke_provider(model)
 
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
@@ -260,27 +282,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 ),
             )
 
-        ## COMPLETION CALL
-
-        headers = {"Content-Type": "application/json"}
-        if extra_headers is not None:
-            headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST",
-            url=self.get_complete_url(
-                api_base=api_base,
-                model=model,
-                optional_params=optional_params,
-                stream=stream,
-            ),
-            data=json.dumps(request_data),
-            headers=headers,
-        )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
         return request_data
 
     def transform_response(  # noqa: PLR0915
