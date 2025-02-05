@@ -3,6 +3,7 @@ import json
 import time
 import traceback
 import uuid
+import re
 from typing import Dict, Iterable, List, Literal, Optional, Union
 
 import litellm
@@ -415,8 +416,17 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     for field in choice["message"].keys():
                         if field not in message_keys:
                             provider_specific_fields[field] = choice["message"][field]
+
+                    # Handle reasoning models that display `reasoning_content` within `content``
+                    content = choice["message"].get("content", None)
+                    reasoning_match = re.match(r"<think>(.*?)</think>(.*)", content, re.DOTALL)
+
+                    if reasoning_match:
+                        provider_specific_fields["reasoning_content"] = reasoning_match.group(1)
+                        content = reasoning_match.group(2)
+
                     message = Message(
-                        content=choice["message"].get("content", None),
+                        content=content,
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
