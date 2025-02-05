@@ -435,6 +435,18 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: Optional[AsyncHTTPHandler] = None,
     ):
+        if provider_config.has_async_custom_stream_wrapper is True:
+            return provider_config.get_async_custom_stream_wrapper(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                messages=messages,
+                client=client,
+            )
+
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
             custom_llm_provider=custom_llm_provider,
             provider_config=provider_config,
