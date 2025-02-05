@@ -4,44 +4,69 @@ import sys
 from unittest.mock import patch
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+# Add parent directory to system path
+sys.path.insert(0, os.path.abspath("../.."))
+
 import litellm
-from litellm.utils import get_llm_provider
-from litellm.utils import ProviderConfigManager
+from litellm.utils import get_llm_provider, ProviderConfigManager
 from litellm import LlmProviders
 
+# Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
+SKIP_MODELS = ["azure/mistral", "azure/command-r", "jamba", "deepinfra"]
+
+# Bedrock models to block - organized by type
+BEDROCK_REGIONS = ["ap-northeast-1", "eu-central-1", "us-east-1", "us-west-2"]
+BEDROCK_COMMITMENTS = ["1-month-commitment", "6-month-commitment"]
+BEDROCK_MODELS = {
+    "anthropic.claude-v1",
+    "anthropic.claude-v2",
+    "anthropic.claude-v2:1",
+    "anthropic.claude-instant-v1",
+}
+
+# Generate block_list dynamically
+block_list = set()
+for region in BEDROCK_REGIONS:
+    for commitment in BEDROCK_COMMITMENTS:
+        for model in BEDROCK_MODELS:
+            block_list.add(f"bedrock/{region}/{commitment}/{model}")
+
+# Add Cohere models
+for commitment in BEDROCK_COMMITMENTS:
+    block_list.add(f"bedrock/*/{commitment}/cohere.command-text-v14")
+    block_list.add(f"bedrock/*/{commitment}/cohere.command-light-text-v14")
 
 
 @pytest.mark.asyncio
 async def test_supports_tool_choice():
     """
-    goes through all models in model_prices_and_context_window.json, checks if the litellm.utils.supports_tool_choice() returns the value set in the model_prices_and_context_window.json
+    Test that litellm.utils.supports_tool_choice() returns the correct value
+    for all models in model_prices_and_context_window.json.
+
+    The test:
+    1. Loads model pricing data
+    2. Iterates through each model
+    3. Checks if tool_choice support matches the model's supported parameters
     """
-    # Load the model prices file
+    # Load model prices
     with open("../../model_prices_and_context_window.json", "r") as f:
         model_prices = json.load(f)
     litellm.model_cost = model_prices
-
     config_manager = ProviderConfigManager()
 
-    for model_name in model_prices:
-        # Get LLM provider
+    for model_name, model_info in model_prices.items():
         print(f"testing model: {model_name}")
-        if model_name == "sample_spec":
-            continue
-        model_info = model_prices[model_name]
 
-        if model_info.get("mode", None) != "chat":
-            continue
-        _litellm_provider = model_info["litellm_provider"]
-        if "azure/mistral" in model_name or "azure/command-r" in model_name:
-            continue
-        if any(provider in model_name for provider in OLD_PROVIDERS):
-            continue
-        if _litellm_provider in OLD_PROVIDERS:
+        # Skip certain models
+        if (
+            model_name == "sample_spec"
+            or model_info.get("mode") != "chat"
+            or any(skip in model_name for skip in SKIP_MODELS)
+            or any(provider in model_name for provider in OLD_PROVIDERS)
+            or model_info["litellm_provider"] in OLD_PROVIDERS
+            or model_name in block_list
+        ):
             continue
 
         try:
@@ -50,24 +75,19 @@ async def test_supports_tool_choice():
             print(f"\033[91mERROR for {model_name}: {e}\033[0m")
             continue
 
-        # Get provider config
+        # Get provider config and supported params
         provider_enum = LlmProviders(provider)
         config = config_manager.get_provider_chat_config(model, provider_enum)
-
-        # Get supported params
         supported_params = config.get_supported_openai_params(model)
 
-        # Check if tool_choice is in supported params
-        has_tool_choice = litellm.utils.supports_tool_choice(
+        # Check tool_choice support
+        supports_tool_choice_result = litellm.utils.supports_tool_choice(
             model=model_name, custom_llm_provider=provider
         )
+        tool_choice_in_params = "tool_choice" in supported_params
 
-        # Print in red if there's a mismatch between supported_params and has_tool_choice
-        if ("tool_choice" in supported_params) != has_tool_choice:
-            print(
-                f"\033[91mINCORRECT VALUE for {model_name}: has_tool_choice={has_tool_choice}, tool_choice in supported_params={'tool_choice' in supported_params}\033[0m"
-            )
-        else:
-            print(
-                f"CORRECT: {model_name} - has_tool_choice={has_tool_choice}, tool_choice in supported_params={'tool_choice' in supported_params}"
-            )
+        assert supports_tool_choice_result == tool_choice_in_params, (
+            f"Tool choice support mismatch for {model_name}:\n"
+            f"supports_tool_choice() returned: {supports_tool_choice_result}\n"
+            f"tool_choice in supported params: {tool_choice_in_params}"
+        )
