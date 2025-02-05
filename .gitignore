@@ -75,3 +75,4 @@ litellm/proxy/custom_guardrail.py
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/model_hub.html
+.mypy_cache/*
