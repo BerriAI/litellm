@@ -171,7 +171,7 @@ async def make_call(
     client: Optional[AsyncHTTPHandler],
     api_base: str,
     headers: dict,
-    data: str,
+    data: dict,
     model: str,
     messages: list,
     logging_obj: Logging,
@@ -1034,7 +1034,7 @@ class BedrockLLM(BaseAWSLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=data,  # type: ignore
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
