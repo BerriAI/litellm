@@ -40,6 +40,7 @@ class BaseLLMHTTPHandler:
         data: dict,
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
     ) -> httpx.Response:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
@@ -56,6 +57,7 @@ class BaseLLMHTTPHandler:
                     data=json.dumps(data),
                     timeout=timeout,
                     stream=stream,
+                    logging_obj=logging_obj,
                 )
             except httpx.HTTPStatusError as e:
                 hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
@@ -93,6 +95,7 @@ class BaseLLMHTTPHandler:
         data: dict,
         timeout: Union[float, httpx.Timeout],
         litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
         stream: bool = False,
     ) -> httpx.Response:
 
@@ -110,6 +113,7 @@ class BaseLLMHTTPHandler:
                     data=json.dumps(data),
                     timeout=timeout,
                     stream=stream,
+                    logging_obj=logging_obj,
                 )
             except httpx.HTTPStatusError as e:
                 hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
@@ -173,6 +177,7 @@ class BaseLLMHTTPHandler:
             timeout=timeout,
             litellm_params=litellm_params,
             stream=False,
+            logging_obj=logging_obj,
         )
         return provider_config.transform_response(
             model=model,
@@ -341,6 +346,7 @@ class BaseLLMHTTPHandler:
             data=data,
             timeout=timeout,
             litellm_params=litellm_params,
+            logging_obj=logging_obj,
         )
         return provider_config.transform_response(
             model=model,
@@ -390,6 +396,7 @@ class BaseLLMHTTPHandler:
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
+            logging_obj=logging_obj,
         )
 
         if fake_stream is True:
@@ -486,6 +493,7 @@ class BaseLLMHTTPHandler:
             timeout=timeout,
             litellm_params=litellm_params,
             stream=stream,
+            logging_obj=logging_obj,
         )
 
         if fake_stream is True:
