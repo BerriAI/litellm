@@ -274,10 +274,12 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
-from litellm.types.router import DeploymentTypedDict, RouterGeneralSettings, updateDeployment
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
-from litellm.types.utils import CustomHuggingfaceTokenizer, StandardLoggingPayload
+from litellm.types.router import RouterGeneralSettings, updateDeployment
+from litellm.types.utils import CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
@@ -5801,11 +5803,11 @@ async def token_counter(request: TokenCountRequest):
 )
 async def supported_openai_params(model: str):
     """
-    Returns supported openai params for a given litellm model name
+    Returns supported openai params for a given litellm model name 
 
-    e.g. `gpt-4` vs `gpt-3.5-turbo`
+    e.g. `gpt-4` vs `gpt-3.5-turbo` 
 
-    Example curl:
+    Example curl: 
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
         --header 'Authorization: Bearer sk-1234'
@@ -6611,18 +6613,18 @@ async def model_metrics_exceptions(
     """
     sql_query = """
         WITH cte AS (
-            SELECT
+            SELECT 
                 CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
                 exception_type,
                 COUNT(*) AS num_rate_limit_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE
-                "startTime" >= $1::timestamp
-                AND "endTime" <= $2::timestamp
+            WHERE 
+                "startTime" >= $1::timestamp 
+                AND "endTime" <= $2::timestamp 
                 AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
-        SELECT
+        SELECT 
             combined_model_api_base,
             COUNT(*) AS total_exceptions,
             json_object_agg(exception_type, num_rate_limit_exceptions) AS exception_counts
@@ -6877,7 +6879,7 @@ async def model_group_info(
     - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
     - /model_group/info?model_group=rerank-english-v3.0 returns all model groups for a specific model group (`model_name` in config.yaml)
 
-
+    
 
     Example Request (All Models):
     ```shell
@@ -6895,10 +6897,10 @@ async def model_group_info(
     -H 'Authorization: Bearer sk-1234'
     ```
 
-    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
+    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml) 
     ```shell
     curl -X 'GET' \
-    'http://localhost:4000/model_group/info?model_group=openai/tts-1'
+    'http://localhost:4000/model_group/info?model_group=openai/tts-1' 
     -H 'accept: application/json' \
     -H 'Authorization: Bearersk-1234'
     ```
@@ -7476,7 +7478,7 @@ async def login(request: Request):  # noqa: PLR0915
         get_disabled_non_admin_personal_key_creation()
     )
     """
-    To login to Admin UI, we support the following
+    To login to Admin UI, we support the following 
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
@@ -8000,7 +8002,7 @@ async def invitation_update(
 ):
     """
     Update when invitation is accepted
-
+    
     ```
     curl -X POST 'http://localhost:4000/invitation/update' \
         -H 'Content-Type: application/json' \
@@ -8061,7 +8063,7 @@ async def invitation_delete(
 ):
     """
     Delete invitation link
-
+    
     ```
     curl -X POST 'http://localhost:4000/invitation/delete' \
         -H 'Content-Type: application/json' \
@@ -8273,8 +8275,8 @@ async def update_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings
-    - Check if config value is valid type
+    - Check if param in general settings 
+    - Check if config value is valid type 
     """
 
     if prisma_client is None:
@@ -8350,7 +8352,7 @@ async def get_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings
+    - Check if param in general settings 
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8414,7 +8416,7 @@ async def get_config_list(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings
+    - Check if param in general settings 
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8551,7 +8553,7 @@ async def delete_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings
+    - Check if param in general settings 
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8642,7 +8644,7 @@ async def get_config():  # noqa: PLR0915
                 },
             }
         ]
-
+        
         """
         for _callback in _success_callbacks:
             if _callback != "langfuse":
