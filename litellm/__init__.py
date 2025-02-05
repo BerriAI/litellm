@@ -864,6 +864,9 @@ from .llms.bedrock.chat.invoke_transformations.bedrock_transformations import (
     AmazonLlamaConfig,
     AmazonMistralConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.bedrock_transformations import (
+    AmazonInvokeConfig,
+)
 
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config

@@ -48,6 +48,33 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        """
+        This is a base invoke model mapping. For Invoke - define a bedrock provider specific config that extends this class.
+        """
+        return [
+            "max_tokens",
+            "max_completion_tokens",
+            "stream",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        """
+        This is a base invoke model mapping. For Invoke - define a bedrock provider specific config that extends this class.
+        """
+        for param, value in non_default_params.items():
+            if param == "max_tokens" or param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+        return optional_params
+
     def get_complete_url(
         self,
         api_base: str,
