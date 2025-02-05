@@ -768,6 +768,7 @@ def test_bedrock_system_prompt(system, model):
 def test_bedrock_claude_3_tool_calling():
     try:
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         tools = [
             {
                 "type": "function",
