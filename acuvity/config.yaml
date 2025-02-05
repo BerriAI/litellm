@@ -9,30 +9,30 @@ guardrails:
       guardrail: acuvity
       mode: "pre_call"
       api_key: os.environ/ACUVITY_TOKEN
-      analyzer_names:
-        - "en-text-prompt_injection-detector"
-  - guardrail_name: "acuvity-during-guard"
-    litellm_params:
-      guardrail: acuvity
-      mode: "during_call"
-      api_key: os.environ/ACUVITY_TOKEN
-      analyzer_names:
-        - "en-text-prompt_injection-detector"
+      vendor_specific_params:
+        guardrails:
+          - name: prompt_injection
+            threshold: ">= 0.7"
+          - name: toxic
+            threshold: "0.7"
+          - name: jailbreak
+            threshold: ">= 1.0"
+          - name: biased
+            threshold: "0.8"
+          - name: harmful
   - guardrail_name: "acuvity-post-guard"
     litellm_params:
       guardrail: acuvity
       mode: "post_call"
       api_key: os.environ/ACUVITY_TOKEN
-      analyzer_names:
-        - "en-text-prompt_injection-detector"
-  - guardrail_name: "acuvity-ner-guard"
-    litellm_params:
-      guardrail: acuvity
-      mode: "post_call"
-      api_key: os.environ/ACUVITY_TOKEN
-      analyzer_names:
-        - "en-text-ner-detector"
-      # this will be kick in only for the ner
-      redact_entities:
-        - "person"
-        - "address"
+      vendor_specific_params:
+        guardrails:
+          - name: prompt_injection
+            threshold: ">= 0.7"
+          - name: toxic
+            threshold: "0.7"
+          - name: jailbreak
+            threshold: ">= 1.0"
+          - name: biased
+            threshold: "0.8"
+          - name: harmful

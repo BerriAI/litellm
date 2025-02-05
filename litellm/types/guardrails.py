@@ -106,11 +106,7 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
     default_on: Optional[bool]
 
-    # Acuvity AI analyzers
-    analyzer_names: Optional[List[str]]  # New field for multiple analyzer names
-    redact_entities: Optional[List[str]]
-
-    vendor_specific_params: Optional[Dict[str, List[str]]]
+    vendor_specific_params: Optional[Dict]
 
 
 
