@@ -200,6 +200,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     - user_route: str - the route the user is trying to call
     - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
     """
+
     for allowed_route in allowed_routes:
         if (
             allowed_route in LiteLLMRoutes.__members__
@@ -402,6 +403,29 @@ def _update_last_db_access_time(
     last_db_access_time[key] = (value, time.time())
 
 
+def _get_role_based_permissions(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+    key: Literal["models", "routes"],
+) -> Optional[List[str]]:
+    """
+    Get the role based permissions from the general settings.
+    """
+    role_based_permissions = cast(
+        Optional[List[RoleBasedPermissions]],
+        general_settings.get("role_permissions", []),
+    )
+    if role_based_permissions is None:
+        return None
+
+    for role_based_permission in role_based_permissions:
+
+        if role_based_permission.role == rbac_role:
+            return getattr(role_based_permission, key)
+
+    return None
+
+
 def get_role_based_models(
     rbac_role: RBAC_ROLES,
     general_settings: dict,
@@ -412,18 +436,26 @@ def get_role_based_models(
     Used by JWT Auth.
     """
 
-    role_based_permissions = cast(
-        Optional[List[RoleBasedPermissions]],
-        general_settings.get("role_permissions", []),
+    return _get_role_based_permissions(
+        rbac_role=rbac_role,
+        general_settings=general_settings,
+        key="models",
     )
-    if role_based_permissions is None:
-        return None
 
-    for role_based_permission in role_based_permissions:
-        if role_based_permission["role"] == rbac_role:
-            return role_based_permission["models"]
 
-    return None
+def get_role_based_routes(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+) -> Optional[List[str]]:
+    """
+    Get the routes allowed for a user role.
+    """
+
+    return _get_role_based_permissions(
+        rbac_role=rbac_role,
+        general_settings=general_settings,
+        key="routes",
+    )
 
 
 async def _get_fuzzy_user_object(
