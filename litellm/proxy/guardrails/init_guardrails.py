@@ -156,6 +156,7 @@ def init_guardrails_v2(
                 guardrail_name=guardrail["guardrail_name"],
                 event_hook=litellm_params["mode"],
                 default_on=litellm_params["default_on"],
+                custom_config=litellm_params["custom_config"],
             )
             litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
         else:
