@@ -91,9 +91,6 @@ def init_guardrails_v2(
     guardrail_list = []
 
     for guardrail in all_guardrails:
-        print("\n GUARDRAILS INIT LIST: ", guardrail_list)
-
-        # Init litellm params for guardrail
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
