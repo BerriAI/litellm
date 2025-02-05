@@ -245,6 +245,8 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             request_data=data,
             api_base=api_base,
+            stream=stream,
+            fake_stream=fake_stream,
         )
 
         ## LOGGING
