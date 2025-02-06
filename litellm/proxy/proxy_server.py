@@ -515,14 +515,6 @@ async def proxy_startup_event(app: FastAPI):
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None and master_key is not None:
-        ProxyStartupEvent._add_master_key_hash_to_db(
-            master_key=master_key,
-            prisma_client=prisma_client,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            general_settings=general_settings,
-        )
-
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
@@ -3204,39 +3196,6 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
-
-    @classmethod
-    def _add_master_key_hash_to_db(
-        cls,
-        master_key: str,
-        prisma_client: PrismaClient,
-        litellm_proxy_admin_name: str,
-        general_settings: dict,
-    ):
-        """Adds master key hash to db for cost tracking"""
-        if os.getenv("PROXY_ADMIN_ID", None) is not None:
-            litellm_proxy_admin_name = os.getenv(
-                "PROXY_ADMIN_ID", litellm_proxy_admin_name
-            )
-        if general_settings.get("disable_adding_master_key_hash_to_db") is True:
-            verbose_proxy_logger.info("Skipping writing master key hash to db")
-        else:
-            # add master key to db
-            # add 'admin' user to db. Fixes https://github.com/BerriAI/litellm/issues/6206
-            task_1 = generate_key_helper_fn(
-                request_type="user",
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                token=master_key,
-                user_id=litellm_proxy_admin_name,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                query_type="update_data",
-                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
-            )
-            asyncio.create_task(task_1)
 
     @classmethod
     def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):
