@@ -4179,8 +4179,14 @@ class Router:
                     vertex_credentials=deployment.litellm_params.vertex_credentials,
                 )
             else:
-                verbose_router_logger.error(
-                    f"Unsupported provider - {custom_llm_provider} for pass-through endpoints"
+                from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                    passthrough_endpoint_router,
+                )
+
+                passthrough_endpoint_router.set_pass_through_credentials(
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=deployment.litellm_params.api_base,
+                    api_key=deployment.litellm_params.api_key,
                 )
             pass
         pass
