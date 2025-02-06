@@ -7,17 +7,12 @@ from litellm.caching import DualCache
 TEST_DB_ENV_VAR_NAME = "MASTER_KEY_CHECK_DB_URL"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def override_env_settings():
-    # Point to your dedicated test PostgreSQL instance.
-    # (Make sure this DB is isolated from production and is safe to run tests against.)
-    os.environ["DATABASE_URL"] = os.environ[TEST_DB_ENV_VAR_NAME]
-    os.environ["LITELLM_MASTER_KEY"] = "sk-1234"
-    os.environ["LITELLM_LOG"] = "DEBUG"
-    yield
-    # Clean up environment variables (if needed) after tests.
-    del os.environ["DATABASE_URL"]
-    del os.environ["LITELLM_MASTER_KEY"]
+@pytest.fixture(autouse=True)
+def override_env_settings(monkeypatch):
+    # Set environment variables only for tests using monkeypatch (function scope by default).
+    monkeypatch.setenv("DATABASE_URL", os.environ[TEST_DB_ENV_VAR_NAME])
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_LOG", "DEBUG")
 
 
 @pytest.fixture(scope="module")
