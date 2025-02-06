@@ -3824,7 +3824,7 @@
         "supports_response_schema": true,
         "supports_audio_output": false,
         "supports_tool_choice": true,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash-lite"
     },
     "gemini/gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
