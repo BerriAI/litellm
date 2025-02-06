@@ -2669,35 +2669,23 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
             else:
-                model = model.replace("invoke/", "")
-                response = bedrock_chat_completion.completion(
+                response = base_llm_http_handler.completion(
                     model=model,
+                    stream=stream,
                     messages=messages,
-                    custom_prompt_dict=custom_prompt_dict,
+                    acompletion=acompletion,
+                    api_base=api_base,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
+                    custom_llm_provider="bedrock",
                     timeout=timeout,
-                    acompletion=acompletion,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,
                     client=client,
-                    api_base=api_base,
                 )
-
-            if optional_params.get("stream", False):
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=None,
-                    original_response=response,
-                )
-
-            ## RESPONSE OBJECT
-            response = response
         elif custom_llm_provider == "watsonx":
             response = watsonx_chat_completion.completion(
                 model=model,

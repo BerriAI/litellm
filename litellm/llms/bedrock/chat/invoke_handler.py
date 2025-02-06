@@ -238,6 +238,73 @@ async def make_call(
         raise BedrockError(status_code=500, message=str(e))
 
 
+def make_sync_call(
+    client: Optional[HTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj: Logging,
+    fake_stream: bool = False,
+    json_mode: Optional[bool] = False,
+):
+    try:
+        if client is None:
+            client = _get_httpx_client(params={})
+
+        response = client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=not fake_stream,
+            logging_obj=logging_obj,
+        )
+
+        if response.status_code != 200:
+            raise BedrockError(status_code=response.status_code, message=response.text)
+
+        if fake_stream:
+            model_response: (
+                ModelResponse
+            ) = litellm.AmazonConverseConfig()._transform_response(
+                model=model,
+                response=response,
+                model_response=litellm.ModelResponse(),
+                stream=True,
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                data=data,
+                messages=messages,
+                print_verbose=print_verbose,
+                encoding=litellm.encoding,
+            )  # type: ignore
+            completion_stream: Any = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
+            )
+        else:
+            decoder = AWSEventStreamDecoder(model=model)
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
+
+        return completion_stream
+    except httpx.HTTPStatusError as err:
+        error_code = err.response.status_code
+        raise BedrockError(status_code=error_code, message=err.response.text)
+    except httpx.TimeoutException:
+        raise BedrockError(status_code=408, message="Timeout error occurred.")
+    except Exception as e:
+        raise BedrockError(status_code=500, message=str(e))
+
+
 class BedrockLLM(BaseAWSLLM):
     """
     Example call
@@ -1034,7 +1101,7 @@ class BedrockLLM(BaseAWSLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=data,  # type: ignore
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,

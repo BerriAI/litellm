@@ -360,7 +360,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
 ]
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
-    "cohere", "anthropic", "mistral", "amazon", "meta", "llama"
+    "cohere", "anthropic", "mistral", "amazon", "meta", "llama", "ai21"
 ]
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
@@ -853,15 +853,33 @@ from .llms.bedrock.chat.invoke_handler import (
 )
 
 from .llms.bedrock.common_utils import (
-    AmazonTitanConfig,
-    AmazonAI21Config,
-    AmazonAnthropicConfig,
-    AmazonAnthropicClaude3Config,
-    AmazonCohereConfig,
-    AmazonLlamaConfig,
-    AmazonMistralConfig,
     AmazonBedrockGlobalConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
+    AmazonAI21Config,
+)
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
+    AmazonAnthropicConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaude3Config,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
+    AmazonCohereConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
+    AmazonLlamaConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
+    AmazonMistralConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
+    AmazonTitanConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+    AmazonInvokeConfig,
+)
+
 from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
 from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
