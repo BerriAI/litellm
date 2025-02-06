@@ -4,13 +4,12 @@ import sys
 from datetime import datetime
 
 sys.path.insert(
-    0, os.path.abspath("../../")
+    0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path
 
 import litellm
 import pytest
 from datetime import timedelta
-from litellm.utils import convert_to_model_response_object
 
 from litellm.types.utils import (
     ModelResponse,
@@ -18,6 +17,10 @@ from litellm.types.utils import (
     Choices,
     PromptTokensDetailsWrapper,
     CompletionTokensDetailsWrapper,
+)
+
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_model_response_object,
 )
 
 
@@ -324,12 +327,21 @@ def test_convert_to_model_response_object_json_mode():
     This test is verifying that when convert_tool_call_to_json_mode is True, a single tool call's arguments are correctly converted into the message content of the response.
     """
     model_response_object = ModelResponse(model="gpt-3.5-turbo")
+    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
     response_object = {
         "choices": [
             {
                 "message": {
                     "role": "assistant",
-                    "tool_calls": [{"function": {"arguments": '{"key": "value"}'}}],
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": '{"key": "value"}',
+                                "name": RESPONSE_FORMAT_TOOL_NAME,
+                            }
+                        }
+                    ],
                 },
                 "finish_reason": None,
             }
@@ -621,16 +633,21 @@ def test_convert_to_model_response_object_with_logprobs():
         "system_fingerprint": None,
     }
 
-    result = convert_to_model_response_object(
-        model_response_object=ModelResponse(),
-        response_object=response_object,
-        stream=False,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-        hidden_params=None,
-        _response_headers=None,
-        convert_tool_call_to_json_mode=False,
-    )
+    print("ENTERING CONVERT")
+    try:
+        result = convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            hidden_params=None,
+            _response_headers=None,
+            convert_tool_call_to_json_mode=False,
+        )
+    except Exception as e:
+        print(f"ERROR: {e}")
+        raise e
 
     assert isinstance(result, ModelResponse)
     assert result.id == "chatcmpl-123"
@@ -648,7 +665,7 @@ def test_convert_to_model_response_object_with_logprobs():
 
     # Check logprobs
     assert choice.logprobs is not None
-    assert len(choice.logprobs["content"]) == 9
+    assert len(choice.logprobs.content) == 9
 
     # Check each logprob entry
     expected_tokens = [
@@ -662,14 +679,14 @@ def test_convert_to_model_response_object_with_logprobs():
         " today",
         "?",
     ]
-    for i, logprob in enumerate(choice.logprobs["content"]):
-        assert logprob["token"] == expected_tokens[i]
-        assert isinstance(logprob["logprob"], float)
-        assert isinstance(logprob["bytes"], list)
-        assert len(logprob["top_logprobs"]) == 2
-        assert isinstance(logprob["top_logprobs"][0]["token"], str)
-        assert isinstance(logprob["top_logprobs"][0]["logprob"], float)
-        assert isinstance(logprob["top_logprobs"][0]["bytes"], (list, type(None)))
+    for i, logprob in enumerate(choice.logprobs.content):
+        assert logprob.token == expected_tokens[i]
+        assert isinstance(logprob.logprob, float)
+        assert isinstance(logprob.bytes, list)
+        assert len(logprob.top_logprobs) == 2
+        assert isinstance(logprob.top_logprobs[0].token, str)
+        assert isinstance(logprob.top_logprobs[0].logprob, float)
+        assert isinstance(logprob.top_logprobs[0].bytes, (list, type(None)))
 
     assert result.usage.prompt_tokens == 9
     assert result.usage.completion_tokens == 9

@@ -187,7 +187,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 
     usage: litellm.Usage = Usage(
         completion_tokens=27,
-        prompt_tokens=55,
+        prompt_tokens=50,
         total_tokens=82,
         completion_tokens_details=None,
         prompt_tokens_details=None,
@@ -213,7 +213,9 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 
     # assert prompt tokens are the same
 
-    assert gemini_pt == stream_rebuilt_pt
+    assert (
+        gemini_pt == stream_rebuilt_pt
+    ), f"Stream builder is not able to rebuild usage correctly. Got={stream_rebuilt_pt}, expected={gemini_pt}"
 
 
 def test_stream_chunk_builder_litellm_mixed_calls():
@@ -729,6 +731,7 @@ def test_stream_chunk_builder_openai_audio_output_usage():
     assert (
         usage_dict == response_usage_dict
     ), f"\nExpected: {usage_dict}\nGot: {response_usage_dict}"
+
 
 def test_stream_chunk_builder_empty_initial_chunk():
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (

@@ -1216,14 +1216,14 @@ def test_litellm_verification_token_view_response_with_budget_table(
         )
 
 
-def test_is_allowed_to_create_key():
+def test_is_allowed_to_make_key_request():
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _is_allowed_to_create_key,
+        _is_allowed_to_make_key_request,
     )
 
     assert (
-        _is_allowed_to_create_key(
+        _is_allowed_to_make_key_request(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="test_user_id", user_role=LitellmUserRoles.PROXY_ADMIN
             ),
@@ -1234,7 +1234,7 @@ def test_is_allowed_to_create_key():
     )
 
     assert (
-        _is_allowed_to_create_key(
+        _is_allowed_to_make_key_request(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="test_user_id",
                 user_role=LitellmUserRoles.INTERNAL_USER,
@@ -1552,6 +1552,7 @@ async def test_spend_logs_cleanup_after_error():
     assert (
         mock_client.spend_log_transactions == original_logs[100:]
     ), "Should remove processed logs even after error"
+
 
 def test_provider_specific_header():
     from litellm.proxy.litellm_pre_call_utils import (

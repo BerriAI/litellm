@@ -298,7 +298,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.bedrock.common_utils import (
+    from litellm import (
         AmazonAnthropicClaude3Config,
         AmazonAnthropicConfig,
     )
