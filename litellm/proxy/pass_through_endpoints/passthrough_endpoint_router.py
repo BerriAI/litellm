@@ -1,6 +1,9 @@
 import os
 from typing import Dict, Optional
 
+from litellm._logging import verbose_logger
+from litellm.secret_managers.main import get_secret_str
+
 
 class PassthroughEndpointRouter:
     """
@@ -38,20 +41,27 @@ class PassthroughEndpointRouter:
         self,
         custom_llm_provider: str,
         region_name: Optional[str],
-    ):
+    ) -> Optional[str]:
         credential_name = self._get_credential_name_for_provider(
             custom_llm_provider=custom_llm_provider,
             region_name=region_name,
         )
+        verbose_logger.debug(
+            f"Pass-through llm endpoints router, looking for credentials for {credential_name}"
+        )
         if credential_name in self.credentials:
+            verbose_logger.debug(f"Found credentials for {credential_name}")
             return self.credentials[credential_name]
         else:
+            verbose_logger.debug(
+                f"No credentials found for {credential_name}, looking for env variable"
+            )
             _env_variable_name = (
                 self._get_default_env_variable_name_passthrough_endpoint(
                     custom_llm_provider=custom_llm_provider,
                 )
             )
-            return os.environ[_env_variable_name]
+            return get_secret_str(_env_variable_name)
 
     def _get_credential_name_for_provider(
         self,
