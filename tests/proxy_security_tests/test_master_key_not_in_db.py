@@ -9,7 +9,7 @@ TEST_DB_ENV_VAR_NAME = "MASTER_KEY_CHECK_DB_URL"
 
 @pytest.fixture(autouse=True)
 def override_env_settings(monkeypatch):
-    # Set environment variables only for tests using monkeypatch (function scope by default).
+    # Set environment variables only for tests using-monkeypatch (function scope by default).
     monkeypatch.setenv("DATABASE_URL", os.environ[TEST_DB_ENV_VAR_NAME])
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
     monkeypatch.setenv("LITELLM_LOG", "DEBUG")
