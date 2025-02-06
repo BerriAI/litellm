@@ -19,12 +19,12 @@ You can check available models for an inference provider by going to [huggingfac
 ### Dedicated Inference Endpoints
 Refer to the [Inference Endpoints catalog](https://endpoints.huggingface.co/catalog) for a list of available models.
 
-
+## Usage
 
 <Tabs>
 <TabItem value="serverless" label="Serverless Inference Providers">
 
-## Authentication
+### Authentication
 With a single Hugging Face token, you can access inference through multiple providers. Your calls are routed through Hugging Face and the usage is billed directly to your Hugging Face account at the standard provider API rates.
 
 Simply set the `HF_TOKEN` environment variable with your Hugging Face token, you can create one here: https://huggingface.co/settings/tokens.
@@ -37,7 +37,7 @@ or alternatively, you can pass your Hugging Face token as a parameter:
 completion(..., api_key="hf_xxxxxx")
 ```
 
-## How to use
+### Getting Started
 
 To use a Hugging Face model, specify both the provider and model you want to use in the following format:
 ```
