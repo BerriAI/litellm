@@ -68,7 +68,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
-                self.raise_rate_limit_error(
+                raise self.raise_rate_limit_error(
                     additional_details=f"Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
                 )
             new_val = {
@@ -272,7 +272,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                max_parallel_requests=max_parallel_requests,
                 current=cache_objects["request_count_api_key"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=tpm_limit,
@@ -307,7 +307,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a model
                 current=cache_objects["request_count_api_key_model"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=tpm_limit_for_model or sys.maxsize,
