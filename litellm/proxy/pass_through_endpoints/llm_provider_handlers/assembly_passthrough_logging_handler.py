@@ -102,7 +102,7 @@ class AssemblyAIPassthroughLoggingHandler:
             )
         transcript_response = self._poll_assembly_for_transcript_response(transcript_id)
         verbose_proxy_logger.debug(
-            "finished polling assembly for transcript response- got transcript response",
+            "finished polling assembly for transcript response- got transcript response %s",
             json.dumps(transcript_response, indent=4),
         )
         if transcript_response:

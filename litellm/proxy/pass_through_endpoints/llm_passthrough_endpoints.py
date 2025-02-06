@@ -308,6 +308,11 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["AssemblyAI Pass-through", "pass-through"],
 )
+@router.api_route(
+    "/eu.assemblyai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["AssemblyAI EU Pass-through", "pass-through"],
+)
 async def assemblyai_proxy_route(
     endpoint: str,
     request: Request,
@@ -317,9 +322,12 @@ async def assemblyai_proxy_route(
     """
     [Docs](https://api.assemblyai.com)
     """
-    base_target_url = "https://api.assemblyai.com"
+    # Set base URL based on the route
+    is_eu_route = "eu.assemblyai" in str(request.url)
+    base_target_url = (
+        "https://api.eu.assemblyai.com" if is_eu_route else "https://api.assemblyai.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
-
     # Ensure endpoint starts with '/' for proper URL construction
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
@@ -331,7 +339,7 @@ async def assemblyai_proxy_route(
     # Add or update query parameters
     assemblyai_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="assemblyai",
-        region_name="eu" if "eu" in str(request.url) else None,
+        region_name="eu" if is_eu_route else None,
     )
 
     ## check for streaming
