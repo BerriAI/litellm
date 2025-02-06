@@ -106,7 +106,7 @@ class LitellmParams(TypedDict):
     guard_name: Optional[str]
     default_on: Optional[bool]
 
-    vendor_specific_params: Optional[Dict]
+    vendor_params: Optional[Dict]
 
 
 
