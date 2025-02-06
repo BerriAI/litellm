@@ -6,7 +6,8 @@ import { modelCreateCall, Model } from "../networking";
 export const handleAddModelSubmit = async (
     formValues: Record<string, any>,
     accessToken: string,
-    form: any
+    form: any,
+    callback?: ()=>void
   ) => {
     try {
       console.log("handling submit for formValues:", formValues);
@@ -137,6 +138,7 @@ export const handleAddModelSubmit = async (
         };
   
         const response: any = await modelCreateCall(accessToken, new_model);
+        callback && callback()
   
         console.log(`response for model create call: ${response["data"]}`);
       });
