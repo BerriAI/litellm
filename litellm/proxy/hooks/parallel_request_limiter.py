@@ -65,10 +65,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         rate_limit_type: Literal["user", "customer", "team"],
         values_to_update_in_cache: List[Tuple[Any, Any]],
     ):
-        # current = await self.internal_usage_cache.async_get_cache(
-        #     key=request_count_api_key,
-        #     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-        # )  # {"current_requests": 1, "current_tpm": 1, "current_rpm": 10}
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
@@ -81,24 +77,36 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 "current_rpm": 0,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
-        elif (
-            int(current["current_requests"]) < max_parallel_requests
-            and current["current_tpm"] < tpm_limit
-            and current["current_rpm"] < rpm_limit
-        ):
-            # Increase count for this token
+        else:
+            # Atomically increment RPM counter
+            new_rpm = await self.internal_usage_cache.async_increment_cache(
+                f"{request_count_api_key}:rpm",
+                1,
+                ttl=60,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+            if (
+                int(current["current_requests"]) >= max_parallel_requests
+                or current["current_tpm"] >= tpm_limit
+                or new_rpm > rpm_limit
+            ):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. "
+                        f"Crossed limits. current rpm: {new_rpm}, rpm limit: {rpm_limit}, "
+                        f"current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}"
+                    ),
+                    headers={"retry-after": str(self.time_to_next_minute())},
+                )
+
+            # Update the main cache with new values
             new_val = {
                 "current_requests": current["current_requests"] + 1,
                 "current_tpm": current["current_tpm"],
-                "current_rpm": current["current_rpm"],
+                "current_rpm": new_rpm,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
-        else:
-            raise HTTPException(
-                status_code=429,
-                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. Crossed TPM, RPM Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}",
-                headers={"retry-after": str(self.time_to_next_minute())},
-            )
 
     def time_to_next_minute(self) -> float:
         # Get the current time
@@ -260,42 +268,19 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_api_key = f"{api_key}::{precise_minute}::request_count"
 
             # CHECK IF REQUEST ALLOWED for key
-
-            current = cache_objects["request_count_api_key"]
-            self.print_verbose(f"current: {current}")
-            if (
-                max_parallel_requests == sys.maxsize
-                and tpm_limit == sys.maxsize
-                and rpm_limit == sys.maxsize
-            ):
-                pass
-            elif max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
-                return self.raise_rate_limit_error(
-                    additional_details=f"Hit limit for {RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY}: {api_key}. max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
-                )
-            elif current is None:
-                new_val = {
-                    "current_requests": 1,
-                    "current_tpm": 0,
-                    "current_rpm": 0,
-                }
-                values_to_update_in_cache.append((request_count_api_key, new_val))
-            elif (
-                int(current["current_requests"]) < max_parallel_requests
-                and current["current_tpm"] < tpm_limit
-                and current["current_rpm"] < rpm_limit
-            ):
-                # Increase count for this token
-                new_val = {
-                    "current_requests": current["current_requests"] + 1,
-                    "current_tpm": current["current_tpm"],
-                    "current_rpm": current["current_rpm"],
-                }
-                values_to_update_in_cache.append((request_count_api_key, new_val))
-            else:
-                return self.raise_rate_limit_error(
-                    additional_details=f"Hit limit for {RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY}: {api_key}. tpm_limit: {tpm_limit}, current_tpm {current['current_tpm']} , rpm_limit: {rpm_limit} current rpm {current['current_rpm']} "
-                )
+            await self.check_key_in_limits(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type=call_type,
+                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                current=cache_objects["request_count_api_key"],
+                request_count_api_key=request_count_api_key,
+                tpm_limit=tpm_limit,
+                rpm_limit=rpm_limit,
+                rate_limit_type="user",
+                values_to_update_in_cache=values_to_update_in_cache,
+            )
 
         # Check if request under RPM/TPM per model for a given API Key
         if (
