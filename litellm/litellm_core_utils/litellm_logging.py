@@ -837,7 +837,7 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
-                traceback_str=traceback.format_exc(),
+                traceback_str=_get_traceback_str_for_error(str(e)),
                 model=response_cost_calculator_kwargs["model"],
                 cache_hit=response_cost_calculator_kwargs["cache_hit"],
                 custom_llm_provider=response_cost_calculator_kwargs[

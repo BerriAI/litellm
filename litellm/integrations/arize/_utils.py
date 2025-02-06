@@ -63,69 +63,57 @@ def set_attributes(span: Span, kwargs, response_obj):
                     msg.get("content", ""),
                 )
 
-        # The Generative AI Provider: Azure, OpenAI, etc.
-        _optional_params = make_json_serializable(optional_params)
-        _json_optional_params = json.dumps(_optional_params)
-        span.set_attribute(
-            SpanAttributes.LLM_INVOCATION_PARAMETERS, _json_optional_params
-        )
+        if isinstance(optional_params, dict):
+            # The Generative AI Provider: Azure, OpenAI, etc.
+            span.set_attribute(
+                SpanAttributes.LLM_INVOCATION_PARAMETERS, json.dumps(optional_params)
+            )
 
-        if optional_params.get("user"):
-            span.set_attribute(SpanAttributes.USER_ID, optional_params.get("user"))
+            if optional_params.get("user"):
+                user_id = optional_params.get("user")
+                if user_id is not None:
+                    span.set_attribute(SpanAttributes.USER_ID, user_id)
 
         #############################################
         ########## LLM Response Attributes ##########
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
         #############################################
-        for choice in response_obj.get("choices"):
-            response_message = choice.get("message", {})
-            span.set_attribute(
-                SpanAttributes.OUTPUT_VALUE, response_message.get("content", "")
-            )
+        if hasattr(response_obj, 'get'):
+            for choice in response_obj.get("choices", []):
+                response_message = choice.get("message", {})
+                span.set_attribute(
+                    SpanAttributes.OUTPUT_VALUE, response_message.get("content", "")
+                )
 
-            # This shows up under `output_messages` tab on the span page
-            # This code assumes a single response
-            span.set_attribute(
-                f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
-                response_message["role"],
-            )
-            span.set_attribute(
-                f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
-                response_message.get("content", ""),
-            )
+                # This shows up under `output_messages` tab on the span page
+                # This code assumes a single response
+                span.set_attribute(
+                    f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}",
+                    response_message.get("role"),
+                )
+                span.set_attribute(
+                    f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}",
+                    response_message.get("content", ""),
+                )
 
-        usage = response_obj.get("usage")
-        if usage:
-            span.set_attribute(
-                SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
-                usage.get("total_tokens"),
-            )
+            usage = response_obj.get("usage")
+            if usage:
+                span.set_attribute(
+                    SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+                    usage.get("total_tokens"),
+                )
 
-            # The number of tokens used in the LLM response (completion).
-            span.set_attribute(
-                SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
-                usage.get("completion_tokens"),
-            )
+                # The number of tokens used in the LLM response (completion).
+                span.set_attribute(
+                    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+                    usage.get("completion_tokens"),
+                )
 
-            # The number of tokens used in the LLM prompt.
-            span.set_attribute(
-                SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
-                usage.get("prompt_tokens"),
-            )
+                # The number of tokens used in the LLM prompt.
+                span.set_attribute(
+                    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+                    usage.get("prompt_tokens"),
+                )
         pass
     except Exception as e:
         verbose_logger.error(f"Error setting arize attributes: {e}")
-
-def make_json_serializable(payload: dict) -> dict:
-    for key, value in payload.items():
-        try:
-            if isinstance(value, dict):
-                # recursively sanitize dicts
-                payload[key] = make_json_serializable(value.copy())
-            elif not isinstance(value, (str, int, float, bool, type(None))):
-                # everything else becomes a string
-                payload[key] = str(value)
-        except Exception:
-            # non blocking if it can't cast to a str
-            pass
-    return payload
