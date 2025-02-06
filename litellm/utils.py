@@ -36,8 +36,10 @@ import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
+from importlib.metadata import version
 from inspect import iscoroutine
 from os.path import abspath, dirname, join
+from packaging.version import parse
 
 import aiohttp
 import dotenv
@@ -1629,14 +1631,17 @@ def create_pretrained_tokenizer(
     Returns:
     dict: A dictionary with the tokenizer and its type.
     """
+    # Choose the right argument name based on tokenizers version
+    auth_token_argument_name = "token" if parse(version("tokenizers")) >= parse("0.21.0") else "auth_token"
+    auth_token_kwarg = {auth_token_argument_name: auth_token}
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier, revision=revision, **auth_token_kwarg  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
-            f"Error creating pretrained tokenizer: {e}. Defaulting to version without 'auth_token'."
+            f"Error creating pretrained tokenizer: {e}. Defaulting to version without '{auth_token_argument_name}'."
         )
         tokenizer = Tokenizer.from_pretrained(identifier, revision=revision)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
