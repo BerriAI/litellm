@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 from httpx._models import Headers, Response
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
@@ -12,13 +11,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import supports_response_schema
 
 from ....exceptions import UnsupportedParamsError
-from ....types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolChoiceFunctionParam,
-    ChatCompletionToolChoiceObjectParam,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-)
+from ....types.llms.openai import AllMessageValues
 from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
