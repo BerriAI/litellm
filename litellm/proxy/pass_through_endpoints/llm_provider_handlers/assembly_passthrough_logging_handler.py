@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 from datetime import datetime
 from typing import Literal, Optional, TypedDict
@@ -163,7 +162,9 @@ class AssemblyAIPassthroughLoggingHandler:
         return dict(transcript_response)
 
     def _get_assembly_transcript(
-        self, request_region: Optional[Literal["eu"]], transcript_id: str
+        self,
+        transcript_id: str,
+        request_region: Optional[Literal["eu"]] = None,
     ) -> Optional[dict]:
         """
         Get the transcript details from AssemblyAI API
