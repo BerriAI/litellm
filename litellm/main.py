@@ -2981,6 +2981,49 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
+        elif custom_llm_provider == "novita":
+            api_base = api_base or litellm.api_base or "https://api.novita.ai/v3/openai"
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.novita_api_key
+                or get_secret("NOVITA_API_KEY")
+            )
+
+            novita_headers = {
+                "X-Novita-Source": "litellm",
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                novita_headers.update(_headers)
+
+            headers = novita_headers
+
+            data = {"model": model, "messages": messages}
+
+            ## COMPLETION CALL
+            response = openai_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging,
+                acompletion=acompletion,
+                timeout=timeout,  # type: ignore
+                custom_llm_provider="novita",
+            )
+            ## LOGGING
+            logging.post_call(
+                input=messages, api_key=api_key, original_response=response
+            )
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -3205,7 +3248,6 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
-
         if (
             response is not None
             and isinstance(response, EmbeddingResponse)
@@ -3936,6 +3978,7 @@ async def atext_completion(
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "novita"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             # Await normally

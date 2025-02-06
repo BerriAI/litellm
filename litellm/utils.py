@@ -2173,6 +2173,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+        elif value.get("litellm_provider") == "novita":
+            if key not in litellm.novita_models:
+                litellm.novita_models.append(key)
     return model_cost
 
 
@@ -2830,6 +2833,7 @@ def get_optional_params(  # noqa: PLR0915
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "novita"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -4883,6 +4887,11 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("CLOUDFLARE_API_KEY")
                 missing_keys.append("CLOUDFLARE_API_BASE")
+        elif custom_llm_provider == "novita":
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -4965,6 +4974,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif model in litellm.novita_models:
+            if "NOVITA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NOVITA_API_KEY")
 
     if api_key is not None:
         new_missing_keys = []
@@ -6057,6 +6071,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.NOVITA == provider:
+            return litellm.NovitaConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             base_model = litellm.AmazonConverseConfig()._get_base_model(model)
             bedrock_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model)

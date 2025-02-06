@@ -71,3 +71,27 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 | google/palm-2-codechat-bison | `completion('google/palm-2-codechat-bison', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
 | meta-llama/llama-2-13b-chat | `completion('meta-llama/llama-2-13b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
 | meta-llama/llama-2-70b-chat | `completion('meta-llama/llama-2-70b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
+
+## Novita AI Completion Models
+
+🚨 LiteLLM supports ALL Novita AI models, send `model=novita/<your-novita-model>` to send it to Novita AI. See all Novita AI models [here](https://novita.ai/models/llm?utm_source=github_litellm&utm_medium=github_readme&utm_campaign=github_link)
+
+| Model Name       | Function Call                              | Required OS Variables                |
+|------------------|--------------------------------------------|--------------------------------------|
+| novita/deepseek/deepseek-r1 | `completion('novita/deepseek/deepseek-r1', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/deepseek/deepseek_v3 | `completion('novita/deepseek/deepseek_v3', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.3-70b-instruct | `completion('novita/meta-llama/llama-3.3-70b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.1-8b-instruct | `completion('novita/meta-llama/llama-3.1-8b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.1-8b-instruct-max | `completion('novita/meta-llama/llama-3.1-8b-instruct-max', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.1-70b-instruct | `completion('novita/meta-llama/llama-3.1-70b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3-8b-instruct | `completion('novita/meta-llama/llama-3-8b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3-70b-instruct | `completion('novita/meta-llama/llama-3-70b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.2-1b-instruct | `completion('novita/meta-llama/llama-3.2-1b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.2-11b-vision-instruct | `completion('novita/meta-llama/llama-3.2-11b-vision-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/meta-llama/llama-3.2-3b-instruct | `completion('novita/meta-llama/llama-3.2-3b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/gryphe/mythomax-l2-13b | `completion('novita/gryphe/mythomax-l2-13b', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/google/gemma-2-9b-it | `completion('novita/google/gemma-2-9b-it', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/mistralai/mistral-nemo | `completion('novita/mistralai/mistral-nemo', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/mistralai/mistral-7b-instruct | `completion('novita/mistralai/mistral-7b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/qwen/qwen-2.5-72b-instruct | `completion('novita/qwen/qwen-2.5-72b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
+| novita/qwen/qwen-2-vl-72b-instruct | `completion('novita/qwen/qwen-2-vl-72b-instruct', messages)` | `os.environ['NOVITA_API_KEY']` |
