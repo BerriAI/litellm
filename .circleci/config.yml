@@ -1877,20 +1877,17 @@ jobs:
       - checkout
       - run:
           name: Build UI
-          shell: /bin/bash -leo pipefail
           command: |
-            export NVM_DIR="/opt/circleci/.nvm"
-            source "$NVM_DIR/nvm.sh"
+            # Load nvm in the current shell and make it available to subshells
+            echo 'export NVM_DIR="/opt/circleci/.nvm"' >> $BASH_ENV
+            echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> $BASH_ENV
+            echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> $BASH_ENV
+            source $BASH_ENV
             
-            # Navigate to the UI directory first
+            # Verify nvm is available
+            command -v nvm
+            
             cd ui/litellm-dashboard
-            
-            # Install dependencies if package.json exists
-            if [ -f "package.json" ]; then
-              npm install
-            fi
-            
-            # Now run the build script
             ./build_ui.sh
       - run:
           name: Install Docker CLI (In case it's not already installed)
