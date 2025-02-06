@@ -73,7 +73,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
       )}
 
       {(selectedProviderEnum === Providers.Azure ||
-        selectedProviderEnum === Providers.OpenAI_Compatible) && (
+        selectedProviderEnum === Providers.OpenAI_Compatible ||
+        selectedProviderEnum === Providers.AssemblyAI
+      ) && (
         <Form.Item
           rules={[{ required: true, message: "Required" }]}
           label="API Base"
