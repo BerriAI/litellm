@@ -1,5 +1,6 @@
 import os
 from typing import Callable
+from litellm._logging import verbose_logger
 
 
 def get_azure_ad_token_provider() -> Callable[[], str]:
@@ -14,20 +15,20 @@ def get_azure_ad_token_provider() -> Callable[[], str]:
     Returns:
         Callable that returns a temporary authentication token.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+    from azure.identity import get_bearer_token_provider
+    import azure.identity as identity
+    azure_scope = os.environ.get("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default")
+    cred = os.environ.get("AZURE_CREDENTIAL", "ClientSecretCredential")
 
-    try:
-        credential = ClientSecretCredential(
+    cred_cls = getattr(identity, cred)
+    # ClientSecretCredential, DefaultAzureCredential, AzureCliCredential
+    if cred == "ClientSecretCredential":
+        credential = cred_cls(
             client_id=os.environ["AZURE_CLIENT_ID"],
             client_secret=os.environ["AZURE_CLIENT_SECRET"],
             tenant_id=os.environ["AZURE_TENANT_ID"],
         )
-    except KeyError as e:
-        raise ValueError(
-            "Missing environment variable required by Azure AD workflow."
-        ) from e
+    else:
+        credential = cred_cls()
 
-    return get_bearer_token_provider(
-        credential,
-        "https://cognitiveservices.azure.com/.default",
-    )
+    return get_bearer_token_provider(credential, azure_scope)
