@@ -3449,7 +3449,6 @@
         "supports_response_schema": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-1.5-flash",
         "deprecation_date": "2025-09-24",
-        "deprecation_date": "2025-09-24",
         "supports_tool_choice": true
     },
     "gemini-1.5-flash-001": {
@@ -3664,20 +3663,9 @@
         "max_audio_length_hours": 8.4,
         "max_audio_per_prompt": 1,
         "max_pdf_size_mb": 30,
-        "input_cost_per_image": 0,
-        "input_cost_per_video_per_second": 0,
-        "input_cost_per_audio_per_second": 0,
-        "input_cost_per_token": 0,
-        "input_cost_per_character": 0, 
-        "input_cost_per_token_above_128k_tokens": 0, 
-        "input_cost_per_character_above_128k_tokens": 0, 
-        "input_cost_per_image_above_128k_tokens": 0,
-        "input_cost_per_video_per_second_above_128k_tokens": 0,
-        "input_cost_per_audio_per_second_above_128k_tokens": 0,
-        "output_cost_per_token": 0,
-        "output_cost_per_character": 0,
-        "output_cost_per_token_above_128k_tokens": 0,
-        "output_cost_per_character_above_128k_tokens": 0,
+        "input_cost_per_audio_token": 0.001,
+        "input_cost_per_token": 0.00015,
+        "output_cost_per_token": 0.0006,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
         "supports_system_messages": true,
@@ -3685,8 +3673,8 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash"
     },
     "gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
