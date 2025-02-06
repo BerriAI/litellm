@@ -51,6 +51,6 @@ async def test_master_key_not_inserted(test_client):
 
     # The expectation is that no token (or unintended record) is added on startup.
     assert len(result) == 0, (
-        "🚨 🚨🚨🚨🚨🚨🚨 - Security Alert: Expected no record in the litellm_verificationtoken table. On startup - the master key should NOT be Inserted into the DB."
+        "SECURITY ALERT SECURITY ALERT SECURITY ALERT: Expected no record in the litellm_verificationtoken table. On startup - the master key should NOT be Inserted into the DB."
         "We have found keys in the DB. This is unexpected and should not happen."
     )
