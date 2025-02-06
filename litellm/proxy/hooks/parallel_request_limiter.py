@@ -77,36 +77,24 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 "current_rpm": 0,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
-        else:
-            # Atomically increment RPM counter
-            new_rpm = await self.internal_usage_cache.async_increment_cache(
-                f"{request_count_api_key}:rpm",
-                1,
-                ttl=60,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
-            if (
-                int(current["current_requests"]) >= max_parallel_requests
-                or current["current_tpm"] >= tpm_limit
-                or new_rpm > rpm_limit
-            ):
-                raise HTTPException(
-                    status_code=429,
-                    detail=(
-                        f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. "
-                        f"Crossed limits. current rpm: {new_rpm}, rpm limit: {rpm_limit}, "
-                        f"current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}"
-                    ),
-                    headers={"retry-after": str(self.time_to_next_minute())},
-                )
-
-            # Update the main cache with new values
+        elif (
+            int(current["current_requests"]) < max_parallel_requests
+            and current["current_tpm"] < tpm_limit
+            and current["current_rpm"] < rpm_limit
+        ):
+            # Increase count for this token
             new_val = {
                 "current_requests": current["current_requests"] + 1,
                 "current_tpm": current["current_tpm"],
-                "current_rpm": new_rpm,
+                "current_rpm": current["current_rpm"] + 1,
             }
             values_to_update_in_cache.append((request_count_api_key, new_val))
+        else:
+            raise HTTPException(
+                status_code=429,
+                detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. Crossed TPM, RPM Limit. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}",
+                headers={"retry-after": str(self.time_to_next_minute())},
+            )
 
     def time_to_next_minute(self) -> float:
         # Get the current time
@@ -266,7 +254,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         )
         if api_key is not None:
             request_count_api_key = f"{api_key}::{precise_minute}::request_count"
-
             # CHECK IF REQUEST ALLOWED for key
             await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
@@ -539,7 +526,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
-                    "current_rpm": current["current_rpm"] + 1,
+                    "current_rpm": current["current_rpm"],
                 }
 
                 self.print_verbose(
@@ -576,7 +563,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
-                    "current_rpm": current["current_rpm"] + 1,
+                    "current_rpm": current["current_rpm"],
                 }
 
                 self.print_verbose(
@@ -609,7 +596,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
-                    "current_rpm": current["current_rpm"] + 1,
+                    "current_rpm": current["current_rpm"],
                 }
 
                 self.print_verbose(
@@ -642,7 +629,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
-                    "current_rpm": current["current_rpm"] + 1,
+                    "current_rpm": current["current_rpm"],
                 }
 
                 self.print_verbose(
@@ -675,7 +662,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
-                    "current_rpm": current["current_rpm"] + 1,
+                    "current_rpm": current["current_rpm"],
                 }
 
                 self.print_verbose(
