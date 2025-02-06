@@ -858,10 +858,10 @@ from .llms.bedrock.common_utils import (
 from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
     AmazonAI21Config,
 )
-from .llms.bedrock.chat.invoke_transformations.amazon_anthropic_claude2_transformation import (
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
     AmazonAnthropicConfig,
 )
-from .llms.bedrock.chat.invoke_transformations.amazon_anthropic_claude3_transformation import (
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaude3Config,
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (

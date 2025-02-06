@@ -4,7 +4,9 @@ from typing import List, Optional, Union
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseConfig
-from litellm.llms.bedrock.chat.invoke_transformation import AmazonInvokeConfig
+from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+    AmazonInvokeConfig,
+)
 
 
 class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):

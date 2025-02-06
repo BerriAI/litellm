@@ -4,7 +4,9 @@ import traceback
 from dotenv import load_dotenv
 import litellm.types
 import pytest
-from litellm.llms.bedrock.chat.invoke_transformation import AmazonInvokeConfig
+from litellm.llms.bedrock.chat.invoke_transformation.base_invoke_transformation import (
+    AmazonInvokeConfig,
+)
 import json
 
 load_dotenv()
