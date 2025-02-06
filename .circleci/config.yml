@@ -1876,6 +1876,19 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Build UI
+          command: |
+            # Source nvm
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            
+            # Setup Node version before running the script
+            nvm install 18.17.0
+            nvm use 18.17.0
+            
+            # Modify the script to run with the current shell
+            bash -c '. ./ui/litellm-dashboard/build_ui.sh'
+      - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
             sudo apt-get update
@@ -1919,21 +1932,7 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-      - run:
-          name: Install and setup Node
-          command: |
-            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-            export NVM_DIR="/opt/circleci/.nvm"  # Updated path
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            nvm install 18.17.0
-            nvm use 18.17.0
-            nvm alias default 18.17.0
-      - run:
-          name: Build UI
-          command: |
-            export NVM_DIR="/opt/circleci/.nvm"  # Updated path
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            ./ui/litellm-dashboard/build_ui.sh
+      
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
