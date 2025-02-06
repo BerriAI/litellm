@@ -1878,19 +1878,19 @@ jobs:
       - run:
           name: Build UI
           command: |
-            # Set up nvm
+            # Set up nvm and Node
             export NVM_DIR="/opt/circleci/.nvm"
             source "$NVM_DIR/nvm.sh"
-            source "$NVM_DIR/bash_completion"
-            
-            # Install and use Node version
             nvm install v18.17.0
             nvm use v18.17.0
             
             cd ui/litellm-dashboard
             
-            # Instead of executing the script directly, source it in the current shell
-            source ./build_ui.sh
+            # Export the path to node and npm
+            export PATH="$NVM_DIR/versions/node/v18.17.0/bin:$PATH"
+            
+            # Now run the script
+            bash ./build_ui.sh
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
