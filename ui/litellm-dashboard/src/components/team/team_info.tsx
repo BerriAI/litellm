@@ -19,7 +19,7 @@ import {
   Table,
   Icon
 } from "@tremor/react";
-import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member } from "@/components/networking";
+import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member, teamUpdateCall } from "@/components/networking";
 import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import {
@@ -186,18 +186,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       };
       
-      const response = await fetch('/team/update', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updateData)
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update team');
-      }
+      const response = await teamUpdateCall(accessToken, updateData);
       
       message.success("Team settings updated successfully");
       setIsEditing(false);
