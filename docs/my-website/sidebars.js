@@ -45,7 +45,7 @@ const sidebars = {
             "proxy/health",
             "proxy/debugging",
             "proxy/spending_monitoring",
-        ],
+          ],
         },
         "proxy/demo",
         {
@@ -133,6 +133,7 @@ const sidebars = {
           label: "[Beta] Guardrails",
           items: [
             "proxy/guardrails/quick_start",
+            "proxy/guardrails/acuvity_ai",
             "proxy/guardrails/aim_security",
             "proxy/guardrails/aporia_api",
             "proxy/guardrails/bedrock",
@@ -142,7 +143,7 @@ const sidebars = {
             "proxy/guardrails/secret_detection",
             "proxy/guardrails/custom_guardrail",
             "prompt_injection"
-        ],
+          ],
         },
         {
           type: "category",
@@ -328,7 +329,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing",  "wildcard_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing", "wildcard_routing"],
     },
     {
       type: "category",
