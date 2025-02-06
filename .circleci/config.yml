@@ -1877,17 +1877,21 @@ jobs:
       - checkout
       - run:
           name: Build UI
+          shell: /bin/bash -leo pipefail
           command: |
-            # Source nvm
             export NVM_DIR="/opt/circleci/.nvm"
             source "$NVM_DIR/nvm.sh"
             
-            # Setup Node version before running the script
-            nvm install 18.17.0
-            nvm use 18.17.0
+            # Navigate to the UI directory first
+            cd ui/litellm-dashboard
             
-            # Modify the script to run with the current shell
-            bash -c '. ./ui/litellm-dashboard/build_ui.sh'
+            # Install dependencies if package.json exists
+            if [ -f "package.json" ]; then
+              npm install
+            fi
+            
+            # Now run the build script
+            ./build_ui.sh
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
