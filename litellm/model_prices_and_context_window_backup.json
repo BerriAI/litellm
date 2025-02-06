@@ -5749,8 +5749,7 @@
         "input_cost_per_token": 0.0000125,
         "output_cost_per_token": 0.0000125,
         "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "ai21.j2-ultra-v1": {
         "max_tokens": 8191, 
@@ -5759,8 +5758,7 @@
         "input_cost_per_token": 0.0000188,
         "output_cost_per_token": 0.0000188,
         "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "ai21.jamba-instruct-v1:0": {
         "max_tokens": 4096,
@@ -5779,8 +5777,7 @@
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000008,
         "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "ai21.jamba-1-5-mini-v1:0": {
         "max_tokens": 256000,
@@ -5789,8 +5786,7 @@
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000004,
         "litellm_provider": "bedrock",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "amazon.titan-text-lite-v1": {
         "max_tokens": 4000, 
@@ -8904,5 +8900,17 @@
         "supports_function_calling": true,
         "mode": "chat",
         "supports_tool_choice": true
+    },
+    "assemblyai/nano": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00010278,
+        "output_cost_per_second": 0.00, 
+        "litellm_provider": "assemblyai"
+    },
+    "assemblyai/best": {
+        "mode": "audio_transcription",
+        "input_cost_per_second": 0.00003333,
+        "output_cost_per_second": 0.00, 
+        "litellm_provider": "assemblyai"
     }
 }

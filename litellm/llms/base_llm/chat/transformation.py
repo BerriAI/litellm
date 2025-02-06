@@ -27,7 +27,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
+
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
 from litellm.types.utils import ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 from ..base_utils import (
     map_developer_role_to_system_role,
@@ -224,6 +228,29 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> dict:
+        """
+        Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
+        Args:
+            headers: dict
+            optional_params: dict
+            request_data: dict - the request body being sent in http request
+            api_base: str - the complete url being sent in http request
+        Returns:
+            dict - the signed headers
+
+        Update the headers with the signed headers in this function. The return values will be sent as headers in the http request.
+        """
+        return headers
+
     def get_complete_url(
         self,
         api_base: str,
@@ -282,6 +309,45 @@ class BaseConfig(ABC):
     ) -> Any:
         pass
 
+    def get_async_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> CustomStreamWrapper:
+        raise NotImplementedError
+
+    def get_sync_custom_stream_wrapper(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        messages: list,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    ) -> CustomStreamWrapper:
+        raise NotImplementedError
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return None
+
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return False
+
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        """
+        Some providers like Bedrock invoke do not support the stream parameter in the request body.
+
+        By default, this is true for almost all providers.
+        """
+        return True

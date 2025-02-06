@@ -1031,7 +1031,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
       .validateFields()
       .then((values) => {
-        handleAddModelSubmit(values, accessToken, form);
+        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
         // form.resetFields();
       })
       .catch((error) => {
@@ -1450,6 +1450,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 <DeleteModelButton
                                   modelID={model.model_info.id}
                                   accessToken={accessToken}
+                                  callback={handleRefreshClick}
                                 />
                               </Col>
                             </Grid>
