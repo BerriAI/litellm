@@ -1,6 +1,8 @@
 version: 2.1
 orbs:
   codecov: codecov/codecov@4.0.1
+  node: circleci/node@5.1.0  # Add this line to declare the node orb
+
 
 jobs:
   local_testing:
@@ -1873,6 +1875,7 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - node/install-packages
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
