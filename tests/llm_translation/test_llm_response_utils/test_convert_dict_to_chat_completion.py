@@ -327,12 +327,21 @@ def test_convert_to_model_response_object_json_mode():
     This test is verifying that when convert_tool_call_to_json_mode is True, a single tool call's arguments are correctly converted into the message content of the response.
     """
     model_response_object = ModelResponse(model="gpt-3.5-turbo")
+    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
     response_object = {
         "choices": [
             {
                 "message": {
                     "role": "assistant",
-                    "tool_calls": [{"function": {"arguments": '{"key": "value"}'}}],
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "arguments": '{"key": "value"}',
+                                "name": RESPONSE_FORMAT_TOOL_NAME,
+                            }
+                        }
+                    ],
                 },
                 "finish_reason": None,
             }
