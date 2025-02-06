@@ -55,6 +55,39 @@ def test_e2e_assemblyai_passthrough_eu():
     pass
 
 
+def test_assemblyai_routes_with_bad_api_key():
+    """
+    Test AssemblyAI endpoints with invalid API key to ensure proper error handling
+    """
+    bad_api_key = "sk-12222"
+    payload = {
+        "audio_url": "https://assembly.ai/wildfires.mp3",
+        "audio_end_at": 280,
+        "audio_start_from": 10,
+        "auto_chapters": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {bad_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # Test EU endpoint
+    eu_response = httpx.post(
+        f"{PROXY_BASE_URL}/eu.assemblyai/v2/transcript", headers=headers, json=payload
+    )
+    assert (
+        eu_response.status_code == 401
+    ), f"Expected 401 unauthorized, got {eu_response.status_code}"
+
+    # Test US endpoint
+    us_response = httpx.post(
+        f"{PROXY_BASE_URL}/assemblyai/v2/transcript", headers=headers, json=payload
+    )
+    assert (
+        us_response.status_code == 401
+    ), f"Expected 401 unauthorized, got {us_response.status_code}"
+
+
 def create_virtual_key():
     """
     Create a virtual key
