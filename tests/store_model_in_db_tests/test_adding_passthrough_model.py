@@ -15,6 +15,7 @@ import assemblyai as aai
 import pytest
 import httpx
 import os
+import json
 
 TEST_MASTER_KEY = "sk-1234"
 PROXY_BASE_URL = "http://0.0.0.0:4000"
@@ -29,10 +30,11 @@ def _delete_all_assemblyai_models_from_db():
     """
     print("Deleting all assemblyai models from the db.......")
     model_list_response = httpx.get(
-        url=f"{PROXY_BASE_URL}/model_group/info",
+        url=f"{PROXY_BASE_URL}/v2/model/info",
         headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
     )
     response_data = model_list_response.json()
+    print("model list response", json.dumps(response_data, indent=4, default=str))
     # Filter for only AssemblyAI models
     assemblyai_models = [
         model
