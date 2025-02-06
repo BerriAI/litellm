@@ -23,6 +23,48 @@ EU_BASE_URL = f"{PROXY_BASE_URL}/eu.assemblyai"
 ASSEMBLYAI_API_KEY_ENV_VAR = "TEST_SPECIAL_ASSEMBLYAI_API_KEY"
 
 
+def _delete_all_assemblyai_models_from_db():
+    """
+    Delete all assemblyai models from the db
+    """
+    print("Deleting all assemblyai models from the db.......")
+    model_list_response = httpx.get(
+        url=f"{PROXY_BASE_URL}/model_group/info",
+        headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
+    )
+    response_data = model_list_response.json()
+    # Filter for only AssemblyAI models
+    assemblyai_models = [
+        model
+        for model in response_data["data"]
+        if model.get("litellm_params", {}).get("custom_llm_provider") == "assemblyai"
+    ]
+
+    for model in assemblyai_models:
+        model_id = model["model_info"]["id"]
+        httpx.post(
+            url=f"{PROXY_BASE_URL}/model/delete",
+            headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
+            json={"id": model_id},
+        )
+    print("Deleted all assemblyai models from the db")
+
+
+@pytest.fixture(autouse=True)
+def cleanup_assemblyai_models():
+    """
+    Fixture to clean up AssemblyAI models before and after each test
+    """
+    # Clean up before test
+    _delete_all_assemblyai_models_from_db()
+
+    # Run the test
+    yield
+
+    # Clean up after test
+    _delete_all_assemblyai_models_from_db()
+
+
 def test_e2e_assemblyai_passthrough():
     """
     Test adding a pass through assemblyai model + api key + api base to the db
@@ -107,6 +149,7 @@ def add_assembly_ai_model_to_db(
     """
     Add the assemblyai model to the db - makes a http request to the /model/new endpoint on PROXY_BASE_URL
     """
+    print("assmbly ai api key", os.getenv(ASSEMBLYAI_API_KEY_ENV_VAR))
     response = httpx.post(
         url=f"{PROXY_BASE_URL}/model/new",
         headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
