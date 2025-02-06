@@ -36,6 +36,7 @@ from typing import (
     Tuple,
     TypedDict,
     Union,
+    cast,
 )
 
 import httpx
@@ -54,7 +55,7 @@ from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
+from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -96,6 +97,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
 )
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
+    AllMessageValues,
     Assistant,
     AssistantToolParam,
     AsyncCursorPage,
@@ -149,10 +151,12 @@ from litellm.utils import (
     get_llm_provider,
     get_secret,
     get_utc_datetime,
+    is_prompt_caching_valid_prompt,
     is_region_allowed,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
+from .router_utils.prompt_caching_cache import PromptCachingCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -737,7 +741,9 @@ class Router:
                 model_client = potential_model_client
 
             ### DEPLOYMENT-SPECIFIC PRE-CALL CHECKS ### (e.g. update rpm pre-call. Raise error, if deployment over limit)
-            self.routing_strategy_pre_call_checks(deployment=deployment)
+            ## only run if model group given, not model id
+            if model not in self.get_model_ids():
+                self.routing_strategy_pre_call_checks(deployment=deployment)
 
             response = litellm.completion(
                 **{
@@ -2787,8 +2793,10 @@ class Router:
                         *args,
                         **input_kwargs,
                     )
+
                     return response
             except Exception as new_exception:
+                traceback.print_exc()
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 verbose_router_logger.error(
                     "litellm.router.py::async_function_with_fallbacks() - Error occurred while trying to do fallbacks - {}\n{}\n\nDebug Information:\nCooldown Deployments={}".format(
@@ -3375,6 +3383,29 @@ class Router:
                     litellm_router_instance=self,
                     deployment_id=id,
                 )
+
+                ## PROMPT CACHING
+                prompt_cache = PromptCachingCache(
+                    cache=self.cache,
+                )
+                if (
+                    standard_logging_object["messages"] is not None
+                    and isinstance(standard_logging_object["messages"], list)
+                    and deployment_name is not None
+                    and isinstance(deployment_name, str)
+                ):
+                    valid_prompt = is_prompt_caching_valid_prompt(
+                        messages=standard_logging_object["messages"],  # type: ignore
+                        tools=None,
+                        model=deployment_name,
+                        custom_llm_provider=None,
+                    )
+                    if valid_prompt:
+                        await prompt_cache.async_add_model_id(
+                            model_id=id,
+                            messages=standard_logging_object["messages"],  # type: ignore
+                            tools=None,
+                        )
 
                 return tpm_key
 
@@ -5190,7 +5221,6 @@ class Router:
         - List, if multiple models chosen
         - Dict, if specific model chosen
         """
-
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
             return model, self._get_deployment_by_litellm_model(model=model)
@@ -5302,13 +5332,6 @@ class Router:
                 cooldown_deployments=cooldown_deployments,
             )
 
-            # filter pre-call checks
-            _allowed_model_region = (
-                request_kwargs.get("allowed_model_region")
-                if request_kwargs is not None
-                else None
-            )
-
             if self.enable_pre_call_checks and messages is not None:
                 healthy_deployments = self._pre_call_checks(
                     model=model,
@@ -5316,6 +5339,24 @@ class Router:
                     messages=messages,
                     request_kwargs=request_kwargs,
                 )
+
+            if messages is not None and is_prompt_caching_valid_prompt(
+                messages=cast(List[AllMessageValues], messages),
+                model=model,
+                custom_llm_provider=None,
+            ):
+                prompt_cache = PromptCachingCache(
+                    cache=self.cache,
+                )
+                healthy_deployment = (
+                    await prompt_cache.async_get_prompt_caching_deployment(
+                        router=self,
+                        messages=cast(List[AllMessageValues], messages),
+                        tools=None,
+                    )
+                )
+                if healthy_deployment is not None:
+                    return healthy_deployment
 
             # check if user wants to do tag based routing
             healthy_deployments = await get_deployments_for_tag(  # type: ignore

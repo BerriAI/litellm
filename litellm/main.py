@@ -77,7 +77,7 @@ from litellm.utils import (
     read_config_args,
     supports_httpx_timeout,
     token_counter,
-    validate_chat_completion_user_messages,
+    validate_chat_completion_messages,
 )
 
 from ._logging import verbose_logger
@@ -99,15 +99,15 @@ from .llms import (
     replicate,
     vllm,
 )
-from .llms.AI21 import completion as ai21
+from .llms.ai21 import completion as ai21
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.completion import AnthropicTextCompletion
+from .llms.azure.audio_transcriptions import AzureAudioTranscription
+from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.azure.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure_ai.chat import AzureAIChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.azure_text import AzureTextCompletion
-from .llms.AzureOpenAI.audio_transcriptions import AzureAudioTranscription
-from .llms.AzureOpenAI.azure import AzureChatCompletion, _check_dynamic_azure_params
-from .llms.AzureOpenAI.chat.o1_handler import AzureOpenAIO1ChatCompletion
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
@@ -931,7 +931,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### VALIDATE USER MESSAGES ###
-        validate_chat_completion_user_messages(messages=messages)
+        messages = validate_chat_completion_messages(messages=messages)
 
         ### TIMEOUT LOGIC ###
         timeout = timeout or kwargs.get("request_timeout", 600) or 600
@@ -3274,6 +3274,7 @@ def embedding(  # noqa: PLR0915
     client = kwargs.pop("client", None)
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
+    max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     cooldown_time = kwargs.get("cooldown_time", None)
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
@@ -3422,6 +3423,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                max_retries=max_retries,
             )
         elif (
             model in litellm.open_ai_embedding_models
@@ -3466,6 +3468,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                max_retries=max_retries,
             )
         elif custom_llm_provider == "databricks":
             api_base = (

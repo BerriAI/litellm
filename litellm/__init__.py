@@ -21,6 +21,7 @@ from litellm.constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     ROUTER_MAX_FALLBACKS,
+    DEFAULT_MAX_RETRIES,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.proxy._types import (
@@ -36,10 +37,10 @@ from enum import Enum
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-############################################
+#############################################
 if set_verbose == True:
     _turn_on_debug()
-############################################
+#############################################
 ### Callbacks /Logging / Success / Failure Handlers ###
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
@@ -1065,8 +1066,8 @@ from .llms.predibase import PredibaseConfig
 from .llms.replicate import ReplicateConfig
 from .llms.cohere.completion import CohereConfig
 from .llms.clarifai import ClarifaiConfig
-from .llms.AI21.completion import AI21Config
-from .llms.AI21.chat import AI21ChatConfig
+from .llms.ai21.completion import AI21Config
+from .llms.ai21.chat import AI21ChatConfig
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
@@ -1158,7 +1159,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
-from .llms.AI21.chat import AI21ChatConfig
+from .llms.ai21.chat import AI21ChatConfig
 from .llms.fireworks_ai.chat.fireworks_ai_transformation import FireworksAIConfig
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
@@ -1167,18 +1168,18 @@ from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.xai_transformation import XAIChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.text_completion_codestral import MistralTextCompletionConfig
-from .llms.AzureOpenAI.azure import (
+from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
 
-from .llms.AzureOpenAI.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.deepseek.chat.transformation import DeepSeekChatConfig
 from .llms.lm_studio.chat.transformation import LMStudioChatConfig
 from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
 from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.AzureOpenAI.chat.o1_transformation import AzureOpenAIO1Config
+from .llms.azure.chat.o1_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.handler import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .main import *  # type: ignore

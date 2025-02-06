@@ -1763,9 +1763,14 @@ def supports_response_schema(model: str, custom_llm_provider: Optional[str]) -> 
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    if custom_llm_provider == "predibase":  # predibase supports this globally
-        return True
+    # providers that globally support response schema
+    PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA = [
+        litellm.LlmProviders.PREDIBASE,
+        litellm.LlmProviders.FIREWORKS_AI,
+    ]
 
+    if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
+        return True
     try:
         ## GET MODEL INFO
         model_info = litellm.get_model_info(
@@ -6146,6 +6151,38 @@ from litellm.types.llms.openai import (
 )
 
 
+def convert_to_dict(message: Union[BaseModel, dict]) -> dict:
+    """
+    Converts a message to a dictionary if it's a Pydantic model.
+
+    Args:
+        message: The message, which may be a Pydantic model or a dictionary.
+
+    Returns:
+        dict: The converted message.
+    """
+    if isinstance(message, BaseModel):
+        return message.model_dump(exclude_none=True)
+    elif isinstance(message, dict):
+        return message
+    else:
+        raise TypeError(
+            f"Invalid message type: {type(message)}. Expected dict or Pydantic model."
+        )
+
+
+def validate_chat_completion_messages(messages: List[AllMessageValues]):
+    """
+    Ensures all messages are valid OpenAI chat completion messages.
+    """
+    # 1. convert all messages to dict
+    messages = [
+        cast(AllMessageValues, convert_to_dict(cast(dict, m))) for m in messages
+    ]
+    # 2. validate user messages
+    return validate_chat_completion_user_messages(messages=messages)
+
+
 def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
     """
     Ensures all user messages are valid OpenAI chat completion messages.
@@ -6224,3 +6261,22 @@ def get_end_user_id_for_cost_tracking(
     ):
         return None
     return proxy_server_request.get("body", {}).get("user", None)
+
+
+def is_prompt_caching_valid_prompt(
+    model: str,
+    messages: Optional[List[AllMessageValues]],
+    tools: Optional[List[ChatCompletionToolParam]] = None,
+    custom_llm_provider: Optional[str] = None,
+) -> bool:
+    """
+    Returns true if the prompt is valid for prompt caching.
+
+    OpenAI + Anthropic providers have a minimum token count of 1024 for prompt caching.
+    """
+    if messages is None and tools is None:
+        return False
+    if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
+        model = custom_llm_provider + "/" + model
+    token_count = token_counter(messages=messages, tools=tools, model=model)
+    return token_count >= 1024

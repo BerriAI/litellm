@@ -49,6 +49,7 @@ async def run_async_fallback(
         raise original_exception
 
     error_from_fallbacks = original_exception
+
     for mg in fallback_model_group:
         if mg == original_model_group:
             continue

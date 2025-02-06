@@ -108,6 +108,13 @@ class FireworksAIConfig:
                 else:
                     # pass through the value of tool choice
                     optional_params["tool_choice"] = value
+            elif (
+                param == "response_format" and value.get("type", None) == "json_schema"
+            ):
+                optional_params["response_format"] = {
+                    "type": "json_object",
+                    "schema": value["json_schema"]["schema"],
+                }
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:

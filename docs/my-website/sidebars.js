@@ -318,6 +318,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        "observability/mlflow",
         "observability/langfuse_integration",
         "observability/gcs_bucket_integration",
         "observability/langsmith_integration",

@@ -219,6 +219,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         api_base: Optional[str] = None,
         client=None,
         aembedding=None,
+        max_retries: Optional[int] = None,
     ) -> litellm.EmbeddingResponse:
         """
         - Separate image url from text

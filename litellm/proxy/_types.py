@@ -8,6 +8,7 @@ from dataclasses import fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Extra, Field, Json, model_validator
 from typing_extensions import Annotated, TypedDict
 
@@ -722,7 +723,7 @@ class KeyRequest(LiteLLMBase):
 
 
 class LiteLLM_ModelTable(LiteLLMBase):
-    model_aliases: Optional[str] = None  # json dump the dict
+    model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
     created_by: str
     updated_by: str
 
@@ -980,6 +981,7 @@ class UpdateTeamRequest(LiteLLMBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     tags: Optional[list] = None
+    model_aliases: Optional[dict] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMBase):
@@ -1058,6 +1060,7 @@ class LiteLLM_TeamTable(TeamBase):
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
     model_id: Optional[int] = None
+    litellm_model_table: Optional[LiteLLM_ModelTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1812,6 +1815,7 @@ class SpendLogsPayload(TypedDict):
     team_id: Optional[str]
     end_user: Optional[str]
     requester_ip_address: Optional[str]
+    custom_llm_provider: Optional[str]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -1937,6 +1941,9 @@ class ProxyErrorTypes(str, enum.Enum):
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
+
+
+DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
 
 
 class SSOUserDefinedValues(TypedDict):

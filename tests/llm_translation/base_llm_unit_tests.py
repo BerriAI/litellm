@@ -82,6 +82,16 @@ class BaseLLMChatTest(ABC):
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
 
+    def test_pydantic_model_input(self):
+        litellm.set_verbose = True
+
+        from litellm import completion, Message
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [Message(content="Hello, how are you?", role="user")]
+
+        completion(**base_completion_call_args, messages=messages)
+
     @pytest.mark.parametrize("image_url", ["str", "dict"])
     def test_pdf_handling(self, pdf_messages, image_url):
         from litellm.utils import supports_pdf_input

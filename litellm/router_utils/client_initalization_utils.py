@@ -9,7 +9,7 @@ import openai
 import litellm
 from litellm import get_secret, get_secret_str
 from litellm._logging import verbose_router_logger
-from litellm.llms.AzureOpenAI.azure import get_azure_ad_token_from_oidc
+from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -355,7 +355,12 @@ class InitalizeOpenAISDKClient:
                         "azure_ad_token": azure_ad_token,
                         "azure_ad_token_provider": azure_ad_token_provider,
                     }
-                    from litellm.llms.AzureOpenAI.azure import (
+
+                    if azure_ad_token_provider is not None:
+                        azure_client_params["azure_ad_token_provider"] = (
+                            azure_ad_token_provider
+                        )
+                    from litellm.llms.azure.azure import (
                         select_azure_base_url_or_endpoint,
                     )
 

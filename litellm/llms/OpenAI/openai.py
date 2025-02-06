@@ -1217,12 +1217,13 @@ class OpenAIChatCompletion(BaseLLM):
         api_base: Optional[str] = None,
         client=None,
         aembedding=None,
+        max_retries: Optional[int] = None,
     ) -> litellm.EmbeddingResponse:
         super().embedding()
         try:
             model = model
             data = {"model": model, "input": input, **optional_params}
-            max_retries = data.pop("max_retries", 2)
+            max_retries = max_retries or litellm.DEFAULT_MAX_RETRIES
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
             ## LOGGING

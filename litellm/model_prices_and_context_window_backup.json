@@ -1741,7 +1741,7 @@
         "supports_prompt_caching": true
     },
     "groq/llama-3.3-70b-versatile": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 0.00000059,
@@ -6606,6 +6606,17 @@
         "litellm_provider": "deepinfra",
         "mode": "chat"
     },
+    "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "deepinfra",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true
+    },
     "deepinfra/01-ai/Yi-34B-200K": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -6817,6 +6828,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": {
@@ -6828,6 +6840,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": {
@@ -6840,6 +6853,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "accounts/fireworks/models/llama-v3p2-90b-vision-instruct": {
@@ -6852,6 +6866,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/firefunction-v2": {
@@ -6863,6 +6878,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
@@ -6874,6 +6890,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct": {
@@ -6885,6 +6902,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct": {
@@ -6896,6 +6914,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/yi-large": {
@@ -6907,6 +6926,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": {
@@ -6918,6 +6938,7 @@
         "litellm_provider": "fireworks_ai", 
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing"
     },
     "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": {

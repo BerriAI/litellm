@@ -1498,3 +1498,26 @@ async def test_router_disable_fallbacks_dynamically():
             print(e)
 
         mock_client.assert_not_called()
+
+
+def test_router_fallbacks_with_model_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"gpt-3.5-turbo": ["123"]}],
+    )
+
+    ## test model id fallback works
+    router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_testing_fallbacks=True,
+    )

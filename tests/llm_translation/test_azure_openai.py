@@ -6,8 +6,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import pytest
-from litellm.llms.AzureOpenAI.common_utils import process_azure_headers
+from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
+from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 
 def test_process_azure_headers_empty():
@@ -172,7 +173,7 @@ def test_azure_extra_headers(input, call_type):
     ],
 )
 def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
-    from litellm.llms.AzureOpenAI.azure import AzureChatCompletion
+    from litellm.llms.azure.azure import AzureChatCompletion
 
     azure_chat_completion = AzureChatCompletion()
     input_args = {
@@ -188,3 +189,15 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
     }
     result = azure_chat_completion.create_azure_base_url(**input_args)
     assert result == expected_endpoint, "Unexpected endpoint"
+
+
+class TestAzureEmbedding(BaseLLMEmbeddingTest):
+    def get_base_embedding_call_args(self) -> dict:
+        return {
+            "model": "azure/azure-embedding-model",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+        }
+
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.AZURE

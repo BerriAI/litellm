@@ -134,7 +134,7 @@ class DatabricksConfig(OpenAIGPTConfig):
         new_messages = []
         for idx, message in enumerate(messages):
             if isinstance(message, BaseModel):
-                _message = message.model_dump()
+                _message = message.model_dump(exclude_none=True)
             else:
                 _message = message
             new_messages.append(_message)
