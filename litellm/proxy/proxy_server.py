@@ -1631,7 +1631,7 @@ class ProxyConfig:
         self,
         cache_params: dict,
     ):
-        global redis_usage_cache
+        global redis_usage_cache, llm_router
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -1645,6 +1645,10 @@ class ProxyConfig:
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+
+            ## INIT ROUTER REDIS CACHE ##
+            if llm_router is not None:
+                llm_router._update_redis_cache(cache=redis_usage_cache)
 
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
