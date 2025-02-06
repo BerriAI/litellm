@@ -4,20 +4,17 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
-import types
 from typing import List, Optional, Tuple, Union
 
-from pydantic import BaseModel
-
-import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ..common_utils import IBMWatsonXMixin
 
 
-class IBMWatsonXChatConfig(OpenAIGPTConfig):
+class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
     def get_supported_openai_params(self, model: str) -> List:
         return [
@@ -80,3 +77,33 @@ class IBMWatsonXChatConfig(OpenAIGPTConfig):
             api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""
         )  # vllm does not require an api key
         return api_base, dynamic_api_key
+
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        url = self._get_base_url(api_base=api_base)
+        if model.startswith("deployment/"):
+            deployment_id = "/".join(model.split("/")[1:])
+            endpoint = (
+                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value
+                if stream
+                else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
+            )
+            endpoint = endpoint.format(deployment_id=deployment_id)
+        else:
+            endpoint = (
+                WatsonXAIEndpoint.CHAT_STREAM.value
+                if stream
+                else WatsonXAIEndpoint.CHAT.value
+            )
+        url = url.rstrip("/") + endpoint
+
+        ## add api version
+        url = self._add_api_version_to_url(
+            url=url, api_version=optional_params.pop("api_version", None)
+        )
+        return url

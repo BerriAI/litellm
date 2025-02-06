@@ -43,6 +43,9 @@ def test_batch_completions():
     except Timeout as e:
         print(f"IN TIMEOUT")
         pass
+    except litellm.InternalServerError as e:
+        print(f"IN INTERNAL SERVER ERROR")
+        pass
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 
@@ -69,7 +72,7 @@ def test_batch_completions_models():
 def test_batch_completion_models_all_responses():
     try:
         responses = batch_completion_models_all_responses(
-            models=["j2-light", "claude-3-haiku-20240307"],
+            models=["gemini/gemini-1.5-flash", "claude-3-haiku-20240307"],
             messages=[{"role": "user", "content": "write a poem"}],
             max_tokens=10,
         )

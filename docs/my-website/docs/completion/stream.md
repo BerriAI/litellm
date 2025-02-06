@@ -3,9 +3,11 @@ import TabItem from '@theme/TabItem';
 
 # Streaming + Async
 
-- [Streaming Responses](#streaming-responses)
-- [Async Completion](#async-completion)
-- [Async + Streaming Completion](#async-streaming)
+| Feature | LiteLLM SDK | LiteLLM Proxy |
+|---------|-------------|---------------|
+| Streaming | ✅ [start here](#streaming-responses) | ✅ [start here](../proxy/user_keys#streaming) |
+| Async | ✅ [start here](#async-completion) | ✅ [start here](../proxy/user_keys#streaming) |
+| Async Streaming | ✅ [start here](#async-streaming) | ✅ [start here](../proxy/user_keys#streaming) |
 
 ## Streaming Responses
 LiteLLM supports streaming the model response back by passing `stream=True` as an argument to the completion function

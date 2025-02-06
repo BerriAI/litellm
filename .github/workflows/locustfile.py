@@ -1,6 +1,4 @@
-from locust import HttpUser, task, between, events
-import json
-import time
+from locust import HttpUser, task, between
 
 
 class MyUser(HttpUser):
@@ -10,7 +8,7 @@ class MyUser(HttpUser):
     def chat_completion(self):
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer sk-ZoHqrLIs2-5PzJrqBaviAA",
+            "Authorization": "Bearer sk-ZoHqrLIs2-5PzJrqBaviAA",
             # Include any additional headers you may need for authentication, etc.
         }
 

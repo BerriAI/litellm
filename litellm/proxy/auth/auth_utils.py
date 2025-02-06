@@ -1,6 +1,6 @@
+import os
 import re
 import sys
-import traceback
 from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
@@ -8,10 +8,7 @@ from fastapi import HTTPException, Request, status
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.types.router import (
-    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
-    ConfigurableClientsideParamsCustomAuth,
-)
+from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
 
 def _get_request_ip_address(
@@ -266,7 +263,6 @@ def route_in_additonal_public_routes(current_route: str):
     """
 
     # check if user is premium_user - if not do nothing
-    from litellm.proxy._types import LiteLLMRoutes
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:
@@ -418,18 +414,31 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
-def get_key_model_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
+def get_key_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
     if user_api_key_dict.metadata:
         if "model_rpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_rpm_limit"]
+    elif user_api_key_dict.model_max_budget:
+        model_rpm_limit: Dict[str, Any] = {}
+        for model, budget in user_api_key_dict.model_max_budget.items():
+            if "rpm_limit" in budget and budget["rpm_limit"] is not None:
+                model_rpm_limit[model] = budget["rpm_limit"]
+        return model_rpm_limit
 
     return None
 
 
-def get_key_model_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Optional[dict]:
+def get_key_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
     if user_api_key_dict.metadata:
         if "model_tpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_tpm_limit"]
+    elif user_api_key_dict.model_max_budget:
+        if "tpm_limit" in user_api_key_dict.model_max_budget:
+            return user_api_key_dict.model_max_budget["tpm_limit"]
 
     return None
 
@@ -459,6 +468,7 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     if premium_user is not True:
+
         return False
 
     # premium use has opted into using client credentials
@@ -474,17 +484,31 @@ def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
 
 def _has_user_setup_sso():
     """
-    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID, and UI username environment variables.
+    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
     Returns a boolean indicating whether SSO has been set up.
     """
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
-    ui_username = os.getenv("UI_USERNAME", None)
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
 
     sso_setup = (
         (microsoft_client_id is not None)
         or (google_client_id is not None)
-        or (ui_username is not None)
+        or (generic_client_id is not None)
     )
 
     return sso_setup
+
+
+def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
+    # openai - check 'user'
+    if "user" in request_body and request_body["user"] is not None:
+        return str(request_body["user"])
+    # anthropic - check 'litellm_metadata'
+    end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
+    if end_user_id:
+        return str(end_user_id)
+    metadata = request_body.get("metadata")
+    if metadata and "user_id" in metadata and metadata["user_id"] is not None:
+        return str(metadata["user_id"])
+    return None

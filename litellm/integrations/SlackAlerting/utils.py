@@ -3,12 +3,17 @@ Utils used for slack alerting
 """
 
 import asyncio
-from typing import Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-import litellm
-from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
+
+    Logging = _Logging
+else:
+    Logging = Any
 
 
 def process_slack_alerting_variables(

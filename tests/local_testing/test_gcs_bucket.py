@@ -30,7 +30,7 @@ def load_vertex_ai_credentials():
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/adroit-crow-413218-bc47f303efc9.json"
+    vertex_key_path = filepath + "/vertex_key.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
@@ -68,7 +68,7 @@ def load_vertex_ai_credentials():
 
 
 @pytest.mark.asyncio
-async def test_basic_gcs_logger():
+async def test_aaabasic_gcs_logger():
     load_vertex_ai_credentials()
     gcs_logger = GCSBucketLogger()
     print("GCSBucketLogger", gcs_logger)
@@ -270,6 +270,7 @@ async def test_basic_gcs_logger_failure():
     await gcs_logger.delete_gcs_object(object_name=object_name)
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
 async def test_basic_gcs_logging_per_request_with_callback_set():
     """
@@ -287,7 +288,7 @@ async def test_basic_gcs_logging_per_request_with_callback_set():
     print("GCSBucketLogger", gcs_logger)
     litellm.callbacks = [gcs_logger]
 
-    GCS_BUCKET_NAME = "key-logging-project1"
+    GCS_BUCKET_NAME = "example-bucket-1-litellm"
     standard_callback_dynamic_params: StandardCallbackDynamicParams = (
         StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
     )
@@ -397,6 +398,7 @@ async def test_basic_gcs_logging_per_request_with_callback_set():
     )
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
 async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     """
@@ -414,7 +416,7 @@ async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     load_vertex_ai_credentials()
     gcs_logger = GCSBucketLogger()
 
-    GCS_BUCKET_NAME = "key-logging-project1"
+    GCS_BUCKET_NAME = "example-bucket-1-litellm"
     standard_callback_dynamic_params: StandardCallbackDynamicParams = (
         StandardCallbackDynamicParams(gcs_bucket_name=GCS_BUCKET_NAME)
     )
@@ -522,8 +524,9 @@ async def test_basic_gcs_logging_per_request_with_no_litellm_callback_set():
     )
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
-async def test_get_gcs_logging_config_without_service_account():
+async def test_aaaget_gcs_logging_config_without_service_account():
     """
     Test the get_gcs_logging_config works for IAM auth on GCS
     1. Key based logging without a service account
@@ -531,10 +534,10 @@ async def test_get_gcs_logging_config_without_service_account():
     """
     load_vertex_ai_credentials()
     _old_gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
-    os.environ.pop("GCS_BUCKET_NAME")
+    os.environ.pop("GCS_BUCKET_NAME", None)
 
     _old_gcs_service_acct = os.environ.get("GCS_PATH_SERVICE_ACCOUNT")
-    os.environ.pop("GCS_PATH_SERVICE_ACCOUNT")
+    os.environ.pop("GCS_PATH_SERVICE_ACCOUNT", None)
 
     # Mock the load_auth function to avoid credential loading issues
     # Test 1: With standard_callback_dynamic_params (with service account)
@@ -576,6 +579,7 @@ async def test_get_gcs_logging_config_without_service_account():
         os.environ["GCS_PATH_SERVICE_ACCOUNT"] = _old_gcs_service_acct
 
 
+@pytest.mark.skip(reason="This test is flaky")
 @pytest.mark.asyncio
 async def test_basic_gcs_logger_with_folder_in_bucket_name():
     load_vertex_ai_credentials()

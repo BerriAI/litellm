@@ -4,9 +4,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 
 import copy
 import json
-import os
-from copy import deepcopy
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx
 
@@ -20,9 +18,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse
 
-from ...base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
@@ -160,10 +158,8 @@ class BedrockEmbedding(BaseAWSLLM):
         logging_obj: Any,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
@@ -251,10 +247,8 @@ class BedrockEmbedding(BaseAWSLLM):
         logging_obj: Any,
     ):
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
@@ -346,10 +340,8 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         try:
-            import boto3
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
@@ -448,7 +440,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 logging_obj=logging_obj,
             )
         elif data is None:
-            raise Exception("Unable to map request to provider")
+            raise Exception("Unable to map Bedrock request to provider")
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
         headers = {"Content-Type": "application/json"}

@@ -1,23 +1,32 @@
 # FriendliAI
-https://suite.friendli.ai/
 
+:::info
 **We support ALL FriendliAI models, just set `friendliai/` as a prefix when sending completion requests**
+:::
+
+| Property                   | Details                                                                                         |
+| -------------------------- | ----------------------------------------------------------------------------------------------- |
+| Description                | The fastest and most efficient inference engine to build production-ready, compound AI systems. |
+| Provider Route on LiteLLM  | `friendliai/`                                                                                   |
+| Provider Doc               | [FriendliAI ↗](https://friendli.ai/docs/sdk/integrations/litellm)                               |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`                                                             |
 
 ## API Key
+
 ```python
 # env variable
 os.environ['FRIENDLI_TOKEN']
-os.environ['FRIENDLI_API_BASE'] # Optional. Set this when using dedicated endpoint.
 ```
 
 ## Sample Usage
+
 ```python
 from litellm import completion
 import os
 
 os.environ['FRIENDLI_TOKEN'] = ""
 response = completion(
-    model="friendliai/mixtral-8x7b-instruct-v0-1", 
+    model="friendliai/meta-llama-3.1-8b-instruct",
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -26,13 +35,14 @@ print(response)
 ```
 
 ## Sample Usage - Streaming
+
 ```python
 from litellm import completion
 import os
 
 os.environ['FRIENDLI_TOKEN'] = ""
 response = completion(
-    model="friendliai/mixtral-8x7b-instruct-v0-1", 
+    model="friendliai/meta-llama-3.1-8b-instruct",
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -43,18 +53,11 @@ for chunk in response:
     print(chunk)
 ```
 
-
 ## Supported Models
-### Serverless Endpoints
+
 We support ALL FriendliAI AI models, just set `friendliai/` as a prefix when sending completion requests
 
-| Model Name               | Function Call                                                                                                                                                      |
-|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| mixtral-8x7b-instruct | `completion(model="friendliai/mixtral-8x7b-instruct-v0-1", messages)` | 
-| meta-llama-3-8b-instruct | `completion(model="friendliai/meta-llama-3-8b-instruct", messages)` |
-| meta-llama-3-70b-instruct | `completion(model="friendliai/meta-llama-3-70b-instruct", messages)` |  
-
-### Dedicated Endpoints
-```
-model="friendliai/$ENDPOINT_ID:$ADAPTER_ROUTE"
-```
+| Model Name                  | Function Call                                                          |
+| --------------------------- | ---------------------------------------------------------------------- |
+| meta-llama-3.1-8b-instruct  | `completion(model="friendliai/meta-llama-3.1-8b-instruct", messages)`  |
+| meta-llama-3.1-70b-instruct | `completion(model="friendliai/meta-llama-3.1-70b-instruct", messages)` |

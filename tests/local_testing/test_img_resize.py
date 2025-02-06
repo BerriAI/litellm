@@ -1,7 +1,7 @@
 from typing import Literal
 
 
-def calculage_img_tokens(
+def calculate_img_tokens(
     width,
     height,
     mode: Literal["low", "high", "auto"] = "auto",

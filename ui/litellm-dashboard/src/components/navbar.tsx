@@ -17,6 +17,7 @@ import {
   Card,
 } from "@tremor/react";
 
+
 // Define the props type
 interface NavbarProps {
   userID: string | null;
@@ -82,57 +83,51 @@ const Navbar: React.FC<NavbarProps> = ({
   ];
 
   return (
-    <nav className="left-0 right-0 top-0 flex justify-between items-center h-12 mb-4">
-      <div className="text-left my-2 absolute top-0 left-0">
-        <div className="flex flex-col items-center">
-          <Link href="/">
-            <button className="text-gray-800 rounded text-center">
-              <img
-                src={imageUrl}
-                width={160}
-                height={160}
-                alt="LiteLLM Brand"
-                className="mr-2"
-              />
-            </button>
-          </Link>
-        </div>
-      </div>
-      <div className="text-right mx-4 my-2 absolute top-0 right-0 flex items-center justify-end space-x-2">
-        {premiumUser ? null : (
-          <div
-            style={{
-              // border: '1px solid #391085',
-              padding: "6px",
-              borderRadius: "8px", // Added border-radius property
-            }}
-          >
-            <a
-              href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"
-              target="_blank"
-              style={{
-                fontSize: "14px",
-                textDecoration: "underline",
-              }}
-            >
-              Get enterprise license
-            </a>
-          </div>
-        )}
+    <>
+      <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="w-full px-4">
+          <div className="flex justify-between items-center h-14">
+            {/* Left side - Just Logo */}
+            <div className="flex items-center">
+              <Link href="/" className="flex items-center">
+                <button className="text-gray-800 rounded text-center">
+                  <img
+                    src={imageUrl}
+                    alt="LiteLLM Brand"
+                    className="h-10 w-40 object-contain"
+                  />
+                </button>
+              </Link>
+            </div>
 
-        <div
-          style={{
-            border: "1px solid #391085",
-            padding: "6px",
-            borderRadius: "8px", // Added border-radius property
-          }}
-        >
-          <Dropdown menu={{ items }}>
-            <Space>{userEmail ? userEmail : userRole}</Space>
-          </Dropdown>
+            {/* Right side - Links and Admin */}
+            <div className="flex items-center space-x-6">
+              <a 
+                href="https://docs.litellm.ai/docs/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-gray-600 hover:text-gray-800"
+              >
+                Docs
+              </a>
+              <Dropdown menu={{ items }}>
+                <button className="flex items-center text-sm text-gray-600 hover:text-gray-800">
+                  User
+                  <svg 
+                    className="ml-1 w-4 h-4" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              </Dropdown>
+            </div>
+          </div>
         </div>
-      </div>
-    </nav>
+      </nav>
+    </>
   );
 };
 

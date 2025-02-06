@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm.llms.prompt_templates.factory import prompt_factory
+from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 
 
 def test_prompt_formatting():

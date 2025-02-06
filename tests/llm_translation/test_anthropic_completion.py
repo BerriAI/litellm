@@ -670,7 +670,7 @@ class TestAnthropicCompletion(BaseLLMChatTest):
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        from litellm.llms.prompt_templates.factory import (
+        from litellm.litellm_core_utils.prompt_templates.factory import (
             convert_to_anthropic_tool_invoke,
         )
 
@@ -684,6 +684,67 @@ class TestAnthropicCompletion(BaseLLMChatTest):
         Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
         """
         pass
+
+    def test_tool_call_and_json_response_format(self):
+        """
+        Test that the tool call and JSON response format is supported by the LLM API
+        """
+        litellm.set_verbose = True
+        from pydantic import BaseModel
+        from litellm.utils import supports_response_schema
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        class RFormat(BaseModel):
+            question: str
+            answer: str
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_response_schema(base_completion_call_args["model"], None):
+            pytest.skip("Model does not support response schema")
+
+        try:
+            res = litellm.completion(
+                **base_completion_call_args,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "response user question with JSON object",
+                    },
+                    {"role": "user", "content": "Hey! What's the weather in NewYork?"},
+                ],
+                tool_choice="required",
+                response_format=RFormat,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_current_weather",
+                            "description": "Get the current weather in a given location",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "location": {
+                                        "type": "string",
+                                        "description": "The city and state, e.g. San Francisco, CA",
+                                    },
+                                    "unit": {
+                                        "type": "string",
+                                        "enum": ["celsius", "fahrenheit"],
+                                    },
+                                },
+                                "required": ["location"],
+                            },
+                        },
+                    }
+                ],
+            )
+            assert res is not None
+
+            assert res.choices[0].message.tool_calls is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
 
 
 def test_convert_tool_response_to_message_with_values():
@@ -767,7 +828,7 @@ def test_convert_tool_response_to_message_no_arguments():
 
 
 def test_anthropic_tool_with_image():
-    from litellm.llms.prompt_templates.factory import prompt_factory
+    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
     import json
 
     b64_data = "iVBORw0KGgoAAAANSUhEu6U3//C9t/fKv5wDgpP1r5796XwC4zyH1D565bHGDqbY85AMb0nIQe+u3J390Xbtb9XgXxcK0/aqRXpdYcwgARbCN03FJk"
@@ -829,3 +890,148 @@ def test_anthropic_tool_with_image():
     )
 
     assert b64_data in json.dumps(result)
+
+
+def test_anthropic_map_openai_params_tools_and_json_schema():
+    import json
+
+    args = {
+        "non_default_params": {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "question": {"title": "Question", "type": "string"},
+                            "answer": {"title": "Answer", "type": "string"},
+                        },
+                        "required": ["question", "answer"],
+                        "title": "RFormat",
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                    "name": "RFormat",
+                    "strict": True,
+                },
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "tool_choice": "required",
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
+    )
+
+    assert "Question" in json.dumps(mapped_params)
+
+
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+
+@pytest.mark.parametrize(
+    "json_mode, tool_calls, expect_null_response",
+    [
+        (
+            True,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            True,
+        ),
+        (
+            True,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            False,
+        ),
+        (
+            False,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            True,
+        ),
+    ],
+)
+def test_anthropic_json_mode_and_tool_call_response(
+    json_mode, tool_calls, expect_null_response
+):
+    result = litellm.AnthropicConfig()._transform_response_for_json_mode(
+        json_mode=json_mode,
+        tool_calls=tool_calls,
+    )
+
+    assert (
+        result is None if expect_null_response else result is not None
+    ), f"Expected result to be {None if expect_null_response else 'not None'}, but got {result}"
+
+
+@pytest.mark.parametrize(
+    "stop_input,expected_output,drop_params",
+    [
+        ("stop", ["stop"], True),  # basic string
+        (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
+        ("   ", None, True),  # whitespace string should be dropped when drop_params is True
+        ("   ", ["   "], False),  # whitespace string should be kept when drop_params is False
+        (["stop1", "  ", "stop2"], ["stop1", "stop2"], True),  # list with whitespace that should be filtered
+        (["stop1", "  ", "stop2"], ["stop1", "  ", "stop2"], False),  # list with whitespace that should be kept
+        (None, None, True),  # None input
+    ],
+)
+def test_map_stop_sequences(stop_input, expected_output, drop_params):
+    """Test the _map_stop_sequences method of AnthropicConfig"""
+    litellm.drop_params = drop_params
+    config = AnthropicConfig()
+    result = config._map_stop_sequences(stop_input)
+    assert result == expected_output

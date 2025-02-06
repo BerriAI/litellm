@@ -9,7 +9,7 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 import types
-from typing import Optional, Union
+from typing import Optional
 
 
 class NvidiaNimEmbeddingConfig:

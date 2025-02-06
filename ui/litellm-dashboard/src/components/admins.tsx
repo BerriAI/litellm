@@ -42,6 +42,8 @@ interface AdminPanelProps {
   showSSOBanner: boolean;
   premiumUser: boolean;
 }
+import { useBaseUrl } from "./constants";
+
 
 import {
   userUpdateUserCall,
@@ -94,18 +96,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   if (isLocal != true) {
     console.log = function() {};
   }
-  const [baseUrl, setBaseUrl] = useState(
-    isLocal ? "http://localhost:4000" : ""
-  );
 
+  const baseUrl = useBaseUrl();
   const all_ip_address_allowed = "All IP Addresses Allowed";
 
-  let nonSssoUrl;
-  try {
-    nonSssoUrl = window.location.origin;
-  } catch (error) {
-    nonSssoUrl = "<your-proxy-url>";
-  }
+  let nonSssoUrl = baseUrl;
   nonSssoUrl += "/fallback/login";
 
   const handleShowAllowedIPs = async () => {
@@ -202,13 +197,13 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const roles = ["proxy_admin", "proxy_admin_viewer"];
 
-  useEffect(() => {
-    if (router) {
-      const { protocol, host } = window.location;
-      const baseUrl = `${protocol}//${host}`;
-      setBaseUrl(baseUrl);
-    }
-  }, [router]);
+  // useEffect(() => {
+  //   if (router) {
+  //     const { protocol, host } = window.location;
+  //     const baseUrl = `${protocol}//${host}`;
+  //     setBaseUrl(baseUrl);
+  //   }
+  // }, [router]);
 
   useEffect(() => {
     // Fetch model info and set the default selected model

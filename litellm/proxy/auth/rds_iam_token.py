@@ -164,8 +164,6 @@ def generate_iam_auth_token(
 ) -> str:
     from urllib.parse import quote
 
-    import boto3
-
     if client is None:
         boto_client = init_rds_client(
             aws_region_name=os.getenv("AWS_REGION_NAME"),

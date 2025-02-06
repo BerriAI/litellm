@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -313,6 +314,23 @@ class LiteLLMResponseObjectHandler:
         return transformed_logprobs
 
 
+def _should_convert_tool_call_to_json_mode(
+    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None,
+    convert_tool_call_to_json_mode: Optional[bool] = None,
+) -> bool:
+    """
+    Determine if tool calls should be converted to JSON mode
+    """
+    if (
+        convert_tool_call_to_json_mode
+        and tool_calls is not None
+        and len(tool_calls) == 1
+        and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
+    ):
+        return True
+    return False
+
+
 def convert_to_model_response_object(  # noqa: PLR0915
     response_object: Optional[dict] = None,
     model_response_object: Optional[
@@ -337,7 +355,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
     ] = None,  # used for supporting 'json_schema' on older models
 ):
     received_args = locals()
-
     additional_headers = get_response_headers(_response_headers)
 
     if hidden_params is None:
@@ -398,10 +415,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
                 message: Optional[Message] = None
                 finish_reason: Optional[str] = None
-                if (
-                    convert_tool_call_to_json_mode
-                    and tool_calls is not None
-                    and len(tool_calls) == 1
+                if _should_convert_tool_call_to_json_mode(
+                    tool_calls=tool_calls,
+                    convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
                 ):
                     # to support 'json_schema' logic on older models
                     json_mode_content_str: Optional[str] = tool_calls[0][
@@ -411,12 +427,18 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
+                    provider_specific_fields = {}
+                    message_keys = Message.model_fields.keys()
+                    for field in choice["message"].keys():
+                        if field not in message_keys:
+                            provider_specific_fields[field] = choice["message"][field]
                     message = Message(
                         content=choice["message"].get("content", None),
                         role=choice["message"]["role"] or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
+                        provider_specific_fields=provider_specific_fields,
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:

@@ -1,19 +1,16 @@
 import ast
 import base64
 import binascii
-import json
 import os
-import sys
 import traceback
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
-from dotenv import load_dotenv
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import KeyManagementSystem
 
 oidc_cache = DualCache()
@@ -288,6 +285,16 @@ def get_secret(  # noqa: PLR0915
                         if secret is None:
                             raise ValueError(
                                 f"No secret found in Google Secret Manager for {secret_name}"
+                            )
+                    except Exception as e:
+                        print_verbose(f"An error occurred - {str(e)}")
+                        raise e
+                elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
+                    try:
+                        secret = client.sync_read_secret(secret_name=secret_name)
+                        if secret is None:
+                            raise ValueError(
+                                f"No secret found in Hashicorp Secret Manager for {secret_name}"
                             )
                     except Exception as e:
                         print_verbose(f"An error occurred - {str(e)}")

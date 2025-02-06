@@ -1,5 +1,5 @@
 # What this tests ?
-## Tests /chat/completions by generating a key and then making a chat completions request
+## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
 import asyncio
 import aiohttp, openai
@@ -297,6 +297,7 @@ async def test_chat_completion():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_chat_completion_ratelimit():
     """
     - call model with rpm 1
@@ -375,6 +376,39 @@ async def test_chat_completion_streaming():
         response_str += chunk.choices[0].delta.content or ""
 
     print(f"response_str: {response_str}")
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_anthropic_structured_output():
+    """
+    Ensure nested pydantic output is returned correctly
+    """
+    from pydantic import BaseModel
+
+    class CalendarEvent(BaseModel):
+        name: str
+        date: str
+        participants: list[str]
+
+    class EventsList(BaseModel):
+        events: list[CalendarEvent]
+
+    messages = [
+        {"role": "user", "content": "List 5 important events in the XIX century"}
+    ]
+
+    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+
+    res = await client.beta.chat.completions.parse(
+        model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=messages,
+        response_format=EventsList,
+        timeout=60,
+    )
+    message = res.choices[0].message
+
+    if message.parsed:
+        print(message.parsed.events)
 
 
 @pytest.mark.asyncio

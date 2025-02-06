@@ -1,12 +1,8 @@
-import uuid
-from typing import Any, Callable, Coroutine, Iterable, List, Literal, Optional, Union
+from typing import Coroutine, Iterable, Literal, Optional, Union
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from typing_extensions import overload
-
-import litellm
-from litellm.types.utils import FileTypes  # type: ignore
 
 from ...types.llms.openai import (
     Assistant,
@@ -476,7 +472,7 @@ class AzureAssistantsAPI(BaseLLM):
         """
         Here's an example:
         ```
-        from litellm.llms.OpenAI.openai import OpenAIAssistantsAPI, MessageData
+        from litellm.llms.openai.openai import OpenAIAssistantsAPI, MessageData
 
         # create thread
         message: MessageData = {"role": "user", "content": "Hey, how's it going?"}

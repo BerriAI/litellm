@@ -1,27 +1,20 @@
 import json
-import re
-import threading
 from datetime import datetime
 from typing import Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
-import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import (
-    get_standard_logging_object_payload,
-)
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexLLM,
-)
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import StandardPassThroughResponseObject
 from litellm.utils import executor as thread_pool_executor
 
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
+)
+from .llm_provider_handlers.assembly_passthrough_logging_handler import (
+    AssemblyAIPassthroughLoggingHandler,
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -38,6 +31,48 @@ class PassThroughEndpointLogging:
 
         # Anthropic
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages"]
+
+        self.assemblyai_passthrough_logging_handler = (
+            AssemblyAIPassthroughLoggingHandler()
+        )
+
+    async def _handle_logging(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        standard_logging_response_object: Union[
+            StandardPassThroughResponseObject,
+            PassThroughEndpointLoggingResultValues,
+            dict,
+        ],
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        **kwargs,
+    ):
+        """Helper function to handle both sync and async logging operations"""
+        # Submit to thread pool for sync logging
+        thread_pool_executor.submit(
+            logging_obj.success_handler,
+            standard_logging_response_object,
+            start_time,
+            end_time,
+            cache_hit,
+            **kwargs,
+        )
+
+        # Handle async logging
+        await logging_obj.async_success_handler(
+            result=(
+                json.dumps(result)
+                if isinstance(result, dict)
+                else standard_logging_response_object
+            ),
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            **kwargs,
+        )
 
     async def pass_through_async_success_handler(
         self,
@@ -90,28 +125,39 @@ class PassThroughEndpointLogging:
                 anthropic_passthrough_logging_handler_result["result"]
             )
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
+        elif self.is_assemblyai_route(url_route):
+            if (
+                AssemblyAIPassthroughLoggingHandler._should_log_request(
+                    httpx_response.request.method
+                )
+                is not True
+            ):
+                return
+            self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
+                httpx_response=httpx_response,
+                response_body=response_body or {},
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                **kwargs,
+            )
+            return
+
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=httpx_response.text
             )
-        thread_pool_executor.submit(
-            logging_obj.success_handler,
-            standard_logging_response_object,  # Positional argument 1
-            start_time,  # Positional argument 2
-            end_time,  # Positional argument 3
-            cache_hit,  # Positional argument 4
-            **kwargs,  # Unpacked keyword arguments
-        )
 
-        await logging_obj.async_success_handler(
-            result=(
-                json.dumps(result)
-                if isinstance(result, dict)
-                else standard_logging_response_object
-            ),
+        await self._handle_logging(
+            logging_obj=logging_obj,
+            standard_logging_response_object=standard_logging_response_object,
+            result=result,
             start_time=start_time,
             end_time=end_time,
-            cache_hit=False,
+            cache_hit=cache_hit,
             **kwargs,
         )
 
@@ -125,4 +171,12 @@ class PassThroughEndpointLogging:
         for route in self.TRACKED_ANTHROPIC_ROUTES:
             if route in url_route:
                 return True
+        return False
+
+    def is_assemblyai_route(self, url_route: str):
+        parsed_url = urlparse(url_route)
+        if parsed_url.hostname == "api.assemblyai.com":
+            return True
+        elif "/transcript" in parsed_url.path:
+            return True
         return False

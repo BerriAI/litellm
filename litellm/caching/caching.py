@@ -8,16 +8,12 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import ast
-import asyncio
 import hashlib
-import inspect
-import io
 import json
-import logging
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from openai.types.audio.transcription_create_params import TranscriptionCreateParams
 from openai.types.chat.completion_create_params import (
@@ -41,7 +37,7 @@ from litellm.types.utils import all_litellm_params
 
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache
+from .dual_cache import DualCache  # noqa
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache
@@ -211,9 +207,9 @@ class Cache:
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
-            litellm.success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
-            litellm._async_success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
@@ -778,9 +774,9 @@ def enable_cache(
     if "cache" not in litellm.input_callback:
         litellm.input_callback.append("cache")
     if "cache" not in litellm.success_callback:
-        litellm.success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_success_callback("cache")
     if "cache" not in litellm._async_success_callback:
-        litellm._async_success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
 
     if litellm.cache is None:
         litellm.cache = Cache(

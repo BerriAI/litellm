@@ -4,11 +4,7 @@ Re rank api
 LiteLLM supports the re rank API format, no paramter transformation occurs
 """
 
-import uuid
 from typing import Any, Dict, List, Optional, Union
-
-import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm.llms.base import BaseLLM

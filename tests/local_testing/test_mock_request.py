@@ -11,6 +11,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
+import time
 
 
 def test_mock_request():
@@ -92,3 +93,86 @@ async def test_async_mock_streaming_request_n_greater_than_1():
     # assert (
     #     complete_response == "LiteLLM is awesome"
     # ), f"Unexpected response got {complete_response}"
+
+
+def test_mock_request_with_mock_timeout():
+    """
+    Allow user to set 'mock_timeout = True', this allows for testing if fallbacks/retries are working on timeouts.
+    """
+    start_time = time.time()
+    with pytest.raises(litellm.Timeout):
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
+            timeout=3,
+            mock_timeout=True,
+        )
+    end_time = time.time()
+    assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
+
+
+def test_router_mock_request_with_mock_timeout():
+    """
+    Allow user to set 'mock_timeout = True', this allows for testing if fallbacks/retries are working on timeouts.
+    """
+    start_time = time.time()
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+    )
+    with pytest.raises(litellm.Timeout):
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
+            timeout=3,
+            mock_timeout=True,
+        )
+        print(response)
+    end_time = time.time()
+    assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
+
+
+def test_router_mock_request_with_mock_timeout_with_fallbacks():
+    """
+    Allow user to set 'mock_timeout = True', this allows for testing if fallbacks/retries are working on timeouts.
+    """
+    litellm.set_verbose = True
+    start_time = time.time()
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "azure-gpt",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+            },
+        ],
+        fallbacks=[{"gpt-3.5-turbo": ["azure-gpt"]}],
+    )
+    response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, I'm a mock request"}],
+        timeout=3,
+        num_retries=1,
+        mock_timeout=True,
+    )
+    print(response)
+    end_time = time.time()
+    assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
+    assert "gpt-35-turbo" in response.model, "Model should be azure gpt-35-turbo"

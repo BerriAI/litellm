@@ -9,11 +9,11 @@ Convers
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 """
 
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
 from litellm.types.llms.openai import EmbeddingCreateParams
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse, Usage
 from litellm.utils import is_base64_encoded
 
 

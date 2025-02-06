@@ -88,11 +88,14 @@ async def add_models(session, model_id="123", model_name="azure-gpt-3.5"):
         return response_json
 
 
-async def get_model_info(session, key):
+async def get_model_info(session, key, litellm_model_id=None):
     """
     Make sure only models user has access to are returned
     """
-    url = "http://0.0.0.0:4000/model/info"
+    if litellm_model_id:
+        url = f"http://0.0.0.0:4000/model/info?litellm_model_id={litellm_model_id}"
+    else:
+        url = "http://0.0.0.0:4000/model/info"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -146,6 +149,35 @@ async def test_get_models():
         models = [m["model_name"] for m in response["data"]]
         for m in models:
             assert m == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_get_specific_model():
+    """
+    Return specific model info
+
+    Ensure value of model_info is same as on `/model/info` (no id set)
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, models=["gpt-4"])
+        key = key_gen["key"]
+        response = await get_model_info(session=session, key=key)
+        models = [m["model_name"] for m in response["data"]]
+        model_specific_info = None
+        for idx, m in enumerate(models):
+            assert m == "gpt-4"
+            litellm_model_id = response["data"][idx]["model_info"]["id"]
+            model_specific_info = response["data"][idx]
+        assert litellm_model_id is not None
+        response = await get_model_info(
+            session=session, key=key, litellm_model_id=litellm_model_id
+        )
+        assert response["data"][0]["model_info"]["id"] == litellm_model_id
+        assert (
+            response["data"][0] == model_specific_info
+        ), "Model info is not the same. Got={}, Expected={}".format(
+            response["data"][0], model_specific_info
+        )
 
 
 async def delete_model(session, model_id="123"):

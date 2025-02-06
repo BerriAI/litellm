@@ -1,13 +1,13 @@
 import openai
 
-api_base = f"http://0.0.0.0:8000"
+api_base = "http://0.0.0.0:8000"
 
 openai.api_base = api_base
 openai.api_key = "temp-key"
 print(openai.api_base)
 
 
-print(f"LiteLLM: response from proxy with streaming")
+print("LiteLLM: response from proxy with streaming")
 response = openai.ChatCompletion.create(
     model="ollama/llama2",
     messages=[

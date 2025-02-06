@@ -2,17 +2,12 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-import types
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple
 
-from pydantic import BaseModel
-
-import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -40,6 +35,6 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
         dynamic_api_key = (
-            api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""
+            api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         )  # vllm does not require an api key
         return api_base, dynamic_api_key

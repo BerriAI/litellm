@@ -48,7 +48,7 @@ deploy/charts/litellm/charts/*
 deploy/charts/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/
-/node_modules
+**/node_modules
 kub.yaml
 loadtest_kub.yaml
 litellm/proxy/_new_secret_config.yaml
@@ -66,3 +66,14 @@ litellm/tests/langfuse.log
 litellm/tests/langfuse.log
 litellm/proxy/google-cloud-sdk/*
 tests/llm_translation/log.txt
+venv/
+tests/local_testing/log.txt
+
+.codegpt
+litellm/proxy/_new_new_secret_config.yaml
+litellm/proxy/custom_guardrail.py
+litellm/proxy/_experimental/out/404.html
+litellm/proxy/_experimental/out/404.html
+litellm/proxy/_experimental/out/model_hub.html
+.mypy_cache/*
+litellm/proxy/application.log

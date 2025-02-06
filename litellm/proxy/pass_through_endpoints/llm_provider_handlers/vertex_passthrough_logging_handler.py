@@ -11,10 +11,16 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
-from litellm.llms.vertex_ai_and_google_ai_studio.gemini.vertex_and_google_ai_studio_gemini import (
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -40,21 +46,20 @@ class VertexPassthroughLoggingHandler:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm = litellm.VertexGeminiConfig()
-            litellm_model_response: litellm.ModelResponse = (
-                instance_of_vertex_llm._transform_response(
+            litellm_model_response: ModelResponse = (
+                instance_of_vertex_llm.transform_response(
                     model=model,
                     messages=[
                         {"role": "user", "content": "no-message-pass-through-endpoint"}
                     ],
-                    response=httpx_response,
+                    raw_response=httpx_response,
                     model_response=litellm.ModelResponse(),
                     logging_obj=logging_obj,
                     optional_params={},
                     litellm_params={},
                     api_key="",
-                    data={},
-                    print_verbose=litellm.print_verbose,
-                    encoding=None,
+                    request_data={},
+                    encoding=litellm.encoding,
                 )
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
@@ -72,7 +77,7 @@ class VertexPassthroughLoggingHandler:
             }
 
         elif "predict" in url_route:
-            from litellm.llms.vertex_ai_and_google_ai_studio.image_generation.image_generation_handler import (
+            from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
                 VertexImageGeneration,
             )
             from litellm.types.utils import PassthroughCallTypes
@@ -83,8 +88,8 @@ class VertexPassthroughLoggingHandler:
             _json_response = httpx_response.json()
 
             litellm_prediction_response: Union[
-                litellm.ModelResponse, litellm.EmbeddingResponse, litellm.ImageResponse
-            ] = litellm.ModelResponse()
+                ModelResponse, EmbeddingResponse, ImageResponse
+            ] = ModelResponse()
             if vertex_image_generation_class.is_image_generation_response(
                 _json_response
             ):
@@ -177,7 +182,7 @@ class VertexPassthroughLoggingHandler:
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[litellm.ModelResponse, litellm.TextCompletionResponse]]:
+    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
         vertex_iterator = VertexModelResponseIterator(
             streaming_response=None,
             sync_stream=False,
@@ -213,9 +218,7 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _create_vertex_response_logging_payload_for_generate_content(
-        litellm_model_response: Union[
-            litellm.ModelResponse, litellm.TextCompletionResponse
-        ],
+        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
         model: str,
         kwargs: dict,
         start_time: datetime,

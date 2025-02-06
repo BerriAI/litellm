@@ -8,44 +8,15 @@
 - async_streaming
 """
 
-import copy
-import json
-import os
-import time
-import types
-from enum import Enum
-from functools import partial
-from typing import (
-    Any,
-    AsyncGenerator,
-    AsyncIterator,
-    Callable,
-    Coroutine,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-)
+from typing import Any, AsyncIterator, Callable, Iterator, Optional, Union
 
-import httpx  # type: ignore
-import requests  # type: ignore
+import httpx
 
-import litellm
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.utils import GenericStreamingChunk, ProviderField
-from litellm.utils import (
-    CustomStreamWrapper,
-    EmbeddingResponse,
-    ImageResponse,
-    ModelResponse,
-    Usage,
-)
+from litellm.types.utils import GenericStreamingChunk
+from litellm.utils import ImageResponse, ModelResponse
 
 from .base import BaseLLM
-from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class CustomLLMError(Exception):  # use this for all your exceptions

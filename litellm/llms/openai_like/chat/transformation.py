@@ -2,24 +2,30 @@
 OpenAI-like chat completion transformation
 """
 
-import types
-from typing import List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
-from pydantic import BaseModel
 
-import litellm
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage
 from litellm.types.utils import ModelResponse
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ...OpenAI.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class OpenAILikeChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
         dynamic_api_key = (
@@ -61,7 +67,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         response: httpx.Response,
         model_response: ModelResponse,
         stream: bool,
-        logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         api_key: Optional[str],
         data: Union[dict, str],
@@ -96,3 +102,25 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
         return returned_response
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict:
+        mapped_params = super().map_openai_params(
+            non_default_params, optional_params, model, drop_params
+        )
+        if (
+            "max_completion_tokens" in non_default_params
+            and replace_max_completion_tokens_with_max_tokens
+        ):
+            mapped_params["max_tokens"] = non_default_params[
+                "max_completion_tokens"
+            ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
+            mapped_params.pop("max_completion_tokens", None)
+
+        return mapped_params
