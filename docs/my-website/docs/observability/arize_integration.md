@@ -28,7 +28,7 @@ import litellm
 import os
 
 os.environ["ARIZE_SPACE_KEY"] = ""
-os.environ["ARIZE_API_KEY"] = "" # defaults to litellm-completion
+os.environ["ARIZE_API_KEY"] = ""
 
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
