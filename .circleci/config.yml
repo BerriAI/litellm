@@ -1878,17 +1878,21 @@ jobs:
       - run:
           name: Build UI
           command: |
-            # Load nvm in the current shell and make it available to subshells
-            echo 'export NVM_DIR="/opt/circleci/.nvm"' >> $BASH_ENV
-            echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> $BASH_ENV
-            echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> $BASH_ENV
-            source $BASH_ENV
+            # Set NVM_DIR before the script runs to override its default location
+            export NVM_DIR="/opt/circleci/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
             
-            # Verify nvm is available
-            command -v nvm
+            # Install Node.js version if not already installed
+            nvm install v18.17.0
             
             cd ui/litellm-dashboard
-            ./build_ui.sh
+            
+            # Set NODE_VERSION env var to help debug
+            echo "Current node version: $(node -v)"
+            
+            # Run the build script with the correct NVM_DIR
+            NVM_DIR="/opt/circleci/.nvm" ./build_ui.sh
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
