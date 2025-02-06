@@ -112,7 +112,10 @@ class AcuvityGuardrail(CustomGuardrail):
                         if resp.match_details[index].response_match == ResponseMatch.YES:
                             # return the 1st detection
                             raise HTTPException(
-                                status_code=400, detail=resp.match_details[index].matched_checks[0].to_dict()
+                                status_code=400, detail={
+                                    "error": "Violated guardrail policy",
+                                    "guard": resp.match_details[index].matched_checks[0].to_dict()
+                                }
                             )
         pass
 
@@ -138,6 +141,9 @@ class AcuvityGuardrail(CustomGuardrail):
                     if resp.match_details[index].response_match == ResponseMatch.YES:
                         # return the 1st detection
                         raise HTTPException(
-                            status_code=400, detail=resp.match_details[index].matched_checks[0].to_dict()
-                        )
+                                status_code=400, detail={
+                                    "error": "Violated guardrail policy",
+                                    "guard": resp.match_details[index].matched_checks[0].to_dict()
+                                }
+                            )
         pass
