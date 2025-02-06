@@ -30,25 +30,21 @@ Acuvity supports guardrails at different stages of an LLM request:
 2. **During LLM API Call** - Monitor for prompt injection or malicious content.
 3. **Post LLM API Call** - Analyze and filter responses for security violations.
 
-<Image img={require('../../../img/acuvity_setup.png')} />
 
 ### **Pre-Call: Detect and Redact PII**
 
 Add the **PII Detection** guardrail to your **Pre LLM API Call** configuration.
 
-<Image img={require('../../../img/acuvity_pre.png')} />
 
 ### **During-Call: Detect Prompt Injection**
 
 Enable **Prompt Injection Detection** for your **During LLM API Call** configuration.
 
-<Image img={require('../../../img/acuvity_during.png')} />
 
 ### **Post-Call: Monitor Responses for Security Issues**
 
 Configure **Post LLM API Call** guardrails to filter inappropriate or malicious responses.
 
-<Image img={require('../../../img/acuvity_post.png')} />
 
 ## 3. Define Guardrails in Your LiteLLM `config.yaml`
 
