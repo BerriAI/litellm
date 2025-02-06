@@ -65,6 +65,7 @@ interface TeamInfoProps {
   is_team_admin: boolean;
   is_proxy_admin: boolean;
   userModels: string[];
+  editTeam: boolean;
 }
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
@@ -73,7 +74,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken, 
   is_team_admin, 
   is_proxy_admin,
-  userModels
+  userModels,
+  editTeam
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -383,7 +385,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <TabGroup>
+      <TabGroup defaultIndex={editTeam ? 2 : 0}>
         <TabList className="mb-4">
           <Tab>Overview</Tab>
           <Tab>Members</Tab>
