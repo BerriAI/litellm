@@ -1918,6 +1918,10 @@ jobs:
           command: |
             npx playwright install
       - run:
+          name: Build UI
+          command: |
+            ./ui/litellm-dashboard/build_ui.sh
+      - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
