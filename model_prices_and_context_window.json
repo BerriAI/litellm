@@ -8894,6 +8894,17 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "sambanova/Qwen2.5-72B-Instruct": {
+        "max_tokens": 8000,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000, 
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "sambanova",
+        "supports_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "assemblyai/nano": {
         "mode": "audio_transcription",
         "input_cost_per_second": 0.00010278,
