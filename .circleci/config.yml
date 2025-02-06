@@ -1875,7 +1875,15 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
-      - node/install-packages
+      - run:
+          name: Install and setup Node
+          command: |
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            nvm install 18.17.0
+            nvm use 18.17.0
+            nvm alias default 18.17.0
       - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
