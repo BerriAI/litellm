@@ -22,16 +22,58 @@ import {
 import { teamInfoCall, teamMemberDeleteCall, teamMemberAddCall, teamMemberUpdateCall, Member } from "@/components/networking";
 import { Button, Form, Input, Select, message, InputNumber, Tooltip } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
+import {
+  Select as Select2,
+} from "antd";
 import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import TeamMemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+
+
+interface TeamData {
+  team_id: string;
+  team_info: {
+    team_alias: string;
+    team_id: string;
+    organization_id: string | null;
+    admins: string[];
+    members: string[];
+    members_with_roles: Member[];
+    metadata: Record<string, any>;
+    tpm_limit: number | null;
+    rpm_limit: number | null;
+    max_budget: number | null;
+    budget_duration: string | null;
+    models: string[];
+    blocked: boolean;
+    spend: number;
+    max_parallel_requests: number | null;
+    budget_reset_at: string | null;
+    model_id: string | null;
+    litellm_model_table: string | null;
+    created_at: string;
+  };
+  keys: any[];
+  team_memberships: any[];
+}
+
+interface TeamInfoProps {
+  teamId: string;
+  onClose: () => void;
+  accessToken: string | null;
+  is_team_admin: boolean;
+  is_proxy_admin: boolean;
+  userModels: string[];
+}
 
 const TeamInfoView: React.FC<TeamInfoProps> = ({ 
   teamId, 
   onClose, 
   accessToken, 
   is_team_admin, 
-  is_proxy_admin 
+  is_proxy_admin,
+  userModels
 }) => {
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,6 +82,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+
+  console.log("userModels in team info", userModels);
 
   const canManageMembers = is_team_admin || is_proxy_admin;
   const canEditTeam = is_team_admin || is_proxy_admin;
@@ -253,18 +297,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </Form.Item>
           
           <Form.Item label="Models" name="models">
-            <AntSelect
+            <Select2
               mode="multiple"
               placeholder="Select models"
+              style={{ width: "100%" }}
             >
-              <AntSelect.Option key="all-proxy-models" value="all-proxy-models">
+              <Select2.Option
+                key="all-proxy-models"
+                value="all-proxy-models"
+              >
                 All Proxy Models
-              </AntSelect.Option>
-              <AntSelect.Option key="gpt-4" value="gpt-4">GPT-4</AntSelect.Option>
-              <AntSelect.Option key="gpt-3.5-turbo" value="gpt-3.5-turbo">GPT-3.5 Turbo</AntSelect.Option>
-              <AntSelect.Option key="claude-2" value="claude-2">Claude 2</AntSelect.Option>
-              {/* Add additional models as needed */}
-            </AntSelect>
+              </Select2.Option>
+              {userModels.map((model) => (
+                <Select2.Option key={model} value={model}>
+                  {getModelDisplayName(model)}
+                </Select2.Option>
+              ))}
+            </Select2>
           </Form.Item>
 
           <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -495,6 +544,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Select.Option key="all-proxy-models" value="all-proxy-models">
                         All Proxy Models
                       </Select.Option>
+                      {userModels.map((model) => (
+                        <Select.Option key={model} value={model}>
+                          {getModelDisplayName(model)}
+                        </Select.Option>
+                      ))}
                     </Select>
                   </Form.Item>
 
@@ -547,7 +601,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Button onClick={() => setIsEditing(false)}>
                       Cancel
                     </Button>
-                    <Button type="primary" htmlType="submit">
+                    <Button type="primary" htmlType="submit" className="bg-blue-500">
                       Save Changes
                     </Button>
                   </div>

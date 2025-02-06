@@ -530,6 +530,7 @@ const Team: React.FC<TeamProps> = ({
         accessToken={accessToken}
         is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
         is_proxy_admin={userRole == "Admin"}
+        userModels={userModels}
       />
     ) : (
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
