@@ -90,8 +90,4 @@ class PassthroughEndpointRouter:
     def _get_default_env_variable_name_passthrough_endpoint(
         custom_llm_provider: str,
     ) -> str:
-        if custom_llm_provider is None:
-            raise ValueError(
-                "custom_llm_provider is required for setting pass-through credentials"
-            )
         return f"{custom_llm_provider.upper()}_API_KEY"
