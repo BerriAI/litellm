@@ -54,9 +54,12 @@ completion(model="huggingface/together/deepseek-ai/DeepSeek-R1",...)
 
 # Run Qwen2.5-72B-Instruct inference through Sambanova
 completion(model="huggingface/sambanova/Qwen/Qwen2.5-72B-Instruct",...)
+
+# Run Llama-3.3-70B-Instruct inference through HF Inference API
+completion(model="huggingface/meta-llama/Llama-3.3-70B-Instruct",...)
 ```
 
-For Hugging Face models, LiteLLM uses Hugging Face's Python client [InferenceClient](https://huggingface.co/docs/huggingface_hub/package_reference/inference_client) under the hood. `InferenceClient` is a drop-in replacement for OpenAI client.
+For Hugging Face models, LiteLLM uses Hugging Face's Python client [InferenceClient](https://huggingface.co/docs/huggingface_hub/package_reference/inference_client) under the hood. `InferenceClient` is a drop-in replacement for OpenAI client with some extra features to handle providers.
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_HuggingFace.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -98,7 +101,7 @@ for chunk in response:
 ```
 
 ### Image Input
-You can also pass images to the model.
+You can also pass images when the model supports it. Here is an example using [Llama-3.2-11B-Vision-Instruct](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct) model through Sambanova.
 
 ```python
 from litellm import completion
@@ -122,14 +125,14 @@ messages=[
     ]
 
 response = completion(
-    model="huggingface/sambanova/Qwen/Qwen2.5-72B-Instruct", 
+    model="huggingface/sambanova/meta-llama/Llama-3.2-11B-Vision-Instruct", 
     messages=messages,
 )
 print(response.choices[0])
 ```
 
 ### Function Calling
-You can extend the model's capabilities by giving them access to tools, here is an example with function calling using the Qwen2.5-72B-Instruct model through Sambanova.
+You can extend the model's capabilities by giving them access to tools. Here is an example with function calling using [Qwen2.5-72B-Instruct](https://huggingface.co/Qwen/Qwen2.5-72B-Instruct) model through Sambanova.
 
 ```python
 import os
@@ -355,7 +358,11 @@ response = embedding(
 
 **How does billing work with Hugging Face Inference Providers?**
 
-> You pay the standard provider API rates with no additional markup - Hugging Face simply passes through the provider costs. Note that [Hugging Face PRO](https://huggingface.co/subscribe/pro) users get $2 worth of Inference credits every month that can be used across providers.
+> Billing is centralized on your Hugging Face account, no matter which providers you are using. You are billed the standard provider API rates with no additional markup - Hugging Face simply passes through the provider costs. Note that [Hugging Face PRO](https://huggingface.co/subscribe/pro) users get $2 worth of Inference credits every month that can be used across providers.
+
+**Do I need to create an account for each Inference Provider?**
+
+> No, you don't need to create separate accounts. All requests are routed through Hugging Face, so you only need your HF token. This allows you to easily benchmark different providers and choose the one that best fits your needs.
 
 **Will more inference providers be supported by Hugging Face in the future?**
 
