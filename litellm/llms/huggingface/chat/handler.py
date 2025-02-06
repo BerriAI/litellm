@@ -17,7 +17,7 @@ from ...base import BaseLLM
 from ..common_utils import HuggingFaceError
 
 if TYPE_CHECKING:
-    from huggingface_hub import AsyncInferenceClient, InferenceClient
+    pass
 
 
 class HFCompletion(BaseLLM):
@@ -100,9 +100,9 @@ class HFCompletion(BaseLLM):
                         from huggingface_hub import InferenceClient
                     except ImportError:
                         raise ImportError(
-                        "To use the default Hugging Face's InferenceClient client, please install `huggingface-hub` "
-                        "with `pip install huggingface-hub` or `poetry add huggingface-hub`."
-                    )
+                            "To use the default Hugging Face's InferenceClient client, please install `huggingface-hub` "
+                            "with `pip install huggingface-hub` or `poetry add huggingface-hub`."
+                        )
                     hf_client = InferenceClient(
                         api_key=api_key,
                         timeout=timeout,
@@ -112,7 +112,7 @@ class HFCompletion(BaseLLM):
                     )
                 else:
                     hf_client = client
-
+                request_parameters.inputs.pop("max_retries", None)
                 response = hf_client.chat.completions.create(**request_parameters.inputs)  # type: ignore
                 response_dict = dataclasses.asdict(response)
 
@@ -134,9 +134,7 @@ class HFCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise HuggingFaceError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise HuggingFaceError(status_code=status_code, message=error_text, headers=error_headers)
 
     async def acompletion(
         self,
@@ -155,9 +153,9 @@ class HFCompletion(BaseLLM):
                     from huggingface_hub import AsyncInferenceClient
                 except ImportError:
                     raise ImportError(
-                    "To use the default Hugging Face's AsyncInferenceClient client, please install `huggingface-hub` "
-                    "with `pip install huggingface-hub` or `poetry add huggingface-hub`."
-                )
+                        "To use the default Hugging Face's AsyncInferenceClient client, please install `huggingface-hub` "
+                        "with `pip install huggingface-hub` or `poetry add huggingface-hub`."
+                    )
                 hf_client = AsyncInferenceClient(
                     api_key=api_key,
                     timeout=timeout,
@@ -168,7 +166,6 @@ class HFCompletion(BaseLLM):
 
             else:
                 hf_client = client
-
             response = await hf_client.chat.completions.create(**data)
             response_dict = dataclasses.asdict(response)
 
@@ -192,9 +189,7 @@ class HFCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise HuggingFaceError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise HuggingFaceError(status_code=status_code, message=error_text, headers=error_headers)
 
     def streaming(
         self,
@@ -234,9 +229,7 @@ class HFCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise HuggingFaceError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise HuggingFaceError(status_code=status_code, message=error_text, headers=error_headers)
 
         try:
             for chunk in response_stream:
@@ -249,9 +242,7 @@ class HFCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise HuggingFaceError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise HuggingFaceError(status_code=status_code, message=error_text, headers=error_headers)
 
     async def async_streaming(
         self,
@@ -265,7 +256,7 @@ class HFCompletion(BaseLLM):
     ):
         if client is None:
             try:
-                    from huggingface_hub import AsyncInferenceClient
+                from huggingface_hub import AsyncInferenceClient
             except ImportError:
                 raise ImportError(
                     "To use the default Hugging Face's AsyncInferenceClient client, please install `huggingface-hub` "
@@ -294,9 +285,7 @@ class HFCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise HuggingFaceError(
-                status_code=status_code, message=error_text, headers=error_headers
-            )
+            raise HuggingFaceError(status_code=status_code, message=error_text, headers=error_headers)
         finally:
             # Close the client if we created it
             if hf_client is not None and client is None:

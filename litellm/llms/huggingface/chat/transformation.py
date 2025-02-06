@@ -1,6 +1,6 @@
 import dataclasses
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 from attr import dataclass
@@ -9,6 +9,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+
 from ..common_utils import HuggingFaceError, _validate_environment
 
 if TYPE_CHECKING:
@@ -86,9 +87,7 @@ class HFChatConfig(OpenAIGPTConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return HuggingFaceError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return HuggingFaceError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_request(
         self,
@@ -98,6 +97,8 @@ class HFChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        if "max_retries" in optional_params:
+            optional_params.pop("max_retries", None)
         messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
 
@@ -155,11 +156,8 @@ class HFChatConfig(OpenAIGPTConfig):
             model=chunk.model,
             system_fingerprint=chunk.system_fingerprint,
             stream=True,
-            usage = dataclasses.asdict(chunk.usage) if chunk.usage else None,
+            usage=dataclasses.asdict(chunk.usage) if chunk.usage else None,
             object="chat.completion.chunk",
         )
-        response._hidden_params = {
-            "created_at": chunk.created,
-            "usage": chunk.usage if chunk.usage else None
-        }
+        response._hidden_params = {"created_at": chunk.created, "usage": chunk.usage if chunk.usage else None}
         return response

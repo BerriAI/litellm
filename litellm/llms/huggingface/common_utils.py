@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, Union
+from typing import Dict, Optional, Union
 
 import httpx
 
@@ -21,21 +21,6 @@ class HuggingFaceError(BaseLLMException):
             response=response,
             headers=headers,
         )
-
-
-hf_tasks = Literal[
-    "text-generation-inference",
-    "conversational",
-    "text-classification",
-    "text-generation",
-]
-
-hf_task_list = [
-    "text-generation-inference",
-    "conversational",
-    "text-classification",
-    "text-generation",
-]
 
 
 def output_parser(generated_text: str):
