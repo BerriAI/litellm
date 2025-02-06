@@ -312,11 +312,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </Form.Item>
 
           <Form.Item label="Reset Budget" name="budget_duration">
-            <AntSelect placeholder="n/a">
-              <AntSelect.Option value="24h">daily</AntSelect.Option>
-              <AntSelect.Option value="7d">weekly</AntSelect.Option>
-              <AntSelect.Option value="30d">monthly</AntSelect.Option>
-            </AntSelect>
+            <Select placeholder="n/a">
+              <Select.Option value="24h">daily</Select.Option>
+              <Select.Option value="7d">weekly</Select.Option>
+              <Select.Option value="30d">monthly</Select.Option>
+            </Select>
           </Form.Item>
 
           <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
@@ -346,7 +346,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             name="guardrails"
             help="Select existing guardrails or enter new ones"
           >
-            <AntSelect
+            <Select
               mode="tags"
               placeholder="Select or enter guardrails"
             />
