@@ -206,7 +206,18 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            setKeys(response["keys"]); // Assuming this is the correct path to your data
+
+            // set keys for admin and users
+            if (!response?.teams[0].keys) {
+              setKeys(response["keys"]); 
+            } else {
+              setKeys(
+                response["keys"].concat(
+                  response.teams.flatMap((team: any) => team.keys)
+                )
+              );
+            }
+
             const teamsArray = [...response["teams"]];
             if (teamsArray.length > 0) {
               console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
