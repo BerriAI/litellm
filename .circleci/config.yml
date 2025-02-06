@@ -415,6 +415,50 @@ jobs:
           paths:
             - litellm_router_coverage.xml
             - litellm_router_coverage
+  litellm_proxy_security_tests:
+    docker:
+        - image: cimg/python:3.11
+          auth:
+            username: ${DOCKERHUB_USERNAME}
+            password: ${DOCKERHUB_PASSWORD}
+      working_directory: ~/project
+      steps:
+        - checkout
+        - run:
+            name: Show git commit hash
+            command: |
+              echo "Git commit hash: $CIRCLE_SHA1"
+        - run:
+            name: Install Dependencies
+            command: |
+              python -m pip install --upgrade pip
+              python -m pip install -r requirements.txt
+              pip install "pytest==7.3.1"
+              pip install "pytest-retry==1.6.3"
+              pip install "pytest-asyncio==0.21.1"
+              pip install "pytest-cov==5.0.0"
+        # Run pytest and generate JUnit XML report
+        - run:
+            name: Run tests
+            command: |
+              pwd
+              ls
+              python -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+            no_output_timeout: 120m
+        - run:
+            name: Rename the coverage files
+            command: |
+              mv coverage.xml litellm_proxy_security_tests_coverage.xml
+              mv .coverage litellm_proxy_security_tests_coverage
+        # Store test results
+        - store_test_results:
+            path: test-results
+
+        - persist_to_workspace:
+            root: .
+            paths:
+              - litellm_proxy_security_tests_coverage.xml
+              - litellm_proxy_security_tests_coverage
   litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
     docker:
       - image: cimg/python:3.11
@@ -1788,7 +1832,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage
+            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2045,6 +2089,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_proxy_security_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_assistants_api_testing:
           filters:
             branches:
@@ -2158,6 +2208,7 @@ workflows:
             - litellm_router_testing
             - caching_unit_tests
             - litellm_proxy_unit_testing
+            - litellm_proxy_security_tests
             - langfuse_logging_unit_tests
             - local_testing
             - litellm_assistants_api_testing
@@ -2219,6 +2270,7 @@ workflows:
             - db_migration_disable_update_check
             - e2e_ui_testing
             - litellm_proxy_unit_testing
+            - litellm_proxy_security_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
