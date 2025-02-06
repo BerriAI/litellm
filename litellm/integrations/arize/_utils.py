@@ -2,6 +2,7 @@ import json
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_logger
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -18,8 +19,6 @@ def set_attributes(span: Span, kwargs, response_obj):
     )
 
     try:
-
-        optional_params = kwargs.get("optional_params", {})
         litellm_params = kwargs.get("litellm_params", {}) or {}
 
         #############################################
@@ -63,14 +62,17 @@ def set_attributes(span: Span, kwargs, response_obj):
                     msg.get("content", ""),
                 )
 
-        if isinstance(optional_params, dict):
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
+        if standard_logging_payload and (model_params := standard_logging_payload["model_parameters"]):
             # The Generative AI Provider: Azure, OpenAI, etc.
             span.set_attribute(
-                SpanAttributes.LLM_INVOCATION_PARAMETERS, json.dumps(optional_params)
+                SpanAttributes.LLM_INVOCATION_PARAMETERS, json.dumps(model_params)
             )
 
-            if optional_params.get("user"):
-                user_id = optional_params.get("user")
+            if model_params.get("user"):
+                user_id = model_params.get("user")
                 if user_id is not None:
                     span.set_attribute(SpanAttributes.USER_ID, user_id)
 
