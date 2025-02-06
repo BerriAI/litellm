@@ -210,7 +210,7 @@ class AssemblyAIPassthroughLoggingHandler:
     def _poll_assembly_for_transcript_response(
         self,
         transcript_id: str,
-        url_route: str,
+        url_route: Optional[str] = None,
     ) -> Optional[AssemblyAITranscriptResponse]:
         """
         Poll the status of the transcript until it is completed or timeout (30 minutes)
@@ -298,10 +298,12 @@ class AssemblyAIPassthroughLoggingHandler:
         return request_method == "POST"
 
     @staticmethod
-    def _get_assembly_region_from_url(url: str) -> Optional[Literal["eu"]]:
+    def _get_assembly_region_from_url(url: Optional[str]) -> Optional[Literal["eu"]]:
         """
         Get the region from the URL
         """
+        if url is None:
+            return None
         if "eu.assemblyai.com" in url:
             return "eu"
         return None
