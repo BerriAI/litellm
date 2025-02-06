@@ -6077,6 +6077,8 @@ class ProviderConfigManager:
                 return litellm.AmazonCohereConfig()
             elif bedrock_provider == "mistral":  # mistral models on bedrock
                 return litellm.AmazonMistralConfig()
+            else:
+                return litellm.AmazonInvokeConfig()
         return litellm.OpenAIGPTConfig()
 
     @staticmethod

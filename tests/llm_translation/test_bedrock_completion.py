@@ -886,7 +886,10 @@ def test_completion_claude_3_base64():
 
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
+
     import os
+
+    litellm._turn_on_debug()
 
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -902,6 +905,7 @@ def test_completion_bedrock_mistral_completion_auth():
             temperature=0.1,
         )  # type: ignore
         # Add any assertions here to check the response
+        print(f"response: {response}")
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
 
@@ -2581,28 +2585,35 @@ def test_bedrock_custom_deepseek():
         except Exception as e:
             print(f"Error: {str(e)}")
             raise e
-        
+
+
 @pytest.mark.parametrize(
-    "model, expected_output", 
+    "model, expected_output",
     [
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 3}),
-        ("bedrock/converse/us.amazon.nova-pro-v1:0", {'inferenceConfig': {"topK": 3}}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 3}}),
         ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
-    ]
+    ],
 )
 def test_handle_top_k_value_helper(model, expected_output):
-    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3}) == expected_output
-    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3}) == expected_output
+    assert (
+        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3})
+        == expected_output
+    )
+    assert (
+        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3})
+        == expected_output
+    )
+
 
 @pytest.mark.parametrize(
-    "model, expected_params", 
+    "model, expected_params",
     [
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 2}),
-        ("bedrock/converse/us.amazon.nova-pro-v1:0", {'inferenceConfig': {"topK": 2}}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 2}}),
         ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
         ("bedrock/mistral.mistral-7b-instruct-v0:2", {}),
-
-    ]
+    ],
 )
 def test_bedrock_top_k_param(model, expected_params):
     import json
@@ -2611,42 +2622,39 @@ def test_bedrock_top_k_param(model, expected_params):
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
-        
-        if ("mistral" in model):
-            mock_response.text = json.dumps({"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}) 
+
+        if "mistral" in model:
+            mock_response.text = json.dumps(
+                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
+            )
         else:
             mock_response.text = json.dumps(
                 {
                     "output": {
                         "message": {
                             "role": "assistant",
-                            "content": [
-                                {
-                                    "text": "Here's a joke..."
-                                }
-                            ]
+                            "content": [{"text": "Here's a joke..."}],
                         }
                     },
                     "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
-                    "stopReason": "stop"
+                    "stopReason": "stop",
                 }
-            ) 
-            
+            )
+
         mock_response.status_code = 200
         # Add required response attributes
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
-        
 
         litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Hello, world!"}],
             top_k=2,
-            client=client
-        )  
+            client=client,
+        )
         data = json.loads(mock_post.call_args.kwargs["data"])
-        if ("mistral" in model):
-            assert (data["top_k"] == 2)
+        if "mistral" in model:
+            assert data["top_k"] == 2
         else:
-            assert (data["additionalModelRequestFields"] == expected_params)
+            assert data["additionalModelRequestFields"] == expected_params
