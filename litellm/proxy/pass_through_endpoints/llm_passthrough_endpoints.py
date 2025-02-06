@@ -20,8 +20,12 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.secret_managers.main import get_secret_str
 
+from .passthrough_endpoint_router import PassthroughEndpointRouter
+
 router = APIRouter()
 default_vertex_config = None
+
+passthrough_endpoint_router = PassthroughEndpointRouter()
 
 
 def create_request_copy(request: Request):
@@ -68,8 +72,9 @@ async def gemini_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    gemini_api_key: Optional[str] = litellm.utils.get_secret(  # type: ignore
-        secret_name="GEMINI_API_KEY"
+    gemini_api_key: Optional[str] = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="gemini",
+        region_name=None,
     )
     if gemini_api_key is None:
         raise Exception(
@@ -126,7 +131,10 @@ async def cohere_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    cohere_api_key = litellm.utils.get_secret(secret_name="COHERE_API_KEY")
+    cohere_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="cohere",
+        region_name=None,
+    )
 
     ## check for streaming
     is_streaming_request = False
@@ -175,7 +183,10 @@ async def anthropic_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    anthropic_api_key = litellm.utils.get_secret(secret_name="ANTHROPIC_API_KEY")
+    anthropic_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="anthropic",
+        region_name=None,
+    )
 
     ## check for streaming
     is_streaming_request = False
@@ -318,7 +329,10 @@ async def assemblyai_proxy_route(
     updated_url = base_url.copy_with(path=encoded_endpoint)
 
     # Add or update query parameters
-    assemblyai_api_key = litellm.utils.get_secret(secret_name="ASSEMBLYAI_API_KEY")
+    assemblyai_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="assemblyai",
+        region_name="eu" if "eu" in str(request.url) else None,
+    )
 
     ## check for streaming
     is_streaming_request = False
@@ -366,7 +380,10 @@ async def azure_proxy_route(
             "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
         )
     # Add or update query parameters
-    azure_api_key = get_secret_str(secret_name="AZURE_API_KEY")
+    azure_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="azure",
+        region_name=None,
+    )
     if azure_api_key is None:
         raise Exception(
             "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
@@ -400,7 +417,10 @@ async def openai_proxy_route(
     """
     base_target_url = "https://api.openai.com"
     # Add or update query parameters
-    openai_api_key = get_secret_str(secret_name="OPENAI_API_KEY")
+    openai_api_key = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="openai",
+        region_name=None,
+    )
     if openai_api_key is None:
         raise Exception(
             "Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI."
