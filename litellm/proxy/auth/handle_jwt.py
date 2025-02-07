@@ -30,6 +30,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ScopeMapping,
     Span,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -545,7 +546,7 @@ class JWTAuthManager:
 
     @staticmethod
     def check_scope_based_access(
-        jwt_handler: JWTHandler,
+        scope_mappings: List[ScopeMapping],
         scopes: List[str],
         request_data: dict,
         general_settings: dict,
@@ -553,12 +554,11 @@ class JWTAuthManager:
         """
         Check if scope allows access to the requested model
         """
-        scope_mapping = jwt_handler.litellm_jwtauth.scope_mappings
-        if not scope_mapping:
+        if not scope_mappings:
             return None
 
         allowed_models = []
-        for sm in scope_mapping:
+        for sm in scope_mappings:
             if sm.scope in scopes and sm.models:
                 allowed_models.extend(sm.models)
 
@@ -867,9 +867,12 @@ class JWTAuthManager:
 
         # Check Scope Based Access
         scopes = jwt_handler.get_scopes(token=jwt_valid_token)
-        if jwt_handler.litellm_jwtauth.enforce_scope_based_access:
+        if (
+            jwt_handler.litellm_jwtauth.enforce_scope_based_access
+            and jwt_handler.litellm_jwtauth.scope_mappings
+        ):
             JWTAuthManager.check_scope_based_access(
-                jwt_handler=jwt_handler,
+                scope_mappings=jwt_handler.litellm_jwtauth.scope_mappings,
                 scopes=scopes,
                 request_data=request_data,
                 general_settings=general_settings,
