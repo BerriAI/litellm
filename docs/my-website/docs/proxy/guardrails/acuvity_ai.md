@@ -22,6 +22,8 @@ pip install acuvity
 
 ## 2. Setup Guardrails on Acuvity
 
+### On more details on the usage of Acuvity with guardrails, please visit the https://docs.acuvity.ai/
+
 ### **Define Guardrails for Different Stages**
 
 Acuvity supports guardrails at different stages of an LLM request:
@@ -47,6 +49,8 @@ Configure **Post LLM API Call** guardrails to filter inappropriate or malicious 
 
 
 ## 3. Define Guardrails in Your LiteLLM `config.yaml`
+
+### On more details on the usage of Acuvity with guardrails, please visit the https://docs.acuvity.ai/
 
 Update your LiteLLM `config.yaml` file to include Acuvity guardrails:
 
