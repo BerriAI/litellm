@@ -248,6 +248,7 @@ class LiteLLMRoutes(enum.Enum):
         "/azure",
         "/openai",
         "/assemblyai",
+        "/eu.assemblyai",
     ]
 
     anthropic_routes = [
