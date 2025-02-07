@@ -1785,7 +1785,8 @@ def token_counter(
                     for tool_call in message["tool_calls"]:
                         if "function" in tool_call:
                             function_arguments = tool_call["function"]["arguments"]
-                            text += str(function_arguments)
+                            if function_arguments and text:
+                                text += str(function_arguments)
         else:
             raise ValueError("text and messages cannot both be None")
     elif isinstance(text, List):
