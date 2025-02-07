@@ -3699,8 +3699,9 @@ class Router:
 
         Else, original response is returned.
         """
-        if response.choices[0].finish_reason != "content_filter":
-            return False
+        if response.choices and len(response.choices) > 0:
+            if response.choices[0].finish_reason != "content_filter":
+                return False
 
         content_policy_fallbacks = kwargs.get(
             "content_policy_fallbacks", self.content_policy_fallbacks
