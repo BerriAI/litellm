@@ -96,8 +96,7 @@ class AssemblyAIPassthroughLoggingHandler:
         )
         kwargs["model"] = model
         kwargs["custom_llm_provider"] = "assemblyai"
-        logging_obj.model_call_details["model"] = model
-        logging_obj.model_call_details["custom_llm_provider"] = "assemblyai"
+        response_cost: Optional[float] = None
 
         transcript_id = response_body.get("id")
         if transcript_id is None:
@@ -116,7 +115,7 @@ class AssemblyAIPassthroughLoggingHandler:
                 speech_model=model,
                 transcript_response=transcript_response,
             )
-            kwargs["response_cost"] = cost
+            response_cost = cost
 
         # Make standard logging object for Vertex AI
         standard_logging_object = get_standard_logging_object_payload(
@@ -141,6 +140,10 @@ class AssemblyAIPassthroughLoggingHandler:
         verbose_proxy_logger.debug(
             "standard_logging_object= %s", json.dumps(standard_logging_object, indent=4)
         )
+        logging_obj.model_call_details["model"] = model
+        logging_obj.model_call_details["custom_llm_provider"] = "assemblyai"
+        logging_obj.model_call_details["response_cost"] = response_cost
+
         asyncio.run(
             pass_through_endpoint_logging._handle_logging(
                 logging_obj=logging_obj,
