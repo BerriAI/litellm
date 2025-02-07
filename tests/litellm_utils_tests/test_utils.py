@@ -1850,3 +1850,15 @@ def test_dict_to_response_format_helper():
         "ref_template": "/$defs/{model}",
     }
     _dict_to_response_format_helper(**args)
+
+
+def test_validate_user_messages_invalid_content_type():
+    from litellm.utils import validate_chat_completion_user_messages
+
+    messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
+
+    with pytest.raises(Exception) as e:
+        validate_chat_completion_user_messages(messages)
+
+    assert "Invalid message" in str(e)
+    print(e)
