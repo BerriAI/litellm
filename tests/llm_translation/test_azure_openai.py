@@ -436,3 +436,27 @@ def test_map_openai_params():
     optional_params = azure_openai_config.map_openai_params(**received_args)
     assert "tools" in optional_params
     assert len(optional_params["tools"]) > 1
+
+
+@patch(
+    "litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request"
+)
+def test_azure_max_retries_0(mock_make_sync_azure_openai_chat_completion_request):
+    from litellm import completion
+
+    try:
+        completion(
+            model="azure/gpt-4o",
+            messages=[{"role": "user", "content": "Hello world"}],
+            max_retries=0,
+        )
+    except Exception as e:
+        print(e)
+
+    mock_make_sync_azure_openai_chat_completion_request.assert_called_once()
+    assert (
+        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs[
+            "azure_client"
+        ].max_retries
+        == 0
+    )

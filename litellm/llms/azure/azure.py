@@ -9,6 +9,7 @@ from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -98,14 +99,6 @@ class AzureOpenAIAssistantsAPIConfig:
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
-    # azure_client_params = {
-    #     "api_version": api_version,
-    #     "azure_endpoint": api_base,
-    #     "azure_deployment": model,
-    #     "http_client": litellm.client_session,
-    #     "max_retries": max_retries,
-    #     "timeout": timeout,
-    # }
     azure_endpoint = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
         # see : https://github.com/openai/openai-python/blob/3d61ed42aba652b547029095a7eb269ad4e1e957/src/openai/lib/azure.py#L192
@@ -353,7 +346,9 @@ class AzureChatCompletion(BaseLLM):
                     status_code=422, message="Missing model or messages"
                 )
 
-            max_retries = optional_params.pop("max_retries", 2)
+            max_retries = optional_params.pop("max_retries", None)
+            if max_retries is None:
+                max_retries = DEFAULT_MAX_RETRIES
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
