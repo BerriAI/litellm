@@ -496,22 +496,31 @@ async def test_async_azure_max_retries_0(
 
 
 @pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("sync_mode", [True, False])
 @patch("litellm.llms.azure.completion.handler.select_azure_base_url_or_endpoint")
-def test_azure_instruct(mock_select_azure_base_url_or_endpoint, max_retries):
-    from litellm import completion
+@pytest.mark.asyncio
+async def test_azure_instruct(
+    mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
+):
+    from litellm import completion, acompletion
+
+    args = {
+        "model": "azure_text/instruct-model",
+        "messages": [
+            {"role": "user", "content": "What is the weather like in Boston?"}
+        ],
+        "max_tokens": 10,
+        "max_retries": max_retries,
+    }
 
     try:
-        response = completion(
-            model="azure_text/instruct-model",
-            messages=[
-                {"role": "user", "content": "What is the weather like in Boston?"}
-            ],
-            max_tokens=10,
-            max_retries=max_retries,
-        )
-        print("response", response)
-    except Exception as e:
-        print(e)
+        if sync_mode:
+            completion(**args)
+        else:
+            await acompletion(**args)
+    except Exception:
+        pass
 
     mock_select_azure_base_url_or_endpoint.assert_called_once()
     assert (
