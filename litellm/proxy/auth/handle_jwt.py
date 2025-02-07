@@ -318,7 +318,7 @@ class JWTHandler:
             org_id = default_value
         return org_id
 
-    def get_scopes(self, token: dict) -> list:
+    def get_scopes(self, token: dict) -> List[str]:
         try:
             if isinstance(token["scope"], str):
                 # Assuming the scopes are stored in 'scope' claim and are space-separated
@@ -542,6 +542,41 @@ class JWTAuthManager:
             )
 
         return True
+
+    @staticmethod
+    def check_scope_based_access(
+        jwt_handler: JWTHandler,
+        scopes: List[str],
+        request_data: dict,
+        general_settings: dict,
+    ) -> None:
+        """
+        Check if scope allows access to the requested model
+        """
+        scope_mapping = jwt_handler.litellm_jwtauth.scope_mappings
+        if not scope_mapping:
+            return None
+
+        allowed_models = []
+        for sm in scope_mapping:
+            if sm.scope in scopes and sm.models:
+                allowed_models.extend(sm.models)
+
+        requested_model = request_data.get("model")
+
+        if not requested_model:
+            return None
+
+        if requested_model not in allowed_models:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "model={} not allowed. Allowed_models={}".format(
+                        requested_model, allowed_models
+                    )
+                },
+            )
+        return None
 
     @staticmethod
     async def check_rbac_role(
@@ -829,6 +864,16 @@ class JWTAuthManager:
             route,
             rbac_role,
         )
+
+        # Check Scope Based Access
+        scopes = jwt_handler.get_scopes(token=jwt_valid_token)
+        if jwt_handler.litellm_jwtauth.enforce_scope_based_access:
+            JWTAuthManager.check_scope_based_access(
+                jwt_handler=jwt_handler,
+                scopes=scopes,
+                request_data=request_data,
+                general_settings=general_settings,
+            )
 
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 

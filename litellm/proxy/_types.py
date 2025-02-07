@@ -2371,6 +2371,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         None  # can be either user / team, inferred from the role mapping
     )
     scope_mappings: Optional[List[ScopeMapping]] = None
+    enforce_scope_based_access: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2381,6 +2382,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         user_allowed_roles = kwargs.get("user_allowed_roles")
         object_id_jwt_field = kwargs.get("object_id_jwt_field")
         role_mappings = kwargs.get("role_mappings")
+        scope_mappings = kwargs.get("scope_mappings")
+        enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
 
         if invalid_keys:
             raise ValueError(
@@ -2396,6 +2399,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         if object_id_jwt_field is not None and role_mappings is None:
             raise ValueError(
                 "if object_id_jwt_field is set, role_mappings must also be set. Needed to infer if the caller is a user or team."
+            )
+
+        if scope_mappings is not None and not enforce_scope_based_access:
+            raise ValueError(
+                "scope_mappings must be set if enforce_scope_based_access is true."
             )
 
         super().__init__(**kwargs)
