@@ -1222,6 +1222,8 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+            if max_retries is not None:
+                optional_params["max_retries"] = max_retries
 
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
 

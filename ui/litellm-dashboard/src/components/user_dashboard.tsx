@@ -213,9 +213,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             } else {
               setKeys(
                 response["keys"].concat(
-                  response.teams.flatMap((team: any) => team.keys)
+                  response.teams
+                    .filter((team: any) => userRole === "Admin" || team.user_id === userID)
+                    .flatMap((team: any) => team.keys)
                 )
               );
+              
             }
 
             const teamsArray = [...response["teams"]];

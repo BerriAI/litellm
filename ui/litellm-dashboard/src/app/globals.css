@@ -42,8 +42,3 @@ body {
 .custom-border {
   border: 1px solid var(--neutral-border);
 }
-
-.max-w-md {
-  display: flex;
-  max-width: 100px !important;
-}
