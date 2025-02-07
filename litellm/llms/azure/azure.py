@@ -440,6 +440,7 @@ class AzureChatCompletion(BaseLLM):
                     azure_ad_token_provider=azure_ad_token_provider,
                     timeout=timeout,
                     client=client,
+                    max_retries=max_retries,
                 )
             else:
                 ## LOGGING
@@ -666,15 +667,11 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         model: str,
         timeout: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
     ):
-        max_retries = data.pop("max_retries", 2)
-        if not isinstance(max_retries, int):
-            raise AzureOpenAIError(
-                status_code=422, message="max retries must be an int"
-            )
         # init AzureOpenAI Client
         azure_client_params = {
             "api_version": api_version,
