@@ -468,6 +468,34 @@ def test_azure_max_retries_0(
 
 
 @pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
+@pytest.mark.asyncio
+async def test_async_azure_max_retries_0(
+    make_azure_openai_chat_completion_request, max_retries, stream
+):
+    from litellm import acompletion
+
+    try:
+        await acompletion(
+            model="azure/gpt-4o",
+            messages=[{"role": "user", "content": "Hello world"}],
+            max_retries=max_retries,
+            stream=stream,
+        )
+    except Exception as e:
+        print(e)
+
+    make_azure_openai_chat_completion_request.assert_called_once()
+    assert (
+        make_azure_openai_chat_completion_request.call_args.kwargs[
+            "azure_client"
+        ].max_retries
+        == max_retries
+    )
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
 @patch("litellm.llms.azure.completion.handler.select_azure_base_url_or_endpoint")
 def test_azure_instruct(mock_select_azure_base_url_or_endpoint, max_retries):
     from litellm import completion

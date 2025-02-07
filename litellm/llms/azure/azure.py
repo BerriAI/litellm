@@ -410,6 +410,7 @@ class AzureChatCompletion(BaseLLM):
                         azure_ad_token_provider=azure_ad_token_provider,
                         timeout=timeout,
                         client=client,
+                        max_retries=max_retries,
                     )
                 else:
                     return self.acompletion(
@@ -425,6 +426,7 @@ class AzureChatCompletion(BaseLLM):
                         timeout=timeout,
                         client=client,
                         logging_obj=logging_obj,
+                        max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
@@ -549,6 +551,7 @@ class AzureChatCompletion(BaseLLM):
         dynamic_params: bool,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         convert_tool_call_to_json_mode: Optional[bool] = None,
@@ -556,12 +559,6 @@ class AzureChatCompletion(BaseLLM):
     ):
         response = None
         try:
-            max_retries = data.pop("max_retries", 2)
-            if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
-
             # init AzureOpenAI Client
             azure_client_params = {
                 "api_version": api_version,
@@ -734,6 +731,7 @@ class AzureChatCompletion(BaseLLM):
         data: dict,
         model: str,
         timeout: Any,
+        max_retries: int,
         azure_ad_token: Optional[str] = None,
         azure_ad_token_provider: Optional[Callable] = None,
         client=None,
@@ -745,7 +743,7 @@ class AzureChatCompletion(BaseLLM):
                 "azure_endpoint": api_base,
                 "azure_deployment": model,
                 "http_client": litellm.aclient_session,
-                "max_retries": data.pop("max_retries", 2),
+                "max_retries": max_retries,
                 "timeout": timeout,
             }
             azure_client_params = select_azure_base_url_or_endpoint(
