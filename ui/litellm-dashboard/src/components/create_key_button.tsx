@@ -159,7 +159,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
       message.info("Making API Call");
       setIsModalVisible(true);
-
+      
+      if(keyOwner === "you"){
+        formValues.user_id = userID 
+      }
       // If it's a service account, add the service_account_id to the metadata
       if (keyOwner === "service_account") {
         // Parse existing metadata or create an empty object
