@@ -399,6 +399,7 @@ general_settings:
       - scope: litellm.api.consumer
         models: ["anthropic-claude"]
       - scope: litellm.api.gpt_3_5_turbo
+        models: ["gpt-3.5-turbo-testing"]
     enforce_scope_based_access: true # 👈 enforce scope-based access control
     enforce_rbac: true # 👈 enforces only a Team/User/ProxyAdmin can access the proxy.
 ```
