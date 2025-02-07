@@ -12,6 +12,9 @@ Supports **ALL** Assembly AI Endpoints
 
 [**See All Assembly AI Endpoints**](https://www.assemblyai.com/docs/api-reference)
 
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/aac3f4d74592448992254bfa79b9f62d?sid=267cd0ab-d92b-42fa-b97a-9f385ef8930c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
 ## Quick Start
 
 Let's call the Assembly AI [`/v2/transcripts` endpoint](https://www.assemblyai.com/docs/api-reference/transcripts)
