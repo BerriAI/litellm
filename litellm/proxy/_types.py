@@ -1040,6 +1040,13 @@ class LiteLLM_TeamTable(TeamBase):
             "model_max_budget",
             "model_aliases",
         ]
+
+        if (
+            isinstance(values.get("members_with_roles"), dict)
+            and not values["members_with_roles"]
+        ):
+            values["members_with_roles"] = []
+
         for field in dict_fields:
             value = values.get(field)
             if value is not None and isinstance(value, str):
@@ -2279,10 +2286,13 @@ RBAC_ROLES = Literal[
 ]
 
 
-class RoleBasedPermissions(LiteLLMPydanticObjectBase):
-    role: RBAC_ROLES
+class OIDCPermissions(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = None
     routes: Optional[List[str]] = None
+
+
+class RoleBasedPermissions(OIDCPermissions):
+    role: RBAC_ROLES
 
     model_config = {
         "extra": "forbid",
@@ -2292,6 +2302,14 @@ class RoleBasedPermissions(LiteLLMPydanticObjectBase):
 class RoleMapping(BaseModel):
     role: str
     internal_role: RBAC_ROLES
+
+
+class ScopeMapping(OIDCPermissions):
+    scope: str
+
+    model_config = {
+        "extra": "forbid",
+    }
 
 
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
@@ -2323,6 +2341,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "info_routes",
     ]
     team_id_jwt_field: Optional[str] = None
+    team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[
@@ -2351,6 +2370,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     object_id_jwt_field: Optional[str] = (
         None  # can be either user / team, inferred from the role mapping
     )
+    scope_mappings: Optional[List[ScopeMapping]] = None
+    enforce_scope_based_access: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2361,6 +2382,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         user_allowed_roles = kwargs.get("user_allowed_roles")
         object_id_jwt_field = kwargs.get("object_id_jwt_field")
         role_mappings = kwargs.get("role_mappings")
+        scope_mappings = kwargs.get("scope_mappings")
+        enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
 
         if invalid_keys:
             raise ValueError(
@@ -2376,6 +2399,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         if object_id_jwt_field is not None and role_mappings is None:
             raise ValueError(
                 "if object_id_jwt_field is set, role_mappings must also be set. Needed to infer if the caller is a user or team."
+            )
+
+        if scope_mappings is not None and not enforce_scope_based_access:
+            raise ValueError(
+                "scope_mappings must be set if enforce_scope_based_access is true."
             )
 
         super().__init__(**kwargs)
