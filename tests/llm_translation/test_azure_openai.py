@@ -529,3 +529,37 @@ async def test_azure_instruct(
         ]
         == max_retries
     )
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@patch("litellm.llms.azure.azure.select_azure_base_url_or_endpoint")
+@pytest.mark.asyncio
+async def test_azure_embedding_max_retries_0(
+    mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
+):
+    from litellm import aembedding, embedding
+
+    args = {
+        "model": "azure/azure-embedding-model",
+        "input": "Hello world",
+        "max_retries": max_retries,
+        "stream": stream,
+    }
+
+    try:
+        if sync_mode:
+            embedding(**args)
+        else:
+            await aembedding(**args)
+    except Exception as e:
+        print(e)
+
+    mock_select_azure_base_url_or_endpoint.assert_called_once()
+    assert (
+        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
+            "max_retries"
+        ]
+        == max_retries
+    )
