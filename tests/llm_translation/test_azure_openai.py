@@ -460,3 +460,30 @@ def test_azure_max_retries_0(mock_make_sync_azure_openai_chat_completion_request
         ].max_retries
         == 0
     )
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
+@patch("litellm.llms.azure.completion.handler.select_azure_base_url_or_endpoint")
+def test_azure_instruct(mock_select_azure_base_url_or_endpoint, max_retries):
+    from litellm import completion
+
+    try:
+        response = completion(
+            model="azure_text/instruct-model",
+            messages=[
+                {"role": "user", "content": "What is the weather like in Boston?"}
+            ],
+            max_tokens=10,
+            max_retries=max_retries,
+        )
+        print("response", response)
+    except Exception as e:
+        print(e)
+
+    mock_select_azure_base_url_or_endpoint.assert_called_once()
+    assert (
+        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
+            "max_retries"
+        ]
+        == max_retries
+    )
