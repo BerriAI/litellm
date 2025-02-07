@@ -38,7 +38,6 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
-    ScopeMapping,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
