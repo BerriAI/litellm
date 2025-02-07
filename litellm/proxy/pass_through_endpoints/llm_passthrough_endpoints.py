@@ -319,13 +319,21 @@ async def assemblyai_proxy_route(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler import (
+        AssemblyAIPassthroughLoggingHandler,
+    )
+
     """
     [Docs](https://api.assemblyai.com)
     """
     # Set base URL based on the route
-    is_eu_route = "eu.assemblyai" in str(request.url)
+    assembly_region = AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
+        url=str(request.url)
+    )
     base_target_url = (
-        "https://api.eu.assemblyai.com" if is_eu_route else "https://api.assemblyai.com"
+        AssemblyAIPassthroughLoggingHandler._get_assembly_base_url_from_region(
+            region=assembly_region
+        )
     )
     encoded_endpoint = httpx.URL(endpoint).path
     # Ensure endpoint starts with '/' for proper URL construction
@@ -339,7 +347,7 @@ async def assemblyai_proxy_route(
     # Add or update query parameters
     assemblyai_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="assemblyai",
-        region_name="eu" if is_eu_route else None,
+        region_name=assembly_region,
     )
 
     ## check for streaming

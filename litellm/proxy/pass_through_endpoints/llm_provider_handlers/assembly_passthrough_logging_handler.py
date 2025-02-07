@@ -95,6 +95,8 @@ class AssemblyAIPassthroughLoggingHandler:
         )
         kwargs["model"] = model
         kwargs["custom_llm_provider"] = "assemblyai"
+        logging_obj.model_call_details["model"] = model
+        logging_obj.model_call_details["custom_llm_provider"] = "assemblyai"
 
         transcript_id = response_body.get("id")
         if transcript_id is None:
@@ -307,3 +309,14 @@ class AssemblyAIPassthroughLoggingHandler:
         if "eu.assemblyai.com" in url:
             return "eu"
         return None
+
+    @staticmethod
+    def _get_assembly_base_url_from_region(region: Optional[Literal["eu"]]) -> str:
+        """
+        Get the base URL for the AssemblyAI API
+        if region == "eu", return "https://api.eu.assemblyai.com"
+        else return "https://api.assemblyai.com"
+        """
+        if region == "eu":
+            return "https://api.eu.assemblyai.com"
+        return "https://api.assemblyai.com"

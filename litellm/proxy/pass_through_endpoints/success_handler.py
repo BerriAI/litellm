@@ -50,7 +50,6 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         **kwargs,
     ):
-        logging_obj.model_call_details.update(kwargs)
         """Helper function to handle both sync and async logging operations"""
         # Submit to thread pool for sync logging
         thread_pool_executor.submit(
