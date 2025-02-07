@@ -314,3 +314,18 @@ def test_completion_bad_org():
         os.environ["OPENAI_ORGANIZATION"] = _old_org
     else:
         del os.environ["OPENAI_ORGANIZATION"]
+
+
+@patch("litellm.main.openai_chat_completions._get_openai_client")
+def test_openai_max_retries_0(mock_get_openai_client):
+    import litellm
+
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        max_retries=0,
+    )
+
+    mock_get_openai_client.assert_called_once()
+    assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
