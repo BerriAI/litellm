@@ -3,6 +3,7 @@
 import copy
 import os
 import traceback
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from packaging.version import Version
@@ -157,19 +158,30 @@ class LangFuseLogger:
 
         return metadata
 
-    def _old_log_event(  # noqa: PLR0915
+    def log_event_on_langfuse(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
-        user_id,
-        print_verbose,
-        level="DEFAULT",
-        status_message=None,
+        kwargs: dict,
+        response_obj: Optional[
+            Union[
+                dict,
+                EmbeddingResponse,
+                ModelResponse,
+                TextCompletionResponse,
+                ImageResponse,
+                TranscriptionResponse,
+                RerankResponse,
+                HttpxBinaryResponseContent,
+            ],
+        ],
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        user_id: Optional[str] = None,
+        level: str = "DEFAULT",
+        status_message: Optional[str] = None,
     ) -> dict:
-        # Method definition
-
+        """
+        Logs a success or error event on Langfuse
+        """
         try:
             verbose_logger.debug(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
@@ -219,31 +231,30 @@ class LangFuseLogger:
             generation_id = None
             if self._is_langfuse_v2():
                 trace_id, generation_id = self._log_langfuse_v2(
-                    user_id,
-                    metadata,
-                    litellm_params,
-                    output,
-                    start_time,
-                    end_time,
-                    kwargs,
-                    optional_params,
-                    input,
-                    response_obj,
-                    level,
-                    print_verbose,
-                    litellm_call_id,
+                    user_id=user_id,
+                    metadata=metadata,
+                    litellm_params=litellm_params,
+                    output=output,
+                    start_time=start_time,
+                    end_time=end_time,
+                    kwargs=kwargs,
+                    optional_params=optional_params,
+                    input=input,
+                    response_obj=response_obj,
+                    level=level,
+                    litellm_call_id=litellm_call_id,
                 )
             elif response_obj is not None:
                 self._log_langfuse_v1(
-                    user_id,
-                    metadata,
-                    output,
-                    start_time,
-                    end_time,
-                    kwargs,
-                    optional_params,
-                    input,
-                    response_obj,
+                    user_id=user_id,
+                    metadata=metadata,
+                    output=output,
+                    start_time=start_time,
+                    end_time=end_time,
+                    kwargs=kwargs,
+                    optional_params=optional_params,
+                    input=input,
+                    response_obj=response_obj,
                 )
             verbose_logger.debug(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
@@ -260,15 +271,17 @@ class LangFuseLogger:
     def _get_langfuse_input_output_content(
         self,
         kwargs: dict,
-        response_obj: Union[
-            dict,
-            EmbeddingResponse,
-            ModelResponse,
-            TextCompletionResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            RerankResponse,
-            HttpxBinaryResponseContent,
+        response_obj: Optional[
+            Union[
+                dict,
+                EmbeddingResponse,
+                ModelResponse,
+                TextCompletionResponse,
+                ImageResponse,
+                TranscriptionResponse,
+                RerankResponse,
+                HttpxBinaryResponseContent,
+            ],
         ],
         prompt: dict,
         level: str,
@@ -352,10 +365,12 @@ class LangFuseLogger:
         return input, output
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        self, kwargs, response_obj, start_time, end_time, user_id
     ):
         """
-        TODO: support async calls when langfuse is truly async
+        Langfuse SDK uses a background thread to log events
+
+        This approach does not impact latency and runs in the background
         """
 
     def _is_langfuse_v2(self):
@@ -409,19 +424,18 @@ class LangFuseLogger:
 
     def _log_langfuse_v2(  # noqa: PLR0915
         self,
-        user_id,
-        metadata,
-        litellm_params,
-        output,
-        start_time,
-        end_time,
-        kwargs,
-        optional_params,
-        input,
+        user_id: Optional[str],
+        metadata: dict,
+        litellm_params: dict,
+        output: Optional[Union[str, dict, list]],
+        start_time: Optional[datetime],
+        end_time: Optional[datetime],
+        kwargs: dict,
+        optional_params: dict,
+        input: Optional[dict],
         response_obj,
-        level,
-        print_verbose,
-        litellm_call_id,
+        level: str,
+        litellm_call_id: Optional[str],
     ) -> tuple:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
