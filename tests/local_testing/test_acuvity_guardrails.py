@@ -23,10 +23,10 @@ async def test_acuvity_pre_guard_config():
     init_guardrails_v2(
         all_guardrails=[
             {
-                "guardrail_name": "gibberish-guard",
+                "guardrail_name": "pii_detector-guard",
                 "litellm_params": {
                     "guardrail": "acuvity",
-                    "guard_name": "gibberish_guard",
+                    "guard_name": "pii_detector_guard",
                     "mode": "pre_call",
                     "api_key": "",
                     "vendor_params": {

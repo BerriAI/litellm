@@ -134,6 +134,7 @@ class AcuvityGuardrail(CustomGuardrail):
 
         response_str: Optional[str] = convert_litellm_response_object_to_str(response)
         if response_str is not None:
+            verbose_proxy_logger.debug("Acuvity post_call data: %s", response_str)
             resp = await self.acuvity_client.apex.scan_async(response_str, request_type= "Output" ,guard_config=self.post_guard_config_dict)
 
             if resp.scan_response.extractions:
