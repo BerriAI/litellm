@@ -3,6 +3,7 @@ import json
 import time
 from datetime import datetime
 from typing import Literal, Optional, TypedDict
+from urllib.parse import urlparse
 
 import httpx
 
@@ -306,7 +307,7 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         if url is None:
             return None
-        if "eu.assemblyai.com" in url:
+        if urlparse(url).hostname == "eu.assemblyai.com":
             return "eu"
         return None
 
