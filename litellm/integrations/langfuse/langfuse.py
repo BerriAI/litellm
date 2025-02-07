@@ -3,7 +3,7 @@
 import copy
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from packaging.version import Version
 
@@ -273,7 +273,7 @@ class LangFuseLogger:
         prompt: dict,
         level: str,
         status_message: Optional[str],
-    ) -> tuple[Optional[dict], Optional[Union[str, dict, list]]]:
+    ) -> Tuple[Optional[dict], Optional[Union[str, dict, list]]]:
         """
         Get the input and output content for Langfuse logging
 
@@ -289,7 +289,7 @@ class LangFuseLogger:
             output: The output content for Langfuse logging
         """
         input = None
-        output = None
+        output: Optional[Union[str, dict, List[Any]]] = None
         if (
             level == "ERROR"
             and status_message is not None
