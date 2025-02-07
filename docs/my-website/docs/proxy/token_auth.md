@@ -393,14 +393,14 @@ model_list:
 general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
-    team_id_jwt_field: "client_id"
+    team_id_jwt_field: "client_id" # 👈 set the field in the JWT token that contains the team id
     team_id_upsert: true # 👈 upsert the team to db, if team id is not found in db
     scope_mappings:
       - scope: litellm.api.consumer
         models: ["anthropic-claude"]
       - scope: litellm.api.gpt_3_5_turbo
     enforce_scope_based_access: true # 👈 enforce scope-based access control
-    enforce_rbac: true
+    enforce_rbac: true # 👈 enforces only a Team/User/ProxyAdmin can access the proxy.
 ```
 
 #### Scope Mapping Spec 
