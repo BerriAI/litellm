@@ -1247,13 +1247,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
                         if langfuse_logger_to_use is not None:
-                            _response = langfuse_logger_to_use._old_log_event(
+                            _response = langfuse_logger_to_use.log_event_on_langfuse(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                                 user_id=kwargs.get("user", None),
-                                print_verbose=print_verbose,
                             )
                             if _response is not None and isinstance(_response, dict):
                                 _trace_id = _response.get("trace_id", None)
@@ -1957,12 +1956,11 @@ class Logging(LiteLLMLoggingBaseClass):
                             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
-                        _response = langfuse_logger_to_use._old_log_event(
+                        _response = langfuse_logger_to_use.log_event_on_langfuse(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
                             user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
                             status_message=str(exception),
                             level="ERROR",
                             kwargs=self.model_call_details,
