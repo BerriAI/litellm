@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.60.6"
+version = "1.60.7"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
