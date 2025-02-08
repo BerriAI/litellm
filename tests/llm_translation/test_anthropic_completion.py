@@ -1089,8 +1089,6 @@ def test_anthropic_citations_api():
     Test the citations API
     """
     from litellm import completion
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    import json
 
     resp = completion(
         model="claude-3-5-sonnet-20241022",
@@ -1121,3 +1119,45 @@ def test_anthropic_citations_api():
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 
     assert citations is not None
+
+
+def test_anthropic_citations_api_streaming():
+    from litellm import completion
+
+    resp = completion(
+        model="claude-3-5-sonnet-20241022",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "The grass is green. The sky is blue.",
+                        },
+                        "title": "My Document",
+                        "context": "This is a trustworthy document.",
+                        "citations": {"enabled": True},
+                    },
+                    {
+                        "type": "text",
+                        "text": "What color is the grass and sky?",
+                    },
+                ],
+            }
+        ],
+        stream=True,
+    )
+
+    has_citations = False
+    for chunk in resp:
+        print(f"returned chunk: {chunk}")
+        if (
+            chunk.choices[0].delta.provider_specific_fields
+            and "citation" in chunk.choices[0].delta.provider_specific_fields
+        ):
+            has_citations = True
+
+    assert has_citations

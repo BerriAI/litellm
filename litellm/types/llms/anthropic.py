@@ -180,6 +180,11 @@ class ContentTextBlockDelta(TypedDict):
     text: str
 
 
+class ContentCitationsBlockDelta(TypedDict):
+    type: Literal["citations"]
+    citation: dict
+
+
 class ContentJsonBlockDelta(TypedDict):
     """
     "delta": {"type": "input_json_delta","partial_json": "{\"location\": \"San Fra"}}
@@ -192,7 +197,9 @@ class ContentJsonBlockDelta(TypedDict):
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int
-    delta: Union[ContentTextBlockDelta, ContentJsonBlockDelta]
+    delta: Union[
+        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta
+    ]
 
 
 class ContentBlockStop(TypedDict):

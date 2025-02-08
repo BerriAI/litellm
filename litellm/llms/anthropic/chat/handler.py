@@ -4,7 +4,7 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
 
@@ -515,6 +515,7 @@ class ModelResponseIterator:
             is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields: Dict[str, Any] = {}
 
             index = int(chunk.get("index", 0))
             if type_chunk == "content_block_delta":
@@ -536,6 +537,10 @@ class ModelResponseIterator:
                         },
                         "index": self.tool_index,
                     }
+                elif "citation" in content_block["delta"]:
+                    provider_specific_fields["citation"] = content_block["delta"][
+                        "citation"
+                    ]
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -628,6 +633,7 @@ class ModelResponseIterator:
                 finish_reason=finish_reason,
                 usage=usage,
                 index=index,
+                provider_specific_fields=provider_specific_fields,
             )
 
             return returned_chunk
