@@ -219,7 +219,7 @@ async def make_call(
                 model_response=model_response, json_mode=json_mode
             )
         elif bedrock_invoke_provider == "anthropic":
-            decoder = AmazonAnthropicClaudeStreamDecoder(
+            decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=False,
             )
@@ -297,7 +297,7 @@ def make_sync_call(
                 model_response=model_response, json_mode=json_mode
             )
         elif bedrock_invoke_provider == "anthropic":
-            decoder = AmazonAnthropicClaudeStreamDecoder(
+            decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
                 model=model,
                 sync_stream=True,
             )
@@ -1454,6 +1454,11 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         model: str,
         sync_stream: bool,
     ) -> None:
+        """
+        Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
+
+        The only difference between AWSEventStreamDecoder and AmazonAnthropicClaudeStreamDecoder is the `chunk_parser` method
+        """
         super().__init__(model=model)
         self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
             streaming_response=None,
