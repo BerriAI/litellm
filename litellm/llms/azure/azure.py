@@ -5,7 +5,7 @@ import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx  # type: ignore
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -305,6 +305,7 @@ class AzureChatCompletion(BaseLLM):
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
         - call chat.completions.create by default
         """
+        start_time = time.time()
         try:
             raw_response = await azure_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
@@ -313,6 +314,11 @@ class AzureChatCompletion(BaseLLM):
             headers = dict(raw_response.headers)
             response = raw_response.parse()
             return headers, response
+        except APITimeoutError as e:
+            end_time = time.time()
+            time_delta = round(end_time - start_time, 2)
+            e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
+            raise e
         except Exception as e:
             raise e
 
@@ -642,6 +648,7 @@ class AzureChatCompletion(BaseLLM):
             )
             raise AzureOpenAIError(status_code=500, message=str(e))
         except Exception as e:
+            message = getattr(e, "message", str(e))
             ## LOGGING
             logging_obj.post_call(
                 input=data["messages"],
@@ -652,7 +659,7 @@ class AzureChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise e
             else:
-                raise AzureOpenAIError(status_code=500, message=str(e))
+                raise AzureOpenAIError(status_code=500, message=message)
 
     def streaming(
         self,
@@ -797,10 +804,11 @@ class AzureChatCompletion(BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            message = getattr(e, "message", str(e))
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code, message=message, headers=error_headers
             )
 
     async def aembedding(
