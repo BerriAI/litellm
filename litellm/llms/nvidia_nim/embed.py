@@ -58,7 +58,7 @@ class NvidiaNimEmbeddingConfig:
     def get_supported_openai_params(
         self,
     ):
-        return ["encoding_format", "user"]
+        return ["encoding_format", "user", "dimensions"]
 
     def map_openai_params(
         self,
@@ -73,6 +73,8 @@ class NvidiaNimEmbeddingConfig:
                 optional_params["extra_body"].update({"input_type": v})
             elif k == "truncate":
                 optional_params["extra_body"].update({"truncate": v})
+            else:
+                optional_params[k] = v
 
         if kwargs is not None:
             # pass kwargs in extra_body
