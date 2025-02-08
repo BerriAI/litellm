@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
@@ -22,8 +24,8 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params = {}
-    specific_cache_params = {}
+    litellm_cache_params: Dict[str, Any] = {}
+    specific_cache_params: Dict[str, Any] = {}
     try:
 
         if litellm.cache is None:
