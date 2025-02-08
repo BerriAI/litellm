@@ -6081,24 +6081,23 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
-            base_model = BedrockModelInfo.get_base_model(model)
-            bedrock_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model)
-            if (
-                base_model in litellm.bedrock_converse_models
-                or "converse_like" in model
-            ):
+            bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+            bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
+                model
+            )
+            if bedrock_route == "converse" or bedrock_route == "converse_like":
                 return litellm.AmazonConverseConfig()
-            elif bedrock_provider == "amazon":  # amazon titan llms
+            elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif (
-                bedrock_provider == "meta" or bedrock_provider == "llama"
+                bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
                 return litellm.AmazonLlamaConfig()
-            elif bedrock_provider == "ai21":  # ai21 llms
+            elif bedrock_invoke_provider == "ai21":  # ai21 llms
                 return litellm.AmazonAI21Config()
-            elif bedrock_provider == "cohere":  # cohere models on bedrock
+            elif bedrock_invoke_provider == "cohere":  # cohere models on bedrock
                 return litellm.AmazonCohereConfig()
-            elif bedrock_provider == "mistral":  # mistral models on bedrock
+            elif bedrock_invoke_provider == "mistral":  # mistral models on bedrock
                 return litellm.AmazonMistralConfig()
             else:
                 return litellm.AmazonInvokeConfig()

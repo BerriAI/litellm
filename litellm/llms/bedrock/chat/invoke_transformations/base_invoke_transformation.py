@@ -189,7 +189,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
         }
-        json_schemas: dict = {}
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -553,7 +552,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         modelId = modelId.replace("invoke/", "", 1)
         if provider == "llama" and "llama/" in modelId:
             modelId = self._get_model_id_for_llama_like_model(modelId)
-
         return modelId
 
     def _get_aws_region_name(self, optional_params: dict) -> str:
