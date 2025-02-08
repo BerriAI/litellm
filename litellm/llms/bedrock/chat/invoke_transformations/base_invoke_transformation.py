@@ -2,7 +2,6 @@ import copy
 import json
 import time
 import urllib.parse
-import uuid
 from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
@@ -13,11 +12,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
-    construct_tool_use_system_prompt,
-    contains_tag,
     custom_prompt,
-    extract_between_tags,
-    parse_xml_params,
     prompt_factory,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -194,7 +189,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
         }
-        json_schemas: dict = {}
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -223,57 +217,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     )
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            if model.startswith("anthropic.claude-3"):
-                # Separate system prompt from rest of message
-                system_prompt_idx: list[int] = []
-                system_messages: list[str] = []
-                for idx, message in enumerate(messages):
-                    if message["role"] == "system" and isinstance(
-                        message["content"], str
-                    ):
-                        system_messages.append(message["content"])
-                        system_prompt_idx.append(idx)
-                if len(system_prompt_idx) > 0:
-                    inference_params["system"] = "\n".join(system_messages)
-                    messages = [
-                        i for j, i in enumerate(messages) if j not in system_prompt_idx
-                    ]
-                # Format rest of message according to anthropic guidelines
-                messages = prompt_factory(
-                    model=model, messages=messages, custom_llm_provider="anthropic_xml"
-                )  # type: ignore
-                ## LOAD CONFIG
-                config = litellm.AmazonAnthropicClaude3Config.get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
-                ## Handle Tool Calling
-                if "tools" in inference_params:
-                    _is_function_call = True
-                    for tool in inference_params["tools"]:
-                        json_schemas[tool["function"]["name"]] = tool["function"].get(
-                            "parameters", None
-                        )
-                    tool_calling_system_prompt = construct_tool_use_system_prompt(
-                        tools=inference_params["tools"]
-                    )
-                    inference_params["system"] = (
-                        inference_params.get("system", "\n")
-                        + tool_calling_system_prompt
-                    )  # add the anthropic tool calling prompt to the system prompt
-                    inference_params.pop("tools")
-                request_data = {"messages": messages, **inference_params}
-            else:
-                ## LOAD CONFIG
-                config = litellm.AmazonAnthropicConfig.get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
-                request_data = {"prompt": prompt, **inference_params}
+            return litellm.AmazonAnthropicClaude3Config().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         elif provider == "ai21":
             ## LOAD CONFIG
             config = litellm.AmazonAI21Config.get_config()
@@ -359,66 +309,19 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                         completion_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
-                if model.startswith("anthropic.claude-3"):
-                    json_schemas: dict = {}
-                    _is_function_call = False
-                    ## Handle Tool Calling
-                    if "tools" in optional_params:
-                        _is_function_call = True
-                        for tool in optional_params["tools"]:
-                            json_schemas[tool["function"]["name"]] = tool[
-                                "function"
-                            ].get("parameters", None)
-                    outputText = completion_response.get("content")[0].get("text", None)
-                    if outputText is not None and contains_tag(
-                        "invoke", outputText
-                    ):  # OUTPUT PARSE FUNCTION CALL
-                        function_name = extract_between_tags("tool_name", outputText)[0]
-                        function_arguments_str = extract_between_tags(
-                            "invoke", outputText
-                        )[0].strip()
-                        function_arguments_str = (
-                            f"<invoke>{function_arguments_str}</invoke>"
-                        )
-                        function_arguments = parse_xml_params(
-                            function_arguments_str,
-                            json_schema=json_schemas.get(
-                                function_name, None
-                            ),  # check if we have a json schema for this function name)
-                        )
-                        _message = litellm.Message(
-                            tool_calls=[
-                                {
-                                    "id": f"call_{uuid.uuid4()}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_name,
-                                        "arguments": json.dumps(function_arguments),
-                                    },
-                                }
-                            ],
-                            content=None,
-                        )
-                        model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params["original_response"] = (
-                            outputText  # allow user to access raw anthropic tool calling response
-                        )
-                    model_response.choices[0].finish_reason = map_finish_reason(
-                        completion_response.get("stop_reason", "")
-                    )
-                    _usage = litellm.Usage(
-                        prompt_tokens=completion_response["usage"]["input_tokens"],
-                        completion_tokens=completion_response["usage"]["output_tokens"],
-                        total_tokens=completion_response["usage"]["input_tokens"]
-                        + completion_response["usage"]["output_tokens"],
-                    )
-                    setattr(model_response, "usage", _usage)
-                else:
-                    outputText = completion_response["completion"]
-
-                    model_response.choices[0].finish_reason = completion_response[
-                        "stop_reason"
-                    ]
+                return litellm.AmazonAnthropicClaude3Config().transform_response(
+                    model=model,
+                    raw_response=raw_response,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    request_data=request_data,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    encoding=encoding,
+                    api_key=api_key,
+                    json_mode=json_mode,
+                )
             elif provider == "ai21":
                 outputText = (
                     completion_response.get("completions")[0].get("data").get("text")
@@ -536,6 +439,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 messages=messages,
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
+                bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -569,6 +473,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 messages=messages,
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
+                bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             ),
             model=model,
             custom_llm_provider="bedrock",
@@ -594,10 +499,14 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         Helper function to get the bedrock provider from the model
 
-        handles 2 scenarions:
-        1. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        2. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
+        handles 3 scenarions:
+        1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
         """
+        if model.startswith("invoke/"):
+            model = model.replace("invoke/", "", 1)
+
         _split_model = model.split(".")[0]
         if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
@@ -640,9 +549,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         else:
             modelId = model
 
+        modelId = modelId.replace("invoke/", "", 1)
         if provider == "llama" and "llama/" in modelId:
             modelId = self._get_model_id_for_llama_like_model(modelId)
-
         return modelId
 
     def _get_aws_region_name(self, optional_params: dict) -> str:
