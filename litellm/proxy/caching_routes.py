@@ -1,5 +1,3 @@
-import copy
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
