@@ -1,11 +1,14 @@
-import copy
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+masker = SensitiveDataMasker()
 
 router = APIRouter(
     prefix="/cache",
@@ -21,27 +24,30 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params = {}
-    specific_cache_params = {}
+    litellm_cache_params: Dict[str, Any] = {}
+    specific_cache_params: Dict[str, Any] = {}
     try:
 
         if litellm.cache is None:
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-
+        litellm_cache_params = {}
+        specific_cache_params = {}
         for k, v in vars(litellm.cache).items():
             try:
                 if k == "cache":
                     continue
-                litellm_cache_params[k] = str(copy.deepcopy(v))
+                litellm_cache_params[k] = v
             except Exception:
                 litellm_cache_params[k] = "<unable to copy or convert>"
         for k, v in vars(litellm.cache.cache).items():
             try:
-                specific_cache_params[k] = str(v)
+                specific_cache_params[k] = v
             except Exception:
                 specific_cache_params[k] = "<unable to copy or convert>"
+        litellm_cache_params = masker.mask_dict(litellm_cache_params)
+        specific_cache_params = masker.mask_dict(specific_cache_params)
         if litellm.cache.type == "redis":
             # ping the redis cache
             ping_response = await litellm.cache.ping()
@@ -56,6 +62,7 @@ async def cache_ping():
                 messages=[{"role": "user", "content": "test from litellm"}],
             )
             verbose_proxy_logger.debug("/cache/ping: done with set_cache()")
+
             return {
                 "status": "healthy",
                 "cache_type": litellm.cache.type,
