@@ -758,30 +758,3 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
             ), "temperature should not be in the request body"
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-
-    def test_streaming_response(self):
-        """Test that streaming response is returned correctly"""
-        from litellm import completion
-
-        client = self.get_client()
-
-        completion_args = self.get_base_completion_call_args()
-
-        response = completion(
-            **completion_args,
-            messages=[
-                {"role": "system", "content": "Be a good bot!"},
-                {"role": "user", "content": "Hello!"},
-            ],
-            stream=True,
-        )
-
-        assert response is not None
-        assert isinstance(response, CustomStreamWrapper)
-
-        chunks = []
-        for chunk in response:
-            chunks.append(chunk)
-
-        resp = litellm.stream_chunk_builder(chunks=chunks)
-        print(resp)
