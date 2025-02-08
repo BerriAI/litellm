@@ -1985,7 +1985,7 @@ def test_bedrock_mapped_converse_models():
 def test_bedrock_base_model_helper():
     model = "us.amazon.nova-pro-v1:0"
     litellm.AmazonConverseConfig()._get_base_model(model)
-    assert model == "us.amazon.nova-pro-v1:0"
+    assert model == "amazon.nova-pro-v1:0"
 
 
 @pytest.mark.parametrize(
