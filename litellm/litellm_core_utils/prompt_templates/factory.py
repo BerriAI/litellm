@@ -1421,6 +1421,8 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             user_content.append(_content_element)
+                        elif m.get("type", "") == "document":
+                            user_content.append(cast(AnthropicMessagesDocumentParam, m))
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
