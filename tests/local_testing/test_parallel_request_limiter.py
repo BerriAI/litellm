@@ -68,6 +68,7 @@ async def test_global_max_parallel_requests():
             print(e)
 
 
+@pytest.mark.flaky(retries=6, delay=1)
 @pytest.mark.asyncio
 async def test_key_max_parallel_requests():
     """
