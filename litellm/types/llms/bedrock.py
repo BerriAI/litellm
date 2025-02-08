@@ -184,6 +184,18 @@ class RequestObject(CommonRequestObject, total=False):
     messages: Required[List[MessageBlock]]
 
 
+class BedrockInvokeNovaRequest(TypedDict, total=False):
+    """
+    Request object for sending `nova` requests to `/bedrock/invoke/`
+    """
+
+    messages: List[MessageBlock]
+    inferenceConfig: InferenceConfig
+    system: List[SystemContentBlock]
+    toolConfig: ToolConfigBlock
+    guardrailConfig: Optional[GuardrailConfigBlock]
+
+
 class GenericStreamingChunk(TypedDict):
     text: Required[str]
     tool_use: Optional[ChatCompletionToolCallChunk]
