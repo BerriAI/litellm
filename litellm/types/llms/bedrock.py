@@ -189,7 +189,7 @@ class BedrockInvokeNovaRequest(TypedDict, total=False):
     Request object for sending `nova` requests to `/bedrock/invoke/`
     """
 
-    messages: Required[List[MessageBlock]]
+    messages: List[MessageBlock]
     inferenceConfig: InferenceConfig
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
