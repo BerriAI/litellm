@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union
 
 from httpx import Headers, Response
 
@@ -51,6 +51,17 @@ class TritonConfig(BaseConfig):
         api_base: Optional[str] = None,
     ) -> Dict:
         return {"Content-Type": "application/json"}
+
+    def get_complete_url(
+        self,
+        api_base: str,
+        model: str,
+        optional_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if stream:
+            return api_base + "_stream"
+        return api_base
 
     def get_supported_openai_params(self, model: str) -> List:
         return ["max_tokens", "max_completion_tokens"]
@@ -148,6 +159,18 @@ class TritonConfig(BaseConfig):
             return "infer"
         else:
             raise ValueError(f"Invalid Triton API base: {api_base}")
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return TritonResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
 
 class TritonGenerateConfig(TritonConfig):
