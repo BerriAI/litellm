@@ -770,7 +770,7 @@ class BaseOSeriesModelsTest(ABC):  # test across azure/openai
         response = completion(
             **completion_args,
             messages=[
-                {"role": "developer", "content": "Be a good bot!"},
+                {"role": "system", "content": "Be a good bot!"},
                 {"role": "user", "content": "Hello!"},
             ],
             stream=True,
