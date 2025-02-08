@@ -14,6 +14,10 @@ from litellm.types.llms.openai import AllMessageValues
 
 
 class AmazonInvokeNovaConfig(litellm.AmazonConverseConfig):
+    """
+    Config for sending `nova` requests to `/bedrock/invoke/`
+    """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
