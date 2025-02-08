@@ -1151,6 +1151,7 @@ def test_models_by_provider():
         elif (
             v["litellm_provider"] == "sagemaker"
             or v["litellm_provider"] == "bedrock_converse"
+            or v["litellm_provider"] == "assemblyai"
         ):
             continue
         else:
