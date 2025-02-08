@@ -92,10 +92,17 @@ class AnthropicMessagesImageParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
     source: Required[AnthropicContentParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
 
 
 class AnthropicMessagesToolResultContent(TypedDict):

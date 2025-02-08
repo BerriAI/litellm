@@ -1082,3 +1082,55 @@ async def test_anthropic_structured_output():
     assert response is not None
 
     print(response)
+
+
+def test_anthropic_citations_api():
+    """
+    Test the citations API
+    """
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    import json
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            resp = completion(
+                model="claude-3-5-sonnet-20241022",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "text",
+                                    "media_type": "text/plain",
+                                    "data": "The grass is green. The sky is blue.",
+                                },
+                                "title": "My Document",
+                                "context": "This is a trustworthy document.",
+                                "citations": {"enabled": True},
+                            },
+                            {
+                                "type": "text",
+                                "text": "What color is the grass and sky?",
+                            },
+                        ],
+                    }
+                ],
+                client=client,
+            )
+
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        print(mock_post.call_args.kwargs)
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+
+        assert json_data["messages"][0]["content"][0]["citations"]["enabled"]
