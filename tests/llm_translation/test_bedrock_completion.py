@@ -1988,7 +1988,7 @@ def test_bedrock_base_model_helper():
 
     model = "us.amazon.nova-pro-v1:0"
     base_model = BedrockModelInfo.get_base_model(model)
-    assert base_model == "us.amazon.nova-pro-v1:0"
+    assert base_model == "amazon.nova-pro-v1:0"
 
     assert (
         BedrockModelInfo.get_base_model(
