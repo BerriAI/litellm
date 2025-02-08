@@ -70,7 +70,7 @@ class AnthropicConfig(BaseConfig):
         metadata: Optional[dict] = None,
         system: Optional[str] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

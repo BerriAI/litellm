@@ -13,6 +13,7 @@ IGNORE_FUNCTIONS = [
     "add_object_type",
     "strip_field",
     "_transform_prompt",
+    "mask_dict",
 ]
 
 
