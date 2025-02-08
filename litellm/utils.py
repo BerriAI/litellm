@@ -3189,8 +3189,8 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
-        base_model = BedrockModelInfo.get_base_model(model)
-        if base_model in litellm.bedrock_converse_models:
+        bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+        if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
@@ -3203,22 +3203,20 @@ def get_optional_params(  # noqa: PLR0915
                 messages=messages,
             )
 
-        elif "anthropic" in model:
-            if "aws_bedrock_client" in passed_params:  # deprecated boto3.invoke route.
-                if model.startswith("anthropic.claude-3"):
-                    optional_params = (
-                        litellm.AmazonAnthropicClaude3Config().map_openai_params(
-                            non_default_params=non_default_params,
-                            optional_params=optional_params,
-                            model=model,
-                            drop_params=(
-                                drop_params
-                                if drop_params is not None
-                                and isinstance(drop_params, bool)
-                                else False
-                            ),
-                        )
+        elif "anthropic" in model and bedrock_route == "invoke":
+            if model.startswith("anthropic.claude-3"):
+                optional_params = (
+                    litellm.AmazonAnthropicClaude3Config().map_openai_params(
+                        non_default_params=non_default_params,
+                        optional_params=optional_params,
+                        model=model,
+                        drop_params=(
+                            drop_params
+                            if drop_params is not None and isinstance(drop_params, bool)
+                            else False
+                        ),
                     )
+                )
             else:
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,

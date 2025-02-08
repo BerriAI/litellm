@@ -23,7 +23,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
+class AmazonAnthropicClaude3Config(AmazonInvokeConfig):
     """
     Reference:
         https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
@@ -33,6 +33,41 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
     """
 
     anthropic_version: str = "bedrock-2023-05-31"
+
+    def get_supported_openai_params(self, model: str):
+        return [
+            "max_tokens",
+            "max_completion_tokens",
+            "tools",
+            "tool_choice",
+            "stream",
+            "stop",
+            "temperature",
+            "top_p",
+            "extra_headers",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ):
+        for param, value in non_default_params.items():
+            if param == "max_tokens" or param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            if param == "tools":
+                optional_params["tools"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "stop":
+                optional_params["stop_sequences"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+        return optional_params
 
     def transform_request(
         self,
