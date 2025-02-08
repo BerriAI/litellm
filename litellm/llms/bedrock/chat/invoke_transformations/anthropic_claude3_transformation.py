@@ -3,16 +3,10 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 import litellm
-from litellm.llms.anthropic.chat.handler import (
-    ModelResponseIterator as AnthropicModelResponseIterator,
-)
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:

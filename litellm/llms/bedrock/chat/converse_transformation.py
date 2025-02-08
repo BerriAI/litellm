@@ -33,12 +33,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
-from ..common_utils import (
-    AmazonBedrockGlobalConfig,
-    BedrockError,
-    BedrockModelInfo,
-    get_bedrock_tool_name,
-)
+from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
 
 class AmazonConverseConfig(BaseConfig):
