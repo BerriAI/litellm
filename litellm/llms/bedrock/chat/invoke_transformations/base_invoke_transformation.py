@@ -91,7 +91,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             optional_params=optional_params,
         )
         ### SET RUNTIME ENDPOINT ###
-        aws_bedrock_runtime_endpoint = optional_params.pop(
+        aws_bedrock_runtime_endpoint = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -129,15 +129,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        extra_headers = optional_params.pop("extra_headers", None)
-        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-        aws_session_token = optional_params.pop("aws_session_token", None)
-        aws_role_name = optional_params.pop("aws_role_name", None)
-        aws_session_name = optional_params.pop("aws_session_name", None)
-        aws_profile_name = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        extra_headers = optional_params.get("extra_headers", None)
+        aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = optional_params.get("aws_access_key_id", None)
+        aws_session_token = optional_params.get("aws_session_token", None)
+        aws_role_name = optional_params.get("aws_role_name", None)
+        aws_session_name = optional_params.get("aws_session_name", None)
+        aws_profile_name = optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
         aws_region_name = self._get_aws_region_name(optional_params)
 
         credentials: Credentials = self.get_credentials(
@@ -347,6 +347,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
+
         provider = self.get_bedrock_invoke_provider(model)
         outputText: Optional[str] = None
         try:
@@ -649,7 +650,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         Get the AWS region name from the environment variables
         """
-        aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_region_name = optional_params.get("aws_region_name", None)
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check env #
