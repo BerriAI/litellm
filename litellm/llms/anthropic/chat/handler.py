@@ -641,7 +641,9 @@ class ModelResponseIterator:
                 finish_reason=finish_reason,
                 usage=usage,
                 index=index,
-                provider_specific_fields=provider_specific_fields,
+                provider_specific_fields=(
+                    provider_specific_fields if provider_specific_fields else None
+                ),
             )
 
             return returned_chunk
