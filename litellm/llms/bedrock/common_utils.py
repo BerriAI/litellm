@@ -8,6 +8,7 @@ from typing import List, Optional, Union
 import httpx
 
 import litellm
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
 
@@ -310,3 +311,52 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
             response_tool_name
         ]
     return response_tool_name
+
+
+class BedrockModelInfo(BaseLLMModelInfo):
+
+    global_config = AmazonBedrockGlobalConfig()
+    all_global_regions = global_config.get_all_regions()
+
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        """
+        Get the base model from the given model name.
+
+        Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+        AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+        """
+        if model.startswith("bedrock/"):
+            model = model.split("/", 1)[1]
+
+        if model.startswith("converse/"):
+            model = model.split("/", 1)[1]
+
+        if model.startswith("invoke/"):
+            model = model.split("/", 1)[1]
+
+        potential_region = model.split(".", 1)[0]
+
+        alt_potential_region = model.split("/", 1)[
+            0
+        ]  # in model cost map we store regional information like `/us-west-2/bedrock-model`
+
+        if (
+            potential_region
+            in BedrockModelInfo._supported_cross_region_inference_region()
+        ):
+            return model.split(".", 1)[1]
+        elif (
+            alt_potential_region in BedrockModelInfo.all_global_regions
+            and len(model.split("/", 1)) > 1
+        ):
+            return model.split("/", 1)[1]
+
+        return model
+
+    @staticmethod
+    def _supported_cross_region_inference_region() -> List[str]:
+        """
+        Abbreviations of regions AWS Bedrock supports for cross region inference
+        """
+        return ["us", "eu", "apac"]

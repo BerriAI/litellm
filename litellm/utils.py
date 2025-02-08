@@ -110,6 +110,7 @@ from litellm.litellm_core_utils.token_counter import (
     calculate_img_tokens,
     get_modified_max_tokens,
 )
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy,
@@ -3188,7 +3189,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
-        base_model = litellm.AmazonConverseConfig()._get_base_model(model)
+        base_model = BedrockModelInfo.get_base_model(model)
         if base_model in litellm.bedrock_converse_models:
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
@@ -3209,6 +3210,13 @@ def get_optional_params(  # noqa: PLR0915
                         litellm.AmazonAnthropicClaude3Config().map_openai_params(
                             non_default_params=non_default_params,
                             optional_params=optional_params,
+                            model=model,
+                            drop_params=(
+                                drop_params
+                                if drop_params is not None
+                                and isinstance(drop_params, bool)
+                                else False
+                            ),
                         )
                     )
             else:
@@ -3971,8 +3979,16 @@ def _strip_stable_vertex_version(model_name) -> str:
     return re.sub(r"-\d+$", "", model_name)
 
 
-def _strip_bedrock_region(model_name) -> str:
-    return litellm.AmazonConverseConfig()._get_base_model(model_name)
+def _get_base_bedrock_model(model_name) -> str:
+    """
+    Get the base model from the given model name.
+
+    Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+    AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    return BedrockModelInfo.get_base_model(model_name)
 
 
 def _strip_openai_finetune_model_name(model_name: str) -> str:
@@ -3993,8 +4009,8 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
 
 def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
     if custom_llm_provider and custom_llm_provider == "bedrock":
-        strip_bedrock_region = _strip_bedrock_region(model_name=model)
-        return strip_bedrock_region
+        stripped_bedrock_model = _get_base_bedrock_model(model_name=model)
+        return stripped_bedrock_model
     elif custom_llm_provider and (
         custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini"
     ):
@@ -6065,7 +6081,7 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
-            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
+            base_model = BedrockModelInfo.get_base_model(model)
             bedrock_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model)
             if (
                 base_model in litellm.bedrock_converse_models
