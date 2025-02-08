@@ -83,19 +83,3 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-
-
-class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
-    def __init__(
-        self,
-        model: str,
-        sync_stream: bool,
-    ) -> None:
-        super().__init__(model=model)
-        self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
-            streaming_response=None,
-            sync_stream=sync_stream,
-        )
-
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
-        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
