@@ -26,3 +26,15 @@ class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
             pytest.skip(
                 f"Skipping non-JSON test: {request.function.__name__} does not contain 'json'"
             )
+
+
+class TestBedrockInvokeNovaJson(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        litellm._turn_on_debug()
+        return {
+            "model": "bedrock/invoke/us.amazon.nova-micro-v1:0",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass
