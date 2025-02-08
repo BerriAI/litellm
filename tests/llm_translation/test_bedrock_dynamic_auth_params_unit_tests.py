@@ -188,6 +188,15 @@ class DummyCredentials:
 # or aws_bedrock_runtime_endpoint—are already covered by other tests.)
 # ------------------------------------------------------------------------------
 @pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/cohere.command-r-v1:0",
+        "cohere.command-r-v1:0",
+        "bedrock/cohere.command-r-v1:0",
+        "bedrock/invoke/cohere.command-r-v1:0",
+    ],
+)
+@pytest.mark.parametrize(
     "param_name, param_value",
     [
         ("aws_session_token", "dummy_session_token"),
@@ -198,10 +207,12 @@ class DummyCredentials:
         ("aws_sts_endpoint", "dummy_sts_endpoint"),
     ],
 )
-def test_dynamic_aws_params_propagation(param_name, param_value):
+def test_dynamic_aws_params_propagation(model, param_name, param_value):
     """
     When passed to litellm.completion, each dynamic AWS authentication parameter
     should propagate down to the get_credentials() call in BaseAWSLLM.
+
+    Also tests different model parameter values.
     """
     client = HTTPHandler()
 
@@ -209,7 +220,7 @@ def test_dynamic_aws_params_propagation(param_name, param_value):
     # (We include aws_access_key_id and aws_secret_access_key so that the correct auth
     # branch in get_credentials() is reached.)
     base_params = {
-        "model": "cohere.command-r-v1:0",
+        "model": model,
         "messages": [{"role": "user", "content": "Hello, world!"}],
         "aws_access_key_id": "dummy_access",
         "aws_secret_access_key": "dummy_secret",
@@ -249,6 +260,24 @@ def test_dynamic_aws_params_propagation(param_name, param_value):
                         "finish_reason": "COMPLETE",
                     }
                 )
+                if "converse" in model:
+                    mock_response.text = json.dumps(
+                        {
+                            "output": {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [{"text": "Here's a joke..."}],
+                                }
+                            },
+                            "usage": {
+                                "inputTokens": 12,
+                                "outputTokens": 6,
+                                "totalTokens": 18,
+                            },
+                            "stopReason": "stop",
+                        }
+                    )
+
                 mock_response.status_code = 200
                 mock_response.headers = {"Content-Type": "application/json"}
                 mock_response.json = lambda: json.loads(mock_response.text)
