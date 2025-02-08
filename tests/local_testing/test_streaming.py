@@ -4084,3 +4084,28 @@ def test_deepseek_reasoning_content_completion():
         assert reasoning_content_exists
     except litellm.Timeout:
         pytest.skip("Model is timing out")
+
+
+@pytest.mark.asyncio
+async def test_openrouter_deepseek_reasoning_content_acompletion():
+    litellm._turn_on_debug()
+    try:
+        resp = await litellm.acompletion(
+            model="openrouter/deepseek/deepseek-r1",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            include_reasoning=True,
+        )
+
+        reasoning_content_exists = False
+        async for chunk in resp:
+            if chunk.choices[0].delta.get("reasoning_content", None) is not None:
+                print(f"chunk reasoning_content: {chunk}")
+                reasoning_content_exists = True
+                break
+        assert reasoning_content_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
+    except Exception as e:
+        print("ERROR traceback", traceback.format_exc())
+        pytest.fail(f"Error occurred: {e}")
