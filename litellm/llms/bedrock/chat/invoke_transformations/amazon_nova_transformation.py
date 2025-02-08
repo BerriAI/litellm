@@ -37,7 +37,7 @@ class AmazonInvokeNovaConfig(litellm.AmazonConverseConfig):
             headers=headers,
         )
         _bedrock_invoke_nova_request = BedrockInvokeNovaRequest(
-            **_transformed_nova_request
+            messages=_transformed_nova_request["messages"], **_transformed_nova_request
         )
         self._remove_empty_system_messages(_bedrock_invoke_nova_request)
         bedrock_invoke_nova_request = self._filter_allowed_fields(
