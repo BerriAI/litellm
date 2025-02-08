@@ -3,7 +3,7 @@ Common utilities used across bedrock chat/embedding/image generation
 """
 
 import os
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 import httpx
 
@@ -360,3 +360,19 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Abbreviations of regions AWS Bedrock supports for cross region inference
         """
         return ["us", "eu", "apac"]
+
+    @staticmethod
+    def get_bedrock_route(model: str) -> Literal["converse", "invoke", "converse_like"]:
+        """
+        Get the bedrock route for the given model.
+        """
+        base_model = BedrockModelInfo.get_base_model(model)
+        if "invoke/" in model:
+            return "invoke"
+        elif "converse_like" in model:
+            return "converse_like"
+        elif "converse/" in model:
+            return "converse"
+        elif base_model in litellm.bedrock_converse_models:
+            return "converse"
+        return "invoke"
