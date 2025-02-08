@@ -36,7 +36,35 @@ class AmazonInvokeNovaConfig(litellm.AmazonConverseConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        bedrock_invoke_nova_request = dict(
-            BedrockInvokeNovaRequest(**_transformed_nova_request)
+        _bedrock_invoke_nova_request = BedrockInvokeNovaRequest(
+            **_transformed_nova_request
+        )
+        self._remove_empty_system_messages(_bedrock_invoke_nova_request)
+        bedrock_invoke_nova_request = self._filter_allowed_fields(
+            _bedrock_invoke_nova_request
         )
         return bedrock_invoke_nova_request
+
+    def _filter_allowed_fields(
+        self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest
+    ) -> dict:
+        """
+        Filter out fields that are not allowed in the `BedrockInvokeNovaRequest` dataclass.
+        """
+        allowed_fields = set(BedrockInvokeNovaRequest.__annotations__.keys())
+        return {
+            k: v for k, v in bedrock_invoke_nova_request.items() if k in allowed_fields
+        }
+
+    def _remove_empty_system_messages(
+        self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest
+    ) -> None:
+        """
+        In-place remove empty `system` messages from the request.
+
+        /bedrock/invoke/ does not allow empty `system` messages.
+        """
+        _system_message = bedrock_invoke_nova_request.get("system", None)
+        if isinstance(_system_message, list) and len(_system_message) == 0:
+            bedrock_invoke_nova_request.pop("system", None)
+        return
