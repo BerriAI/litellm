@@ -3,11 +3,16 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import httpx
 
 import litellm
+from litellm.llms.anthropic.chat.handler import (
+    ModelResponseIterator as AnthropicModelResponseIterator,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -78,3 +83,19 @@ class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+
+
+class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+    ) -> None:
+        super().__init__(model=model)
+        self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
+            streaming_response=None,
+            sync_stream=sync_stream,
+        )
+
+    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
