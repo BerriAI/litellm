@@ -88,3 +88,66 @@ def test_nova_invoke_filter_allowed_fields():
     assert "messages" in result
     assert "system" in result
     assert "inferenceConfig" in result
+
+
+def test_nova_invoke_streaming_chunk_parsing():
+    """
+    Test that the AWSEventStreamDecoder correctly handles Nova's /bedrock/invoke/ streaming format
+    where content is nested under 'contentBlockDelta'.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    # Initialize the decoder with a Nova model
+    decoder = AWSEventStreamDecoder(model="bedrock/invoke/us.amazon.nova-micro-v1:0")
+
+    # Test case 1: Text content in contentBlockDelta
+    nova_text_chunk = {
+        "contentBlockDelta": {
+            "delta": {"text": "Hello, how can I help?"},
+            "contentBlockIndex": 0,
+        }
+    }
+    result = decoder._chunk_parser(nova_text_chunk)
+    assert result["text"] == "Hello, how can I help?"
+    assert result["index"] == 0
+    assert not result["is_finished"]
+    assert result["tool_use"] is None
+
+    # Test case 2: Tool use start in contentBlockDelta
+    nova_tool_start_chunk = {
+        "contentBlockDelta": {
+            "start": {"toolUse": {"name": "get_weather", "toolUseId": "tool_1"}},
+            "contentBlockIndex": 1,
+        }
+    }
+    result = decoder._chunk_parser(nova_tool_start_chunk)
+    assert result["text"] == ""
+    assert result["index"] == 1
+    assert result["tool_use"] is not None
+    assert result["tool_use"]["type"] == "function"
+    assert result["tool_use"]["function"]["name"] == "get_weather"
+    assert result["tool_use"]["id"] == "tool_1"
+
+    # Test case 3: Tool use arguments in contentBlockDelta
+    nova_tool_args_chunk = {
+        "contentBlockDelta": {
+            "delta": {"toolUse": {"input": '{"location": "New York"}'}},
+            "contentBlockIndex": 2,
+        }
+    }
+    result = decoder._chunk_parser(nova_tool_args_chunk)
+    assert result["text"] == ""
+    assert result["index"] == 2
+    assert result["tool_use"] is not None
+    assert result["tool_use"]["function"]["arguments"] == '{"location": "New York"}'
+
+    # Test case 4: Stop reason in contentBlockDelta
+    nova_stop_chunk = {
+        "contentBlockDelta": {
+            "stopReason": "tool_use",
+        }
+    }
+    result = decoder._chunk_parser(nova_stop_chunk)
+    print(result)
+    assert result["is_finished"] is True
+    assert result["finish_reason"] == "tool_calls"
