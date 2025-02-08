@@ -864,6 +864,18 @@ def test_convert_model_response_object():
             == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
         )
 
+@pytest.mark.parametrize(
+    "content, expected_reasoning, expected_content", 
+    [
+        (None, None, None),
+        ("<think>I am thinking here</think>The sky is a canvas of blue", "I am thinking here", "The sky is a canvas of blue"),
+        ("I am a regular response", None, "I am a regular response"),
+
+    ]
+)
+def test_parse_content_for_reasoning(content, expected_reasoning, expected_content):
+    assert(litellm.utils._parse_content_for_reasoning(content) == (expected_reasoning, expected_content))
+
 
 @pytest.mark.parametrize(
     "model, expected_bool",
