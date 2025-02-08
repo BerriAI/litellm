@@ -1069,6 +1069,21 @@
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
+    "azure/o1-2024-12-17": {
+        "max_tokens": 100000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000060,
+        "cache_read_input_token_cost": 0.0000075,
+        "litellm_provider": "azure",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true
+    },
     "azure/o1-preview": {
         "max_tokens": 32768,
         "max_input_tokens": 128000,
@@ -6176,6 +6191,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6188,6 +6204,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6215,6 +6232,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6228,6 +6246,7 @@
         "mode": "chat",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
@@ -6240,6 +6259,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6252,6 +6272,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6264,6 +6285,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6291,6 +6313,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6305,6 +6328,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
@@ -6316,6 +6340,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6328,6 +6353,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6340,6 +6366,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6367,6 +6394,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
@@ -6393,6 +6421,7 @@
         "litellm_provider": "bedrock",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_vision": true,
         "supports_tool_choice": true
     },
