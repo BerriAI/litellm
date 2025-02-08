@@ -1999,6 +1999,37 @@ def test_bedrock_base_model_helper():
 
 
 @pytest.mark.parametrize(
+    "model,expected_route",
+    [
+        # Test explicit route prefixes
+        ("invoke/anthropic.claude-3-sonnet-20240229-v1:0", "invoke"),
+        ("converse/anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("converse_like/anthropic.claude-3-sonnet-20240229-v1:0", "converse_like"),
+        # Test models in BEDROCK_CONVERSE_MODELS list
+        ("anthropic.claude-3-5-haiku-20241022-v1:0", "converse"),
+        ("anthropic.claude-v2", "converse"),
+        ("meta.llama3-70b-instruct-v1:0", "converse"),
+        ("mistral.mistral-large-2407-v1:0", "converse"),
+        # Test models with region prefixes
+        ("us.anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("us.meta.llama3-70b-instruct-v1:0", "converse"),
+        # Test default case (should return "invoke")
+        ("amazon.titan-text-express-v1", "invoke"),
+        ("cohere.command-text-v14", "invoke"),
+        ("cohere.command-r-v1:0", "invoke"),
+    ],
+)
+def test_bedrock_route_detection(model, expected_route):
+    """Test all scenarios for BedrockModelInfo.get_bedrock_route"""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    route = BedrockModelInfo.get_bedrock_route(model)
+    assert (
+        route == expected_route
+    ), f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
+
+
+@pytest.mark.parametrize(
     "messages, expected_cache_control",
     [
         (
