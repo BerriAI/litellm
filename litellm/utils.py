@@ -2813,7 +2813,7 @@ def get_optional_params(  # noqa: PLR0915
     ):
         if (
             custom_llm_provider == "ollama"
-            and custom_llm_provider != "text-completion-openai"
+            or custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
             and custom_llm_provider != "vertex_ai"
             and custom_llm_provider != "anyscale"
