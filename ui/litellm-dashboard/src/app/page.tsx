@@ -75,6 +75,8 @@ export default function CreateKeyPage() {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
+  const [currentOrg, setCurrentOrg] = useState<string>("default");
+  const [isOrgAdmin, setIsOrgAdmin] = useState<boolean>(false);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
@@ -191,6 +193,7 @@ export default function CreateKeyPage() {
               premiumUser={premiumUser}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
+              currentOrg={currentOrg}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">

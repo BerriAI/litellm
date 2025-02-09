@@ -57,6 +57,8 @@ interface UserDashboardProps {
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setCurrentOrg: React.Dispatch<React.SetStateAction<string>>;
+  setIsOrgAdmin: React.Dispatch<React.SetStateAction<boolean>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   premiumUser: boolean;
 }
@@ -77,6 +79,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
+  setCurrentOrg,
+  setIsOrgAdmin,
   premiumUser,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(

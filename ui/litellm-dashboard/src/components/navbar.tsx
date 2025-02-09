@@ -33,7 +33,7 @@ const Navbar: React.FC<NavbarProps> = ({
   onOrgChange = () => {},
   onNewOrg = () => {},
   organizations = [
-    { id: "default", name: "Default Organization" },
+    { id: "default", name: "Organization" },
   ]
 }) => {
   const isLocal = process.env.NODE_ENV === "development";
@@ -69,9 +69,9 @@ const Navbar: React.FC<NavbarProps> = ({
           label: (
             <div className="flex items-center justify-between py-1">
               <span className="text-sm">Global View</span>
-              <CogIcon className="h-4 w-4 text-gray-400" />
             </div>
           ),
+          onClick: () => onOrgChange({ id: "global", name: "Global View" })
         }]
       : [
           {
