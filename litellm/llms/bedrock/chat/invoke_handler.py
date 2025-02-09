@@ -1342,7 +1342,7 @@ class AWSEventStreamDecoder:
             text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
             is_finished = True
             finish_reason = "stop"
-        ######## converse bedrock.anthropic mappings ###############
+        ######## /bedrock/converse mappings ###############
         elif (
             "contentBlockIndex" in chunk_data
             or "stopReason" in chunk_data
@@ -1350,6 +1350,11 @@ class AWSEventStreamDecoder:
             or "trace" in chunk_data
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
+        ######### /bedrock/invoke nova mappings ###############
+        elif "contentBlockDelta" in chunk_data:
+            # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
+            _chunk_data = chunk_data.get("contentBlockDelta", None)
+            return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
             if (

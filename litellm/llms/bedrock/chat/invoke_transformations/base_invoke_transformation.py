@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_a
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -86,7 +87,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             optional_params=optional_params,
         )
         ### SET RUNTIME ENDPOINT ###
-        aws_bedrock_runtime_endpoint = optional_params.pop(
+        aws_bedrock_runtime_endpoint = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -124,15 +125,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        extra_headers = optional_params.pop("extra_headers", None)
-        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-        aws_session_token = optional_params.pop("aws_session_token", None)
-        aws_role_name = optional_params.pop("aws_role_name", None)
-        aws_session_name = optional_params.pop("aws_session_name", None)
-        aws_profile_name = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        extra_headers = optional_params.get("extra_headers", None)
+        aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = optional_params.get("aws_access_key_id", None)
+        aws_session_token = optional_params.get("aws_session_token", None)
+        aws_role_name = optional_params.get("aws_role_name", None)
+        aws_session_name = optional_params.get("aws_session_name", None)
+        aws_profile_name = optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
         aws_region_name = self._get_aws_region_name(optional_params)
 
         credentials: Credentials = self.get_credentials(
@@ -166,7 +167,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         return dict(request.headers)
 
-    def transform_request(  # noqa: PLR0915
+    def transform_request(
         self,
         model: str,
         messages: List[AllMessageValues],
@@ -218,6 +219,14 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
             return litellm.AmazonAnthropicClaude3Config().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        elif provider == "nova":
+            return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
@@ -297,6 +306,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
+        verbose_logger.debug(
+            "bedrock invoke response % s",
+            json.dumps(completion_response, indent=4, default=str),
+        )
         provider = self.get_bedrock_invoke_provider(model)
         outputText: Optional[str] = None
         try:
@@ -321,6 +334,18 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     encoding=encoding,
                     api_key=api_key,
                     json_mode=json_mode,
+                )
+            elif provider == "nova":
+                return litellm.AmazonInvokeNovaConfig().transform_response(
+                    model=model,
+                    raw_response=raw_response,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    request_data=request_data,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    encoding=encoding,
                 )
             elif provider == "ai21":
                 outputText = (
@@ -503,6 +528,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
         3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
+        4. model=us.amazon.nova-pro-v1:0 -> Returns `nova`
         """
         if model.startswith("invoke/"):
             model = model.replace("invoke/", "", 1)
@@ -515,6 +541,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         provider = AmazonInvokeConfig._get_provider_from_model_path(model)
         if provider is not None:
             return provider
+
+        # check if provider == "nova"
+        if "nova" in model:
+            return "nova"
         return None
 
     @staticmethod
@@ -558,7 +588,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         Get the AWS region name from the environment variables
         """
-        aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_region_name = optional_params.get("aws_region_name", None)
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check env #

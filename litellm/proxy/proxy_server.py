@@ -196,6 +196,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    router as model_management_router,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
@@ -6042,6 +6045,11 @@ async def update_model(
     model_params: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Old endpoint for model update. Makes a PUT request.
+
+    Use `/model/{model_id}/update` to PATCH the stored model in db.
+    """
     global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db, proxy_logging_obj
     try:
         import base64
@@ -8924,3 +8932,4 @@ app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
+app.include_router(model_management_router)
