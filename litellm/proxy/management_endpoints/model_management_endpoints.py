@@ -17,7 +17,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     CommonProxyErrors,
     PrismaCompatibleUpdateDBModel,
@@ -62,7 +61,7 @@ def update_db_model(
     merged_deployment_dict = DeploymentTypedDict(
         model_name=db_model.model_name,
         litellm_params=LiteLLMParamsTypedDict(
-            **db_model.litellm_params.model_dump(exclude_none=True)
+            **db_model.litellm_params.model_dump(exclude_none=True)  # type: ignore
         ),
     )
     # update model name
