@@ -10,6 +10,7 @@ import {
   organizationListCall,
   DEFAULT_ORGANIZATION
 } from "./networking";
+import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -86,14 +87,13 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   premiumUser,
   currentOrg
 }) => {
+  console.log(`currentOrg in user dashboard: ${JSON.stringify(currentOrg)}`)
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
   );
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
-  const viewSpend = searchParams.get("viewSpend");
-  const router = useRouter();
 
   const token = getCookie('token');
 
@@ -180,18 +180,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       // if (cachedUserModels) {
       //   setUserModels(JSON.parse(cachedUserModels));
       // } else {
-        const fetchTeams = async () => {
-          let givenTeams;
-          if (userRole != "Admin" && userRole != "Admin Viewer") {
-            givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
-          } else {
-            givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
-          }
-          
-          console.log(`givenTeams: ${givenTeams}`)
-
-          setTeams(givenTeams)
-        }
+        console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
         const fetchData = async () => {
           try {
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
@@ -273,11 +262,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           setOrganizations(organizations);
         }
         fetchData();
-        fetchTeams();
+        fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
         fetchOrganizations();
       }
     // }
   }, [userID, token, accessToken, keys, userRole]);
+
+  useEffect(() => {
+    console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
+    if (accessToken) {
+      console.log(`fetching teams`)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+    }
+  }, [currentOrg]);
 
   useEffect(() => {
     // This code will run every time selectedTeam changes

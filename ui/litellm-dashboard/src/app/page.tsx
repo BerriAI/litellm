@@ -202,6 +202,7 @@ export default function CreateKeyPage() {
             setTeams={setTeams}
             setKeys={setKeys}
             setOrganizations={setOrganizations}
+            currentOrg={currentOrg}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -238,6 +239,7 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   setKeys={setKeys}
                   setOrganizations={setOrganizations}
+                  currentOrg={currentOrg}
                 />
               ) : page == "models" ? (
                 <ModelDashboard

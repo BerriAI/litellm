@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Typography } from "antd";
 import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION } from "./networking";
 import TeamMemberModal from "@/components/team/edit_membership";
+import { fetchTeams } from "./common_components/fetch_teams";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -95,23 +96,12 @@ const Team: React.FC<TeamProps> = ({
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
 
-  const fetchTeams = async (accessToken: string, userID: string | null, userRole: string | null) => {
-    let givenTeams;
-    if (userRole != "Admin" && userRole != "Admin Viewer") {
-      givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
-    } else {
-      givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
-    }
-    
-    console.log(`givenTeams: ${givenTeams}`)
 
-    setTeams(givenTeams)
-  }
   useEffect(() => {
     console.log(`inside useeffect - ${teams}`)
     if (teams === null && accessToken) {
       // Call your function here
-      fetchTeams(accessToken, userID, userRole)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
     }
   }, [teams]);
   
@@ -119,7 +109,7 @@ const Team: React.FC<TeamProps> = ({
     console.log(`inside useeffect - ${lastRefreshed}`)
     if (accessToken) {
       // Call your function here
-      fetchTeams(accessToken, userID, userRole)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
     }
     handleRefreshClick()
   }, [lastRefreshed]);
