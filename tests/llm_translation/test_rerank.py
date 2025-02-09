@@ -173,9 +173,9 @@ async def test_basic_rerank_azure_ai(sync_mode):
 
         assert_response_shape(response, custom_llm_provider="together_ai")
 
-
 @pytest.mark.asyncio()
-async def test_rerank_custom_api_base():
+@pytest.mark.parametrize("version", ["v1", "v2"])
+async def test_rerank_custom_api_base(version):
     mock_response = AsyncMock()
 
     def return_val():
@@ -221,7 +221,7 @@ async def test_rerank_custom_api_base():
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
         assert (
-            _url == "https://exampleopenaiendpoint-production.up.railway.app/v1/rerank"
+            _url == f"https://exampleopenaiendpoint-production.up.railway.app/${version}/rerank"
         )
 
         request_data = json.loads(args_to_api)

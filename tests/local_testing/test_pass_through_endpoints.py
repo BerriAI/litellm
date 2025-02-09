@@ -106,15 +106,16 @@ async def test_pass_through_endpoint(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pass_through_endpoint_rerank(client):
+@pytest.mark.parametrize("endpoint_version", ["v1/rerank", "v2/rerank"])
+async def test_pass_through_endpoint_rerank(client, version):
     _cohere_api_key = os.environ.get("COHERE_API_KEY")
     import litellm
 
     # Define a pass-through endpoint
     pass_through_endpoints = [
         {
-            "path": "/v1/rerank",
-            "target": "https://api.cohere.com/v1/rerank",
+            "path": f"/v1/rerank",
+            "target": f"https://api.cohere.com/{endpoint_version}",
             "headers": {"Authorization": f"bearer {_cohere_api_key}"},
         }
     ]
@@ -137,7 +138,7 @@ async def test_pass_through_endpoint_rerank(client):
     }
 
     # Make a request to the pass-through endpoint
-    response = client.post("/v1/rerank", json=_json_data)
+    response = client.post(f"/{version}/rerank", json=_json_data)
 
     print("JSON response: ", _json_data)
 

@@ -4,13 +4,13 @@ import Image from '@theme/IdealImage';
 
 Add pass through routes to LiteLLM Proxy
 
-**Example:** Add a route `/v1/rerank` that forwards requests to `https://api.cohere.com/v1/rerank` through LiteLLM Proxy
+**Example:** Add a route `/v2/rerank` that forwards requests to `https://api.cohere.com/v2/rerank` through LiteLLM Proxy
 
 
 💡 This allows making the following Request to LiteLLM Proxy
 ```shell
 curl --request POST \
-  --url http://localhost:4000/v1/rerank \
+  --url http://localhost:4000/v2/rerank \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
   --data '{
@@ -29,8 +29,8 @@ curl --request POST \
 general_settings:
   master_key: sk-1234
   pass_through_endpoints:
-    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
-      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+    - path: "/v2/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v2/rerank"          # URL this route should forward requests to
       headers:                                            # headers to forward to this URL
         Authorization: "bearer os.environ/COHERE_API_KEY" # (Optional) Auth Header to forward to your Endpoint
         content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
@@ -49,7 +49,7 @@ Here `http://localhost:4000` is your litellm proxy endpoint
 
 ```shell
 curl --request POST \
-  --url http://localhost:4000/v1/rerank \
+  --url http://localhost:4000/v2/rerank \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
   --data '{
@@ -164,8 +164,8 @@ Usage - set `auth: true` on the config
 general_settings:
   master_key: sk-1234
   pass_through_endpoints:
-    - path: "/v1/rerank"
-      target: "https://api.cohere.com/v1/rerank"
+    - path: "/v2/rerank"
+      target: "https://api.cohere.com/v2/rerank"
       auth: true # 👈 Key change to use LiteLLM Auth / Keys
       headers:
         Authorization: "bearer os.environ/COHERE_API_KEY"
@@ -177,7 +177,7 @@ Test Request with LiteLLM Key
 
 ```shell
 curl --request POST \
-  --url http://localhost:4000/v1/rerank \
+  --url http://localhost:4000/v2/rerank \
   --header 'accept: application/json' \
   --header 'Authorization: Bearer sk-1234'\
   --header 'content-type: application/json' \
@@ -248,8 +248,8 @@ All possible values for `pass_through_endpoints` and what they mean
 ```yaml
 general_settings:
   pass_through_endpoints:
-    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
-      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
+    - path: "/v2/rerank"                                  # route you want to add to LiteLLM Proxy Server
+      target: "https://api.cohere.com/v2/rerank"          # URL this route should forward requests to
       headers:                                            # headers to forward to this URL
         Authorization: "bearer os.environ/COHERE_API_KEY" # (Optional) Auth Header to forward to your Endpoint
         content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
