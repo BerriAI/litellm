@@ -25,13 +25,11 @@ interface AvailableTeam {
 interface AvailableTeamsProps {
   accessToken: string | null;
   userID: string | null;
-  searchTerm : string | null;
 }
 
 const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
   accessToken,
   userID,
-  searchTerm,
 }) => {
   const [availableTeams, setAvailableTeams] = useState<AvailableTeam[]>([]);
 
@@ -72,7 +70,7 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
 
 
   return (
-    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[70vh]">
+    <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
       <Table>
         <TableHead>
           <TableRow>
@@ -84,9 +82,7 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
           </TableRow>
         </TableHead>
         <TableBody>
-          {availableTeams
-          ?.filter((team) => team["team_alias"].toLowerCase().includes(searchTerm?.toLowerCase() || ''))
-          ?.map((team) => (
+          {availableTeams.map((team) => (
             <TableRow key={team.team_id}>
               <TableCell>
                 <Text>{team.team_alias}</Text>
