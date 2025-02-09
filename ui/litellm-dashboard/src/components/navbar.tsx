@@ -88,7 +88,6 @@ const Navbar: React.FC<NavbarProps> = ({
             label: (
               <div className="flex items-center justify-between py-1">
                 <span className="text-sm">{org.name}</span>
-                <CogIcon className="h-4 w-4 text-gray-400" />
               </div>
             ),
             onClick: () => onOrgChange(org)
