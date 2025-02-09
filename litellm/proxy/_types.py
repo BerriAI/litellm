@@ -1919,7 +1919,9 @@ class ProxyException(Exception):
 
 
 class CommonProxyErrors(str, enum.Enum):
-    db_not_connected_error = "DB not connected"
+    db_not_connected_error = (
+        "DB not connected. See https://docs.litellm.ai/docs/proxy/virtual_keys"
+    )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
@@ -1940,6 +1942,7 @@ class ProxyErrorTypes(str, enum.Enum):
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
+    validation_error = "bad_request_error"
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
@@ -2407,3 +2410,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             )
 
         super().__init__(**kwargs)
+
+
+class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
+    model_name: str
+    litellm_params: str
+    model_info: str
+    updated_at: str
+    updated_by: str
