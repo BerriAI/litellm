@@ -702,6 +702,11 @@ class JWTAuthManager:
         """Find first team with access to the requested model"""
 
         if not team_ids:
+            if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
+                raise HTTPException(
+                    status_code=403,
+                    detail="No teams found in token. `enforce_team_based_model_access` is set to True. Token must belong to a team.",
+                )
             return None, None
 
         for team_id in team_ids:

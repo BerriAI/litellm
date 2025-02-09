@@ -2372,6 +2372,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
+    enforce_team_based_model_access: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
