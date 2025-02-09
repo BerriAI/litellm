@@ -50,6 +50,8 @@ function formatUserRole(userRole: string) {
       return "Admin";
     case "proxy_admin_viewer":
       return "Admin Viewer";
+    case "org_admin":
+      return "Org Admin";
     case "internal_user":
       return "Internal User";
     case "internal_viewer":
@@ -171,10 +173,13 @@ export default function CreateKeyPage() {
 
   const handleOrgChange = (org: Organization) => {
     setCurrentOrg(org);
-    if (org.members) {
+    console.log(`org: ${JSON.stringify(org)}`)
+    if (org.members && userRole != "Admin") { // don't change user role if user is admin
       for (const member of org.members) {
+        console.log(`member: ${JSON.stringify(member)}`)
         if (member.user_id == userID) {
-          setUserRole(member.user_role);
+          console.log(`member.user_role: ${member.user_role}`)
+          setUserRole(formatUserRole(member.user_role));
         }
       }
     }
@@ -208,7 +213,7 @@ export default function CreateKeyPage() {
               proxySettings={proxySettings}
               currentOrg={currentOrg}
               organizations={organizations}
-              onOrgChange={setCurrentOrg}
+              onOrgChange={handleOrgChange}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -270,6 +275,7 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
+                  currentOrg={currentOrg}
                 />
               ) : page == "organizations" ? (
                 <Organizations

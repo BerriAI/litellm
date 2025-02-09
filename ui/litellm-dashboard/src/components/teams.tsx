@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, teamInfoCall } from "./networking";
+import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization } from "./networking";
 import TeamMemberModal from "@/components/team/edit_membership";
 import {
   InformationCircleIcon,
@@ -64,6 +64,7 @@ interface TeamProps {
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
   userID: string | null;
   userRole: string | null;
+  currentOrg: Organization | null;  
 }
 
 interface EditTeamModalProps {
@@ -90,6 +91,7 @@ const Team: React.FC<TeamProps> = ({
   setTeams,
   userID,
   userRole,
+  currentOrg
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
 
@@ -285,7 +287,7 @@ const Team: React.FC<TeamProps> = ({
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
-        let organizationId = formValues?.organization_id;
+        let organizationId = formValues?.organization_id || currentOrg?.organization_id;
         if (organizationId === "" || typeof organizationId !== 'string') {
           formValues.organization_id = null;
         } else {
@@ -618,7 +620,7 @@ const Team: React.FC<TeamProps> = ({
             )}
           </Card>
         </Col>
-        {userRole == "Admin"? (
+        {userRole == "Admin" || userRole == "Org Admin"? (
           <Col numColSpan={1}>
             <Button
               className="mx-auto"
