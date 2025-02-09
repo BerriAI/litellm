@@ -1146,16 +1146,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                         LiteLLM Model
                       </TableHeaderCell>
                       {userRole === "Admin" && (
-                        <TableHeaderCell
-                          style={{
-                            maxWidth: "150px",
-                            whiteSpace: "normal",
-                            wordBreak: "break-word",
-                            fontSize: "11px",
-                          }}
-                        >
-                          API Base
-                        </TableHeaderCell>
+                        <>
+                          <TableHeaderCell
+                            style={{
+                              maxWidth: "150px",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                              fontSize: "11px",
+                            }}
+                          >
+                            API Base
+                          </TableHeaderCell>
+                          <TableHeaderCell
+                            style={{
+                              maxWidth: "150px",
+                              whiteSpace: "normal",
+                              wordBreak: "break-word",
+                              fontSize: "11px",
+                            }}
+                          >
+                            Model API Key
+                          </TableHeaderCell>
+                        </>
                       )}
                       <TableHeaderCell
                         style={{
@@ -1322,33 +1334,60 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             
                           </TableCell>
                           {userRole === "Admin" && (
-                            <TableCell
-                              style={{
-                                maxWidth: "150px",
-                                whiteSpace: "normal",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              <Tooltip title={model && model.api_base}>
-                                <pre
-                                  style={{
-                                    maxWidth: "150px",
-                                    whiteSpace: "normal",
-                                    wordBreak: "break-word",
-                                  }}
-                                  className="text-xs"
-                                  title={
-                                    model && model.api_base
-                                      ? model.api_base
-                                      : ""
-                                  }
-                                >
-                                  {model && model.api_base
-                                    ? model.api_base.slice(0, 20)
-                                    : "-"}
-                                </pre>
-                              </Tooltip>
-                            </TableCell>
+                            <>
+                              <TableCell
+                                style={{
+                                  maxWidth: "150px",
+                                  whiteSpace: "normal",
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                <Tooltip title={model && model.api_base}>
+                                  <pre
+                                    style={{
+                                      maxWidth: "150px",
+                                      whiteSpace: "normal",
+                                      wordBreak: "break-word",
+                                    }}
+                                    className="text-xs"
+                                    title={
+                                      model && model.api_base
+                                        ? model.api_base
+                                        : ""
+                                    }
+                                  >
+                                    {model && model.api_base
+                                      ? model.api_base.slice(0, 20)
+                                      : "-"}
+                                  </pre>
+                                </Tooltip>
+                              </TableCell>
+                              <TableCell
+                                style={{
+                                  maxWidth: "150px",
+                                  whiteSpace: "normal",
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                <Tooltip title="Model API key hidden for security">
+                                  <pre
+                                    style={{
+                                      maxWidth: "150px",
+                                      whiteSpace: "normal",
+                                      wordBreak: "break-word",
+                                    }}
+                                    className="text-xs"
+                                    title={model && model.litellm_params.model_api_key
+                                      ? model.litellm_params.model_api_key
+                                      : ""}
+                                  >
+                                    {model && model.litellm_params.model_api_key
+                                      ? "***"
+                                      : "-"}
+                                  </pre>
+                                </Tooltip>
+                              </TableCell>
+                            </>
                           )}
                           <TableCell
                             style={{

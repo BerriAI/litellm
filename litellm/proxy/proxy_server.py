@@ -6091,16 +6091,22 @@ async def update_model(
 
             ### ENCRYPT PARAMS ###
             for k, v in _new_litellm_params_dict.items():
-                encrypted_value = encrypt_value_helper(value=v)
-                model_params.litellm_params[k] = encrypted_value
-
+                try:
+                    encrypted_value = encrypt_value_helper(value=v)
+                    model_params.litellm_params[k] = encrypted_value
+                except Exception as e:
+                    print(f"Error encrypting {k}: {e}")  # Debug print
+                    raise
+                    
             ### MERGE WITH EXISTING DATA ###
             merged_dictionary = {}
             _mp = model_params.litellm_params.dict()
 
             for key, value in _mp.items():
                 if value is not None:
-                    merged_dictionary[key] = value
+                    # Ensure we encrypt the value before adding it to the merged dictionary
+                    encrypted_value = encrypt_value_helper(value=value) if isinstance(value, str) else value
+                    merged_dictionary[key] = encrypted_value
                 elif (
                     key in _existing_litellm_params_dict
                     and _existing_litellm_params_dict[key] is not None
@@ -6202,6 +6208,23 @@ async def model_info_v2(
                 _openai_client = "llm_router_is_None"
             openai_client = str(_openai_client)
             _model["openai_client"] = openai_client
+
+        # Decrypt sensitive values in litellm_params
+        if "litellm_params" in _model:
+            decrypted_params = {}
+            for key, value in _model["litellm_params"].items():
+                if key in ["api_base", "base_url", "model_api_key"]:  # Add any other keys that need decryption
+                    try:
+                        decrypted_value = decrypt_value_helper(value=value)
+                        decrypted_params[key] = decrypted_value
+                    except Exception as e:
+                        verbose_proxy_logger.debug(f"Error decrypting {key}: {e}")
+                        decrypted_params[key] = value
+                else:
+                    decrypted_params[key] = value
+            
+            _model["litellm_params"] = decrypted_params
+
 
         # read litellm model_prices_and_context_window.json to get the following:
         # input_cost_per_token, output_cost_per_token, max_tokens

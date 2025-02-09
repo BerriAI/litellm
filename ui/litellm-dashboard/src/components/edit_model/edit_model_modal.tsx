@@ -88,6 +88,9 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
           <Form.Item className="mt-8" label="api_base" name="api_base">
             <TextInput />
           </Form.Item>
+          <Form.Item className="mt-8" label="model_api_key" name="model_api_key">
+            <TextInput type="password" />
+          </Form.Item>
           <Form.Item
             label="organization"
             name="organization"
