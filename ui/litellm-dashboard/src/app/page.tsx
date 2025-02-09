@@ -77,7 +77,6 @@ export default function CreateKeyPage() {
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
-  const [isOrgAdmin, setIsOrgAdmin] = useState<boolean>(false);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
@@ -196,7 +195,7 @@ export default function CreateKeyPage() {
               premiumUser={premiumUser}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
-              currentOrg={currentOrg ? currentOrg.organization_alias : undefined}
+              currentOrg={currentOrg}
               organizations={organizations}
               onOrgChange={setCurrentOrg}
             />

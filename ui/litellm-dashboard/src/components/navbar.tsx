@@ -12,7 +12,7 @@ interface NavbarProps {
   premiumUser: boolean;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
-  currentOrg?: string;
+  currentOrg?: Organization;
   onOrgChange?: (org: Organization) => void;
   onNewOrg?: () => void;
   organizations?: Organization[];
@@ -25,11 +25,12 @@ const Navbar: React.FC<NavbarProps> = ({
   premiumUser,
   setProxySettings,
   proxySettings,
-  currentOrg = "default",
+  currentOrg = null,
   onOrgChange = () => {},
   onNewOrg = () => {},
   organizations = []
 }) => {
+  console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
   console.log(`organizations: ${JSON.stringify(organizations)}`)
   const isLocal = process.env.NODE_ENV === "development";
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
@@ -65,8 +66,7 @@ const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center justify-between py-1">
               <span className="text-sm">Global View</span>
             </div>
-          ),
-          onClick: () => onOrgChange({ id: "global", name: "Global View" })
+          )
         }]
       : [
           {
@@ -121,7 +121,7 @@ const Navbar: React.FC<NavbarProps> = ({
               placement="bottomLeft"
             >
               <button className="inline-flex items-center text-[13px] text-gray-700 hover:text-gray-900 transition-colors">
-                {organizations.find(org => org.id === currentOrg)?.name || "Default Organization"}
+                {currentOrg ? currentOrg.organization_alias : "Default Organization"}
                 <svg
                   className="ml-1 w-4 h-4 text-gray-500"
                   fill="none"
