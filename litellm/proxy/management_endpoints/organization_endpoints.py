@@ -160,6 +160,7 @@ async def new_organization(
                         "error": f"User not allowed to give access to model={m}. Models you have access to = {user_api_key_dict.models}"
                     },
                 )
+
     organization_row = LiteLLM_OrganizationTable(
         **data.json(exclude_none=True),
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -201,7 +202,7 @@ async def delete_organization():
     "/organization/list",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[LiteLLM_OrganizationTable],
+    response_model=List[LiteLLM_OrganizationTableWithMembers],
 )
 async def list_organization(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

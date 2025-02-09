@@ -1483,9 +1483,12 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     budget_id: str
     metadata: Optional[dict] = None
     models: List[str]
-    members: List[LiteLLM_OrganizationMembershipTable]
     created_by: str
     updated_by: str
+
+
+class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
+    members: List[LiteLLM_OrganizationMembershipTable]
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
