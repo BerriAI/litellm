@@ -15,6 +15,24 @@ export interface Model {
   model_info: Object | null;
 }
 
+export interface Organization {
+  organization_id: string;
+  organization_alias: string;
+  budget_id: string;
+  metadata: Record<string, any>;
+  models: string[];
+  spend: number;
+  model_spend: Record<string, number>;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+  litellm_budget_table: any;  // Simplified to any since we don't need the detailed structure
+  teams: any[] | null;
+  users: any[] | null;
+  members: any[] | null;
+}
+
 const baseUrl = "/"; // Assuming the base URL is the root
 
 
