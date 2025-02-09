@@ -9,6 +9,7 @@ from .guardrail_initializers import (
     initialize_guardrails_ai,
     initialize_hide_secrets,
     initialize_lakera,
+    initialize_lasso,
     initialize_presidio,
 )
 
@@ -16,6 +17,7 @@ guardrail_registry = {
     SupportedGuardrailIntegrations.APORIA.value: initialize_aporia,
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
+    SupportedGuardrailIntegrations.LASSO.value: initialize_lasso,
     SupportedGuardrailIntegrations.AIM.value: initialize_aim,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,

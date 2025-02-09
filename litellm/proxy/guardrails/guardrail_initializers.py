@@ -112,3 +112,18 @@ def initialize_guardrails_ai(litellm_params, guardrail):
         default_on=litellm_params["default_on"],
     )
     litellm.logging_callback_manager.add_litellm_callback(_guardrails_ai_callback)
+]
+
+
+
+def initialize_lasso(litellm_params, guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrail
+
+    _lasso_callback = LassoGuardrail(
+        api_base=litellm_params["api_base"],
+        api_key=litellm_params["api_key"],
+        guardrail_name=guardrail["guardrail_name"],
+        event_hook=litellm_params["mode"],
+        default_on=litellm_params["default_on"],
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_lasso_callback)
