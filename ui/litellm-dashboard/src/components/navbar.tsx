@@ -86,7 +86,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 <span className="text-sm">Default Organization</span>
               </div>
             ),
-            onClick: () => onOrgChange({ organization_id: "default", organization_alias: "Default Organization" } as Organization)
+            onClick: () => onOrgChange({ organization_id: null, organization_alias: "Default Organization" } as Organization)
           },
           ...organizations.map(org => ({
             key: org.organization_id,

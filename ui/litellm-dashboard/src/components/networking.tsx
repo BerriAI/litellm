@@ -18,7 +18,7 @@ export interface Model {
 }
 
 export interface Organization {
-  organization_id: string;
+  organization_id: string | null;
   organization_alias: string;
   budget_id: string;
   metadata: Record<string, any>;
