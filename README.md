@@ -457,6 +457,9 @@ If you have suggestions on how to improve the code quality feel free to open an 
 ### Services
 1. Setup .env file in root
 2. Run dependant services `docker-compose up db prometheus`
+3. Install prisma `npm install -g prisma`
+4. Run `prisma generate` to generate the prisma client
+5. (If database needs to be reset run `prisma migrate reset` followed by `prisma db push`)
 
 ### Backend
 1. (In root) create virtual environment `python -m venv .venv`
