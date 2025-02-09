@@ -260,6 +260,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/organization/list",
         "/team/available",
         "/user/info",
         "/model/info",
@@ -1100,24 +1101,6 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
 
 
-class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
-
-    organization_id: Optional[str] = None
-    organization_alias: Optional[str] = None
-    budget_id: str
-    metadata: Optional[dict] = None
-    models: List[str]
-    created_by: str
-    updated_by: str
-
-
-class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
-    created_at: datetime
-    updated_at: datetime
-
-
 class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
 
@@ -1490,6 +1473,28 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    created_by: str
+    updated_by: str
+
+
+class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
+    members: List[LiteLLM_OrganizationMembershipTable]
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str  # type: ignore
+    created_at: datetime
+    updated_at: datetime
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -2375,6 +2380,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
+    enforce_team_based_model_access: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
