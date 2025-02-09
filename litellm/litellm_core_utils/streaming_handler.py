@@ -1262,7 +1262,7 @@ class CustomStreamWrapper:
                                         isinstance(tool, dict)
                                         and "function" in tool
                                         and isinstance(tool["function"], dict)
-                                        and ("type" not in tool or tool["type"] is None)
+                                        and ("type" not in tool)
                                     ):
                                         # if function returned but type set to None - mistral's api returns type: None
                                         tool["type"] = "function"
