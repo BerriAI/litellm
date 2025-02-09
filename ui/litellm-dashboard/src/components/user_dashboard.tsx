@@ -7,7 +7,8 @@ import {
   getProxyUISettings,
   teamListCall,
   Organization,
-  organizationListCall
+  organizationListCall,
+  DEFAULT_ORGANIZATION
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -62,6 +63,7 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
+  currentOrg: Organization | null;
 }
 
 type TeamInterface = {
@@ -82,6 +84,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setKeys,
   setOrganizations,
   premiumUser,
+  currentOrg
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
@@ -180,9 +183,9 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         const fetchTeams = async () => {
           let givenTeams;
           if (userRole != "Admin" && userRole != "Admin Viewer") {
-            givenTeams = await teamListCall(accessToken, userID)
+            givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
           } else {
-            givenTeams = await teamListCall(accessToken)
+            givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
           }
           
           console.log(`givenTeams: ${givenTeams}`)

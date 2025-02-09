@@ -98,9 +98,9 @@ const Team: React.FC<TeamProps> = ({
   const fetchTeams = async (accessToken: string, userID: string | null, userRole: string | null) => {
     let givenTeams;
     if (userRole != "Admin" && userRole != "Admin Viewer") {
-      givenTeams = await teamListCall(accessToken, userID)
+      givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
     } else {
-      givenTeams = await teamListCall(accessToken)
+      givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
     }
     
     console.log(`givenTeams: ${givenTeams}`)
@@ -257,9 +257,9 @@ const Team: React.FC<TeamProps> = ({
         let _team_id_to_info: Record<string, any> = {};
         let teamList;
         if (userRole != "Admin" && userRole != "Admin Viewer") {
-          teamList = await teamListCall(accessToken, userID)
+          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
         } else {
-          teamList = await teamListCall(accessToken)
+          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
         }
         
         for (let i = 0; i < teamList.length; i++) {

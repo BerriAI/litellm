@@ -79,6 +79,15 @@ const Navbar: React.FC<NavbarProps> = ({
               fontSize: '0.875rem'
             }
           },
+          {
+            key: "default",
+            label: (
+              <div className="flex items-center justify-between py-1">
+                <span className="text-sm">Default Organization</span>
+              </div>
+            ),
+            onClick: () => onOrgChange({ organization_id: "default", organization_alias: "Default Organization" } as Organization)
+          },
           ...organizations.map(org => ({
             key: org.organization_id,
             label: (
