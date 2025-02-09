@@ -20,6 +20,11 @@ from .common_utils import InfinityError
 
 
 class InfinityRerankConfig(CohereRerankConfig):
+    # This is set to the v1/rerank endpoint to not break any existing integrations
+    # This should be changed once it is confirmed that infinity supports the v2 endpoint
+    def __init__(self):
+        super().__init__(True)
+
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity rerank")

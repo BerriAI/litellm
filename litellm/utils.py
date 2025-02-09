@@ -6173,14 +6173,15 @@ class ProviderConfigManager:
     def get_provider_rerank_config(
         model: str,
         provider: LlmProviders,
+        api_base: Optional[str]
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider:
-            return litellm.CohereRerankConfig()
+            return litellm.CohereRerankConfig(api_base)
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
-        return litellm.CohereRerankConfig()
+        return litellm.CohereRerankConfig(api_base)
 
     @staticmethod
     def get_provider_audio_transcription_config(

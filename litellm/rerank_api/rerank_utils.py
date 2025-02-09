@@ -15,6 +15,7 @@ def get_optional_rerank_params(
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = True,
     max_chunks_per_doc: Optional[int] = None,
+    max_tokens_per_doc: Optional[int] = None,
     non_default_params: Optional[dict] = None,
 ) -> OptionalRerankParams:
     return rerank_provider_config.map_cohere_rerank_params(
@@ -27,5 +28,6 @@ def get_optional_rerank_params(
         rank_fields=rank_fields,
         return_documents=return_documents,
         max_chunks_per_doc=max_chunks_per_doc,
+        max_tokens_per_doc=max_tokens_per_doc,
         non_default_params=non_default_params,
     )
