@@ -66,13 +66,14 @@ const Navbar: React.FC<NavbarProps> = ({
             <div className="flex items-center justify-between py-1">
               <span className="text-sm">Global View</span>
             </div>
-          )
+          ),
+          onClick: () => onOrgChange({ organization_id: "global", organization_alias: "Global View" } as Organization)
         }]
       : [
           {
             key: 'header',
             label: 'Organizations',
-            type: 'group' as const, // Fix: explicitly specify literal type
+            type: 'group' as const,
             style: { 
               color: '#6B7280',
               fontSize: '0.875rem'
@@ -86,7 +87,16 @@ const Navbar: React.FC<NavbarProps> = ({
               </div>
             ),
             onClick: () => onOrgChange(org)
-          }))
+          })),
+          {
+            key: "note",
+            label: (
+              <div className="flex items-center justify-between py-1 px-2 bg-gray-50 text-gray-500 text-xs italic">
+                <span>Switching between organizations on the UI is currently in beta.</span>
+              </div>
+            ),
+            disabled: true
+          }
         ]
     )
   ];
@@ -106,8 +116,8 @@ const Navbar: React.FC<NavbarProps> = ({
             </Link>
           </div>
 
-          {/* Organization selector */}
-          <div className="ml-8">
+          {/* Organization selector with beta label */}
+          <div className="ml-8 flex items-center">
             <Dropdown 
               menu={{ 
                 items: orgMenuItems,
@@ -132,6 +142,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 </svg>
               </button>
             </Dropdown>
+            <span className="ml-2 text-[10px] bg-blue-100 text-blue-800 font-medium px-2 py-0.5 rounded">BETA</span>
           </div>
 
           {/* Right side nav items */}
