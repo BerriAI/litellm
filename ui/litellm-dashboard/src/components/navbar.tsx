@@ -3,11 +3,7 @@ import React from "react";
 import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
 import { CogIcon } from "@heroicons/react/outline";
-
-interface Organization {
-  id: string;
-  name: string;
-}
+import { Organization } from "@/components/networking";
 
 interface NavbarProps {
   userID: string | null;
@@ -32,10 +28,9 @@ const Navbar: React.FC<NavbarProps> = ({
   currentOrg = "default",
   onOrgChange = () => {},
   onNewOrg = () => {},
-  organizations = [
-    { id: "default", name: "Organization" },
-  ]
+  organizations = []
 }) => {
+  console.log(`organizations: ${JSON.stringify(organizations)}`)
   const isLocal = process.env.NODE_ENV === "development";
   const imageUrl = isLocal ? "http://localhost:4000/get_image" : "/get_image";
   let logoutUrl = proxySettings?.PROXY_LOGOUT_URL || "";
@@ -84,10 +79,10 @@ const Navbar: React.FC<NavbarProps> = ({
             }
           },
           ...organizations.map(org => ({
-            key: org.id,
+            key: org.organization_id,
             label: (
               <div className="flex items-center justify-between py-1">
-                <span className="text-sm">{org.name}</span>
+                <span className="text-sm">{org.organization_alias}</span>
               </div>
             ),
             onClick: () => onOrgChange(org)

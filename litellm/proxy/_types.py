@@ -260,6 +260,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/organization/list",
         "/team/available",
         "/user/info",
         "/model/info",

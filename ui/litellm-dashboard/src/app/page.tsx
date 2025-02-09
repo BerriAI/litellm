@@ -24,6 +24,7 @@ import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
+import { Organization } from "@/components/networking";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -75,8 +76,9 @@ export default function CreateKeyPage() {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
-  const [currentOrg, setCurrentOrg] = useState<string>("default");
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [isOrgAdmin, setIsOrgAdmin] = useState<boolean>(false);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
@@ -183,6 +185,7 @@ export default function CreateKeyPage() {
             setUserEmail={setUserEmail}
             setTeams={setTeams}
             setKeys={setKeys}
+            setOrganizations={setOrganizations}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -193,7 +196,9 @@ export default function CreateKeyPage() {
               premiumUser={premiumUser}
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
-              currentOrg={currentOrg}
+              currentOrg={currentOrg ? currentOrg.organization_alias : undefined}
+              organizations={organizations}
+              onOrgChange={setCurrentOrg}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -216,6 +221,7 @@ export default function CreateKeyPage() {
                   setUserEmail={setUserEmail}
                   setTeams={setTeams}
                   setKeys={setKeys}
+                  setOrganizations={setOrganizations}
                 />
               ) : page == "models" ? (
                 <ModelDashboard

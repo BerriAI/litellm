@@ -6,6 +6,8 @@ import {
   getTotalSpendCall,
   getProxyUISettings,
   teamListCall,
+  Organization,
+  organizationListCall
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -57,9 +59,8 @@ interface UserDashboardProps {
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
-  setCurrentOrg: React.Dispatch<React.SetStateAction<string>>;
-  setIsOrgAdmin: React.Dispatch<React.SetStateAction<boolean>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
 }
 
@@ -79,8 +80,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
-  setCurrentOrg,
-  setIsOrgAdmin,
+  setOrganizations,
   premiumUser,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
@@ -173,10 +173,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !keys && !userSpendData) {
-      const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      if (cachedUserModels) {
-        setUserModels(JSON.parse(cachedUserModels));
-      } else {
+      // const cachedUserModels = sessionStorage.getItem("userModels" + userID);
+      // if (cachedUserModels) {
+      //   setUserModels(JSON.parse(cachedUserModels));
+      // } else {
         const fetchTeams = async () => {
           let givenTeams;
           if (userRole != "Admin" && userRole != "Admin Viewer") {
@@ -202,17 +202,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               null,
               null
             );
-            console.log(
-              `received teams in user dashboard: ${Object.keys(
-                response
-              )}; team values: ${Object.entries(response.teams)}`
-            );
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
 
+            console.log(`response["user_info"]["organization_memberships"]: ${JSON.stringify(response["user_info"]["organization_memberships"])}`)
+            
+
             // set keys for admin and users
-            if (!response?.teams[0].keys) {
+            if (!response?.teams?.[0]?.keys) {
               setKeys(response["keys"]); 
             } else {
               setKeys(
@@ -233,6 +231,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               setSelectedTeam(defaultTeam);
               
             }
+
+            
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -265,10 +265,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             // Optionally, update your UI to reflect the error state here as well
           }
         };
+        const fetchOrganizations = async () => {
+          const organizations = await organizationListCall(accessToken);
+          setOrganizations(organizations);
+        }
         fetchData();
         fetchTeams();
+        fetchOrganizations();
       }
-    }
+    // }
   }, [userID, token, accessToken, keys, userRole]);
 
   useEffect(() => {
