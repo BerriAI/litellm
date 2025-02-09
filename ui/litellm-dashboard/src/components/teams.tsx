@@ -140,7 +140,6 @@ const Team: React.FC<TeamProps> = ({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [teamToDelete, setTeamToDelete] = useState<string | null>(null);
-  const [searchTerm,setSearchTerm] = useState<string>()
   
 
 
@@ -363,24 +362,6 @@ const Team: React.FC<TeamProps> = ({
       />
     ) : (
       <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-     <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Teams</h1>
-       <div className="flex space-x-2">
-         <input
-          type="text"
-          placeholder="Search by team name"
-          className=" py-2 px-3 custom-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-          <Button
-              className="mx-auto"
-              onClick={() => setIsTeamModalVisible(true)}
-            >
-            + Create New Team
-          </Button>
-      </div>
-    </div>
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
           <Tab>Your Teams</Tab>
@@ -404,7 +385,7 @@ const Team: React.FC<TeamProps> = ({
       </Text>
       <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
         <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[70vh]">
+          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
             <Table>
               <TableHead>
                 <TableRow>
@@ -422,8 +403,7 @@ const Team: React.FC<TeamProps> = ({
               <TableBody>
                 {teams && teams.length > 0
                   ? teams
-                      ?.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                      ?.filter((team) => team["team_alias"].toLowerCase().includes(searchTerm?.toLowerCase() || ''))
+                      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                       .map((team: any) => (
                       <TableRow key={team.team_id}>
                         <TableCell
@@ -435,6 +415,7 @@ const Team: React.FC<TeamProps> = ({
                         >
                           {team["team_alias"]}
                         </TableCell>
+                        <TableRow>
                         <TableCell>
                           <div className="overflow-hidden">
                             <Tooltip title={team.team_id}>
@@ -453,6 +434,7 @@ const Team: React.FC<TeamProps> = ({
                             </Tooltip>
                           </div>
                         </TableCell>
+                      </TableRow>
 
                         <TableCell
                           style={{
@@ -584,14 +566,6 @@ const Team: React.FC<TeamProps> = ({
                       </TableRow>
                     ))
                   : null}
-
-            {teams && teams?.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={12} className="text-center">
-                <Text>No available teams</Text>
-                </TableCell>
-              </TableRow>
-            )}
               </TableBody>
             </Table>
             {isDeleteModalOpen && (
@@ -646,6 +620,12 @@ const Team: React.FC<TeamProps> = ({
         </Col>
         {userRole == "Admin"? (
           <Col numColSpan={1}>
+            <Button
+              className="mx-auto"
+              onClick={() => setIsTeamModalVisible(true)}
+            >
+            + Create New Team
+          </Button>
           <Modal
             title="Create Team"
             visible={isTeamModalVisible}
@@ -788,7 +768,6 @@ const Team: React.FC<TeamProps> = ({
         <AvailableTeamsPanel
           accessToken={accessToken}
           userID={userID}
-          searchTerm={searchTerm || null}
         />
       </TabPanel>
       </TabPanels>
