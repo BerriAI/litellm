@@ -183,6 +183,7 @@ export default function CreateKeyPage() {
         }
       }
     }
+    setTeams(null);
   }
 
   return (

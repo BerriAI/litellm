@@ -1482,6 +1482,10 @@ async def list_team(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="Only return teams which this 'user_id' belongs to"
     ),
+    organization_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Only return teams which belong to this 'organization_id'",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1565,6 +1569,14 @@ async def list_team(
             continue
     # Sort the responses by team_alias
     returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+
+    if organization_id:
+        returned_responses = [
+            team
+            for team in returned_responses
+            if team.organization_id == organization_id
+        ]
+
     return returned_responses
 
 
