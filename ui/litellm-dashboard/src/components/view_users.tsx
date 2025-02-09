@@ -79,6 +79,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   teams,
   setKeys,
 }) => {
+  const [searchTerm,setSearchTerm] = useState<string>();
   const [userListResponse, setUserListResponse] = useState<UserListResponse | null>(null);
   const [userData, setUserData] = useState<null | any[]>(null);
   const [endUsers, setEndUsers] = useState<null | any[]>(null);
@@ -233,45 +234,54 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   
 
     return (
-      <div className="flex justify-between items-center">
-        <div>
-          Showing Page {currentPage } of {totalPages}
-        </div>
-        <div className="flex">
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-l focus:outline-none"
+      <div className="flex justify-between items-center mt-2">
+        <p className="text-sm text-gray-600">
+          Showing Page {currentPage} of {totalPages}
+        </p>
+        <div className="flex space-x-2">
+          <Button
             disabled={currentPage === 1}
             onClick={() => handlePageChange(currentPage - 1)}
           >
             &larr; Prev
-          </button>
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-r focus:outline-none"
+          </Button>
+          <Button
             disabled={currentPage === totalPages}
             onClick={() => handlePageChange(currentPage + 1)}
           >
             Next &rarr;
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
-        <CreateUser
+    <div className="w-full mx-4 p-8">
+      <div className="flex items-center justify-between mb-4 mt-2">
+        <h1 className="text-xl font-semibold">Internal Users</h1>
+       <div className="flex space-x-2">
+         <input
+          type="text"
+          placeholder="Search by user email"
+          className=" py-2 px-3 custom-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+         <CreateUser
           userID={userID}
           accessToken={accessToken}
           teams={teams}
           possibleUIRoles={possibleUIRoles}
-        />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
-          <div className="mb-4 mt-1"></div>
+        /> 
+      </div>
+    </div>
+    <Grid className="gap-2 w-full ">
+        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[70vh] min-h-[70vh]">
           <TabGroup>
             <TabPanels>
               <TabPanel>
-                <Table className="mt-5">
+                <Table >
                   <TableHead>
                     <TableRow>
                       <TableHeaderCell>User ID</TableHeaderCell>
@@ -284,7 +294,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {userData.map((user: any) => (
+                    {userData
+                    ?.filter((user) => user?.user_email?.toLowerCase().includes(searchTerm?.toLowerCase() || ''))
+                    ?.map((user: any) => (
                       <TableRow key={user.user_id}>
                         <TableCell>{user.user_id || "-"}</TableCell>
                         <TableCell>{user.user_email || "-"}</TableCell>
