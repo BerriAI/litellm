@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization } from "./networking";
+import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION } from "./networking";
 import TeamMemberModal from "@/components/team/edit_membership";
 import {
   InformationCircleIcon,
@@ -405,6 +405,10 @@ const Team: React.FC<TeamProps> = ({
               <TableBody>
                 {teams && teams.length > 0
                   ? teams
+                      .filter((team) => {
+                        const targetOrgId = currentOrg ? currentOrg.organization_id : null;
+                        return team.organization_id === targetOrgId;
+                      })                  
                       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                       .map((team: any) => (
                       <TableRow key={team.team_id}>
