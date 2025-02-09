@@ -1101,24 +1101,6 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
 
 
-class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
-
-    organization_id: Optional[str] = None
-    organization_alias: Optional[str] = None
-    budget_id: str
-    metadata: Optional[dict] = None
-    models: List[str]
-    created_by: str
-    updated_by: str
-
-
-class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
-    created_at: datetime
-    updated_at: datetime
-
-
 class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
 
@@ -1491,6 +1473,25 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    members: List[LiteLLM_OrganizationMembershipTable]
+    created_by: str
+    updated_by: str
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str  # type: ignore
+    created_at: datetime
+    updated_at: datetime
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):

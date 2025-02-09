@@ -169,6 +169,17 @@ export default function CreateKeyPage() {
     }
   }, [token]);
 
+  const handleOrgChange = (org: Organization) => {
+    setCurrentOrg(org);
+    if (org.members) {
+      for (const member of org.members) {
+        if (member.user_id == userID) {
+          setUserRole(member.user_role);
+        }
+      }
+    }
+  }
+
   return (
     <Suspense fallback={<div>Loading...</div>}>
       <QueryClientProvider client={queryClient}>

@@ -240,8 +240,10 @@ async def list_organization(
                 "organization_id": {
                     "in": [membership.organization_id for membership in org_memberships]
                 }
-            }
+            },
+            include={"members": True},
         )
+
         response = org_objects
 
     return response

@@ -12,7 +12,7 @@ interface NavbarProps {
   premiumUser: boolean;
   setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
-  currentOrg?: Organization;
+  currentOrg: Organization | null;
   onOrgChange?: (org: Organization) => void;
   onNewOrg?: () => void;
   organizations?: Organization[];
