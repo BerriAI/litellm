@@ -3947,6 +3947,7 @@ async def atext_completion(
                 ),
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                stream_options=kwargs.get('stream_options'),
             )
         else:
             ## OpenAI / Azure Text Completion Returns here
