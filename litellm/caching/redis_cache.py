@@ -28,10 +28,8 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis
     from redis.asyncio.client import Pipeline
-    from redis.asyncio.cluster import ClusterPipeline
 
     pipeline = Pipeline
-    cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     Span = _Span
 else:
@@ -348,7 +346,7 @@ class RedisCache(BaseCache):
 
     async def _pipeline_helper(
         self,
-        pipe: Union[pipeline, cluster_pipeline],
+        pipe: pipeline,
         cache_list: List[Tuple[Any, Any]],
         ttl: Optional[float],
     ) -> List:
