@@ -197,12 +197,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-
-            console.log(`response["user_info"]["organization_memberships"]: ${JSON.stringify(response["user_info"]["organization_memberships"])}`)
             
 
             // set keys for admin and users
-            if (!response?.teams?.[0]?.keys) {
+            if (!response?.teams[0].keys) {
               setKeys(response["keys"]); 
             } else {
               setKeys(
