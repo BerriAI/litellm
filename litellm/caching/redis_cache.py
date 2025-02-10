@@ -28,8 +28,10 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
+    from redis.asyncio.cluster import ClusterPipeline
 
     pipeline = Pipeline
+    cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
     Span = _Span
@@ -350,7 +352,7 @@ class RedisCache(BaseCache):
 
     async def _pipeline_helper(
         self,
-        pipe: pipeline,
+        pipe: Union[pipeline, cluster_pipeline],
         cache_list: List[Tuple[Any, Any]],
         ttl: Optional[float],
     ) -> List:
@@ -744,7 +746,8 @@ class RedisCache(BaseCache):
         """
         Use Redis for bulk read operations
         """
-        _redis_client = self.init_async_client()
+        # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `mget`
+        _redis_client: Any = self.init_async_client()
         key_value_dict = {}
         start_time = time.time()
         try:
@@ -836,7 +839,8 @@ class RedisCache(BaseCache):
             raise e
 
     async def ping(self) -> bool:
-        _redis_client = self.init_async_client()
+        # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `ping`
+        _redis_client: Any = self.init_async_client()
         start_time = time.time()
         async with _redis_client as redis_client:
             print_verbose("Pinging Async Redis Cache")
@@ -872,7 +876,8 @@ class RedisCache(BaseCache):
                 raise e
 
     async def delete_cache_keys(self, keys):
-        _redis_client = self.init_async_client()
+        # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
+        _redis_client: Any = self.init_async_client()
         # keys is a list, unpack it so it gets passed as individual elements to delete
         async with _redis_client as redis_client:
             await redis_client.delete(*keys)
@@ -895,7 +900,8 @@ class RedisCache(BaseCache):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
 
     async def async_delete_cache(self, key: str):
-        _redis_client = self.init_async_client()
+        # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
+        _redis_client: Any = self.init_async_client()
         # keys is str
         async with _redis_client as redis_client:
             await redis_client.delete(key)
@@ -1005,7 +1011,8 @@ class RedisCache(BaseCache):
         Redis ref: https://redis.io/docs/latest/commands/ttl/
         """
         try:
-            _redis_client = self.init_async_client()
+            # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `ttl`
+            _redis_client: Any = self.init_async_client()
             async with _redis_client as redis_client:
                 ttl = await redis_client.ttl(key)
                 if ttl <= -1:  # -1 means the key does not exist, -2 key does not exist
