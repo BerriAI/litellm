@@ -898,6 +898,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
+    budget_reset_at: Optional[datetime] = Field(
+        default=None,
+        description="Datetime when the budget is reset",
+    )
 
 
 class BudgetRequest(LiteLLMPydanticObjectBase):

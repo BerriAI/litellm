@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -1410,6 +1410,8 @@ class PrismaClient:
                 "key",
                 "config",
                 "spend",
+                "enduser",
+                "budget",
                 "team",
                 "user_notification",
                 "combined_view",
@@ -1424,6 +1426,7 @@ class PrismaClient:
         ] = None,  # pagination, number of rows to getch when find_all==True
         parent_otel_span: Optional[Span] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
+        budget_id_list: Optional[List[str]] = None,
     ):
         args_passed_in = locals()
         start_time = time.time()
@@ -1603,6 +1606,21 @@ class PrismaClient:
                         order={"startTime": "desc"},
                     )
                     return response
+            elif table_name == "budget" and reset_at is not None:
+                if query_type == "find_all":
+                    response = await self.db.litellm_budgettable.find_many(
+                        where={  # type:ignore
+                            "budget_reset_at": {"lt": reset_at}
+                        }
+                    )
+                    return response
+
+            elif table_name == "enduser" and budget_id_list is not None:
+                if query_type == "find_all":
+                    response = await self.db.litellm_endusertable.find_many(
+                        where={"budget_id": {"in": budget_id_list}}
+                    )
+                    return response
             elif table_name == "team":
                 if query_type == "find_unique":
                     response = await self.db.litellm_teamtable.find_unique(
@@ -1655,10 +1673,10 @@ class PrismaClient:
                         )
 
                     sql_query = f"""
-                        SELECT 
+                        SELECT
                             v.*,
-                            t.spend AS team_spend, 
-                            t.max_budget AS team_max_budget, 
+                            t.spend AS team_spend,
+                            t.max_budget AS team_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.models AS team_models,
@@ -1916,7 +1934,9 @@ class PrismaClient:
         user_id: Optional[str] = None,
         team_id: Optional[str] = None,
         query_type: Literal["update", "update_many"] = "update",
-        table_name: Optional[Literal["user", "key", "config", "spend", "team"]] = None,
+        table_name: Optional[
+            Literal["user", "key", "config", "spend", "team", "enduser", "budget"]
+        ] = None,
         update_key_values: Optional[dict] = None,
         update_key_values_custom_query: Optional[dict] = None,
     ):
@@ -2082,6 +2102,68 @@ class PrismaClient:
                 await batcher.commit()
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB User Table Batch update succeeded" + "\033[0m"
+                )
+            elif (
+                table_name is not None
+                and table_name == "enduser"
+                and query_type == "update_many"
+                and data_list is not None
+                and isinstance(data_list, list)
+            ):
+                """
+                Batch write update queries
+                """
+                batcher = self.db.batch_()
+                for enduser in data_list:
+                    try:
+                        data_json = self.jsonify_object(
+                            data=enduser.model_dump(exclude_none=True)
+                        )
+                    except Exception:
+                        data_json = self.jsonify_object(data=enduser.dict())
+                    batcher.litellm_endusertable.upsert(
+                        where={"user_id": enduser.user_id},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update end-user-specified values, if it already exists
+                        },
+                    )
+                await batcher.commit()
+                verbose_proxy_logger.info(
+                    "\033[91m" + "DB End User Table Batch update succeeded" + "\033[0m"
+                )
+            elif (
+                table_name is not None
+                and table_name == "budget"
+                and query_type == "update_many"
+                and data_list is not None
+                and isinstance(data_list, list)
+            ):
+                """
+                Batch write update queries
+                """
+                batcher = self.db.batch_()
+                for budget in data_list:
+                    try:
+                        data_json = self.jsonify_object(
+                            data=budget.model_dump(exclude_none=True)
+                        )
+                    except Exception:
+                        data_json = self.jsonify_object(data=budget.dict())
+                    batcher.litellm_budgettable.upsert(
+                        where={"budget_id": budget.budget_id},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update end-user-specified values, if it already exists
+                        },
+                    )
+                await batcher.commit()
+                verbose_proxy_logger.info(
+                    "\033[91m" + "DB Budget Table Batch update succeeded" + "\033[0m"
                 )
             elif (
                 table_name is not None
@@ -2432,6 +2514,106 @@ def _hash_token_if_needed(token: str) -> str:
         return hash_token(token=token)
     else:
         return token
+
+
+async def reset_budget(prisma_client: PrismaClient):
+    """
+    Gets all the non-expired keys for a db, which need spend to be reset
+
+    Resets their spend
+
+    Updates db
+    """
+    if prisma_client is not None:
+        ### RESET KEY BUDGET ###
+        now = datetime.utcnow()
+        keys_to_reset = await prisma_client.get_data(
+            table_name="key", query_type="find_all", expires=now, reset_at=now
+        )
+
+        if keys_to_reset is not None and len(keys_to_reset) > 0:
+            for key in keys_to_reset:
+                key.spend = 0.0
+                duration_s = duration_in_seconds(duration=key.budget_duration)
+                key.budget_reset_at = now + timedelta(seconds=duration_s)
+
+            await prisma_client.update_data(
+                query_type="update_many", data_list=keys_to_reset, table_name="key"
+            )
+
+        ### RESET USER BUDGET ###
+        now = datetime.utcnow()
+        users_to_reset = await prisma_client.get_data(
+            table_name="user", query_type="find_all", reset_at=now
+        )
+
+        if users_to_reset is not None and len(users_to_reset) > 0:
+            for user in users_to_reset:
+                user.spend = 0.0
+                duration_s = duration_in_seconds(duration=user.budget_duration)
+                user.budget_reset_at = now + timedelta(seconds=duration_s)
+
+            await prisma_client.update_data(
+                query_type="update_many", data_list=users_to_reset, table_name="user"
+            )
+
+        ## Reset End-User (Customer) Spend and corresponding Budget duration
+        now = datetime.now(timezone.utc)
+
+        budgets_to_reset = await prisma_client.get_data(
+            table_name="budget", query_type="find_all", reset_at=now
+        )
+        budget_id_list_to_reset_enduser = []
+        if budgets_to_reset is not None and len(budgets_to_reset) > 0:
+            for budget in budgets_to_reset:
+                budget_id_list_to_reset_enduser.append(budget.budget_id)
+                duration_s = duration_in_seconds(duration=budget.budget_duration)
+                budget.budget_reset_at = now + timedelta(seconds=duration_s)
+            await prisma_client.update_data(
+                query_type="update_many",
+                data_list=budgets_to_reset,
+                table_name="budget",
+            )
+
+        endusers_to_reset = await prisma_client.get_data(
+            table_name="enduser",
+            query_type="find_all",
+            budget_id_list=budget_id_list_to_reset_enduser,
+        )
+
+        if endusers_to_reset is not None and len(endusers_to_reset) > 0:
+            for enduser in endusers_to_reset:
+                enduser.spend = 0.0
+            await prisma_client.update_data(
+                query_type="update_many",
+                data_list=endusers_to_reset,
+                table_name="enduser",
+            )
+
+        ## Reset Team Budget
+        now = datetime.utcnow()
+        teams_to_reset = await prisma_client.get_data(
+            table_name="team",
+            query_type="find_all",
+            reset_at=now,
+        )
+
+        if teams_to_reset is not None and len(teams_to_reset) > 0:
+            team_reset_requests = []
+            for team in teams_to_reset:
+                duration_s = duration_in_seconds(duration=team.budget_duration)
+                reset_team_budget_request = ResetTeamBudgetRequest(
+                    team_id=team.team_id,
+                    spend=0.0,
+                    budget_reset_at=now + timedelta(seconds=duration_s),
+                    updated_at=now,
+                )
+                team_reset_requests.append(reset_team_budget_request)
+            await prisma_client.update_data(
+                query_type="update_many",
+                data_list=team_reset_requests,
+                table_name="team",
+            )
 
 
 class ProxyUpdateSpend:
