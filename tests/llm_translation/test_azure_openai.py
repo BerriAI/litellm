@@ -298,6 +298,14 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     from pydantic import BaseModel
     import litellm
 
+    from openai import AzureOpenAI
+
+    client = AzureOpenAI(
+        api_key="fake-key",
+        base_url="https://fake-azure.openai.azure.com",
+        api_version=api_version,
+    )
+
     class InvestigationOutput(BaseModel):
         alert_explanation: Optional[str] = None
         investigation: Optional[str] = None
@@ -329,29 +337,34 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
         }
     ]
 
-    response = litellm.completion(
-        model="azure/gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a tool-calling AI assist provided with common devops and IT tools that you can use to troubleshoot problems or answer questions.\nWhenever possible you MUST first use tools to investigate then answer the question.",
-            },
-            {"role": "user", "content": "What is the current date and time in NYC?"},
-        ],
-        drop_params=True,
-        temperature=0.00000001,
-        tools=tools,
-        tool_choice="auto",
-        response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
-        api_version=api_version,
-    )
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+        response = litellm.completion(
+            model="azure/gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a tool-calling AI assist provided with common devops and IT tools that you can use to troubleshoot problems or answer questions.\nWhenever possible you MUST first use tools to investigate then answer the question.",
+                },
+                {
+                    "role": "user",
+                    "content": "What is the current date and time in NYC?",
+                },
+            ],
+            drop_params=True,
+            temperature=0.00000001,
+            tools=tools,
+            tool_choice="auto",
+            response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
+            api_version=api_version,
+            client=client,
+        )
 
-    if api_version == "2024-02-15-preview":
-        assert response.choices[0].finish_reason == "tool_calls"
-    else:
-        assert response.choices[0].finish_reason == "stop"
+        mock_post.assert_called_once()
 
-    print(response.to_json())
+        if api_version == "2024-10-21":
+            assert "response_format" in mock_post.call_args.kwargs
+        else:
+            assert "response_format" not in mock_post.call_args.kwargs
 
 
 def test_map_openai_params():
