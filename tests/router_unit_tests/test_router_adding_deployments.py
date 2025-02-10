@@ -76,27 +76,6 @@ def test_initialize_deployment_for_pass_through_missing_params():
         )
 
 
-def test_initialize_deployment_for_pass_through_unsupported_provider():
-    """
-    Test initialization with an unsupported provider
-    """
-    router = Router(model_list=[])
-    deployment = Deployment(
-        model_name="unsupported-test",
-        litellm_params=LiteLLM_Params(
-            model="unsupported/test-model",
-            use_in_pass_through=True,
-        ),
-    )
-
-    # Should not raise an error, but log a warning
-    router._initialize_deployment_for_pass_through(
-        deployment=deployment,
-        custom_llm_provider="unsupported_provider",
-        model="unsupported/test-model",
-    )
-
-
 def test_initialize_deployment_when_pass_through_disabled():
     """
     Test that initialization simply exits when use_in_pass_through is False

@@ -14,6 +14,7 @@ import litellm.types
 load_dotenv()
 import io
 import os
+import json
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -768,6 +769,7 @@ def test_bedrock_system_prompt(system, model):
 def test_bedrock_claude_3_tool_calling():
     try:
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         tools = [
             {
                 "type": "function",
@@ -885,7 +887,10 @@ def test_completion_claude_3_base64():
 
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
+
     import os
+
+    litellm._turn_on_debug()
 
     # aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     # aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -901,6 +906,7 @@ def test_completion_bedrock_mistral_completion_auth():
             temperature=0.1,
         )  # type: ignore
         # Add any assertions here to check the response
+        print(f"response: {response}")
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0
 
@@ -1260,7 +1266,9 @@ def test_bedrock_cross_region_inference(model):
     ],
 )
 def test_bedrock_get_base_model(model, expected_base_model):
-    assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    assert BedrockModelInfo.get_base_model(model) == expected_base_model
 
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1977,9 +1985,49 @@ def test_bedrock_mapped_converse_models():
 
 
 def test_bedrock_base_model_helper():
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
     model = "us.amazon.nova-pro-v1:0"
-    litellm.AmazonConverseConfig()._get_base_model(model)
-    assert model == "us.amazon.nova-pro-v1:0"
+    base_model = BedrockModelInfo.get_base_model(model)
+    assert base_model == "amazon.nova-pro-v1:0"
+
+    assert (
+        BedrockModelInfo.get_base_model(
+            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+
+@pytest.mark.parametrize(
+    "model,expected_route",
+    [
+        # Test explicit route prefixes
+        ("invoke/anthropic.claude-3-sonnet-20240229-v1:0", "invoke"),
+        ("converse/anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("converse_like/anthropic.claude-3-sonnet-20240229-v1:0", "converse_like"),
+        # Test models in BEDROCK_CONVERSE_MODELS list
+        ("anthropic.claude-3-5-haiku-20241022-v1:0", "converse"),
+        ("anthropic.claude-v2", "converse"),
+        ("meta.llama3-70b-instruct-v1:0", "converse"),
+        ("mistral.mistral-large-2407-v1:0", "converse"),
+        # Test models with region prefixes
+        ("us.anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("us.meta.llama3-70b-instruct-v1:0", "converse"),
+        # Test default case (should return "invoke")
+        ("amazon.titan-text-express-v1", "invoke"),
+        ("cohere.command-text-v14", "invoke"),
+        ("cohere.command-r-v1:0", "invoke"),
+    ],
+)
+def test_bedrock_route_detection(model, expected_route):
+    """Test all scenarios for BedrockModelInfo.get_bedrock_route"""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    route = BedrockModelInfo.get_bedrock_route(model)
+    assert (
+        route == expected_route
+    ), f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
 
 
 @pytest.mark.parametrize(
@@ -2580,3 +2628,76 @@ def test_bedrock_custom_deepseek():
         except Exception as e:
             print(f"Error: {str(e)}")
             raise e
+
+
+@pytest.mark.parametrize(
+    "model, expected_output",
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 3}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 3}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+    ],
+)
+def test_handle_top_k_value_helper(model, expected_output):
+    assert (
+        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3})
+        == expected_output
+    )
+    assert (
+        litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3})
+        == expected_output
+    )
+
+
+@pytest.mark.parametrize(
+    "model, expected_params",
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 2}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 2}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+        ("bedrock/mistral.mistral-7b-instruct-v0:2", {}),
+    ],
+)
+def test_bedrock_top_k_param(model, expected_params):
+    import json
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+
+        if "mistral" in model:
+            mock_response.text = json.dumps(
+                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
+            )
+        else:
+            mock_response.text = json.dumps(
+                {
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "Here's a joke..."}],
+                        }
+                    },
+                    "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
+                    "stopReason": "stop",
+                }
+            )
+
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            top_k=2,
+            client=client,
+        )
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        if "mistral" in model:
+            assert data["top_k"] == 2
+        else:
+            assert data["additionalModelRequestFields"] == expected_params

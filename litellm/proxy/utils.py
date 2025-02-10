@@ -1415,7 +1415,8 @@ class PrismaClient:
                     if key_val is None:
                         key_val = {"user_id": user_id}
                     response = await self.db.litellm_usertable.find_unique(  # type: ignore
-                        where=key_val  # type: ignore
+                        where=key_val,  # type: ignore
+                        include={"organization_memberships": True},
                     )
                 elif query_type == "find_all" and key_val is not None:
                     response = await self.db.litellm_usertable.find_many(
@@ -1544,6 +1545,7 @@ class PrismaClient:
                             t.team_alias AS team_alias,
                             t.metadata AS team_metadata,
                             t.members_with_roles AS team_members_with_roles,
+                            t.organization_id as org_id,
                             tm.spend AS team_member_spend,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns

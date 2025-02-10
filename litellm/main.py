@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_str
@@ -1222,6 +1223,8 @@ def completion(  # type: ignore # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+            if max_retries is not None:
+                optional_params["max_retries"] = max_retries
 
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
 
@@ -1370,6 +1373,36 @@ def completion(  # type: ignore # noqa: PLR0915
                         "api_base": api_base,
                     },
                 )
+        elif custom_llm_provider == "deepseek":
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
         elif custom_llm_provider == "azure_ai":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
@@ -1611,7 +1644,6 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "cerebras"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
-            or custom_llm_provider == "deepseek"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
@@ -2597,11 +2629,8 @@ def completion(  # type: ignore # noqa: PLR0915
                         aws_bedrock_client.meta.region_name
                     )
 
-            base_model = litellm.AmazonConverseConfig()._get_base_model(model)
-
-            if base_model in litellm.bedrock_converse_models or model.startswith(
-                "converse/"
-            ):
+            bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+            if bedrock_route == "converse":
                 model = model.replace("converse/", "")
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
@@ -2620,7 +2649,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                     api_base=api_base,
                 )
-            elif "converse_like" in model:
+            elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
                 response = base_llm_http_handler.completion(
                     model=model,
@@ -2640,35 +2669,23 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,
                 )
             else:
-                model = model.replace("invoke/", "")
-                response = bedrock_chat_completion.completion(
+                response = base_llm_http_handler.completion(
                     model=model,
+                    stream=stream,
                     messages=messages,
-                    custom_prompt_dict=custom_prompt_dict,
+                    acompletion=acompletion,
+                    api_base=api_base,
                     model_response=model_response,
-                    print_verbose=print_verbose,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=encoding,
-                    logging_obj=logging,
-                    extra_headers=extra_headers,
+                    custom_llm_provider="bedrock",
                     timeout=timeout,
-                    acompletion=acompletion,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging,
                     client=client,
-                    api_base=api_base,
                 )
-
-            if optional_params.get("stream", False):
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=None,
-                    original_response=response,
-                )
-
-            ## RESPONSE OBJECT
-            response = response
         elif custom_llm_provider == "watsonx":
             response = watsonx_chat_completion.completion(
                 model=model,

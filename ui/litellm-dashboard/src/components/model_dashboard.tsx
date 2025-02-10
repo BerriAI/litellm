@@ -418,17 +418,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
     for (const [key, value] of Object.entries(formValues)) {
       if (key !== "model_id") {
-        newLiteLLMParams[key] = value;
+        // Empty string means user wants to null the value
+        newLiteLLMParams[key] = value === "" ? null : value;
       } else {
-        model_info_model_id = value;
+        model_info_model_id = value === "" ? null : value;
       }
     }
-
-    let payload = {
-      litellm_params: newLiteLLMParams,
-      model_info: {
+    
+    let payload: {
+      litellm_params: Record<string, any> | undefined;
+      model_info: { id: any } | undefined;
+    } = {
+      litellm_params: Object.keys(newLiteLLMParams).length > 0 ? newLiteLLMParams : undefined,
+      model_info: model_info_model_id !== undefined ? {
         id: model_info_model_id,
-      },
+      } : undefined,
     };
 
     console.log("handleEditSubmit payload:", payload);
@@ -1031,7 +1035,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     form
       .validateFields()
       .then((values) => {
-        handleAddModelSubmit(values, accessToken, form);
+        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
         // form.resetFields();
       })
       .catch((error) => {
@@ -1450,6 +1454,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 <DeleteModelButton
                                   modelID={model.model_info.id}
                                   accessToken={accessToken}
+                                  callback={handleRefreshClick}
                                 />
                               </Col>
                             </Grid>

@@ -81,6 +81,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_response_schema: Optional[bool]
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
+    supports_tool_choice: Optional[bool]
     supports_assistant_prefill: Optional[bool]
     supports_prompt_caching: Optional[bool]
     supports_audio_input: Optional[bool]
@@ -550,6 +551,7 @@ class Delta(OpenAIObject):
     ):
         super(Delta, self).__init__(**params)
         provider_specific_fields: Dict[str, Any] = {}
+
         if "reasoning_content" in params:
             provider_specific_fields["reasoning_content"] = params["reasoning_content"]
             setattr(self, "reasoning_content", params["reasoning_content"])
@@ -1869,6 +1871,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    ASSEMBLYAI = "assemblyai"
 
 
 # Create a set of all provider values for quick lookup

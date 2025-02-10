@@ -1,6 +1,8 @@
 version: 2.1
 orbs:
   codecov: codecov/codecov@4.0.1
+  node: circleci/node@5.1.0  # Add this line to declare the node orb
+
 
 jobs:
   local_testing:
@@ -415,6 +417,56 @@ jobs:
           paths:
             - litellm_router_coverage.xml
             - litellm_router_coverage
+  litellm_proxy_security_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Show git commit hash
+          command: |
+            echo "Git commit hash: $CIRCLE_SHA1"
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-cov==5.0.0"
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_proxy_security_tests_coverage.xml
+            mv .coverage litellm_proxy_security_tests_coverage
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_proxy_security_tests_coverage.xml
+            - litellm_proxy_security_tests_coverage
   litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
     docker:
       - image: cimg/python:3.11
@@ -1464,6 +1516,88 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+
+  proxy_store_model_in_db_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "assemblyai==0.37.0"
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container
+          # intentionally give bad redis credentials here
+          # the OTEL test - should get this as a trace
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e STORE_MODEL_IN_DB="True" \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/store_model_in_db_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout:
+            120m
+            # Clean up first container
+      
   proxy_build_from_pip_tests:
     # Change from docker to machine executor
     machine:
@@ -1707,7 +1841,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage
+            coverage combine llm_translation_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -1793,6 +1927,25 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Build UI
+          command: |
+            # Set up nvm
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            source "$NVM_DIR/bash_completion"
+            
+            # Install and use Node version
+            nvm install v18.17.0
+            nvm use v18.17.0
+            
+            cd ui/litellm-dashboard
+            
+            # Install dependencies first
+            npm install
+            
+            # Now source the build script
+            source ./build_ui.sh
+      - run:
           name: Install Docker CLI (In case it's not already installed)
           command: |
             sudo apt-get update
@@ -1836,6 +1989,7 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
+      
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -1964,6 +2118,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_proxy_security_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_assistants_api_testing:
           filters:
             branches:
@@ -2007,6 +2167,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - proxy_logging_guardrails_model_info_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - proxy_store_model_in_db_tests:
           filters:
             branches:
               only:
@@ -2071,6 +2237,7 @@ workflows:
             - litellm_router_testing
             - caching_unit_tests
             - litellm_proxy_unit_testing
+            - litellm_proxy_security_tests
             - langfuse_logging_unit_tests
             - local_testing
             - litellm_assistants_api_testing
@@ -2132,9 +2299,11 @@ workflows:
             - db_migration_disable_update_check
             - e2e_ui_testing
             - litellm_proxy_unit_testing
+            - litellm_proxy_security_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
+            - proxy_store_model_in_db_tests
             - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests
             - check_code_and_doc_quality

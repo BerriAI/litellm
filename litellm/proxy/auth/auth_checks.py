@@ -200,6 +200,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     - user_route: str - the route the user is trying to call
     - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
     """
+
     for allowed_route in allowed_routes:
         if (
             allowed_route in LiteLLMRoutes.__members__
@@ -402,6 +403,29 @@ def _update_last_db_access_time(
     last_db_access_time[key] = (value, time.time())
 
 
+def _get_role_based_permissions(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+    key: Literal["models", "routes"],
+) -> Optional[List[str]]:
+    """
+    Get the role based permissions from the general settings.
+    """
+    role_based_permissions = cast(
+        Optional[List[RoleBasedPermissions]],
+        general_settings.get("role_permissions", []),
+    )
+    if role_based_permissions is None:
+        return None
+
+    for role_based_permission in role_based_permissions:
+
+        if role_based_permission.role == rbac_role:
+            return getattr(role_based_permission, key)
+
+    return None
+
+
 def get_role_based_models(
     rbac_role: RBAC_ROLES,
     general_settings: dict,
@@ -412,18 +436,26 @@ def get_role_based_models(
     Used by JWT Auth.
     """
 
-    role_based_permissions = cast(
-        Optional[List[RoleBasedPermissions]],
-        general_settings.get("role_permissions", []),
+    return _get_role_based_permissions(
+        rbac_role=rbac_role,
+        general_settings=general_settings,
+        key="models",
     )
-    if role_based_permissions is None:
-        return None
 
-    for role_based_permission in role_based_permissions:
-        if role_based_permission["role"] == rbac_role:
-            return role_based_permission["models"]
 
-    return None
+def get_role_based_routes(
+    rbac_role: RBAC_ROLES,
+    general_settings: dict,
+) -> Optional[List[str]]:
+    """
+    Get the routes allowed for a user role.
+    """
+
+    return _get_role_based_permissions(
+        rbac_role=rbac_role,
+        general_settings=general_settings,
+        key="routes",
+    )
 
 
 async def _get_fuzzy_user_object(
@@ -623,10 +655,19 @@ async def _delete_cache_key_object(
 
 
 @log_db_metrics
-async def _get_team_db_check(team_id: str, prisma_client: PrismaClient):
-    return await prisma_client.db.litellm_teamtable.find_unique(
+async def _get_team_db_check(
+    team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
+):
+    response = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
     )
+
+    if response is None and team_id_upsert:
+        response = await prisma_client.db.litellm_teamtable.create(
+            data={"team_id": team_id}
+        )
+
+    return response
 
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
@@ -643,6 +684,7 @@ async def _get_team_object_from_user_api_key_cache(
     db_cache_expiry: int,
     proxy_logging_obj: Optional[ProxyLogging],
     key: str,
+    team_id_upsert: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key = key
     should_check_db = _should_check_db(
@@ -652,7 +694,7 @@ async def _get_team_object_from_user_api_key_cache(
     )
     if should_check_db:
         response = await _get_team_db_check(
-            team_id=team_id, prisma_client=prisma_client
+            team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert
         )
     else:
         response = None
@@ -720,6 +762,7 @@ async def get_team_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
     check_cache_only: Optional[bool] = None,
     check_db_only: Optional[bool] = None,
+    team_id_upsert: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -763,6 +806,7 @@ async def get_team_object(
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
             key=key,
+            team_id_upsert=team_id_upsert,
         )
     except Exception:
         raise Exception(

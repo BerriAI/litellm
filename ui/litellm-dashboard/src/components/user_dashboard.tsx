@@ -6,6 +6,8 @@ import {
   getTotalSpendCall,
   getProxyUISettings,
   teamListCall,
+  Organization,
+  organizationListCall
 } from "./networking";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
@@ -58,6 +60,7 @@ interface UserDashboardProps {
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
 }
 
@@ -77,6 +80,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setUserEmail,
   setTeams,
   setKeys,
+  setOrganizations,
   premiumUser,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
@@ -169,10 +173,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !keys && !userSpendData) {
-      const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      if (cachedUserModels) {
-        setUserModels(JSON.parse(cachedUserModels));
-      } else {
+      // const cachedUserModels = sessionStorage.getItem("userModels" + userID);
+      // if (cachedUserModels) {
+      //   setUserModels(JSON.parse(cachedUserModels));
+      // } else {
         const fetchTeams = async () => {
           let givenTeams;
           if (userRole != "Admin" && userRole != "Admin Viewer") {
@@ -198,15 +202,27 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               null,
               null
             );
-            console.log(
-              `received teams in user dashboard: ${Object.keys(
-                response
-              )}; team values: ${Object.entries(response.teams)}`
-            );
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-            setKeys(response["keys"]); // Assuming this is the correct path to your data
+
+            console.log(`response["user_info"]["organization_memberships"]: ${JSON.stringify(response["user_info"]["organization_memberships"])}`)
+            
+
+            // set keys for admin and users
+            if (!response?.teams?.[0]?.keys) {
+              setKeys(response["keys"]); 
+            } else {
+              setKeys(
+                response["keys"].concat(
+                  response.teams
+                    .filter((team: any) => userRole === "Admin" || team.user_id === userID)
+                    .flatMap((team: any) => team.keys)
+                )
+              );
+              
+            }
+
             const teamsArray = [...response["teams"]];
             if (teamsArray.length > 0) {
               console.log(`response['teams']: ${JSON.stringify(teamsArray)}`);
@@ -215,6 +231,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               setSelectedTeam(defaultTeam);
               
             }
+
+            
             sessionStorage.setItem(
               "userData" + userID,
               JSON.stringify(response["keys"])
@@ -247,10 +265,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             // Optionally, update your UI to reflect the error state here as well
           }
         };
+        const fetchOrganizations = async () => {
+          const organizations = await organizationListCall(accessToken);
+          setOrganizations(organizations);
+        }
         fetchData();
         fetchTeams();
+        fetchOrganizations();
       }
-    }
+    // }
   }, [userID, token, accessToken, keys, userRole]);
 
   useEffect(() => {

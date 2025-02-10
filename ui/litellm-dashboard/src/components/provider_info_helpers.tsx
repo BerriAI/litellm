@@ -16,6 +16,7 @@ export enum Providers {
     Databricks = "Databricks",
     Ollama = "Ollama",
     xAI = "xAI",
+    AssemblyAI = "AssemblyAI",
   }
   
 export const provider_map: Record<string, string> = {
@@ -34,6 +35,7 @@ export const provider_map: Record<string, string> = {
     xAI: "xai",
     Deepseek: "deepseek",
     Ollama: "ollama",
+    AssemblyAI: "assemblyai",
 };
 
 export const providerLogoMap: Record<string, string> = {
@@ -52,6 +54,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Ollama]: "https://artificialanalysis.ai/img/logos/ollama_small.svg",
     [Providers.xAI]: "https://artificialanalysis.ai/img/logos/xai_small.svg",
     [Providers.Deepseek]: "https://artificialanalysis.ai/img/logos/deepseek_small.jpg",
+    [Providers.AssemblyAI]: "https://artificialanalysis.ai/img/logos/assemblyai_small.png",
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {

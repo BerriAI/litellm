@@ -573,6 +573,7 @@ class Router:
             litellm.amoderation, call_type="moderation"
         )
 
+
     def discard(self):
         """
         Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
@@ -585,6 +586,21 @@ class Router:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
+
+
+    def _update_redis_cache(self, cache: RedisCache):
+        """
+        Update the redis cache for the router, if none set.
+
+        Allows proxy user to just do
+        ```yaml
+        litellm_settings:
+            cache: true
+        ```
+        and caching to just work.
+        """
+        if self.cache.redis_cache is None:
+            self.cache.redis_cache = cache
 
 
     def initialize_assistants_endpoint(self):
@@ -3713,8 +3729,9 @@ class Router:
 
         Else, original response is returned.
         """
-        if response.choices[0].finish_reason != "content_filter":
-            return False
+        if response.choices and len(response.choices) > 0:
+            if response.choices[0].finish_reason != "content_filter":
+                return False
 
         content_policy_fallbacks = kwargs.get(
             "content_policy_fallbacks", self.content_policy_fallbacks
@@ -4193,8 +4210,14 @@ class Router:
                     vertex_credentials=deployment.litellm_params.vertex_credentials,
                 )
             else:
-                verbose_router_logger.error(
-                    f"Unsupported provider - {custom_llm_provider} for pass-through endpoints"
+                from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+                    passthrough_endpoint_router,
+                )
+
+                passthrough_endpoint_router.set_pass_through_credentials(
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=deployment.litellm_params.api_base,
+                    api_key=deployment.litellm_params.api_key,
                 )
             pass
         pass

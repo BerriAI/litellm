@@ -196,6 +196,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    router as model_management_router,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
@@ -425,7 +428,6 @@ async def proxy_startup_event(app: FastAPI):
     import json
 
     init_verbose_loggers()
-
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
     master_key = get_secret("LITELLM_MASTER_KEY", None)  # type: ignore
@@ -516,14 +518,6 @@ async def proxy_startup_event(app: FastAPI):
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None and master_key is not None:
-        ProxyStartupEvent._add_master_key_hash_to_db(
-            master_key=master_key,
-            prisma_client=prisma_client,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            general_settings=general_settings,
-        )
-
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
@@ -691,12 +685,18 @@ try:
         @app.middleware("http")
         async def redirect_ui_middleware(request: Request, call_next):
             if request.url.path.startswith("/ui"):
-                new_path = request.url.path.replace("/ui", f"{server_root_path}/ui", 1)
-                return RedirectResponse(new_path)
+                new_url = str(request.url).replace("/ui", f"{server_root_path}/ui", 1)
+                return RedirectResponse(new_url)
             return await call_next(request)
 
 except Exception:
     pass
+# current_dir = os.path.dirname(os.path.abspath(__file__))
+# ui_path = os.path.join(current_dir, "_experimental", "out")
+# # Mount this test directory instead
+# app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -1634,7 +1634,7 @@ class ProxyConfig:
         self,
         cache_params: dict,
     ):
-        global redis_usage_cache
+        global redis_usage_cache, llm_router
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -1648,6 +1648,10 @@ class ProxyConfig:
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+
+            ## INIT ROUTER REDIS CACHE ##
+            if llm_router is not None:
+                llm_router._update_redis_cache(cache=redis_usage_cache)
 
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
@@ -1689,7 +1693,7 @@ class ProxyConfig:
             # default to file
             config = await self._get_config_from_file(config_file_path=config_file_path)
         ## UPDATE CONFIG WITH DB
-        if prisma_client is not None:
+        if prisma_client is not None and store_model_in_db is True:
             config = await self._update_config_from_db(
                 config=config,
                 prisma_client=prisma_client,
@@ -2087,6 +2091,14 @@ class ProxyConfig:
             )
             health_check_interval = general_settings.get("health_check_interval", 300)
             health_check_details = general_settings.get("health_check_details", True)
+
+            ### RBAC ###
+            rbac_role_permissions = general_settings.get("role_permissions", None)
+            if rbac_role_permissions is not None:
+                general_settings["role_permissions"] = [  # validate role permissions
+                    RoleBasedPermissions(**role_permission)
+                    for role_permission in rbac_role_permissions
+                ]
 
             ## check if user has set a premium feature in general_settings
             if (
@@ -2525,6 +2537,16 @@ class ProxyConfig:
         Adds environment variables from DB config to litellm
         """
         environment_variables = config_data.get("environment_variables", {})
+        self._decrypt_and_set_db_env_variables(environment_variables)
+
+    def _decrypt_and_set_db_env_variables(self, environment_variables: dict) -> None:
+        """
+        Decrypts a dictionary of environment variables and then sets them in the environment
+
+        Args:
+            environment_variables: dict - dictionary of environment variables to decrypt and set
+            eg. `{"LANGFUSE_PUBLIC_KEY": "kFiKa1VZukMmD8RB6WXB9F......."}`
+        """
         for k, v in environment_variables.items():
             try:
                 decrypted_value = decrypt_value_helper(value=v)
@@ -2653,19 +2675,43 @@ class ProxyConfig:
     def _update_config_fields(
         self,
         current_config: dict,
-        param_name: str,
+        param_name: Literal[
+            "general_settings",
+            "router_settings",
+            "litellm_settings",
+            "environment_variables",
+        ],
         db_param_value: Any,
     ) -> dict:
+        """
+        Updates the config fields with the new values from the DB
+
+        Args:
+            current_config (dict): Current configuration dictionary to update
+            param_name (Literal): Name of the parameter to update
+            db_param_value (Any): New value from the database
+
+        Returns:
+            dict: Updated configuration dictionary
+        """
+        if param_name == "environment_variables":
+            self._decrypt_and_set_db_env_variables(db_param_value)
+            return current_config
+
+        # If param doesn't exist in config, add it
+        if param_name not in current_config:
+            current_config[param_name] = db_param_value
+            return current_config
+
+        # For dictionary values, update only non-empty values
         if isinstance(current_config[param_name], dict):
-            # if dict exists (e.g. litellm_settings),
-            # go through each key and value,
-            # and update if new value is not None/empty dict
-            for key, value in db_param_value.items():
-                if value:
-                    current_config[param_name][key] = value
+            # Only keep non None values from db_param_value
+            non_empty_values = {k: v for k, v in db_param_value.items() if v}
+
+            # Update the config with non-empty values
+            current_config[param_name].update(non_empty_values)
         else:
             current_config[param_name] = db_param_value
-
         return current_config
 
     async def _update_config_from_db(
@@ -2674,7 +2720,6 @@ class ProxyConfig:
         config: dict,
         store_model_in_db: Optional[bool],
     ):
-
         if store_model_in_db is not True:
             verbose_proxy_logger.info(
                 "'store_model_in_db' is not True, skipping db updates"
@@ -2696,24 +2741,21 @@ class ProxyConfig:
 
         responses = await asyncio.gather(*_tasks)
         for response in responses:
-            if response is not None:
-                param_name = getattr(response, "param_name", None)
-                if param_name == "litellm_settings":
-                    verbose_proxy_logger.info(
-                        f"litellm_settings: {response.param_value}"
-                    )
-                param_value = getattr(response, "param_value", None)
-                if param_name is not None and param_value is not None:
-                    # check if param_name is already in the config
-                    if param_name in config:
-                        config = self._update_config_fields(
-                            current_config=config,
-                            param_name=param_name,
-                            db_param_value=param_value,
-                        )
-                    else:
-                        # if it's not in the config - then add it
-                        config[param_name] = param_value
+            if response is None:
+                continue
+
+            param_name = getattr(response, "param_name", None)
+            param_value = getattr(response, "param_value", None)
+            verbose_proxy_logger.debug(
+                f"param_name={param_name}, param_value={param_value}"
+            )
+
+            if param_name is not None and param_value is not None:
+                config = self._update_config_fields(
+                    current_config=config,
+                    param_name=param_name,
+                    db_param_value=param_value,
+                )
 
         return config
 
@@ -3161,39 +3203,6 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
-
-    @classmethod
-    def _add_master_key_hash_to_db(
-        cls,
-        master_key: str,
-        prisma_client: PrismaClient,
-        litellm_proxy_admin_name: str,
-        general_settings: dict,
-    ):
-        """Adds master key hash to db for cost tracking"""
-        if os.getenv("PROXY_ADMIN_ID", None) is not None:
-            litellm_proxy_admin_name = os.getenv(
-                "PROXY_ADMIN_ID", litellm_proxy_admin_name
-            )
-        if general_settings.get("disable_adding_master_key_hash_to_db") is True:
-            verbose_proxy_logger.info("Skipping writing master key hash to db")
-        else:
-            # add master key to db
-            # add 'admin' user to db. Fixes https://github.com/BerriAI/litellm/issues/6206
-            task_1 = generate_key_helper_fn(
-                request_type="user",
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                token=master_key,
-                user_id=litellm_proxy_admin_name,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                query_type="update_data",
-                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
-            )
-            asyncio.create_task(task_1)
 
     @classmethod
     def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):
@@ -5786,7 +5795,7 @@ async def token_counter(request: TokenCountRequest):
         model=model_to_use,
         text=prompt,
         messages=messages,
-        custom_tokenizer=_tokenizer_used,
+        custom_tokenizer=_tokenizer_used,  # type: ignore
     )
     return TokenCountResponse(
         total_tokens=total_tokens,
@@ -6036,6 +6045,11 @@ async def update_model(
     model_params: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Old endpoint for model update. Makes a PUT request.
+
+    Use `/model/{model_id}/update` to PATCH the stored model in db.
+    """
     global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db, proxy_logging_obj
     try:
         import base64
@@ -8918,3 +8932,4 @@ app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
+app.include_router(model_management_router)
