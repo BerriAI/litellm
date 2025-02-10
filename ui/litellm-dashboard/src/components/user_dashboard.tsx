@@ -176,10 +176,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !keys && !userSpendData) {
-      // const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      // if (cachedUserModels) {
-      //   setUserModels(JSON.parse(cachedUserModels));
-      // } else {
+      const cachedUserModels = sessionStorage.getItem("userModels" + userID);
+      if (cachedUserModels) {
+        setUserModels(JSON.parse(cachedUserModels));
+      } else {
         console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
         const fetchData = async () => {
           try {
@@ -263,7 +263,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
         fetchOrganizations();
       }
-    // }
+    }
   }, [userID, token, accessToken, keys, userRole]);
 
   useEffect(() => {

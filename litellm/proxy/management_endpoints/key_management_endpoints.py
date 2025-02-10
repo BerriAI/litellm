@@ -168,6 +168,8 @@ def _team_key_generation_check(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest,
 ):
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
     if (
         litellm.key_generation_settings is not None
         and "team_key_generation" in litellm.key_generation_settings
