@@ -29,7 +29,7 @@ class ModelResponseIterator:
             if processed_chunk.choices[0].delta.content is not None:  # type: ignore
                 text = processed_chunk.choices[0].delta.content  # type: ignore
 
-            if processed_chunk.choices[0].delta.reasoning_content is not None:  # type: ignore
+            if 'reasoning_content' in processed_chunk.choices[0].delta and processed_chunk.choices[0].delta.reasoning_content is not None:  # type: ignore
                 provider_specific_fields = {
                     'reasoning_content': processed_chunk.choices[0].delta.reasoning_content # type: ignore
                 }
