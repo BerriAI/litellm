@@ -238,6 +238,7 @@ class LiteLLMProxyRequestSetup:
             return None
         for header, value in headers.items():
             if header.lower() == "openai-organization":
+                verbose_logger.info(f"found openai org id: {value}, sending to llm")
                 return value
         return None
 
