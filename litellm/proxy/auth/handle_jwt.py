@@ -154,7 +154,10 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-        if self.litellm_jwtauth.team_ids_jwt_field is not None:
+        if (
+            self.litellm_jwtauth.team_ids_jwt_field is not None
+            and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
+        ):
             return token[self.litellm_jwtauth.team_ids_jwt_field]
         return []
 
@@ -699,6 +702,11 @@ class JWTAuthManager:
         """Find first team with access to the requested model"""
 
         if not team_ids:
+            if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
+                raise HTTPException(
+                    status_code=403,
+                    detail="No teams found in token. `enforce_team_based_model_access` is set to True. Token must belong to a team.",
+                )
             return None, None
 
         for team_id in team_ids:
@@ -731,7 +739,7 @@ class JWTAuthManager:
         if requested_model:
             raise HTTPException(
                 status_code=403,
-                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}",
+                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
             )
 
         return None, None

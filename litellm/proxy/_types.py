@@ -260,6 +260,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/organization/list",
         "/team/available",
         "/user/info",
         "/model/info",
@@ -1100,24 +1101,6 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
 
 
-class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
-
-    organization_id: Optional[str] = None
-    organization_alias: Optional[str] = None
-    budget_id: str
-    metadata: Optional[dict] = None
-    models: List[str]
-    created_by: str
-    updated_by: str
-
-
-class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
-    created_at: datetime
-    updated_at: datetime
-
-
 class OrganizationRequest(LiteLLMPydanticObjectBase):
     organizations: List[str]
 
@@ -1490,6 +1473,28 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    created_by: str
+    updated_by: str
+
+
+class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
+    members: List[LiteLLM_OrganizationMembershipTable]
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str  # type: ignore
+    created_at: datetime
+    updated_at: datetime
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -1919,7 +1924,9 @@ class ProxyException(Exception):
 
 
 class CommonProxyErrors(str, enum.Enum):
-    db_not_connected_error = "DB not connected"
+    db_not_connected_error = (
+        "DB not connected. See https://docs.litellm.ai/docs/proxy/virtual_keys"
+    )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
@@ -1940,6 +1947,7 @@ class ProxyErrorTypes(str, enum.Enum):
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
+    validation_error = "bad_request_error"
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
@@ -2372,6 +2380,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
+    enforce_team_based_model_access: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2407,3 +2416,11 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             )
 
         super().__init__(**kwargs)
+
+
+class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
+    model_name: str
+    litellm_params: str
+    model_info: str
+    updated_at: str
+    updated_by: str
