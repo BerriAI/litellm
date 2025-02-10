@@ -2428,3 +2428,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_info: str
     updated_at: str
     updated_by: str
+
+
+class SpecialManagementEndpointEnums(enum.Enum):
+    DEFAULT_ORGANIZATION = "default_organization"
