@@ -504,7 +504,9 @@ async def generate_key_fn(  # noqa: PLR0915
             )
             _budget_id = getattr(_budget, "budget_id", None)
         data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
-
+        # associate a unique user with the key
+        if not data_json.get("user_id"):
+            data_json["user_id"] = user_api_key_dict.user_id or litellm_proxy_admin_name
         # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
