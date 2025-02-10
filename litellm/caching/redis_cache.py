@@ -26,15 +26,17 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from redis.asyncio import Redis
+    from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
 
     pipeline = Pipeline
     async_redis_client = Redis
+    async_redis_cluster_client = RedisCluster
     Span = _Span
 else:
     pipeline = Any
     async_redis_client = Any
+    async_redis_cluster_client = Any
     Span = Any
 
 
@@ -122,7 +124,9 @@ class RedisCache(BaseCache):
         else:
             super().__init__()  # defaults to 60s
 
-    def init_async_client(self):
+    def init_async_client(
+        self,
+    ) -> Union[async_redis_client, async_redis_cluster_client]:
         from .._redis import get_redis_async_client
 
         return get_redis_async_client(
@@ -385,7 +389,7 @@ class RedisCache(BaseCache):
             return
         from redis.asyncio import Redis
 
-        _redis_client: Redis = self.init_async_client()
+        _redis_client = self.init_async_client()
         start_time = time.time()
 
         print_verbose(
@@ -740,7 +744,7 @@ class RedisCache(BaseCache):
         """
         Use Redis for bulk read operations
         """
-        _redis_client = await self.init_async_client()
+        _redis_client = self.init_async_client()
         key_value_dict = {}
         start_time = time.time()
         try:
@@ -1001,7 +1005,7 @@ class RedisCache(BaseCache):
         Redis ref: https://redis.io/docs/latest/commands/ttl/
         """
         try:
-            _redis_client = await self.init_async_client()
+            _redis_client = self.init_async_client()
             async with _redis_client as redis_client:
                 ttl = await redis_client.ttl(key)
                 if ttl <= -1:  # -1 means the key does not exist, -2 key does not exist

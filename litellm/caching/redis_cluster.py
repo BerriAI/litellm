@@ -1,5 +1,8 @@
 """
 Redis Cluster Cache implementation
+
+Key differences:
+- RedisClient NEEDs to be re-used across requests, adds 3000ms latency if it's re-created
 """
 
 from typing import TYPE_CHECKING, Any, Optional
