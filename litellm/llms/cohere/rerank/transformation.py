@@ -18,11 +18,13 @@ class CohereRerankConfig(BaseRerankConfig):
     Reference: https://docs.cohere.com/v2/reference/rerank
     """
 
-    def __init__(self, api_base) -> None:
+    def __init__(self, api_base: Optional[str], optional_rerank_params: OptionalRerankParams) -> None:
+        # Default to the v2 client unless the user specifically uses the v1/rerank endpoint or uses v1-specific params
+        uses_v1_params = ("max_chunks_per_doc" in optional_rerank_params) and ('max_tokens_per_doc' not in optional_rerank_params) 
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
-            if api_base.endswith("/v1/rerank"):
+            if api_base.endswith("/v1/rerank") or uses_v1_params:
                 self.uses_v1_client = True
                 return
             
@@ -55,6 +57,7 @@ class CohereRerankConfig(BaseRerankConfig):
             "max_chunks_per_doc",
             "rank_fields",
             "return_documents",
+            "max_tokens_per_doc"
         ]
 
     def map_cohere_rerank_params(

@@ -719,7 +719,10 @@ class BaseLLMHTTPHandler:
     ) -> RerankResponse:
 
         provider_config = ProviderConfigManager.get_provider_rerank_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider), api_base=api_base
+            model=model, 
+            provider=litellm.LlmProviders(custom_llm_provider), 
+            api_base=api_base, 
+            optional_rerank_params=optional_rerank_params
         )
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(

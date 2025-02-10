@@ -6173,10 +6173,11 @@ class ProviderConfigManager:
     def get_provider_rerank_config(
         model: str,
         provider: LlmProviders,
-        api_base: Optional[str]
+        api_base: Optional[str],
+        optional_rerank_params: OptionalRerankParams,
     ) -> BaseRerankConfig:
         if litellm.LlmProviders.COHERE == provider:
-            return litellm.CohereRerankConfig(api_base)
+            return litellm.CohereRerankConfig(api_base, optional_rerank_params)
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
