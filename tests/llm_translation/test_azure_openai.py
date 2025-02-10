@@ -285,7 +285,14 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
         assert "tool_calls" not in mock_post.call_args.kwargs
 
 
-def test_azure_gpt_4o_with_tool_call_and_response_format():
+@pytest.mark.parametrize(
+    "api_version",
+    [
+        "2024-10-21",
+        # "2024-02-15-preview",
+    ],
+)
+def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     from litellm import completion
     from typing import Optional
     from pydantic import BaseModel
@@ -336,9 +343,13 @@ def test_azure_gpt_4o_with_tool_call_and_response_format():
         tools=tools,
         tool_choice="auto",
         response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
+        api_version=api_version,
     )
 
-    assert response.choices[0].finish_reason == "tool_calls"
+    if api_version == "2024-02-15-preview":
+        assert response.choices[0].finish_reason == "tool_calls"
+    else:
+        assert response.choices[0].finish_reason == "stop"
 
     print(response.to_json())
 
