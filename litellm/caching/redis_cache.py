@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     Span = _Span
 else:
     pipeline = Any
+    cluster_pipeline = Any
     async_redis_client = Any
     async_redis_cluster_client = Any
     Span = Any
