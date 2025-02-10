@@ -75,11 +75,11 @@ async def test_team_blocking_behavior_multi_instance():
     Test team blocking scenario across multi-instance setup:
 
     1. Create a new team on port 4000.
-    2. Update the team to set 'blocked': False via the update endpoint on port 4000.
-    3. Verify (via team/info on port 4001) that the team is not blocked.
-    4. Create a key for that team.
-    5. Make a chat completion request (via instance on port 4000) and verify that it works.
+    2. Verify (via team/info on port 4001) that the team is not blocked.
+    3. Create a key for that team.
+    4. Make a chat completion request (via instance on port 4000) and verify that it works.
     6. Update the team to set 'blocked': True via the update endpoint on port 4001.
+    --- Sleep for 61 seconds --- the in-memory team obj ttl is 60 seconds
     7. Verify (via team/info on port 4000) that the team is now blocked.
     8. Make a chat completion request (using instance on port 4000) with a new prompt; expect it to be blocked.
     9. Repeat the chat completion request with another new prompt; expect it to be blocked.
@@ -101,18 +101,18 @@ async def test_team_blocking_behavior_multi_instance():
             team_resp = await response.json()
         team_id = team_resp["team_id"]
 
-        # 3. Verify via team/info on port 4001 that team is not blocked.
+        # 2. Verify via team/info on port 4001 that team is not blocked.
         team_info_4001 = await get_team_info(session, team_id, port=4001)
         assert "blocked" in team_info_4001, "Team info missing 'blocked' field"
         assert (
             team_info_4001["blocked"] is False
         ), "Team should not be blocked initially"
 
-        # 4. Create a key for the team using the existing helper.
+        # 3. Create a key for the team using the existing helper.
         key_gen = await generate_team_key(session=session, team_id=team_id)
         key = key_gen["key"]
 
-        # 5. Make a chat completion request on port 4000 and verify it works.
+        # 4. Make a chat completion request on port 4000 and verify it works.
         response = await chat_completion_on_port(
             session,
             key=key,
@@ -124,12 +124,12 @@ async def test_team_blocking_behavior_multi_instance():
             response is not None
         ), "Chat completion should succeed when team is not blocked"
 
-        # 6. Update the team to set 'blocked': True on instance port 4001.
+        # 5. Update the team to set 'blocked': True on instance port 4001.
         await update_team_block_status(session, team_id, blocked=True, port=4001)
         print("sleeping for 61 seconds")
         await asyncio.sleep(61)
 
-        # 7. Verify via team/info on port 4000 that the team is blocked.
+        # 6. Verify via team/info on port 4000 that the team is blocked.
         team_info_4000 = await get_team_info(session, team_id, port=4000)
         assert "blocked" in team_info_4000, "Team info missing 'blocked' field"
         print(
@@ -137,7 +137,7 @@ async def test_team_blocking_behavior_multi_instance():
             json.dumps(team_info_4000, indent=4, default=str),
         )
         assert team_info_4000["blocked"] is True, "Team should be blocked after update"
-        # 8.  Verify via team/info on port 4001 that the team is blocked.
+        # 7.  Verify via team/info on port 4001 that the team is blocked.
         team_info_4001 = await get_team_info(session, team_id, port=4001)
         assert "blocked" in team_info_4001, "Team info missing 'blocked' field"
         assert team_info_4001["blocked"] is True, "Team should be blocked after update"
@@ -156,7 +156,7 @@ async def test_team_blocking_behavior_multi_instance():
             "blocked" in error_msg.lower()
         ), f"Expected error indicating team blocked, got: {error_msg}"
 
-        # 8. Make a chat completion request on port 4000 with a new prompt; expect it to be blocked.
+        # 9. Make a chat completion request on port 4000 with a new prompt; expect it to be blocked.
         with pytest.raises(Exception) as excinfo:
             await chat_completion_on_port(
                 session,
@@ -170,16 +170,26 @@ async def test_team_blocking_behavior_multi_instance():
             "blocked" in error_msg.lower()
         ), f"Expected error indicating team blocked, got: {error_msg}"
 
-        # # 9. Repeat the chat completion request with another new prompt; expect it to be blocked.
-        # with pytest.raises(Exception) as excinfo_second:
-        #     await chat_completion_on_port(
-        #         session, key=key, model="fake-openai-endpoint", port=4000, prompt="Non-cached prompt 3"
-        #     )
-        # error_msg_second = str(excinfo_second.value)
-        # assert "blocked" in error_msg_second.lower(), f"Expected error indicating team blocked, got: {error_msg_second}"
+        # 9. Repeat the chat completion request with another new prompt; expect it to be blocked.
+        with pytest.raises(Exception) as excinfo_second:
+            await chat_completion_on_port(
+                session,
+                key=key,
+                model="fake-openai-endpoint",
+                port=4000,
+                prompt="Non-cached prompt 3",
+            )
+        error_msg_second = str(excinfo_second.value)
+        assert (
+            "blocked" in error_msg_second.lower()
+        ), f"Expected error indicating team blocked, got: {error_msg_second}"
 
-        # # 10. Final verification: check team info on both ports indicates the team is blocked.
-        # final_team_info_4000 = await get_team_info(session, team_id, port=4000)
-        # final_team_info_4001 = await get_team_info(session, team_id, port=4001)
-        # assert final_team_info_4000.get("blocked") is True, "Team on port 4000 should be blocked"
-        # assert final_team_info_4001.get("blocked") is True, "Team on port 4001 should be blocked"
+        # 10. Final verification: check team info on both ports indicates the team is blocked.
+        final_team_info_4000 = await get_team_info(session, team_id, port=4000)
+        final_team_info_4001 = await get_team_info(session, team_id, port=4001)
+        assert (
+            final_team_info_4000.get("blocked") is True
+        ), "Team on port 4000 should be blocked"
+        assert (
+            final_team_info_4001.get("blocked") is True
+        ), "Team on port 4001 should be blocked"
