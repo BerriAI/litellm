@@ -56,7 +56,7 @@ Let's call the Cohere /rerank endpoint
 
 ```bash
 curl --request POST \
-  --url http://0.0.0.0:4000/cohere/v2/rerank \
+  --url http://0.0.0.0:4000/cohere/v1/rerank \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
   --header "Authorization: bearer sk-anything" \
@@ -91,7 +91,7 @@ Key Changes:
 
 ```bash
 curl --request POST \
-  --url http://0.0.0.0:4000/cohere/v2/rerank \
+  --url http://0.0.0.0:4000/cohere/v1/rerank \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
   --header "Authorization: bearer sk-anything" \
@@ -111,7 +111,7 @@ curl --request POST \
 
 ```bash
 curl --request POST \
-  --url https://api.cohere.com/v2/rerank \
+  --url https://api.cohere.com/v1/rerank \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
   --header "Authorization: bearer $CO_API_KEY" \
@@ -243,7 +243,7 @@ Expected Response
 
 ```bash
 curl --request POST \
-  --url http://0.0.0.0:4000/cohere/v2/rerank \
+  --url http://0.0.0.0:4000/cohere/v1/rerank \
   --header 'accept: application/json' \
   --header 'content-type: application/json' \
   --header "Authorization: bearer sk-1234ewknldferwedojwojw" \
