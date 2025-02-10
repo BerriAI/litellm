@@ -21,7 +21,8 @@ import pytest
 import litellm
 from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
-
+from redis.asyncio import RedisCluster
+from litellm.caching.redis_cluster import RedisClusterCache
 from unittest.mock import AsyncMock, patch, MagicMock, call
 import datetime
 from datetime import timedelta
@@ -2472,3 +2473,36 @@ async def test_redis_get_ttl():
     except Exception as e:
         print(f"Error occurred: {str(e)}")
         raise e
+
+
+def test_init_async_client_returns_same_instance():
+    """
+    Test that once the init_async_client() is called the first time and a real RedisCluster
+    instance is returned, subsequent calls return the same cached instance.
+    """
+    # Create a fake redis cluster client to simulate a working Redis cluster client.
+    fake_client = MagicMock(spec=RedisCluster)
+
+    with patch(
+        "litellm._redis.get_redis_async_client",
+        return_value=fake_client,
+    ) as mock_get_client:
+        # Provide dummy parameters for connection pool and any kwargs.
+        redis_cluster_cache = RedisClusterCache(
+            async_redis_conn_pool="dummy_pool",
+            startup_nodes=[
+                {
+                    "host": "127.0.0.1",
+                    "port": "7100",
+                }
+            ],
+        )
+
+        # First call should trigger a call to get_redis_async_client.
+        client1 = redis_cluster_cache.init_async_client()
+        # Second call should return the same instance without re‐calling get_redis_async_client.
+        client2 = redis_cluster_cache.init_async_client()
+
+        assert client1 is fake_client
+        assert client1 is client2  # confirm reuse of the client
+        mock_get_client.assert_called_once()
