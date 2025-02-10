@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import litellm
 from litellm import verbose_logger
@@ -24,10 +24,16 @@ class ModelResponseIterator:
             is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            provider_specific_fields: Optional[Dict[str, Any]] = None
 
             if processed_chunk.choices[0].delta.content is not None:  # type: ignore
                 text = processed_chunk.choices[0].delta.content  # type: ignore
 
+            if processed_chunk.choices[0].delta.reasoning_content is not None:  # type: ignore
+                provider_specific_fields = {
+                    'reasoning_content': processed_chunk.choices[0].delta.reasoning_content # type: ignore
+                }
+            
             if (
                 processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
                 and len(processed_chunk.choices[0].delta.tool_calls) > 0  # type: ignore
@@ -69,6 +75,7 @@ class ModelResponseIterator:
                 finish_reason=finish_reason,
                 usage=usage,
                 index=0,
+                provider_specific_fields=provider_specific_fields,
             )
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")

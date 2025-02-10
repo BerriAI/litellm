@@ -4099,8 +4099,8 @@ async def test_openrouter_deepseek_reasoning_content_acompletion():
 
         reasoning_content_exists = False
         async for chunk in resp:
-            if chunk.choices[0].delta.get("reasoning_content", None) is not None:
-                print(f"chunk reasoning_content: {chunk}")
+            if chunk.get("reasoning_content", None) is not None:
+                print(f"chunk --reasoning_content: {chunk}")
                 reasoning_content_exists = True
                 break
         assert reasoning_content_exists

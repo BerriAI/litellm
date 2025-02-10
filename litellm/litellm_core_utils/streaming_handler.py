@@ -864,7 +864,14 @@ class CustomStreamWrapper:
             and model_response.choices[0].delta.audio is not None
         ):
             return model_response
-
+        elif (
+            "provider_specific_fields" in response_obj
+            and response_obj["provider_specific_fields"] is not None
+            and 'reasoning_content' in response_obj["provider_specific_fields"]
+        ):
+            if model_response.choices[0].delta.provider_specific_fields is None:
+                model_response.choices[0].delta['provider_specific_fields'] = response_obj["provider_specific_fields"]
+            return model_response
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -926,7 +933,6 @@ class CustomStreamWrapper:
                         "provider_specific_fields"
                     ].items():
                         setattr(model_response, key, value)
-
                 response_obj = anthropic_response_obj
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
