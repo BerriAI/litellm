@@ -385,7 +385,7 @@ class RedisCache(BaseCache):
             return
         from redis.asyncio import Redis
 
-        _redis_client = self.init_async_client()
+        _redis_client: Redis = self.init_async_client()
         start_time = time.time()
 
         print_verbose(
