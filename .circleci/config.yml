@@ -1581,7 +1581,7 @@ jobs:
           name: Run Docker container 2
           command: |
             docker run -d \
-              -p 4001:4000 \
+              -p 4001:4001 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
