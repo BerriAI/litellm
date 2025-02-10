@@ -183,7 +183,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
             )
 
     verbose_logger.debug(
-        "init_redis_cluster: startup nodes: ", redis_kwargs["startup_nodes"]
+        "init_redis_cluster: startup nodes: %s", redis_kwargs["startup_nodes"]
     )
     from redis.cluster import ClusterNode
 
