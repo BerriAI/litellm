@@ -1,5 +1,5 @@
 import React from "react";
-import { Form } from "antd";
+import { Form, Select } from "antd";
 import { TextInput, Text } from "@tremor/react";
 import { Row, Col, Typography, Button as Button2, Upload, UploadProps } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
@@ -72,8 +72,22 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         </>
       )}
 
+      {selectedProviderEnum === Providers.AssemblyAI && (
+        <Form.Item
+          rules={[{ required: true, message: "Required" }]}
+          label="API Base"
+          name="api_base"
+        >
+          <Select placeholder="Select API Base">
+            <Select.Option value="https://api.assemblyai.com">https://api.assemblyai.com</Select.Option>
+            <Select.Option value="https://api.eu.assemblyai.com">https://api.eu.assemblyai.com</Select.Option>
+          </Select>
+        </Form.Item>
+      )}
+
       {(selectedProviderEnum === Providers.Azure ||
-        selectedProviderEnum === Providers.OpenAI_Compatible) && (
+        selectedProviderEnum === Providers.OpenAI_Compatible
+      ) && (
         <Form.Item
           rules={[{ required: true, message: "Required" }]}
           label="API Base"

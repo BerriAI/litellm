@@ -1446,7 +1446,7 @@ def test_bedrock_on_router():
 # test openai-compatible endpoint
 @pytest.mark.asyncio
 async def test_mistral_on_router():
-    litellm.set_verbose = True
+    litellm._turn_on_debug()
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",

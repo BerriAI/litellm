@@ -655,10 +655,19 @@ async def _delete_cache_key_object(
 
 
 @log_db_metrics
-async def _get_team_db_check(team_id: str, prisma_client: PrismaClient):
-    return await prisma_client.db.litellm_teamtable.find_unique(
+async def _get_team_db_check(
+    team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
+):
+    response = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
     )
+
+    if response is None and team_id_upsert:
+        response = await prisma_client.db.litellm_teamtable.create(
+            data={"team_id": team_id}
+        )
+
+    return response
 
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
@@ -675,6 +684,7 @@ async def _get_team_object_from_user_api_key_cache(
     db_cache_expiry: int,
     proxy_logging_obj: Optional[ProxyLogging],
     key: str,
+    team_id_upsert: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key = key
     should_check_db = _should_check_db(
@@ -684,7 +694,7 @@ async def _get_team_object_from_user_api_key_cache(
     )
     if should_check_db:
         response = await _get_team_db_check(
-            team_id=team_id, prisma_client=prisma_client
+            team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert
         )
     else:
         response = None
@@ -752,6 +762,7 @@ async def get_team_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
     check_cache_only: Optional[bool] = None,
     check_db_only: Optional[bool] = None,
+    team_id_upsert: Optional[bool] = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -795,6 +806,7 @@ async def get_team_object(
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
             key=key,
+            team_id_upsert=team_id_upsert,
         )
     except Exception:
         raise Exception(

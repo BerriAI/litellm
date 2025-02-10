@@ -54,7 +54,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
         if model is None:
             return True
-        supported_stream_models = ["o1-mini", "o1-preview"]
+        supported_stream_models = ["o1-mini", "o1-preview", "o3-mini"]
         for supported_model in supported_stream_models:
             if supported_model in model:
                 return False

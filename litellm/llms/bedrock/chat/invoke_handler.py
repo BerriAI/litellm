@@ -40,6 +40,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
+from litellm.llms.anthropic.chat.handler import (
+    ModelResponseIterator as AnthropicModelResponseIterator,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -103,7 +106,7 @@ class AmazonCohereChatConfig:
         stop_sequences: Optional[str] = None,
         raw_prompting: Optional[bool] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -177,6 +180,7 @@ async def make_call(
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
+    bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
 ):
     try:
         if client is None:
@@ -214,11 +218,93 @@ async def make_call(
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
             )
+        elif bedrock_invoke_provider == "anthropic":
+            decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
+                model=model,
+                sync_stream=False,
+            )
+            completion_stream = decoder.aiter_bytes(
+                response.aiter_bytes(chunk_size=1024)
+            )
         else:
             decoder = AWSEventStreamDecoder(model=model)
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=1024)
             )
+
+        # LOGGING
+        logging_obj.post_call(
+            input=messages,
+            api_key="",
+            original_response="first stream response received",
+            additional_args={"complete_input_dict": data},
+        )
+
+        return completion_stream
+    except httpx.HTTPStatusError as err:
+        error_code = err.response.status_code
+        raise BedrockError(status_code=error_code, message=err.response.text)
+    except httpx.TimeoutException:
+        raise BedrockError(status_code=408, message="Timeout error occurred.")
+    except Exception as e:
+        raise BedrockError(status_code=500, message=str(e))
+
+
+def make_sync_call(
+    client: Optional[HTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj: Logging,
+    fake_stream: bool = False,
+    json_mode: Optional[bool] = False,
+    bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+):
+    try:
+        if client is None:
+            client = _get_httpx_client(params={})
+
+        response = client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=not fake_stream,
+            logging_obj=logging_obj,
+        )
+
+        if response.status_code != 200:
+            raise BedrockError(status_code=response.status_code, message=response.text)
+
+        if fake_stream:
+            model_response: (
+                ModelResponse
+            ) = litellm.AmazonConverseConfig()._transform_response(
+                model=model,
+                response=response,
+                model_response=litellm.ModelResponse(),
+                stream=True,
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                data=data,
+                messages=messages,
+                print_verbose=print_verbose,
+                encoding=litellm.encoding,
+            )  # type: ignore
+            completion_stream: Any = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode
+            )
+        elif bedrock_invoke_provider == "anthropic":
+            decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
+                model=model,
+                sync_stream=True,
+            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+        else:
+            decoder = AWSEventStreamDecoder(model=model)
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
 
         # LOGGING
         logging_obj.post_call(
@@ -1034,7 +1120,7 @@ class BedrockLLM(BaseAWSLLM):
                 client=client,
                 api_base=api_base,
                 headers=headers,
-                data=data,
+                data=data,  # type: ignore
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
@@ -1256,7 +1342,7 @@ class AWSEventStreamDecoder:
             text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
             is_finished = True
             finish_reason = "stop"
-        ######## bedrock.anthropic mappings ###############
+        ######## /bedrock/converse mappings ###############
         elif (
             "contentBlockIndex" in chunk_data
             or "stopReason" in chunk_data
@@ -1264,6 +1350,11 @@ class AWSEventStreamDecoder:
             or "trace" in chunk_data
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
+        ######### /bedrock/invoke nova mappings ###############
+        elif "contentBlockDelta" in chunk_data:
+            # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
+            _chunk_data = chunk_data.get("contentBlockDelta", None)
+            return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
             if (
@@ -1360,6 +1451,27 @@ class AWSEventStreamDecoder:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+    ) -> None:
+        """
+        Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
+
+        The only difference between AWSEventStreamDecoder and AmazonAnthropicClaudeStreamDecoder is the `chunk_parser` method
+        """
+        super().__init__(model=model)
+        self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
+            streaming_response=None,
+            sync_stream=sync_stream,
+        )
+
+    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses

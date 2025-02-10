@@ -551,6 +551,7 @@ class Delta(OpenAIObject):
     ):
         super(Delta, self).__init__(**params)
         provider_specific_fields: Dict[str, Any] = {}
+
         if "reasoning_content" in params:
             provider_specific_fields["reasoning_content"] = params["reasoning_content"]
             setattr(self, "reasoning_content", params["reasoning_content"])
@@ -1871,6 +1872,7 @@ class LlmProviders(str, Enum):
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
     NEBIUS = "nebius"
+    ASSEMBLYAI = "assemblyai"
 
 
 # Create a set of all provider values for quick lookup

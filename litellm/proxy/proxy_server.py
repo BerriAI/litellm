@@ -196,6 +196,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
 )
+from litellm.proxy.management_endpoints.model_management_endpoints import (
+    router as model_management_router,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
@@ -515,14 +518,6 @@ async def proxy_startup_event(app: FastAPI):
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
-    if prisma_client is not None and master_key is not None:
-        ProxyStartupEvent._add_master_key_hash_to_db(
-            master_key=master_key,
-            prisma_client=prisma_client,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            general_settings=general_settings,
-        )
-
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
@@ -1639,7 +1634,7 @@ class ProxyConfig:
         self,
         cache_params: dict,
     ):
-        global redis_usage_cache
+        global redis_usage_cache, llm_router
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -1653,6 +1648,10 @@ class ProxyConfig:
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
+
+            ## INIT ROUTER REDIS CACHE ##
+            if llm_router is not None:
+                llm_router._update_redis_cache(cache=redis_usage_cache)
 
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         """
@@ -3204,39 +3203,6 @@ class ProxyStartupEvent:
             user_api_key_cache=user_api_key_cache,
             litellm_jwtauth=litellm_jwtauth,
         )
-
-    @classmethod
-    def _add_master_key_hash_to_db(
-        cls,
-        master_key: str,
-        prisma_client: PrismaClient,
-        litellm_proxy_admin_name: str,
-        general_settings: dict,
-    ):
-        """Adds master key hash to db for cost tracking"""
-        if os.getenv("PROXY_ADMIN_ID", None) is not None:
-            litellm_proxy_admin_name = os.getenv(
-                "PROXY_ADMIN_ID", litellm_proxy_admin_name
-            )
-        if general_settings.get("disable_adding_master_key_hash_to_db") is True:
-            verbose_proxy_logger.info("Skipping writing master key hash to db")
-        else:
-            # add master key to db
-            # add 'admin' user to db. Fixes https://github.com/BerriAI/litellm/issues/6206
-            task_1 = generate_key_helper_fn(
-                request_type="user",
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                token=master_key,
-                user_id=litellm_proxy_admin_name,
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                query_type="update_data",
-                update_key_values={"user_role": LitellmUserRoles.PROXY_ADMIN},
-            )
-            asyncio.create_task(task_1)
 
     @classmethod
     def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):
@@ -6079,6 +6045,11 @@ async def update_model(
     model_params: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Old endpoint for model update. Makes a PUT request.
+
+    Use `/model/{model_id}/update` to PATCH the stored model in db.
+    """
     global llm_router, llm_model_list, general_settings, user_config_file_path, proxy_config, prisma_client, master_key, store_model_in_db, proxy_logging_obj
     try:
         import base64
@@ -8961,3 +8932,4 @@ app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
+app.include_router(model_management_router)
