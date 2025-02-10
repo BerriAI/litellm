@@ -14,7 +14,7 @@ import inspect
 import json
 import time
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -28,8 +28,10 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis
     from redis.asyncio.client import Pipeline
+    from redis.asyncio.cluster import ClusterPipeline
 
     pipeline = Pipeline
+    cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     Span = _Span
 else:
@@ -345,8 +347,14 @@ class RedisCache(BaseCache):
                 )
 
     async def _pipeline_helper(
-        self, pipe: pipeline, cache_list: List[Tuple[Any, Any]], ttl: Optional[float]
+        self,
+        pipe: Union[pipeline, cluster_pipeline],
+        cache_list: List[Tuple[Any, Any]],
+        ttl: Optional[float],
     ) -> List:
+        """
+        Helper function for executing a pipeline of set operations on Redis
+        """
         ttl = self.get_ttl(ttl=ttl)
         # Iterate through each key-value pair in the cache_list and set them in the pipeline.
         for cache_key, cache_value in cache_list:
@@ -359,7 +367,11 @@ class RedisCache(BaseCache):
             _td: Optional[timedelta] = None
             if ttl is not None:
                 _td = timedelta(seconds=ttl)
-            pipe.set(cache_key, json_cache_value, ex=_td)
+            pipe.set(  # type: ignore
+                name=cache_key,
+                value=json_cache_value,
+                ex=_td,
+            )
         # Execute the pipeline and return the results.
         results = await pipe.execute()
         return results
@@ -375,7 +387,7 @@ class RedisCache(BaseCache):
             return
         from redis.asyncio import Redis
 
-        _redis_client: Redis = self.init_async_client()  # type: ignore
+        _redis_client = self.init_async_client()
         start_time = time.time()
 
         print_verbose(
@@ -384,7 +396,7 @@ class RedisCache(BaseCache):
         cache_value: Any = None
         try:
             async with _redis_client as redis_client:
-                async with redis_client.pipeline(transaction=True) as pipe:
+                async with redis_client.pipeline(transaction=False) as pipe:
                     results = await self._pipeline_helper(pipe, cache_list, ttl)
 
             print_verbose(f"pipeline results: {results}")
@@ -936,7 +948,7 @@ class RedisCache(BaseCache):
 
         try:
             async with _redis_client as redis_client:
-                async with redis_client.pipeline(transaction=True) as pipe:
+                async with redis_client.pipeline(transaction=False) as pipe:
                     results = await self._pipeline_increment_helper(
                         pipe, increment_list
                     )

@@ -169,7 +169,7 @@ class Cache:
                     **kwargs,
                 )
             else:
-                self.cache: BaseCache = RedisCache(
+                self.cache = RedisCache(
                     host=host,
                     port=port,
                     password=password,
