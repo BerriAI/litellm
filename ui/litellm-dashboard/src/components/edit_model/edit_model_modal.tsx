@@ -54,7 +54,7 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
 
   return (
     <Modal
-      title={"Edit Model " + model_name}
+      title={"Edit '" + model_name + "' LiteLLM Params"}
       visible={visible}
       width={800}
       footer={null}
@@ -86,6 +86,15 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
             <TextInput />
           </Form.Item>
           <Form.Item className="mt-8" label="api_base" name="api_base">
+            <TextInput />
+          </Form.Item>
+          <Form.Item className="mt-8" label="api_key" name="api_key">
+            <TextInput />
+          </Form.Item>
+          <Form.Item className="mt-8" label="custom_llm_provider" name="custom_llm_provider">
+            <TextInput />
+          </Form.Item>
+          <Form.Item className="mt-8" label="model" name="model">
             <TextInput />
           </Form.Item>
           <Form.Item
