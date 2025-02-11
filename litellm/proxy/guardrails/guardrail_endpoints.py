@@ -4,7 +4,7 @@ CRUD ENDPOINTS FOR GUARDRAILS
 
 from typing import Dict, List, Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailInfoResponse, ListGuardrailsResponse
