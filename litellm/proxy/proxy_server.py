@@ -5882,9 +5882,11 @@ async def _add_team_model_to_db(
     - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
     """
     _team_id = model_params.model_info.team_id
-    original_model_name = model_params.model_name
     if _team_id is None:
         return None
+    original_model_name = model_params.model_name
+    if original_model_name:
+        model_params.model_info.team_public_model_name = original_model_name
 
     unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
 
