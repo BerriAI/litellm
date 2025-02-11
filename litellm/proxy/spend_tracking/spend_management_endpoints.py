@@ -1760,6 +1760,66 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
 
 @router.get(
+    "/spend/logs/ui/{request_id}",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def ui_view_request_response_for_request_id(
+    request_id: str,
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing key spend",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view key spend",
+    ),
+):
+    """
+    View request / response for a specific request_id
+
+    - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
+    - if so, it will return the request and response payload
+    """
+    from litellm.integrations.base_request_response_fetch import (
+        BaseRequestResponseFetchFromCustomLogger,
+    )
+
+    custom_loggers = (
+        litellm.logging_callback_manager.get_active_base_request_response_fetch_from_custom_logger()
+    )
+    # Convert the date strings to datetime objects
+    start_date_iso: Optional[str] = None
+    end_date_iso: Optional[str] = None
+
+    start_date_obj: Optional[datetime] = None
+    end_date_obj: Optional[datetime] = None
+    if start_date is not None:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        # Convert to ISO format strings for Prisma
+        start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
+    if end_date is not None:
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
+
+    for custom_logger in custom_loggers:
+        payload = await custom_logger.get_request_response_payload(
+            request_id=request_id,
+            start_time_utc=start_date_obj,
+            end_time_utc=end_date_obj,
+        )
+        if payload is not None:
+            return payload
+
+    return None
+
+
+@router.get(
     "/spend/logs",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
