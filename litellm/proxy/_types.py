@@ -1042,6 +1042,9 @@ class LiteLLM_TeamTable(TeamBase):
             "model_aliases",
         ]
 
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+
         if (
             isinstance(values.get("members_with_roles"), dict)
             and not values["members_with_roles"]
@@ -1489,6 +1492,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     members: List[LiteLLM_OrganizationMembershipTable]
+    teams: List[LiteLLM_TeamTable]
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -1790,6 +1794,7 @@ class SpendLogsMetadata(TypedDict):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    applied_guardrails: Optional[List[str]]
 
 
 class SpendLogsPayload(TypedDict):
@@ -2424,3 +2429,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_info: str
     updated_at: str
     updated_by: str
+
+
+class SpecialManagementEndpointEnums(enum.Enum):
+    DEFAULT_ORGANIZATION = "default_organization"

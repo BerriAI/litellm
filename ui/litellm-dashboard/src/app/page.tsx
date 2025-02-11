@@ -25,7 +25,7 @@ import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
-
+import GuardrailsPanel from "@/components/guardrails";
 function getCookie(name: string) {
   const cookieValue = document.cookie
     .split("; ")
@@ -183,6 +183,7 @@ export default function CreateKeyPage() {
         }
       }
     }
+    setTeams(null);
   }
 
   return (
@@ -201,6 +202,7 @@ export default function CreateKeyPage() {
             setTeams={setTeams}
             setKeys={setKeys}
             setOrganizations={setOrganizations}
+            currentOrg={currentOrg}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -237,6 +239,7 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   setKeys={setKeys}
                   setOrganizations={setOrganizations}
+                  currentOrg={currentOrg}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
@@ -306,6 +309,8 @@ export default function CreateKeyPage() {
                 />
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
+              ) : page == "guardrails" ? (
+                <GuardrailsPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
