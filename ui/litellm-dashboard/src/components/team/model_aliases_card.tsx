@@ -32,7 +32,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
 
       const newAliases = {
         ...currentAliases,
-        [values.original_model]: values.alias_name,
+        [values.alias_name]: values.original_model,
       };
 
       const updateData = {
@@ -44,7 +44,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
       message.success("Model alias created successfully");
       setIsModalVisible(false);
       form.resetFields();
-      currentAliases[values.original_model] = values.alias_name;
+      currentAliases[values.alias_name] = values.original_model;
     } catch (error) {
       message.error("Failed to create model alias");
       console.error("Error creating model alias:", error);
@@ -77,7 +77,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
         </div>
 
         <div className="space-y-4">
-          {Object.entries(currentAliases).map(([originalModel, aliasName], index) => (
+          {Object.entries(currentAliases).map(([aliasName, originalModel], index) => (
             <div key={index} className="flex space-x-4 border-t border-gray-200 pt-4">
               <div className="w-64">
                 <span className="bg-gray-100 px-2 py-1 rounded font-mono text-sm text-gray-700">
