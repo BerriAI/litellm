@@ -1,7 +1,7 @@
 import os
 from typing import Literal, Optional, Union
 
-from acuvity import Acuvity, GuardConfig, GuardName, ResponseMatch, Security
+from acuvity import Acuvity, GuardConfig, GuardName, ResponseMatch, ScanResponseMatch, Security
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -10,10 +10,8 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.logging_utils import (
-    convert_litellm_response_object_to_str,
-)
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.utils import EmbeddingResponse, ImageResponse, ModelResponse, StreamingChoices
 
 GUARDRAIL_NAME = "acuvity"
 
@@ -29,6 +27,8 @@ class AcuvityGuardrail(CustomGuardrail):
             if kwargs.get("event_hook") == "during_call":
                 self.during_guard_config_dict = kwargs.pop("vendor_params", None)  # None as default if not found
                 self.during_guard_config = GuardConfig(self.during_guard_config_dict)
+                if self.during_guard_config.redaction_keys:
+                    raise ValueError("acuvity guard config cannot do redaction for during_call mode, please add redactions in the pre_call")
             if kwargs.get("event_hook") == "post_call":
                 self.post_guard_config_dict = kwargs.pop("vendor_params", None)  # None as default if not found
                 self.post_guard_config = GuardConfig(self.post_guard_config_dict)
@@ -58,9 +58,9 @@ class AcuvityGuardrail(CustomGuardrail):
         """
         Runs before the LLM API call
         Runs on only Input
-        We just update the data here if there is a pii detection else if more detections are deteected then we raise exception.
+        We just update the data here if there is a pii detection else if more detections are detected then we raise exception.
         """
-
+        redacted = False
         _messages = data.get("messages")
         if _messages:
             msgs = [message.get("content") for message in _messages if message.get("content") is not None]
@@ -68,43 +68,29 @@ class AcuvityGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Acuvity pre_call data: %s", msgs)
             resp = await self.acuvity_client.apex.scan_async(*msgs, guard_config=self.pre_guard_config_dict)
 
-            # List of PII detectors to exclude from validation
-            pii_detectors = [
-                match
-                for detector in [
-                resp.guard_match(guard=GuardName.PII_DETECTOR),
-                resp.guard_match(guard=GuardName.SECRETS_DETECTOR),
-                resp.guard_match(guard=GuardName.KEYWORD_DETECTOR)
-                ]
-                for match in detector
-                if match.response_match == ResponseMatch.YES
-            ]
-
+            redaction_set = set(self.pre_guard_config.redaction_keys)
             for index, extraction in enumerate(resp.scan_response.extractions):
                 # Skip if no match
                 if resp.match_details[index].response_match != ResponseMatch.YES:
                     continue
 
-                # Check for violations
-                matched_checks = resp.match_details[index].matched_checks
-                if len(matched_checks) > len(pii_detectors):
-                    # Found violation beyond basic detectors
-                    violation = matched_checks[0].to_dict()
+                if self._check_violations(resp, redaction_set, index):
                     raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Violated guardrail policy",
-                            "guard": violation
-                        }
-                    )
-
+                                status_code=400, detail={
+                                    "error": "Violated guardrail policy",
+                                    "guard": resp.match_details[index].matched_guards
+                                }
+                            )
+                #If no voilations then, we need to replace the redacted response.
                 if isinstance(_messages[index]["content"], str):
-                    _messages[index]["content"] = extraction.data
+                    if _messages[index]["content"] != extraction.data:
+                        redacted = True
+                        _messages[index]["content"] = extraction.data
 
-                data["messages"] = _messages
-                verbose_proxy_logger.info(
-                    f"Acuvity pre call processed message: {data['messages']}"
-                )
+            data["messages"] = _messages
+            verbose_proxy_logger.info(
+                f"Acuvity pre call processed message: {data['messages']}, redaction applied {redacted}"
+            )
         return data
 
     @log_guardrail_information
@@ -133,11 +119,10 @@ class AcuvityGuardrail(CustomGuardrail):
             if resp.scan_response.extractions:
                     for index, r in enumerate(resp.scan_response.extractions):
                         if resp.match_details[index].response_match == ResponseMatch.YES:
-                            # return the 1st detection
                             raise HTTPException(
                                 status_code=400, detail={
                                     "error": "Violated guardrail policy",
-                                    "guard": resp.match_details[index].matched_checks[0].to_dict()
+                                    "guard": resp.match_details[index].matched_guards
                                 }
                             )
         pass
@@ -147,27 +132,87 @@ class AcuvityGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
     ):
         """
         Runs on response from LLM API call
 
-        It can be used to reject a response
+        Returns:
+            The processed response, potentially with redacted content
+
+        Raises:
+            HTTPException: If guardrail policies are violated
         """
 
-        response_str: Optional[str] = convert_litellm_response_object_to_str(response)
-        if response_str is not None:
-            verbose_proxy_logger.debug("Acuvity post_call data: %s", response_str)
-            resp = await self.acuvity_client.apex.scan_async(response_str, request_type= "Output" ,guard_config=self.post_guard_config_dict)
+        # we are intrested/supported only in text msgs and non streaming.
+        _messages = self._extract_response_messages(response)
+        redacted = False
+        if _messages:
+            verbose_proxy_logger.debug("Acuvity post_call data: %s", _messages)
+            resp = await self.acuvity_client.apex.scan_async(_messages, request_type= "Output" ,guard_config=self.post_guard_config_dict)
 
-            if resp.scan_response.extractions:
-                for index, r in enumerate(resp.scan_response.extractions):
-                    if resp.match_details[index].response_match == ResponseMatch.YES:
-                        # return the 1st detection
-                        raise HTTPException(
+            redaction_set = set(self.post_guard_config.redaction_keys)
+            for index, extraction in enumerate(resp.scan_response.extractions):
+                # Skip if no match
+                if resp.match_details[index].response_match != ResponseMatch.YES:
+                    continue
+
+                if self._check_violations(resp, redaction_set, index):
+                    raise HTTPException(
                                 status_code=400, detail={
                                     "error": "Violated guardrail policy",
-                                    "guard": resp.match_details[index].matched_checks[0].to_dict()
+                                    "guard": resp.match_details[index].matched_guards
                                 }
                             )
-        pass
+
+                #If no voilations then, we need to replace the redacted response.
+                if isinstance(response, ModelResponse) and not isinstance(response.choices[0], StreamingChoices):
+                    if response.choices[0].message.content != extraction.data:
+                        redacted = True
+                        response.choices[0].message.content = extraction.data
+
+        verbose_proxy_logger.info(
+                f"Acuvity post call processed message: {response.choices[0]}, redaction applied {redacted}"
+            )
+        return response
+
+    def _extract_response_messages(self, response_obj: Union[ModelResponse, EmbeddingResponse, ImageResponse]) -> Optional[str]:
+        """
+        Extracts the first non-streaming text message from a response object.
+
+        Args:
+            response_obj: The response object to process
+
+        Returns:
+            The first message content if available, None otherwise
+        """
+        if not isinstance(response_obj, ModelResponse):
+            return None
+
+        for choice in response_obj.choices:
+            if (not isinstance(choice, StreamingChoices) and
+                choice.message.content and
+                isinstance(choice.message.content, str)):
+                return choice.message.content
+        return None
+
+    def _check_violations(self, resp: ScanResponseMatch, redaction_set: set ,index: int) -> bool:
+        pii_detectors = [match
+                for detector in [
+                resp.guard_match(guard=GuardName.PII_DETECTOR, msg_index=index),
+                resp.guard_match(guard=GuardName.SECRETS_DETECTOR, msg_index=index),
+                resp.guard_match(guard=GuardName.KEYWORD_DETECTOR, msg_index=index)
+                ]
+                for match in detector
+                if match.response_match == ResponseMatch.YES
+                ]
+        matched_checks = resp.match_details[index].matched_checks
+        detected_extraction : list[str] = []
+        for m in matched_checks:
+            detected_extraction.extend(m.match_values)
+
+        # we reject the call if either of the following condition meets
+        # 1. we found any voilations other than textual detections.
+        # 2. we found any textual detections which are not part of redacted set.
+        if len(matched_checks) > len(pii_detectors) or len([item for item in detected_extraction if item not in redaction_set]) > 0:
+            return True
