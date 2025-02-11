@@ -6,6 +6,7 @@ import { uiSpendLogsCall, uiSpendLogDetailsCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { RequestViewer } from "./request_viewer";
+import { prefetchLogDetails } from "./prefetch";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -84,23 +85,7 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Function to prefetch log details with caching (optional, can be removed if using useQueries)
-  const prefetchLogDetails = (logs: LogEntry[], formattedStartTime: string) => {
-    logs.forEach((log) => {
-      if (log.request_id) {
-        queryClient.prefetchQuery({
-          queryKey: ["logDetails", log.request_id, formattedStartTime],
-          queryFn: () => uiSpendLogDetailsCall(accessToken!, log.request_id, formattedStartTime),
-          staleTime: 10 * 60 * 1000, // 10 minutes
-          gcTime: 10 * 60 * 1000, // 10 minutes
-        }).catch((error) => {
-          console.error(`Failed to prefetch details for log: ${log.request_id}`, error);
-        });
-      }
-    });
-  };
-
-  // Modify the logs query to handle the new data structure and prefetch details
+  // Update the logs query to use the imported prefetchLogDetails
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -151,8 +136,8 @@ export default function SpendLogsTable({
 
       console.log("Received logs response:", response);
 
-      // Prefetch details for each log (optional)
-      prefetchLogDetails(response.data, formattedStartTime);
+      // Update prefetchLogDetails call with new parameters
+      prefetchLogDetails(response.data, formattedStartTime, accessToken, queryClient);
 
       return response;
     },
