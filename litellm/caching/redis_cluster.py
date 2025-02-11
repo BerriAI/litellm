@@ -7,13 +7,11 @@ Key differences:
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from redis.asyncio import RedisCluster
-
 from litellm.caching.redis_cache import RedisCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from redis.asyncio import Redis
+    from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
 
     pipeline = Pipeline
