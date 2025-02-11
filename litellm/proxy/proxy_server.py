@@ -6354,7 +6354,7 @@ async def model_streaming_metrics(
                 if _day not in _daily_entries:
                     _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if "https://" in _api_base:
+            if _api_base is not None and "https://" in _api_base:
                 _combined_model_name = str(_api_base)
             if "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
@@ -6470,7 +6470,7 @@ async def model_metrics(
             if _day not in _daily_entries:
                 _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if "https://" in _api_base:
+            if _api_base is not None and "https://" in _api_base:
                 _combined_model_name = str(_api_base)
             if "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
