@@ -25,6 +25,7 @@ def _get_guardrails_list_response(
         guardrail_configs.append(
             GuardrailInfoResponse(
                 guardrail_name=guardrail.get("guardrail_name"),
+                litellm_params=guardrail.get("litellm_params"),
                 guardrail_info=guardrail.get("guardrail_info"),
             )
         )
