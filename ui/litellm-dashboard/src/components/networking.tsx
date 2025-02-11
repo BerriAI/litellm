@@ -3221,3 +3221,41 @@ export const getGuardrailsList = async (accessToken: String) => {
     throw error;
   }
 };
+
+
+export const uiSpendLogDetailsCall = async (
+  accessToken: string,
+  logId: string,
+  start_date: string
+) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
+      : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
+
+    console.log("Fetching log details from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched log details:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch log details:", error);
+    throw error;
+  }
+};
+
