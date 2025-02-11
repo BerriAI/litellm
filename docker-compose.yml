@@ -5,7 +5,7 @@ services:
       context: .
       args:
         target: runtime
-    image: ghcr.io/berriai/litellm:main-stable
+    image: ghcr.io/berriai/litellm:main-latest
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
     volumes:
