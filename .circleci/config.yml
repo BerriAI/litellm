@@ -72,6 +72,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "websockets==10.4"
+            pip uninstall posthog
       - save_cache:
           paths:
             - ./venv
@@ -89,14 +90,6 @@ jobs:
             cd litellm
             python -m pip install black
             python -m black .
-            cd ..
-      - run:
-          name: Check Posthog Dependencies
-          command: |
-            cd litellm
-            pip install pipdeptree
-            echo "Checking what requires posthog..."
-            pipdeptree -p posthog
             cd ..
       - run:
           name: Linting Testing
