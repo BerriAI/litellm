@@ -2,9 +2,7 @@ from typing import Callable, List, Set, Union
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.base_request_response_fetch import (
-    BaseRequestResponseFetchFromCustomLogger,
-)
+from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 
 
@@ -221,14 +219,14 @@ class LoggingCallbackManager:
             + litellm._async_failure_callback
         )
 
-    def get_active_base_request_response_fetch_from_custom_logger(
+    def get_active_additional_logging_utils_from_custom_logger(
         self,
-    ) -> Set[BaseRequestResponseFetchFromCustomLogger]:
+    ) -> Set[AdditionalLoggingUtils]:
         """
         Get all custom loggers that are instances of the given class type
 
         Args:
-            class_type: The class type to match against (e.g., BaseRequestResponseFetchFromCustomLogger)
+            class_type: The class type to match against (e.g., AdditionalLoggingUtils)
 
         Returns:
             Set[CustomLogger]: Set of custom loggers that are instances of the given class type
@@ -237,7 +235,7 @@ class LoggingCallbackManager:
         matched_callbacks = set()
         for callback in all_callbacks:
             if isinstance(callback, CustomLogger) and isinstance(
-                callback, BaseRequestResponseFetchFromCustomLogger
+                callback, AdditionalLoggingUtils
             ):
                 matched_callbacks.add(callback)
         return matched_callbacks

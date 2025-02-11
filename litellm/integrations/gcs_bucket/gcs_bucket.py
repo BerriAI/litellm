@@ -7,9 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
-from litellm.integrations.base_request_response_fetch import (
-    BaseRequestResponseFetchFromCustomLogger,
-)
+from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.gcs_bucket import *
@@ -25,7 +23,7 @@ GCS_DEFAULT_BATCH_SIZE = 2048
 GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
 
 
-class GCSBucketLogger(GCSBucketBase, BaseRequestResponseFetchFromCustomLogger):
+class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
         from litellm.proxy.proxy_server import premium_user
 
@@ -44,7 +42,7 @@ class GCSBucketLogger(GCSBucketBase, BaseRequestResponseFetchFromCustomLogger):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
-        BaseRequestResponseFetchFromCustomLogger.__init__(self)
+        AdditionalLoggingUtils.__init__(self)
 
         if premium_user is not True:
             raise ValueError(

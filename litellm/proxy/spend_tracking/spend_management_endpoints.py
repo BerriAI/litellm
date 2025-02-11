@@ -1782,12 +1782,10 @@ async def ui_view_request_response_for_request_id(
     - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
     - if so, it will return the request and response payload
     """
-    from litellm.integrations.base_request_response_fetch import (
-        BaseRequestResponseFetchFromCustomLogger,
-    )
+    from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 
     custom_loggers = (
-        litellm.logging_callback_manager.get_active_base_request_response_fetch_from_custom_logger()
+        litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     )
     # Convert the date strings to datetime objects
     start_date_iso: Optional[str] = None
