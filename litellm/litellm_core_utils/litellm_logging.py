@@ -2854,6 +2854,7 @@ class StandardLoggingPayloadSetup:
         metadata: Optional[Dict[str, Any]],
         litellm_params: Optional[dict] = None,
         prompt_integration: Optional[str] = None,
+        applied_guardrails: Optional[List[str]] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -2898,6 +2899,7 @@ class StandardLoggingPayloadSetup:
             requester_metadata=None,
             user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
+            applied_guardrails=applied_guardrails,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3196,6 +3198,7 @@ def get_standard_logging_object_payload(
             metadata=metadata,
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
+            applied_guardrails=kwargs.get("applied_guardrails", None),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3331,6 +3334,7 @@ def get_standard_logging_metadata(
         requester_metadata=None,
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,
+        applied_guardrails=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys
