@@ -1,10 +1,15 @@
 import asyncio
+import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from urllib.parse import quote
 
 from litellm._logging import verbose_logger
+from litellm.integrations.base_request_response_fetch import (
+    BaseRequestResponseFetchFromCustomLogger,
+)
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.integrations.gcs_bucket import *
@@ -20,7 +25,7 @@ GCS_DEFAULT_BATCH_SIZE = 2048
 GCS_DEFAULT_FLUSH_INTERVAL_SECONDS = 20
 
 
-class GCSBucketLogger(GCSBucketBase):
+class GCSBucketLogger(GCSBucketBase, BaseRequestResponseFetchFromCustomLogger):
     def __init__(self, bucket_name: Optional[str] = None) -> None:
         from litellm.proxy.proxy_server import premium_user
 
@@ -39,6 +44,7 @@ class GCSBucketLogger(GCSBucketBase):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
+        BaseRequestResponseFetchFromCustomLogger.__init__(self)
 
         if premium_user is not True:
             raise ValueError(
@@ -150,11 +156,16 @@ class GCSBucketLogger(GCSBucketBase):
         """
         Get the object name to use for the current payload
         """
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
         if logging_payload.get("error_str", None) is not None:
-            object_name = f"{current_date}/failure-{uuid.uuid4().hex}"
+            object_name = self._generate_failure_object_name(
+                request_date_str=current_date,
+            )
         else:
-            object_name = f"{current_date}/{response_obj.get('id', '')}"
+            object_name = self._generate_success_object_name(
+                request_date_str=current_date,
+                response_id=response_obj.get("id", ""),
+            )
 
         # used for testing
         _litellm_params = kwargs.get("litellm_params", None) or {}
@@ -163,3 +174,44 @@ class GCSBucketLogger(GCSBucketBase):
             object_name = _metadata["gcs_log_id"]
 
         return object_name
+
+    async def get_request_response_payload(
+        self,
+        request_id: str,
+        start_time_utc: Optional[datetime],
+        end_time_utc: Optional[datetime],
+    ) -> Optional[dict]:
+        """
+        Get the request and response payload for a given `request_id`
+        """
+        if start_time_utc is None:
+            raise ValueError(
+                "start_time_utc is required for getting a payload from GCS Bucket"
+            )
+        start_date = self._get_object_date_from_datetime(datetime_obj=start_time_utc)
+
+        object_name = self._generate_success_object_name(
+            request_date_str=start_date,
+            response_id=request_id,
+        )
+        encoded_object_name = quote(object_name, safe="")
+        response = await self.download_gcs_object(encoded_object_name)
+        if response:
+            loaded_response = json.loads(response)
+            return loaded_response
+
+    def _generate_success_object_name(
+        self,
+        request_date_str: str,
+        response_id: str,
+    ) -> str:
+        return f"{request_date_str}/{response_id}"
+
+    def _generate_failure_object_name(
+        self,
+        request_date_str: str,
+    ) -> str:
+        return f"{request_date_str}/failure-{uuid.uuid4().hex}"
+
+    def _get_object_date_from_datetime(self, datetime_obj: datetime) -> str:
+        return datetime_obj.strftime("%Y-%m-%d")
