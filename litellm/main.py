@@ -801,7 +801,7 @@ def mock_completion(
     custom_llm_provider=None,
     timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     **kwargs,
-):
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Generate a mock completion response for testing or debugging purposes.
 
@@ -817,7 +817,9 @@ def mock_completion(
         **kwargs: Additional keyword arguments that can be used but are not required.
 
     Returns:
-        litellm.ModelResponse: A ModelResponse simulating a completion response with the specified model, messages, and mock response.
+        Union[ModelResponse, CustomStreamWrapper]: 
+            - If stream=False: Returns a ModelResponse object containing the completion.
+            - If stream=True: Returns a CustomStreamWrapper object for streaming the completion.
 
     Raises:
         Exception: If an error occurs during the generation of the mock completion response.
