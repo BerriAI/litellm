@@ -227,7 +227,7 @@ async def list_organization(
     # if proxy admin - get all orgs
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         response = await prisma_client.db.litellm_organizationtable.find_many(
-            include={"members": True}
+            include={"members": True, "teams": True}
         )
     # if internal user - get orgs they are a member of
     else:
@@ -242,7 +242,7 @@ async def list_organization(
                     "in": [membership.organization_id for membership in org_memberships]
                 }
             },
-            include={"members": True},
+            include={"members": True, "teams": True},
         )
 
         response = org_objects
