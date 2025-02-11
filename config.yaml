@@ -65,3 +65,7 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.0-flash-thinking-exp-01-21
       api_key: os.environ/GEMINI_API_KEY
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+  
