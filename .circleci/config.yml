@@ -91,6 +91,14 @@ jobs:
             python -m black .
             cd ..
       - run:
+          name: Check Posthog Dependencies
+          command: |
+            cd litellm
+            pip install pipdeptree
+            echo "Checking what requires posthog..."
+            pipdeptree -p posthog
+            cd ..
+      - run:
           name: Linting Testing
           command: |
             cd litellm
