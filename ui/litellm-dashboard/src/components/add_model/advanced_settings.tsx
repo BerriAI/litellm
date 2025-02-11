@@ -91,7 +91,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
           <div className="bg-white rounded-lg">
             <Form.Item
               label="Team"
-              name={["model_info", "team_id"]}
+              name={["team_id"]}
               className="mb-4"
               tooltip="Assign this model to a specific team. When team members make API calls, they'll use this model with their team's API key. Useful for teams using their own fine-tuned models."
             >

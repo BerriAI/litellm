@@ -2,6 +2,8 @@ import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { modelCreateCall, Model } from "../networking";
 
+// fields on Add Model Form that should be added to model_info and not in litellm_params
+const modelInfoKeys = ["base_model", "team_id"];
 
 export const handleAddModelSubmit = async (
     formValues: Record<string, any>,
@@ -72,7 +74,7 @@ export const handleAddModelSubmit = async (
           }
   
           // Check if key is "base_model"
-          else if (key === "base_model") {
+          else if (modelInfoKeys.includes(key)) {
             // Add key-value pair to model_info dictionary
             modelInfoObj[key] = value;
           }
@@ -128,18 +130,6 @@ export const handleAddModelSubmit = async (
           else {
             // Add key-value pair to litellm_params dictionary
             litellmParamsObj[key] = value;
-          }
-  
-          // Check if key is "model_info"
-          if (key === "model_info") {
-            // Handle nested model_info structure
-            if (value && typeof value === 'object') {
-              for (const [infoKey, infoValue] of Object.entries(value)) {
-                if (infoValue !== undefined && infoValue !== '') {
-                  modelInfoObj[infoKey] = infoValue;
-                }
-              }
-            }
           }
         }
   
