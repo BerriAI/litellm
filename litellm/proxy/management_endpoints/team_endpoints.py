@@ -1483,10 +1483,7 @@ async def list_team(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="Only return teams which this 'user_id' belongs to"
     ),
-    organization_id: Optional[str] = fastapi.Query(
-        default=None,
-        description="Only return teams which belong to this 'organization_id'. Pass 'default_organization' to get all teams without organization_id.",
-    ),
+    organization_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1572,7 +1569,7 @@ async def list_team(
     # Sort the responses by team_alias
     returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
 
-    if organization_id:
+    if organization_id is not None:
         if organization_id == SpecialManagementEndpointEnums.DEFAULT_ORGANIZATION.value:
             returned_responses = [
                 team for team in returned_responses if team.organization_id is None
