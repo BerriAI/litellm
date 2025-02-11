@@ -1784,28 +1784,19 @@ async def ui_view_request_response_for_request_id(
     - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
     - if so, it will return the request and response payload
     """
-    from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
-
     custom_loggers = (
         litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     )
-    # Convert the date strings to datetime objects
-    start_date_iso: Optional[str] = None
-    end_date_iso: Optional[str] = None
-
     start_date_obj: Optional[datetime] = None
     end_date_obj: Optional[datetime] = None
     if start_date is not None:
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
         )
-        # Convert to ISO format strings for Prisma
-        start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
     if end_date is not None:
         end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
             tzinfo=timezone.utc
         )
-        end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
 
     for custom_logger in custom_loggers:
         payload = await custom_logger.get_request_response_payload(
