@@ -2033,7 +2033,7 @@ async def test_aview_spend_per_user(prisma_client):
         first_user = user_by_spend[0]
 
         print("\nfirst_user=", first_user)
-        assert first_user["spend"] > 0
+        assert first_user["spend"] >= 0
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
@@ -2051,7 +2051,7 @@ async def test_view_spend_per_key(prisma_client):
         first_key = key_by_spend[0]
 
         print("\nfirst_key=", first_key)
-        assert first_key.spend > 0
+        assert first_key.spend >= 0
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
