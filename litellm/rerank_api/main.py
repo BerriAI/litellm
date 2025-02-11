@@ -180,6 +180,7 @@ def rerank(  # noqa: PLR0915
             response = base_llm_http_handler.rerank(
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
@@ -201,6 +202,7 @@ def rerank(  # noqa: PLR0915
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
                 optional_rerank_params=optional_rerank_params,
+                provider_config=rerank_provider_config,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
                 api_key=dynamic_api_key or optional_params.api_key,
@@ -229,6 +231,7 @@ def rerank(  # noqa: PLR0915
             response = base_llm_http_handler.rerank(
                 model=model,
                 custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,

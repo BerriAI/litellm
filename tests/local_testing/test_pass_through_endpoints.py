@@ -113,8 +113,8 @@ async def test_pass_through_endpoint_rerank(client):
     # Define a pass-through endpoint
     pass_through_endpoints = [
         {
-            "path": f"/v1/rerank",
-            "target": f"https://api.cohere.com/v1/rerank",
+            "path": "/v1/rerank",
+            "target": "https://api.cohere.com/v1/rerank",
             "headers": {"Authorization": f"bearer {_cohere_api_key}"},
         }
     ]
