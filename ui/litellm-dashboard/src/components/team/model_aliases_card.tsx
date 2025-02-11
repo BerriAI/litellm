@@ -53,8 +53,10 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
 
   return (
     <div className="mt-8">
+      <Title>Team Aliases</Title>
       <Text className="text-gray-600 mb-4">
-        Below, please find current model aliases, and guidance on when they will be updated to new versions (if guidance is available).
+        Allow a team to use an alias that points to a specific model deployment.
+        
       </Text>
       
       <div className="bg-white rounded-lg p-6 border border-gray-200">
