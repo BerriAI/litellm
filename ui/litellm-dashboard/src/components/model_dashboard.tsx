@@ -21,6 +21,7 @@ import LiteLLMModelNameField from "./add_model/litellm_model_name";
 import AdvancedSettings from "./add_model/advanced_settings";
 import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+import { getDisplayModelName } from "./view_model/model_name_display";
 import EditModelModal from "./edit_model/edit_model_modal";
 import {
   TabPanel,
@@ -1291,7 +1292,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 wordBreak: "break-word",
                               }}
                             >
-                              <p className="text-xs">{model.model_name || "-"}</p>
+                              <p className="text-xs">{getDisplayModelName(model) || "-"}</p>
                             </TableCell>
                             <TableCell
                                 style={{
