@@ -44,7 +44,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
       message.success("Model alias created successfully");
       setIsModalVisible(false);
       form.resetFields();
-      onUpdate();
+      currentAliases[values.original_model] = values.alias_name;
     } catch (error) {
       message.error("Failed to create model alias");
       console.error("Error creating model alias:", error);
@@ -67,9 +67,8 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
           </div>
           <TremorButton
             size="md"
-            variant="secondary"
+            variant="primary"
             onClick={() => setIsModalVisible(true)}
-            className="bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
           >
             Create Model Alias
           </TremorButton>
@@ -158,9 +157,8 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
             </TremorButton>
             <TremorButton
               size="md"
-              variant="primary"
+              variant="secondary"
               type="submit"
-              className="bg-blue-600 text-white hover:bg-blue-700"
             >
               Create Alias
             </TremorButton>
