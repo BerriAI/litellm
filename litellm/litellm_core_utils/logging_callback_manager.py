@@ -1,7 +1,8 @@
-from typing import Callable, List, Union
+from typing import Callable, List, Set, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 
 
@@ -220,3 +221,36 @@ class LoggingCallbackManager:
         litellm._async_success_callback = []
         litellm._async_failure_callback = []
         litellm.callbacks = []
+
+    def _get_all_callbacks(self) -> List[Union[CustomLogger, Callable, str]]:
+        """
+        Get all callbacks from litellm.callbacks, litellm.success_callback, litellm.failure_callback, litellm._async_success_callback, litellm._async_failure_callback
+        """
+        return (
+            litellm.callbacks
+            + litellm.success_callback
+            + litellm.failure_callback
+            + litellm._async_success_callback
+            + litellm._async_failure_callback
+        )
+
+    def get_active_additional_logging_utils_from_custom_logger(
+        self,
+    ) -> Set[AdditionalLoggingUtils]:
+        """
+        Get all custom loggers that are instances of the given class type
+
+        Args:
+            class_type: The class type to match against (e.g., AdditionalLoggingUtils)
+
+        Returns:
+            Set[CustomLogger]: Set of custom loggers that are instances of the given class type
+        """
+        all_callbacks = self._get_all_callbacks()
+        matched_callbacks: Set[AdditionalLoggingUtils] = set()
+        for callback in all_callbacks:
+            if isinstance(callback, CustomLogger) and isinstance(
+                callback, AdditionalLoggingUtils
+            ):
+                matched_callbacks.add(callback)
+        return matched_callbacks
