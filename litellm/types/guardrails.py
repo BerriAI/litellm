@@ -156,7 +156,7 @@ class GuardrailLiteLLMParamsResponse(BaseModel):
 
 
 class GuardrailInfoResponse(BaseModel):
-    guardrail_name: Optional[str]
+    guardrail_name: str
     litellm_params: GuardrailLiteLLMParamsResponse
     guardrail_info: Optional[Dict]
 
