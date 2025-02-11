@@ -30,6 +30,7 @@ from litellm.types.utils import (
     ModelResponseStream,
 )
 
+
 class AimGuardrailMissingSecrets(Exception):
     pass
 
@@ -120,9 +121,9 @@ class AimGuardrail(CustomGuardrail):
             {"x-aim-user-email": user_email} if user_email else {}
         )
         response = await self.async_handler.post(
-            f"{self.api_base}/detect",
+            f"{self.api_base}/detect/output",
             headers=headers,
-            json={"user_prompt": output},
+            json={"output": output, "messages": request_data.get("messages", [])},
         )
         response.raise_for_status()
         res = response.json()
