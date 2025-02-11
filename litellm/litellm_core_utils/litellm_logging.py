@@ -199,6 +199,7 @@ class Logging(LiteLLMLoggingBaseClass):
         dynamic_async_failure_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = None,
+        applied_guardrails: Optional[List[str]] = None,
         kwargs: Optional[Dict] = None,
     ):
         _input: Optional[str] = messages  # save original value of messages
@@ -271,6 +272,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_call_id": litellm_call_id,
             "input": _input,
             "litellm_params": litellm_params,
+            "applied_guardrails": applied_guardrails,
         }
 
     def process_dynamic_callbacks(self):
@@ -2866,6 +2868,7 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+
         prompt_management_metadata: Optional[
             StandardLoggingPromptManagementMetadata
         ] = None

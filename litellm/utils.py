@@ -60,6 +60,7 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
@@ -418,6 +419,35 @@ def _custom_logger_class_exists_in_failure_callbacks(
     )
 
 
+def get_request_guardrails(kwargs: Dict[str, Any]) -> List[str]:
+    """
+    Get the request guardrails from the kwargs
+    """
+    metadata = kwargs.get("metadata") or {}
+    requester_metadata = metadata.get("requester_metadata") or {}
+    applied_guardrails = requester_metadata.get("guardrails") or []
+    return applied_guardrails
+
+
+def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
+    """
+    - Add 'default_on' guardrails to the list
+    - Add request guardrails to the list
+    """
+
+    request_guardrails = get_request_guardrails(kwargs)
+    applied_guardrails = []
+    for callback in litellm.callbacks:
+        if callback is not None and isinstance(callback, CustomGuardrail):
+            if callback.guardrail_name is not None:
+                if callback.default_on is True:
+                    applied_guardrails.append(callback.guardrail_name)
+                elif callback.guardrail_name in request_guardrails:
+                    applied_guardrails.append(callback.guardrail_name)
+
+    return applied_guardrails
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -435,6 +465,9 @@ def function_setup(  # noqa: PLR0915
 
         ## CUSTOM LLM SETUP ##
         custom_llm_setup()
+
+        ## GET APPLIED GUARDRAILS
+        applied_guardrails = get_applied_guardrails(kwargs)
 
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
@@ -677,6 +710,7 @@ def function_setup(  # noqa: PLR0915
             dynamic_async_success_callbacks=dynamic_async_success_callbacks,
             dynamic_async_failure_callbacks=dynamic_async_failure_callbacks,
             kwargs=kwargs,
+            applied_guardrails=applied_guardrails,
         )
 
         ## check if metadata is passed in
