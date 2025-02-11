@@ -10,6 +10,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.proxy._types import CommonProxyErrors
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.gcs_bucket import *
 from litellm.types.utils import StandardLoggingPayload
 
@@ -231,3 +232,6 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
     def _get_object_date_from_datetime(self, datetime_obj: datetime) -> str:
         return datetime_obj.strftime("%Y-%m-%d")
+
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
+        raise NotImplementedError("GCS Bucket does not support health check")

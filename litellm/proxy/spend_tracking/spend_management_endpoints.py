@@ -2,6 +2,7 @@
 import collections
 import os
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Optional
 
 import fastapi
@@ -1759,6 +1760,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         raise handle_exception_on_proxy(e)
 
 
+@lru_cache(maxsize=128)
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
