@@ -1204,7 +1204,16 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             /1M Tokens ($)
                           </p>
                         </TableHeaderCell>
-
+                        <TableHeaderCell
+                          style={{
+                            maxWidth: "100px",
+                            whiteSpace: "normal",
+                            wordBreak: "break-word",
+                            fontSize: "11px",
+                          }}
+                        >
+                          Team
+                        </TableHeaderCell>
                         <TableHeaderCell
                           style={{
                             maxWidth: "100px",
