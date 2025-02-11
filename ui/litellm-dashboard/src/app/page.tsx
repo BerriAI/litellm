@@ -25,7 +25,7 @@ import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
-
+import GuardrailsPanel from "@/components/guardrails";
 function getCookie(name: string) {
   const cookieValue = document.cookie
     .split("; ")
@@ -306,6 +306,8 @@ export default function CreateKeyPage() {
                 />
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
+              ) : page == "guardrails" ? (
+                <GuardrailsPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}
