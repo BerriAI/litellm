@@ -543,3 +543,13 @@ class DataDogLogger(
                 status="unhealthy",
                 error_message=str(e),
             )
+
+    async def get_request_response_payload(
+        self,
+        request_id: str,
+        start_time_utc: Optional[datetimeObj],
+        end_time_utc: Optional[datetimeObj],
+    ) -> Optional[dict]:
+        raise NotImplementedError(
+            "Datdog Integration for getting request/response payloads not implemented as yet"
+        )
