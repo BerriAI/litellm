@@ -8,11 +8,13 @@ const { Link } = Typography;
 interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
+  teams: any[] | null;
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
+  teams,
 }) => {
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
@@ -87,6 +89,26 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         </AccordionHeader>
         <AccordionBody>
           <div className="bg-white rounded-lg">
+            <Form.Item
+              label="Team"
+              name={["model_info", "team_id"]}
+              className="mb-4"
+              tooltip="Assign this model to a specific team. When team members make API calls, they'll use this model with their team's API key. Useful for teams using their own fine-tuned models."
+            >
+              <Select
+                placeholder="Select a team"
+                showSearch
+                allowClear
+                filterOption={(input, option) =>
+                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                options={teams?.filter(team => team.team_alias).map(team => ({
+                  value: team.team_id,
+                  label: team.team_alias
+                }))}
+              />
+            </Form.Item>
+
             <Form.Item
               label="Custom Pricing"
               name="custom_pricing"

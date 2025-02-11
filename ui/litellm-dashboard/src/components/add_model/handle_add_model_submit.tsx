@@ -129,6 +129,18 @@ export const handleAddModelSubmit = async (
             // Add key-value pair to litellm_params dictionary
             litellmParamsObj[key] = value;
           }
+  
+          // Check if key is "model_info"
+          if (key === "model_info") {
+            // Handle nested model_info structure
+            if (value && typeof value === 'object') {
+              for (const [infoKey, infoValue] of Object.entries(value)) {
+                if (infoValue !== undefined && infoValue !== '') {
+                  modelInfoObj[infoKey] = infoValue;
+                }
+              }
+            }
+          }
         }
   
         const new_model: Model = {

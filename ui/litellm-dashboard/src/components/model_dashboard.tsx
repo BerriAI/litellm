@@ -111,6 +111,7 @@ interface ModelDashboardProps {
   keys: any[] | null;
   setModelData: any;
   premiumUser: boolean;
+  teams?: any[];
 }
 
 interface EditModelModalProps {
@@ -164,6 +165,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   keys,
   setModelData,
   premiumUser,
+  teams,
 }) => {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
@@ -1560,6 +1562,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   <AdvancedSettings 
                     showAdvancedSettings={showAdvancedSettings}
                     setShowAdvancedSettings={setShowAdvancedSettings}
+                    teams={teams}
                   />
                   
 
