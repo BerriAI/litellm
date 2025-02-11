@@ -790,21 +790,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 raise Exception(
                     "Key is blocked. Update via `/key/unblock` if you're admin."
                 )
-
-            # Check 1. If token can call model
-            _model_alias_map = {}
-            model: Optional[str] = None
-            if (
-                hasattr(valid_token, "team_model_aliases")
-                and valid_token.team_model_aliases is not None
-            ):
-                _model_alias_map = {
-                    **valid_token.aliases,
-                    **valid_token.team_model_aliases,
-                }
-            else:
-                _model_alias_map = {**valid_token.aliases}
-            litellm.model_alias_map = _model_alias_map
             config = valid_token.config
 
             if config != {}:
