@@ -1421,7 +1421,8 @@ async def _run_background_health_check():
     if _llm_model_list is None:
         return
 
-    while True:
+    while use_background_health_checks: #this will stop if the flag is false 
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )

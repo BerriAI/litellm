@@ -103,3 +103,6 @@ version_files = [
 
 [tool.mypy]
 plugins = "pydantic.mypy"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
