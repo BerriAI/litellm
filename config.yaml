@@ -49,7 +49,7 @@ model_list:
       aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
   - model_name: bedrock-ray
     litellm_params:
-      model: luma.ray-v2:0
+      model: bedrock/luma.ray-v2:0
       aws_access_key_id: os.environ/CUSTOM_AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/CUSTOM_AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/CUSTOM_AWS_REGION_NAME
@@ -65,4 +65,3 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.0-flash-thinking-exp-01-21
       api_key: os.environ/GEMINI_API_KEY
-      
