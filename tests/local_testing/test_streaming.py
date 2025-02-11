@@ -19,6 +19,8 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm.utils import ModelResponseListIterator
 from litellm.types.utils import ModelResponseStream
 
+from litellm._logging import verbose_logger
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -4091,19 +4093,24 @@ async def test_openrouter_deepseek_reasoning_content_acompletion():
     litellm._turn_on_debug()
     try:
         resp = await litellm.acompletion(
-            model="openrouter/deepseek/deepseek-r1",
+            model="openrouter/deepseek/deepseek-r1-distill-llama-70b",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             stream=True,
             include_reasoning=True,
         )
 
         reasoning_content_exists = False
+        chunks = []
         async for chunk in resp:
+            chunks.append(chunk)
+            verbose_logger.info(f'chunk: {chunk}')
             if chunk.get("reasoning_content", None) is not None:
                 print(f"chunk reasoning_content: {chunk}")
                 reasoning_content_exists = True
                 break
         assert reasoning_content_exists
+        full_message = litellm.stream_chunk_builder(chunks, messages=messages)
+        verbose_logger.info(f'full_message: {full_message}')
     except litellm.Timeout:
         pytest.skip("Model is timing out")
     except Exception as e:

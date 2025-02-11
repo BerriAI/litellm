@@ -1199,6 +1199,7 @@ class TextCompletionResponse(OpenAIObject):
         "choices": [
         {
             "text": response["choices"][0]["message"]["content"],
+            "reasoning_content": response["choices"][0]["message"]["reasoning_content"],
             "index": response["choices"][0]["index"],
             "logprobs": transformed_logprobs,
             "finish_reason": response["choices"][0]["finish_reason"]
