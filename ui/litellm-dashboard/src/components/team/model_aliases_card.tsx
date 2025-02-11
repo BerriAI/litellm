@@ -121,7 +121,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
           >
             <Input 
               placeholder="Enter the model alias (e.g., gpt-4o)"
-              className="w-full font-mono"
+              type=""
             />
           </Form.Item>
 
