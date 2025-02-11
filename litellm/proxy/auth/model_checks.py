@@ -149,9 +149,11 @@ def get_complete_model_list(
 
 
 def get_known_models_from_wildcard(wildcard_model: str) -> List[str]:
-    provider, model = wildcard_model.split("/", 1)
+    try:
+        provider, model = wildcard_model.split("/", 1)
+    except ValueError:  # safely fail
+        return []
     # get all known provider models
-
     wildcard_models = get_provider_models(provider=provider)
     if wildcard_models is None:
         return []
