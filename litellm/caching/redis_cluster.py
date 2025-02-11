@@ -29,6 +29,8 @@ class RedisClusterCache(RedisCache):
         self.redis_cluster_client: Optional[RedisCluster] = None
 
     def init_async_client(self):
+        from redis.asyncio import RedisCluster
+
         from .._redis import get_redis_async_client
 
         if self.redis_cluster_client:
