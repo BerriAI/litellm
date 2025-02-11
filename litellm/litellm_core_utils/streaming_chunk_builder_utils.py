@@ -228,8 +228,7 @@ class ChunkProcessor:
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
-                delta = choice.get("delta", {})
-                content = delta.get("reasoning_content", "")
+                content = choice.get("reasoning_content", "")
                 if content is None:
                     continue  # openai v1.0.0 sets content = None for chunks
                 content_list.append(content)
