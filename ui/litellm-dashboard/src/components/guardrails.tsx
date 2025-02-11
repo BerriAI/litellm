@@ -85,7 +85,13 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
                 <TableCell>{guardrail.guardrail_name}</TableCell>
                 <TableCell>{guardrail.litellm_params.mode}</TableCell>
                 <TableCell>
-                  {guardrail.litellm_params.default_on ? 'Always On' : 'Per Request'}
+                <div className={`inline-flex rounded-full px-2 py-1 text-xs font-medium
+                    ${guardrail.litellm_params.default_on 
+                    ? 'bg-green-100 text-green-800'  // Always On styling
+                    : 'bg-gray-100 text-gray-800'    // Per Request styling
+                    }`}>
+                    {guardrail.litellm_params.default_on ? 'Always On' : 'Per Request'}
+                </div>
                 </TableCell>
                 </TableRow>
               ))
