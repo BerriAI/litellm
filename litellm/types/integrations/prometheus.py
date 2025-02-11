@@ -54,6 +54,7 @@ LATENCY_BUCKETS = (
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
     USER = "user"
+    USER_EMAIL = "user_email"
     API_KEY_HASH = "hashed_api_key"
     API_KEY_ALIAS = "api_key_alias"
     TEAM = "team"
@@ -156,6 +157,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
     litellm_input_tokens_metric = [
@@ -239,6 +241,9 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     user: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER.value)
+    ] = None
+    user_email: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_EMAIL.value)
     ] = None
     hashed_api_key: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.API_KEY_HASH.value)
