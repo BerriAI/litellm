@@ -2,7 +2,7 @@ import moment from "moment";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
 
-import { uiSpendLogsCall } from "../networking";
+import { uiSpendLogsCall, uiSpendLogDetailsCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -54,6 +54,9 @@ export default function SpendLogsTable({
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Team ID");
 
+  // Add new state for storing log details
+  const [logDetails, setLogDetails] = useState<Record<string, any>>({});
+
   // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -82,6 +85,23 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Function to fetch log details
+  const fetchLogDetails = async (logId: string, startDate: string) => {
+    try {
+      console.log(`Fetching details for log: ${logId}`);
+      const utcStartDate = moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss");
+      const details = await uiSpendLogDetailsCall(accessToken!, logId, utcStartDate);
+      setLogDetails(prev => ({
+        ...prev,
+        [logId]: details
+      }));
+      console.log(`Successfully fetched details for log: ${logId}`, details);
+    } catch (error) {
+      console.error(`Failed to fetch details for log: ${logId}`, error);
+    }
+  };
+
+  // Modify the logs query to handle the new data structure
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -105,13 +125,21 @@ export default function SpendLogsTable({
         };
       }
 
-      // Convert times to UTC before formatting
+      console.log("Fetching logs with params:", {
+        startTime,
+        endTime,
+        selectedTeamId,
+        selectedKeyHash,
+        currentPage,
+        pageSize
+      });
+
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
         ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-      return await uiSpendLogsCall(
+      const response = await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
         selectedTeamId || undefined,
@@ -121,6 +149,17 @@ export default function SpendLogsTable({
         currentPage,
         pageSize
       );
+
+      console.log("Received logs response:", response);
+
+      // Start fetching details for each log in the background
+      response.data.forEach((log: LogEntry) => {
+        if (log.request_id) {
+          fetchLogDetails(log.request_id, formattedStartTime);
+        }
+      });
+
+      return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID,
     refetchInterval: 5000,
@@ -134,6 +173,7 @@ export default function SpendLogsTable({
     return null;
   }
 
+  // Modify the filtered data to include log details
   const filteredData =
     logs.data?.data?.filter((log) => {
       const matchesSearch =
@@ -142,9 +182,13 @@ export default function SpendLogsTable({
         log.model.includes(searchTerm) ||
         (log.user && log.user.includes(searchTerm));
       
-      // No need for additional filtering since we're now handling this in the API call
       return matchesSearch;
-    }) || [];
+    }).map(log => ({
+      ...log,
+      // Only include messages/response if we have the details
+      messages: logDetails[log.request_id]?.messages || [],
+      response: logDetails[log.request_id]?.response || {},
+    })) || [];
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
