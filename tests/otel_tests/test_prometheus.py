@@ -258,6 +258,24 @@ async def create_test_team(
         return team_info["team_id"]
 
 
+async def create_test_user(
+    session: aiohttp.ClientSession, user_data: Dict[str, Any]
+) -> str:
+    """Create a new user and return the user_id"""
+    url = "http://0.0.0.0:4000/user/new"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+
+    async with session.post(url, headers=headers, json=user_data) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to create user. Status: {response.status}"
+        user_info = await response.json()
+        return user_info
+
+
 async def get_prometheus_metrics(session: aiohttp.ClientSession) -> str:
     """Fetch current prometheus metrics"""
     async with session.get("http://0.0.0.0:4000/metrics") as response:
@@ -526,3 +544,38 @@ async def test_key_budget_metrics():
         assert (
             abs(key_info_remaining_budget - first_budget["remaining"]) <= 0.00000
         ), f"Spend mismatch: Prometheus={key_info_remaining_budget}, Key Info={first_budget['remaining']}"
+
+
+@pytest.mark.asyncio
+async def test_user_email_metrics():
+    """
+    Test user email tracking metrics:
+    1. Create a user with user_email
+    2. Make chat completion requests using OpenAI SDK with the user's email
+    3. Verify user email is being tracked correctly in `litellm_user_email_metric`
+    """
+    async with aiohttp.ClientSession() as session:
+        # Create a user with user_email
+        user_data = {
+            "user_email": "test@example.com",
+        }
+        user_id = await create_test_user(session, user_data)
+        print("user_id", user_id)
+
+        # Initialize OpenAI client with the user's email
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234")
+
+        # Make initial request and check budget
+        await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        )
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get metrics after request
+        metrics_after_first = await get_prometheus_metrics(session)
+        print("metrics_after_first request", metrics_after_first)
+        assert (
+            "test@example.com" in metrics_after_first
+        ), "user_email should be tracked correctly"
