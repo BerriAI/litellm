@@ -232,7 +232,7 @@ class LoggingCallbackManager:
             Set[CustomLogger]: Set of custom loggers that are instances of the given class type
         """
         all_callbacks = self._get_all_callbacks()
-        matched_callbacks = set()
+        matched_callbacks: Set[AdditionalLoggingUtils] = set()
         for callback in all_callbacks:
             if isinstance(callback, CustomLogger) and isinstance(
                 callback, AdditionalLoggingUtils
