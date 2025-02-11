@@ -20,9 +20,13 @@ interface GuardrailsResponse {
 }
 
 interface GuardrailItem {
-  name: string;
-  mode: string;
-  status: "always_on" | "per_request";
+    guardrail_name: string | null;
+    litellm_params: {
+        guardrail: string;
+        mode: string;
+        default_on: boolean;
+    };
+    guardrail_info: Record<string, any> | null;
 }
 
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
@@ -35,10 +39,9 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
     
     const fetchGuardrails = async () => {
       try {
-        const response = await getGuardrailsList(accessToken);
-        const data: GuardrailsResponse = await response.json();
-
-        setGuardrailsList(data.guardrails);
+        const response: GuardrailsResponse = await getGuardrailsList(accessToken);
+        console.log(`guardrails: ${JSON.stringify(response)}`);
+        setGuardrailsList(response.guardrails);
 
       } catch (error) {
         console.error('Error fetching guardrails:', error);
@@ -79,10 +82,10 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
             ) : (
               guardrailsList?.map((guardrail: GuardrailItem, index: number) => (
                 <TableRow key={index}>
-                <TableCell>{guardrail.name}</TableCell>
-                <TableCell>{guardrail.mode}</TableCell>
+                <TableCell>{guardrail.guardrail_name}</TableCell>
+                <TableCell>{guardrail.litellm_params.mode}</TableCell>
                 <TableCell>
-                  {guardrail.status === 'always_on' ? 'Always On' : 'Per Request'}
+                  {guardrail.litellm_params.default_on ? 'Always On' : 'Per Request'}
                 </TableCell>
                 </TableRow>
               ))
