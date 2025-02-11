@@ -7,8 +7,10 @@ import {
   getProxyUISettings,
   teamListCall,
   Organization,
-  organizationListCall
+  organizationListCall,
+  DEFAULT_ORGANIZATION
 } from "./networking";
+import { fetchTeams } from "./common_components/fetch_teams";
 import { Grid, Col, Card, Text, Title } from "@tremor/react";
 import CreateKey from "./create_key_button";
 import ViewKeyTable from "./view_key_table";
@@ -62,6 +64,7 @@ interface UserDashboardProps {
   setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
   setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>>;
   premiumUser: boolean;
+  currentOrg: Organization | null;
 }
 
 type TeamInterface = {
@@ -82,15 +85,15 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setKeys,
   setOrganizations,
   premiumUser,
+  currentOrg
 }) => {
+  console.log(`currentOrg in user dashboard: ${JSON.stringify(currentOrg)}`)
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(
     null
   );
 
   // Assuming useSearchParams() hook exists and works in your setup
   const searchParams = useSearchParams()!;
-  const viewSpend = searchParams.get("viewSpend");
-  const router = useRouter();
 
   const token = getCookie('token');
 
@@ -173,22 +176,11 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
       }
     }
     if (userID && accessToken && userRole && !keys && !userSpendData) {
-      // const cachedUserModels = sessionStorage.getItem("userModels" + userID);
-      // if (cachedUserModels) {
-      //   setUserModels(JSON.parse(cachedUserModels));
-      // } else {
-        const fetchTeams = async () => {
-          let givenTeams;
-          if (userRole != "Admin" && userRole != "Admin Viewer") {
-            givenTeams = await teamListCall(accessToken, userID)
-          } else {
-            givenTeams = await teamListCall(accessToken)
-          }
-          
-          console.log(`givenTeams: ${givenTeams}`)
-
-          setTeams(givenTeams)
-        }
+      const cachedUserModels = sessionStorage.getItem("userModels" + userID);
+      if (cachedUserModels) {
+        setUserModels(JSON.parse(cachedUserModels));
+      } else {
+        console.log(`currentOrg: ${JSON.stringify(currentOrg)}`)
         const fetchData = async () => {
           try {
             const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
@@ -205,12 +197,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
             setUserSpendData(response["user_info"]);
             console.log(`userSpendData: ${JSON.stringify(userSpendData)}`)
-
-            console.log(`response["user_info"]["organization_memberships"]: ${JSON.stringify(response["user_info"]["organization_memberships"])}`)
             
 
             // set keys for admin and users
-            if (!response?.teams?.[0]?.keys) {
+            if (!response?.teams[0].keys) {
               setKeys(response["keys"]); 
             } else {
               setKeys(
@@ -270,11 +260,19 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
           setOrganizations(organizations);
         }
         fetchData();
-        fetchTeams();
+        fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
         fetchOrganizations();
       }
-    // }
+    }
   }, [userID, token, accessToken, keys, userRole]);
+
+  useEffect(() => {
+    console.log(`currentOrg: ${JSON.stringify(currentOrg)}, accessToken: ${accessToken}, userID: ${userID}, userRole: ${userRole}`)
+    if (accessToken) {
+      console.log(`fetching teams`)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+    }
+  }, [currentOrg]);
 
   useEffect(() => {
     // This code will run every time selectedTeam changes
@@ -375,6 +373,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setData={setKeys}
             premiumUser={premiumUser}
             teams={teams}
+            currentOrg={currentOrg}
           />
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}

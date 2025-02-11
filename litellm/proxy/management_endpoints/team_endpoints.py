@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    SpecialManagementEndpointEnums,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
     TeamListResponseObject,
@@ -1482,6 +1483,7 @@ async def list_team(
     user_id: Optional[str] = fastapi.Query(
         default=None, description="Only return teams which this 'user_id' belongs to"
     ),
+    organization_id: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1492,6 +1494,7 @@ async def list_team(
 
     Parameters:
     - user_id: str - Optional. If passed will only return teams that the user_id is a member of.
+    - organization_id: str - Optional. If passed will only return teams that belong to the organization_id. Pass 'default_organization' to get all teams without organization_id.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1565,6 +1568,19 @@ async def list_team(
             continue
     # Sort the responses by team_alias
     returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+
+    if organization_id is not None:
+        if organization_id == SpecialManagementEndpointEnums.DEFAULT_ORGANIZATION.value:
+            returned_responses = [
+                team for team in returned_responses if team.organization_id is None
+            ]
+        else:
+            returned_responses = [
+                team
+                for team in returned_responses
+                if team.organization_id == organization_id
+            ]
+
     return returned_responses
 
 
