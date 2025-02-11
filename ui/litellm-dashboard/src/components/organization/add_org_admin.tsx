@@ -21,6 +21,9 @@ interface AddOrgAdminProps {
     userID: string;
     selectedOrganization?: Organization;
     onMemberAdd?: (formValues: Record<string, any>) => void;
+    isAddMemberModalVisible: boolean;
+    setIsAddMemberModalVisible: (visible: boolean) => void;
+    form: any;
   }
 
 
@@ -38,10 +41,11 @@ const AddOrgAdmin: FC<AddOrgAdminProps> = ({
     userRole,
     userID,
     selectedOrganization,
-    onMemberAdd
+    onMemberAdd,
+    isAddMemberModalVisible,
+    setIsAddMemberModalVisible, 
+    form
 }) => {
-    const [isAddMemberModalVisible, setIsAddMemberModalVisible] = React.useState(false);
-    const [form] = Form.useForm();
 
     const handleMemberCancel = () => {
         form.resetFields();

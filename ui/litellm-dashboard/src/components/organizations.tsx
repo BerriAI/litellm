@@ -27,7 +27,7 @@ interface TeamProps {
 
 import DataTable from "@/components/common_components/all_view";
 import { Action } from "@/components/common_components/all_view";
-import { Typography, message } from "antd";
+import { Form, Typography, message } from "antd";
 import { Organization, EditModalProps } from "@/components/organization/types";
 
 interface OrganizationsTableProps {
@@ -209,6 +209,9 @@ const Organizations: React.FC<TeamProps> = ({
     }
   }, [accessToken]);
 
+  // Member Create
+  const [form] = Form.useForm();
+  const [isAddMemberModalVisible, setIsAddMemberModalVisible] = React.useState(false);
   const handleMemberCreate = async (formValues: Record<string, any>) => {
     if (!selectedOrganization || !accessToken) return;
     try {
@@ -217,11 +220,27 @@ const Organizations: React.FC<TeamProps> = ({
         user_id: formValues.user_id,
         role: formValues.role
       }
-      await organizationMemberAddCall(
+    const response =  await organizationMemberAddCall(
         accessToken,
         selectedOrganization["organization_id"],
         member
       );
+
+        setSelectedOrganization((prev) => ({
+          ...prev,
+          members: [...(prev?.members || []), response?.updated_organization_memberships[0]],
+          organization_id: prev?.organization_id || "",
+          organization_name: prev?.organization_name || "",
+          spend: prev?.spend || 0,
+          max_budget: prev?.max_budget || null,
+          models: prev?.models || [],
+          tpm_limit: prev?.tpm_limit || 0,
+          rpm_limit: prev?.rpm_limit || 0
+        }));
+    
+      // Clear formValues
+      form.resetFields();
+      setIsAddMemberModalVisible(false)
       message.success("Member added");
     } catch (error) {
       console.error("Error creating the team:", error);
@@ -242,6 +261,7 @@ const Organizations: React.FC<TeamProps> = ({
           accessToken={accessToken}
           availableModels={userModels}
           submitButtonText="Create Organization"
+          setOrganizations = {setOrganizations}
         /> : null}
         {premiumUser ? 
         <Col numColSpan={1}>  
@@ -271,7 +291,7 @@ const Organizations: React.FC<TeamProps> = ({
             </Paragraph>
           )}
         </Col> : null}
-        {userRole == "Admin" && userID && selectedOrganization && premiumUser ? <AddOrgAdmin userRole={userRole} userID={userID} selectedOrganization={selectedOrganization} onMemberAdd={handleMemberCreate} /> : null}
+        {userRole == "Admin" && userID && selectedOrganization && premiumUser ? <AddOrgAdmin userRole={userRole} userID={userID} selectedOrganization={selectedOrganization} onMemberAdd={handleMemberCreate} isAddMemberModalVisible={isAddMemberModalVisible} setIsAddMemberModalVisible={setIsAddMemberModalVisible} form={form}/> : null}
         {userRole == "Admin" && userID && selectedOrganization && premiumUser ? <MemberListTable  selectedEntity={selectedOrganization} onEditSubmit={() => {}} editModalComponent={EditOrganizationModal} entityType="organization" /> : null}
       </Grid>
     </div>

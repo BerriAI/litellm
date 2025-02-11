@@ -32,12 +32,13 @@ export interface OrganizationFormProps {
   initialValues?: Partial<FormData>;
   submitButtonText?: string;
   modelSelectionType?: 'single' | 'multiple';
+  setOrganizations: (organizations: any[]) => void;
 }
 
 // OrganizationForm.tsx
 import React, { useState } from 'react';
 
-const onSubmit = async (formValues: Record<string, any>, accessToken: string | null, setIsModalVisible: any) => {
+const onSubmit = async (formValues: Record<string, any>, accessToken: string | null, setIsModalVisible: any ,setOrganizations :any ) => {
   if (accessToken == null) {
     return;
   }
@@ -45,6 +46,7 @@ const onSubmit = async (formValues: Record<string, any>, accessToken: string | n
     message.info("Creating Organization");
     console.log("formValues: " + JSON.stringify(formValues));
     const response: any = await organizationCreateCall(accessToken, formValues);
+    setOrganizations((prev:any) => [...prev , response])
     console.log(`response for organization create call: ${response}`);
     message.success("Organization created");
     sessionStorage.removeItem('organizations');
@@ -64,6 +66,7 @@ const OrganizationForm: React.FC<OrganizationFormProps> = ({
   initialValues = {},
   submitButtonText = "Create",
   modelSelectionType = "multiple",
+  setOrganizations
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState<boolean>(false);
@@ -82,13 +85,14 @@ const OrganizationForm: React.FC<OrganizationFormProps> = ({
     if (accessToken == null) {
       return;
     }
-    await onSubmit(formValues, accessToken, setIsModalVisible);
+    await onSubmit(formValues, accessToken, setIsModalVisible ,setOrganizations);
     setIsModalVisible(false);
+    form.resetFields();
   };
 
   const handleCancel = (): void => {
     setIsModalVisible(false);
-    if (onCancel) onCancel();
+    form.resetFields();
   };
 
   return (
