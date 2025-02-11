@@ -79,9 +79,6 @@ async def list_guardrails():
     _guardrails_config = cast(Optional[list[dict]], config.get("guardrails"))
 
     if _guardrails_config is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "No guardrails found in config"},
-        )
+        return _get_guardrails_list_response([])
 
     return _get_guardrails_list_response(_guardrails_config)
