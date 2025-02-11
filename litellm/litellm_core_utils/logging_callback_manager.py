@@ -85,6 +85,21 @@ class LoggingCallbackManager:
             callback=callback, parent_list=litellm._async_failure_callback
         )
 
+    def remove_callback_from_list_by_object(
+            self, callback_list, obj
+    ):
+        """
+        Remove callbacks that are methods of a particular object (e.g., router cleanup)
+        """
+        if not isinstance(callback_list, list): # Not list -> do nothing
+            return
+        
+        remove_list=[c for c in callback_list if hasattr(c, '__self__') and c.__self__ == obj]
+
+        for c in remove_list:
+            callback_list.remove(c)
+
+
     def _add_string_callback_to_list(
         self, callback: str, parent_list: List[Union[CustomLogger, Callable, str]]
     ):
