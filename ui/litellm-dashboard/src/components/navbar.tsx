@@ -59,46 +59,45 @@ const Navbar: React.FC<NavbarProps> = ({
   ];
 
   const orgMenuItems: MenuProps["items"] = [
-    ...(userRole === "Admin" 
-      ? [{
-          key: 'global',
-          label: (
-            <div className="flex items-center justify-between py-1">
-              <span className="text-sm">Global View</span>
-            </div>
-          ),
-          onClick: () => onOrgChange({ organization_id: "global", organization_alias: "Global View" } as Organization)
-        }]
-      : [
-          {
-            key: 'header',
-            label: 'Organizations',
-            type: 'group' as const,
-            style: { 
-              color: '#6B7280',
-              fontSize: '0.875rem'
-            }
-          },
-          ...organizations.map(org => ({
-            key: org.organization_id,
-            label: (
-              <div className="flex items-center justify-between py-1">
-                <span className="text-sm">{org.organization_alias}</span>
-              </div>
-            ),
-            onClick: () => onOrgChange(org)
-          })),
-          {
-            key: "note",
-            label: (
-              <div className="flex items-center justify-between py-1 px-2 bg-gray-50 text-gray-500 text-xs italic">
-                <span>Switching between organizations on the UI is currently in beta.</span>
-              </div>
-            ),
-            disabled: true
-          }
-        ]
-    )
+    {
+      key: 'header',
+      label: 'Organizations',
+      type: 'group' as const,
+      style: { 
+        color: '#6B7280',
+        fontSize: '0.875rem'
+      }
+    },
+    {
+      key: "default",
+      label: (
+        <div className="flex items-center justify-between py-1">
+          <span className="text-sm">Default Organization</span>
+        </div>
+      ),
+      onClick: () => onOrgChange({ 
+        organization_id: null, 
+        organization_alias: "Default Organization" 
+      } as Organization)
+    },
+    ...organizations.filter(org => org.organization_id !== null).map(org => ({
+      key: org.organization_id ?? "default",
+      label: (
+        <div className="flex items-center justify-between py-1">
+          <span className="text-sm">{org.organization_alias}</span>
+        </div>
+      ),
+      onClick: () => onOrgChange(org)
+    })),
+    {
+      key: "note",
+      label: (
+        <div className="flex items-center justify-between py-1 px-2 bg-gray-50 text-gray-500 text-xs italic">
+          <span>Switching between organizations on the UI is currently in beta.</span>
+        </div>
+      ),
+      disabled: true
+    }
   ];
 
   return (
