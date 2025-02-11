@@ -5692,9 +5692,7 @@ def stream_chunk_builder(  # noqa: PLR0915
         reasoning_content_chunks = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
-            and "reasoning_content" in chunk["choices"][0]
-            and chunk["choices"][0]["reasoning_content"] is not None
+            if "reasoning_content" in chunk and chunk["reasoning_content"] is not None
         ]
 
         if len(reasoning_content_chunks) > 0:

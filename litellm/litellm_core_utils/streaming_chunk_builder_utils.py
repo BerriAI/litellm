@@ -226,12 +226,10 @@ class ChunkProcessor:
     ) -> ChatCompletionAssistantContentValue:
         content_list: List[str] = []
         for chunk in chunks:
-            choices = chunk["choices"]
-            for choice in choices:
-                content = choice.get("reasoning_content", "")
-                if content is None:
-                    continue  # openai v1.0.0 sets content = None for chunks
-                content_list.append(content)
+            content = chunk.get("reasoning_content", "")
+            if content is None:
+                continue  # openai v1.0.0 sets content = None for chunks
+            content_list.append(content)
 
         # Combine the "reasoning_content" strings into a single string || combine the 'function' strings into a single string
         combined_content = "".join(content_list)
