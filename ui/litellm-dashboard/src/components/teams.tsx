@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Typography } from "antd";
-import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization } from "./networking";
+import { teamDeleteCall, teamUpdateCall, teamInfoCall, Organization, DEFAULT_ORGANIZATION } from "./networking";
 import TeamMemberModal from "@/components/team/edit_membership";
+import { fetchTeams } from "./common_components/fetch_teams";
 import {
   InformationCircleIcon,
   PencilAltIcon,
@@ -95,23 +96,12 @@ const Team: React.FC<TeamProps> = ({
 }) => {
   const [lastRefreshed, setLastRefreshed] = useState("");
 
-  const fetchTeams = async (accessToken: string, userID: string | null, userRole: string | null) => {
-    let givenTeams;
-    if (userRole != "Admin" && userRole != "Admin Viewer") {
-      givenTeams = await teamListCall(accessToken, userID)
-    } else {
-      givenTeams = await teamListCall(accessToken)
-    }
-    
-    console.log(`givenTeams: ${givenTeams}`)
 
-    setTeams(givenTeams)
-  }
   useEffect(() => {
     console.log(`inside useeffect - ${teams}`)
     if (teams === null && accessToken) {
       // Call your function here
-      fetchTeams(accessToken, userID, userRole)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
     }
   }, [teams]);
   
@@ -119,7 +109,7 @@ const Team: React.FC<TeamProps> = ({
     console.log(`inside useeffect - ${lastRefreshed}`)
     if (accessToken) {
       // Call your function here
-      fetchTeams(accessToken, userID, userRole)
+      fetchTeams(accessToken, userID, userRole, currentOrg, setTeams)
     }
     handleRefreshClick()
   }, [lastRefreshed]);
@@ -257,9 +247,9 @@ const Team: React.FC<TeamProps> = ({
         let _team_id_to_info: Record<string, any> = {};
         let teamList;
         if (userRole != "Admin" && userRole != "Admin Viewer") {
-          teamList = await teamListCall(accessToken, userID)
+          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION, userID)
         } else {
-          teamList = await teamListCall(accessToken)
+          teamList = await teamListCall(accessToken, currentOrg?.organization_id || DEFAULT_ORGANIZATION)
         }
         
         for (let i = 0; i < teamList.length; i++) {
@@ -405,6 +395,10 @@ const Team: React.FC<TeamProps> = ({
               <TableBody>
                 {teams && teams.length > 0
                   ? teams
+                      .filter((team) => {
+                        const targetOrgId = currentOrg ? currentOrg.organization_id : null;
+                        return team.organization_id === targetOrgId;
+                      })                  
                       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
                       .map((team: any) => (
                       <TableRow key={team.team_id}>

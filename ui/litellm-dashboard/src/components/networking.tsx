@@ -9,6 +9,8 @@ if (isLocal != true) {
   console.log = function() {};
 }
 
+export const DEFAULT_ORGANIZATION = "default_organization";
+
 export interface Model {
   model_name: string;
   litellm_params: Object;
@@ -16,7 +18,7 @@ export interface Model {
 }
 
 export interface Organization {
-  organization_id: string;
+  organization_id: string | null;
   organization_alias: string;
   budget_id: string;
   metadata: Record<string, any>;
@@ -724,7 +726,8 @@ export const teamInfoCall = async (
 
 export const teamListCall = async (
   accessToken: String, 
-  userID: String | null = null
+  organizationID: string | null,
+  userID: String | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -732,9 +735,21 @@ export const teamListCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/list` : `/team/list`;
     console.log("in teamInfoCall");
+    const queryParams = new URLSearchParams();
+    
     if (userID) {
-      url += `?user_id=${userID}`;
+      queryParams.append('user_id', userID.toString());
     }
+    
+    if (organizationID) {
+      queryParams.append('organization_id', organizationID.toString());
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3206,3 +3221,41 @@ export const getGuardrailsList = async (accessToken: String) => {
     throw error;
   }
 };
+
+
+export const uiSpendLogDetailsCall = async (
+  accessToken: string,
+  logId: string,
+  start_date: string
+) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`
+      : `/spend/logs/ui/${logId}?start_date=${encodeURIComponent(start_date)}`;
+
+    console.log("Fetching log details from:", url);
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched log details:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch log details:", error);
+    throw error;
+  }
+};
+

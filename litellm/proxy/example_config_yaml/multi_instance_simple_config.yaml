@@ -5,11 +5,8 @@ model_list:
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
-
-general_settings:
-  store_model_in_db: true
-
-
 litellm_settings:
-  callbacks: ["gcs_bucket"]
+  cache: True
+  cache_params:
+    type: redis
 
