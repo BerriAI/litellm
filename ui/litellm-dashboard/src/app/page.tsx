@@ -126,7 +126,6 @@ export default function CreateKeyPage() {
     if (decoded) {
       // cast decoded to dictionary
       console.log("Decoded token:", decoded);
-
       console.log("Decoded key:", decoded.key);
       // set accessToken
       setAccessToken(decoded.key);
@@ -174,7 +173,17 @@ export default function CreateKeyPage() {
   const handleOrgChange = (org: Organization) => {
     setCurrentOrg(org);
     console.log(`org: ${JSON.stringify(org)}`)
-    if (org.members && userRole != "Admin") { // don't change user role if user is admin
+    if(org?.organization_alias == "Default Organization"){
+      const decoded = jwtDecode(token as string) as { [key: string]: any };
+
+      if (decoded.user_role) {
+        const formattedUserRole = formatUserRole(decoded.user_role);
+        console.log("Decoded user_role:", formattedUserRole);
+        setUserRole(formattedUserRole);}
+
+
+    } else{
+  if (org.members && userRole != "Admin") { // don't change user role if user is admin
       for (const member of org.members) {
         console.log(`member: ${JSON.stringify(member)}`)
         if (member.user_id == userID) {
@@ -184,6 +193,7 @@ export default function CreateKeyPage() {
       }
     }
     setTeams(null);
+    }
   }
 
   return (
@@ -203,6 +213,7 @@ export default function CreateKeyPage() {
             setKeys={setKeys}
             setOrganizations={setOrganizations}
             currentOrg={currentOrg}
+            accessToken={accessToken}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -240,6 +251,7 @@ export default function CreateKeyPage() {
                   setKeys={setKeys}
                   setOrganizations={setOrganizations}
                   currentOrg={currentOrg}
+                  accessToken={accessToken}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
