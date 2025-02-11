@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -183,22 +183,40 @@ class GCSBucketLogger(GCSBucketBase, BaseRequestResponseFetchFromCustomLogger):
     ) -> Optional[dict]:
         """
         Get the request and response payload for a given `request_id`
+        Tries current day, next day, and previous day until it finds the payload
         """
         if start_time_utc is None:
             raise ValueError(
                 "start_time_utc is required for getting a payload from GCS Bucket"
             )
-        start_date = self._get_object_date_from_datetime(datetime_obj=start_time_utc)
 
-        object_name = self._generate_success_object_name(
-            request_date_str=start_date,
-            response_id=request_id,
-        )
-        encoded_object_name = quote(object_name, safe="")
-        response = await self.download_gcs_object(encoded_object_name)
-        if response:
-            loaded_response = json.loads(response)
-            return loaded_response
+        # Try current day, next day, and previous day
+        dates_to_try = [
+            start_time_utc,
+            start_time_utc + timedelta(days=1),
+            start_time_utc - timedelta(days=1),
+        ]
+        date_str = None
+        for date in dates_to_try:
+            try:
+                date_str = self._get_object_date_from_datetime(datetime_obj=date)
+                object_name = self._generate_success_object_name(
+                    request_date_str=date_str,
+                    response_id=request_id,
+                )
+                encoded_object_name = quote(object_name, safe="")
+                response = await self.download_gcs_object(encoded_object_name)
+
+                if response is not None:
+                    loaded_response = json.loads(response)
+                    return loaded_response
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to fetch payload for date {date_str}: {str(e)}"
+                )
+                continue
+
+        return None
 
     def _generate_success_object_name(
         self,
