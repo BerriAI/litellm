@@ -80,25 +80,21 @@ class CohereRerankConfig(BaseRerankConfig):
         No mapping required - returns all supported params
         """
 
-        if self.uses_v1_client:
-            return OptionalRerankParams(
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                rank_fields=rank_fields,
-                return_documents=return_documents,
-                max_chunks_per_doc=max_chunks_per_doc,
-            )
-        else:
-            return OptionalRerankParams(
-                query=query,
-                documents=documents,
-                top_n=top_n,
-                rank_fields=rank_fields,
-                return_documents=return_documents,
-                max_tokens_per_doc=max_tokens_per_doc,
-            )
+        unique_version_params = (
+            {"max_chunks_per_doc": max_chunks_per_doc} 
+            if self.uses_v1_client 
+            else {"max_tokens_per_doc": max_tokens_per_doc}
+        )
 
+        return OptionalRerankParams(
+            query=query,
+            documents=documents,
+            top_n=top_n,
+            rank_fields=rank_fields,
+            return_documents=return_documents,
+            **unique_version_params
+        )
+        
     def validate_environment(
         self,
         headers: dict,
@@ -140,26 +136,23 @@ class CohereRerankConfig(BaseRerankConfig):
             raise ValueError("query is required for Cohere rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Cohere rerank")
-        if self.uses_v1_client:
-            rerank_request = RerankRequest(
-                model=model,
-                query=optional_rerank_params["query"],
-                documents=optional_rerank_params["documents"],
-                top_n=optional_rerank_params.get("top_n", None),
-                rank_fields=optional_rerank_params.get("rank_fields", None),
-                return_documents=optional_rerank_params.get("return_documents", None),
-                max_chunks_per_doc=optional_rerank_params.get("max_chunks_per_doc", None),
-            )
-        else:
-            rerank_request = RerankRequest(
-                model=model,
-                query=optional_rerank_params["query"],
-                documents=optional_rerank_params["documents"],
-                top_n=optional_rerank_params.get("top_n", None),
-                rank_fields=optional_rerank_params.get("rank_fields", None),
-                return_documents=optional_rerank_params.get("return_documents", None),
-                max_tokens_per_doc=optional_rerank_params.get("max_tokens_per_doc", None),
-            )
+        
+        unique_version_params = (
+            {"max_chunks_per_doc": optional_rerank_params.get("max_chunks_per_doc", None)} 
+            if self.uses_v1_client 
+            else {"max_tokens_per_doc": optional_rerank_params.get("max_tokens_per_doc", None)}
+        )
+
+        rerank_request = RerankRequest(
+            model=model,
+            query=optional_rerank_params["query"],
+            documents=optional_rerank_params["documents"],
+            top_n=optional_rerank_params.get("top_n", None),
+            rank_fields=optional_rerank_params.get("rank_fields", None),
+            return_documents=optional_rerank_params.get("return_documents", None),
+            **unique_version_params
+        )
+
         return rerank_request.model_dump(exclude_none=True)
 
     def transform_rerank_response(
