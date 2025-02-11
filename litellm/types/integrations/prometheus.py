@@ -124,6 +124,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.STATUS_CODE.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
