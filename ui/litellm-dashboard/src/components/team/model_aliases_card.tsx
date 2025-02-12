@@ -52,7 +52,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
   };
 
   return (
-    <div className="mt-8">
+    <Card className="mt-4">
       <Title>Team Aliases</Title>
       <Text className="text-gray-600 mb-4">
         Allow a team to use an alias that points to a specific model deployment.
@@ -167,7 +167,7 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
           </div>
         </Form>
       </Modal>
-    </div>
+    </Card>
   );
 };
 
