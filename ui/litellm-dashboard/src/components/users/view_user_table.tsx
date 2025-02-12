@@ -33,14 +33,8 @@ interface UserListResponse {
   total_pages: number;
 }
 
-interface PossibleRole {
-  ui_label: string;
-  [key: string]: string;
-}
-
 interface FilterableUserTableProps {
   accessToken: string;
-  possibleUIRoles: Record<string, PossibleRole>;
   onEdit: (user: User) => void;
   onDelete: (userId: string) => void;
   defaultPageSize?: number;
@@ -48,7 +42,6 @@ interface FilterableUserTableProps {
 
 const FilterableUserTable: React.FC<FilterableUserTableProps> = ({ 
   accessToken,
-  possibleUIRoles,
   onEdit,
   onDelete,
   defaultPageSize = 25
@@ -179,7 +172,7 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
                 <TableCell>{user.user_id || "-"}</TableCell>
                 <TableCell>{user.user_email || "-"}</TableCell>
                 <TableCell>
-                  {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
+                  {user.user_role}
                 </TableCell>
                 <TableCell>
                   {user.spend ? user.spend?.toFixed(2) : "-"}
