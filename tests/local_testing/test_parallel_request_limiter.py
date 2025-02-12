@@ -65,7 +65,40 @@ async def test_global_max_parallel_requests():
             )
             pytest.fail("Expected call to fail")
         except Exception as e:
-            pass
+            print(e)
+
+
+@pytest.mark.flaky(retries=6, delay=1)
+@pytest.mark.asyncio
+async def test_key_max_parallel_requests():
+    """
+    Ensure the error str returned contains parallel request information.
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/8392
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token("sk-12345")
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    local_cache = DualCache()
+    parallel_request_handler = MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(dual_cache=local_cache)
+    )
+
+    parallel_limit_reached = False
+    for _ in range(3):
+        try:
+            await parallel_request_handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={},
+                call_type="",
+            )
+            await asyncio.sleep(1)
+        except Exception as e:
+            if "current max_parallel_requests" in str(e):
+                parallel_limit_reached = True
+
+    assert parallel_limit_reached
 
 
 @pytest.mark.asyncio

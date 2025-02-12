@@ -111,12 +111,12 @@ async def test_proxy_failure_metrics():
 
         assert (
             expected_metric in metrics
-        ), "Expected failure metric not found in /metrics"
-        expected_llm_deployment_failure = 'litellm_deployment_failure_responses_total{api_base="https://exampleopenaiendpoint-production.up.railway.app",api_provider="openai",exception_class="RateLimitError",exception_status="429",litellm_model_name="429",model_id="7499d31f98cd518cf54486d5a00deda6894239ce16d13543398dc8abf870b15f",requested_model="fake-azure-endpoint"} 1.0'
+        ), "Expected failure metric not found in /metrics."
+        expected_llm_deployment_failure = 'litellm_deployment_failure_responses_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"} 1.0'
         assert expected_llm_deployment_failure
 
         assert (
-            'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",status_code="429",team="None",team_alias="None",user="default_user_id"} 1.0'
+            'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"} 1.0'
             in metrics
         )
 
@@ -256,6 +256,24 @@ async def create_test_team(
         ), f"Failed to create team. Status: {response.status}"
         team_info = await response.json()
         return team_info["team_id"]
+
+
+async def create_test_user(
+    session: aiohttp.ClientSession, user_data: Dict[str, Any]
+) -> str:
+    """Create a new user and return the user_id"""
+    url = "http://0.0.0.0:4000/user/new"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+
+    async with session.post(url, headers=headers, json=user_data) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to create user. Status: {response.status}"
+        user_info = await response.json()
+        return user_info
 
 
 async def get_prometheus_metrics(session: aiohttp.ClientSession) -> str:
@@ -526,3 +544,38 @@ async def test_key_budget_metrics():
         assert (
             abs(key_info_remaining_budget - first_budget["remaining"]) <= 0.00000
         ), f"Spend mismatch: Prometheus={key_info_remaining_budget}, Key Info={first_budget['remaining']}"
+
+
+@pytest.mark.asyncio
+async def test_user_email_metrics():
+    """
+    Test user email tracking metrics:
+    1. Create a user with user_email
+    2. Make chat completion requests using OpenAI SDK with the user's email
+    3. Verify user email is being tracked correctly in `litellm_user_email_metric`
+    """
+    async with aiohttp.ClientSession() as session:
+        # Create a user with user_email
+        user_data = {
+            "user_email": "test@example.com",
+        }
+        user_info = await create_test_user(session, user_data)
+        key = user_info["key"]
+
+        # Initialize OpenAI client with the user's email
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=key)
+
+        # Make initial request and check budget
+        await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        )
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get metrics after request
+        metrics_after_first = await get_prometheus_metrics(session)
+        print("metrics_after_first request", metrics_after_first)
+        assert (
+            "test@example.com" in metrics_after_first
+        ), "user_email should be tracked correctly"

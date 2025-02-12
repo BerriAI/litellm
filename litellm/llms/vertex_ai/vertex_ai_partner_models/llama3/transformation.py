@@ -21,7 +21,7 @@ class VertexAILlama3Config:
         self,
         max_tokens: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens

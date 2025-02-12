@@ -152,3 +152,18 @@ def test_azure_o_series_routing():
             print(e)
         assert mock_create.call_count == 1
         assert "stream" not in mock_create.call_args.kwargs
+
+
+@patch("litellm.main.azure_o1_chat_completions._get_openai_client")
+def test_openai_o_series_max_retries_0(mock_get_openai_client):
+    import litellm
+
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="azure/o1-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        max_retries=0,
+    )
+
+    mock_get_openai_client.assert_called_once()
+    assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0

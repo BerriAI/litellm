@@ -20,6 +20,15 @@ from .common_utils import InfinityError
 
 
 class InfinityRerankConfig(CohereRerankConfig):
+    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required for Infinity rerank")
+        # Remove trailing slashes and ensure clean base URL
+        api_base = api_base.rstrip("/")
+        if not api_base.endswith("/rerank"):
+            api_base = f"{api_base}/rerank"
+        return api_base
+
     def validate_environment(
         self,
         headers: dict,

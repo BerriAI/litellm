@@ -1639,7 +1639,6 @@ def test_provider_specific_header():
         },
     }
 
-
 async def create_budget(session, data):
     url = "http://0.0.0.0:4000/budget/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
@@ -1858,3 +1857,78 @@ async def test_reset_budget_for_endusers(prisma_client, budget_and_enduser_setup
     assert (
         budget_y.budget_reset_at == initial_budget_y_reset_at_date
     ), "Budget Y budget_reset_at should remain unchanged"
+
+
+@pytest.mark.parametrize(
+    "wildcard_model, expected_models",
+    [
+        (
+            "anthropic/*",
+            ["anthropic/claude-3-5-haiku-20241022", "anthropic/claude-3-opus-20240229"],
+        ),
+        (
+            "vertex_ai/gemini-*",
+            ["vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-pro"],
+        ),
+    ],
+)
+def test_get_known_models_from_wildcard(wildcard_model, expected_models):
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    wildcard_models = get_known_models_from_wildcard(wildcard_model=wildcard_model)
+    # Check if all expected models are in the returned list
+    print(f"wildcard_models: {wildcard_models}\n")
+    for model in expected_models:
+        if model not in wildcard_models:
+            print(f"Missing expected model: {model}")
+
+    assert all(model in wildcard_models for model in expected_models)
+    
+@pytest.mark.parametrize(
+    "data, user_api_key_dict, expected_model",
+    [
+        # Test case 1: Model exists in team aliases
+        (
+            {"model": "gpt-4o"},
+            UserAPIKeyAuth(
+                api_key="test_key", team_model_aliases={"gpt-4o": "gpt-4o-team-1"}
+            ),
+            "gpt-4o-team-1",
+        ),
+        # Test case 2: Model doesn't exist in team aliases
+        (
+            {"model": "gpt-4o"},
+            UserAPIKeyAuth(
+                api_key="test_key", team_model_aliases={"claude-3": "claude-3-team-1"}
+            ),
+            "gpt-4o",
+        ),
+        # Test case 3: No team aliases defined
+        (
+            {"model": "gpt-4o"},
+            UserAPIKeyAuth(api_key="test_key", team_model_aliases=None),
+            "gpt-4o",
+        ),
+        # Test case 4: No model in request data
+        (
+            {"messages": []},
+            UserAPIKeyAuth(
+                api_key="test_key", team_model_aliases={"gpt-4o": "gpt-4o-team-1"}
+            ),
+            None,
+        ),
+    ],
+)
+def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_model):
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    # Make a copy of the input data to avoid modifying the test parameters
+    test_data = data.copy()
+
+    # Call the function
+    _update_model_if_team_alias_exists(
+        data=test_data, user_api_key_dict=user_api_key_dict
+    )
+
+    # Check if model was updated correctly
+    assert test_data.get("model") == expected_model

@@ -34,6 +34,17 @@ class BaseLLMModelInfo(ABC):
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         pass
 
+    @staticmethod
+    @abstractmethod
+    def get_base_model(model: str) -> Optional[str]:
+        """
+        Returns the base model name from the given model name.
+
+        Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
+            This function will return `anthropic.claude-3-opus-20240229-v1:0`
+        """
+        pass
+
 
 def _dict_to_response_format_helper(
     response_format: dict, ref_template: Optional[str] = None

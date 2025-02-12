@@ -33,14 +33,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
-from ..common_utils import (
-    AmazonBedrockGlobalConfig,
-    BedrockError,
-    get_bedrock_tool_name,
-)
-
-global_config = AmazonBedrockGlobalConfig()
-all_global_regions = global_config.get_all_regions()
+from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -63,7 +56,7 @@ class AmazonConverseConfig(BaseConfig):
         topP: Optional[int] = None,
         topK: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -104,7 +97,7 @@ class AmazonConverseConfig(BaseConfig):
         ]
 
         ## Filter out 'cross-region' from model name
-        base_model = self._get_base_model(model)
+        base_model = BedrockModelInfo.get_base_model(model)
 
         if (
             base_model.startswith("anthropic")
@@ -341,9 +334,9 @@ class AmazonConverseConfig(BaseConfig):
         if "top_k" in inference_params:
             inference_params["topK"] = inference_params.pop("top_k")
         return InferenceConfig(**inference_params)
-    
+
     def _handle_top_k_value(self, model: str, inference_params: dict) -> dict:
-        base_model = self._get_base_model(model)
+        base_model = BedrockModelInfo.get_base_model(model)
 
         val_top_k = None
         if "topK" in inference_params:
@@ -352,11 +345,11 @@ class AmazonConverseConfig(BaseConfig):
             val_top_k = inference_params.pop("top_k")
 
         if val_top_k:
-            if (base_model.startswith("anthropic")):
+            if base_model.startswith("anthropic"):
                 return {"top_k": val_top_k}
             if base_model.startswith("amazon.nova"):
-                return {'inferenceConfig': {"topK": val_top_k}}                
-                
+                return {"inferenceConfig": {"topK": val_top_k}}
+
         return {}
 
     def _transform_request_helper(
@@ -393,15 +386,25 @@ class AmazonConverseConfig(BaseConfig):
         ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
         supported_guardrail_params = ["guardrailConfig"]
-        total_supported_params = supported_converse_params + supported_tool_call_params + supported_guardrail_params
+        total_supported_params = (
+            supported_converse_params
+            + supported_tool_call_params
+            + supported_guardrail_params
+        )
         inference_params.pop("json_mode", None)  # used for handling json_schema
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
-        additional_request_params = {k: v for k, v in inference_params.items() if k not in total_supported_params}
-        inference_params = {k: v for k, v in inference_params.items() if k in total_supported_params}
+        additional_request_params = {
+            k: v for k, v in inference_params.items() if k not in total_supported_params
+        }
+        inference_params = {
+            k: v for k, v in inference_params.items() if k in total_supported_params
+        }
 
         # Only set the topK value in for models that support it
-        additional_request_params.update(self._handle_top_k_value(model, inference_params))
+        additional_request_params.update(
+            self._handle_top_k_value(model, inference_params)
+        )
 
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
@@ -678,41 +681,6 @@ class AmazonConverseConfig(BaseConfig):
             setattr(model_response, "trace", completion_response["trace"])
 
         return model_response
-
-    def _supported_cross_region_inference_region(self) -> List[str]:
-        """
-        Abbreviations of regions AWS Bedrock supports for cross region inference
-        """
-        return ["us", "eu", "apac"]
-
-    def _get_base_model(self, model: str) -> str:
-        """
-        Get the base model from the given model name.
-
-        Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
-        AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
-        """
-
-        if model.startswith("bedrock/"):
-            model = model.split("/", 1)[1]
-
-        if model.startswith("converse/"):
-            model = model.split("/", 1)[1]
-
-        potential_region = model.split(".", 1)[0]
-
-        alt_potential_region = model.split("/", 1)[
-            0
-        ]  # in model cost map we store regional information like `/us-west-2/bedrock-model`
-
-        if potential_region in self._supported_cross_region_inference_region():
-            return model.split(".", 1)[1]
-        elif (
-            alt_potential_region in all_global_regions and len(model.split("/", 1)) > 1
-        ):
-            return model.split("/", 1)[1]
-
-        return model
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
