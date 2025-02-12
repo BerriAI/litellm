@@ -47,12 +47,17 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      params.append(fieldName, searchText);
+      let userEmail = null;
+      let userId = null;
+      if (fieldName === 'user_email') {
+        userEmail = searchText;
+      } else {
+        userId = searchText;
+      }
       if (accessToken == null) {
         return;
       }
-      const response = await userFilterUICall(accessToken, params);
+      const response = await userFilterUICall(accessToken, userEmail, userId, 1, 10);
       
       const data: User[] = response.users
       const options: UserOption[] = data.map(user => ({
