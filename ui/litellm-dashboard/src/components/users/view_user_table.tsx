@@ -114,7 +114,7 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
       <div className="flex gap-2 items-center">
         <Select
           value={searchType}
-          onValueChange={(value: 'email' | 'user_id') => setSearchType(value)}
+          onValueChange={(value: string) => setSearchType(value as 'email' | 'user_id')}
           className="w-32"
         >
           <SelectItem value="email">Email</SelectItem>
