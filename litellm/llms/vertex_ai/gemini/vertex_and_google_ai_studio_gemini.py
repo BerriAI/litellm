@@ -812,6 +812,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
+            "Connection": "close",
         }
         if api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
@@ -1053,7 +1054,6 @@ class VertexLLM(VertexBase):
             messages=messages,
             optional_params=optional_params,
         )
-        headers["Connection"] = "close"
 
         request_body = await async_transform_request_body(**data)  # type: ignore
         _async_client_params = {}
