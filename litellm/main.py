@@ -31,7 +31,9 @@ from typing import (
     Mapping,
     Optional,
     Type,
+    TypedDict,
     Union,
+    Unpack,
     cast,
 )
 
@@ -300,47 +302,52 @@ class AsyncCompletions:
         return response
 
 
+class CompletionParams(TypedDict, total=False):
+    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
+    messages: List[Any]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    temperature: Optional[float]
+    top_p: Optional[float]
+    n: Optional[int]
+    stream_options: Optional[dict]
+    stop:Any # TODO: Add type
+    max_completion_tokens: Optional[int]
+    max_tokens: Optional[int]
+    modalities: Optional[List[ChatCompletionModality]]
+    prediction: Optional[ChatCompletionPredictionContentParam]
+    audio: Optional[ChatCompletionAudioParam]
+    presence_penalty: Optional[float]
+    frequency_penalty: Optional[float]
+    logit_bias: Optional[dict]
+    user: Optional[str]
+    reasoning_effort: Optional[Literal["low", "medium", "high"]]
+    response_format: Optional[Union[dict, Type[BaseModel]]]
+    seed: Optional[int]
+    tools: Optional[List[Any]]
+    tool_choice: Optional[Union[str, dict]]
+    logprobs: Optional[bool]
+    top_logprobs: Optional[int]
+    parallel_tool_calls: Optional[bool]
+    deployment_id:Any # TODO: Add type
+    extra_headers: Optional[dict]
+    # soon to be deprecated params by OpenAI
+    functions: Optional[List[Any]]
+    function_call: Optional[str]
+    # set api_base, api_version, api_key
+    base_url: Optional[str]
+    api_version: Optional[str]
+    api_key: Optional[str]
+    model_list: Optional[List[Any]]
+    # other optional params
+    mock_response: Optional[Union[str, dict]] # Added this 
+    hf_model_name: Optional[str]
+    
 @overload
 async def acompletion(
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
     stream: Literal[False],
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    deployment_id=None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    extra_headers: Optional[dict] = None,
-    # Optional liteLLM function params
-    **kwargs,
+    **kwargs: Unpack[CompletionParams],
 ) -> ModelResponse: ...
 
 
@@ -348,43 +355,8 @@ async def acompletion(
 async def acompletion(
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
     stream: Literal[True],
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    deployment_id=None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    extra_headers: Optional[dict] = None,
-    # Optional liteLLM function params
-    **kwargs,
+    **kwargs: Unpack[CompletionParams],
 ) -> CustomStreamWrapper: ...
 
 
@@ -392,98 +364,27 @@ async def acompletion(
 async def acompletion(
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
-    stream: bool,
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    deployment_id=None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    extra_headers: Optional[dict] = None,
-    # Optional liteLLM function params
-    **kwargs,
-) -> Union[ModelResponse, CustomStreamWrapper]: ...
-
+    stream: None = None,
+    **kwargs: Unpack[CompletionParams],
+) -> ModelResponse: ...
 
 @overload
 async def acompletion(
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
-    stream: None = None,
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_tokens: Optional[int] = None,
-    max_completion_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    deployment_id=None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    extra_headers: Optional[dict] = None,
-    # Optional liteLLM function params
-    **kwargs,
-) -> ModelResponse: ...
+    stream: bool,
+    **kwargs: Unpack[CompletionParams],
+) -> Union[ModelResponse, CustomStreamWrapper]: ...
 
 
 @client
 async def acompletion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    functions: Optional[List] = None,
+    messages: List[Any] = [],
+    functions: Optional[List[Any]] = None,
     function_call: Optional[str] = None,
-    timeout: Optional[Union[float, int]] = None,
+    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -502,8 +403,8 @@ async def acompletion(
     # openai v1.0+ new params
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[str] = None,
+    tools: Optional[List[Any]] = None,
+    tool_choice: Optional[Union[str, dict]] = None,
     parallel_tool_calls: Optional[bool] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
@@ -513,7 +414,7 @@ async def acompletion(
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    model_list: Optional[List[Any]] = None,  # pass in a list of api_base,keys, etc.
     extra_headers: Optional[dict] = None,
     # Optional liteLLM function params
     **kwargs,
@@ -940,45 +841,8 @@ def mock_completion(
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
     stream: Literal[False],
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_completion_tokens: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[Union[str, dict]] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    deployment_id=None,
-    extra_headers: Optional[dict] = None,
-    # soon to be deprecated params by OpenAI
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    # Optional liteLLM function params
-    **kwargs,
+    **kwargs: Unpack[CompletionParams],
 ) -> ModelResponse: ...
 
 
@@ -986,143 +850,35 @@ def completion(  # type: ignore # noqa: PLR0915
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
     stream: Literal[True],
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_completion_tokens: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[Union[str, dict]] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    deployment_id=None,
-    extra_headers: Optional[dict] = None,
-    # soon to be deprecated params by OpenAI
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    # Optional liteLLM function params
-    **kwargs,
+    **kwargs: Unpack[CompletionParams],
 ) -> CustomStreamWrapper: ...
+
+
 @overload
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
+    stream: None = None,
+    **kwargs: Unpack[CompletionParams],
+) -> ModelResponse: ...
+
+@overload
+def completion(  # type: ignore # noqa: PLR0915
+    model: str,
+    *,
     stream: bool,
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_completion_tokens: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[Union[str, dict]] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    deployment_id=None,
-    extra_headers: Optional[dict] = None,
-    # soon to be deprecated params by OpenAI
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    # Optional liteLLM function params
-    **kwargs,
+    **kwargs: Unpack[CompletionParams],
 ) -> Union[ModelResponse, CustomStreamWrapper]: ...
 
 
-@overload
-def completion(  # type: ignore # noqa: PLR0915
-    model: str,
-    *,
-    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    n: Optional[int] = None,
-    stream: None = None,
-    stream_options: Optional[dict] = None,
-    stop=None,
-    max_completion_tokens: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    modalities: Optional[List[ChatCompletionModality]] = None,
-    prediction: Optional[ChatCompletionPredictionContentParam] = None,
-    audio: Optional[ChatCompletionAudioParam] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logit_bias: Optional[dict] = None,
-    user: Optional[str] = None,
-    # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
-    response_format: Optional[Union[dict, Type[BaseModel]]] = None,
-    seed: Optional[int] = None,
-    tools: Optional[List] = None,
-    tool_choice: Optional[Union[str, dict]] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    parallel_tool_calls: Optional[bool] = None,
-    deployment_id=None,
-    extra_headers: Optional[dict] = None,
-    # soon to be deprecated params by OpenAI
-    functions: Optional[List] = None,
-    function_call: Optional[str] = None,
-    # set api_base, api_version, api_key
-    base_url: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-    # Optional liteLLM function params
-    **kwargs,
-) -> ModelResponse: ...
 
 
 @client
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages: List = [],
+    messages: List[Any] = [],
     timeout: Optional[Union[float, str, httpx.Timeout]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
@@ -1143,7 +899,7 @@ def completion(  # type: ignore # noqa: PLR0915
     reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
-    tools: Optional[List] = None,
+    tools: Optional[List[Any]] = None,
     tool_choice: Optional[Union[str, dict]] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
@@ -1151,13 +907,13 @@ def completion(  # type: ignore # noqa: PLR0915
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     # soon to be deprecated params by OpenAI
-    functions: Optional[List] = None,
+    functions: Optional[List[Any]] = None,
     function_call: Optional[str] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
-    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    model_list: Optional[List[Any]] = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
