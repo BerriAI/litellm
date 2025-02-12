@@ -2433,3 +2433,11 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
 
 class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
+
+
+class UserListResponse(BaseModel):
+    users: List[LiteLLM_UserTable]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

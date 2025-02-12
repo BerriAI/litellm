@@ -43,7 +43,7 @@ import {
   InformationCircleIcon,
   TrashIcon,
 } from "@heroicons/react/outline";
-
+import FilterableUserTable from "./users/view_user_table";
 import { userDeleteCall } from "./networking";
 
 interface ViewUserDashboardProps {
@@ -268,79 +268,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         />
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
           <div className="mb-4 mt-1"></div>
-          <TabGroup>
-            <TabPanels>
-              <TabPanel>
-                <Table className="mt-5">
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>User Email</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-                      <TableHeaderCell>API Keys</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {userData.map((user: any) => (
-                      <TableRow key={user.user_id}>
-                        <TableCell>{user.user_id || "-"}</TableCell>
-                        <TableCell>{user.user_email || "-"}</TableCell>
-                        <TableCell>
-                          {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.spend ? user.spend?.toFixed(2) : "-"}
-                        </TableCell>
-                        <TableCell>
-                          {user.max_budget !== null ? user.max_budget : "Unlimited"}
-                        </TableCell>
-                        <TableCell>
-                          <Grid numItems={2}>
-                            {user.key_count > 0 ? (
-                              <Badge size={"xs"} color={"indigo"}>
-                                {user.key_count} Keys
-                              </Badge>
-                            ) : (
-                              <Badge size={"xs"} color={"gray"}>
-                                No Keys
-                              </Badge>
-                            )}
-                            {/* <Text>{user.key_aliases.filter(key => key !== null).length} Keys</Text> */}
-                          </Grid>
-                        </TableCell>
-                        <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            onClick={() => {
-                              setSelectedUser(user);
-                              setEditModalVisible(true);
-                            }}
-                          >
-                            View Keys
-                          </Icon>
-                          <Icon
-                            icon={TrashIcon}
-                            onClick={() => handleDelete(user.user_id)}
-                          >
-                            Delete
-                          </Icon>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TabPanel>
-              <TabPanel>
-                <div className="flex items-center">
-                  <div className="flex-1"></div>
-                  <div className="flex-1 flex justify-between items-center"></div>
-                </div>
-              </TabPanel>
-            </TabPanels>
-          </TabGroup>
+          <FilterableUserTable  
+            accessToken={accessToken}
+            possibleUIRoles={possibleUIRoles}
+            onEdit={() => {}}
+            onDelete={() => {}}
+          />
           <EditUserModal
             visible={editModalVisible}
             possibleUIRoles={possibleUIRoles}
@@ -396,7 +329,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </div>
       )}
         </Card>
-        {renderPagination()}
       </Grid>
     </div>
   );
