@@ -1408,33 +1408,46 @@ def run_ollama_serve():
         )
 
 
+MAX_HEALTH_CHECK_RETRIES = 3  # Maximum retries before stopping health checks
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
-    Updates the global health_check_results based on the checks.
-    """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details
 
-    # Make a deep copy of llm_model_list for background health checks
+    Updates health_check_results based on this.
+    """
+    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_background_health_checks
+
     _llm_model_list = copy.deepcopy(llm_model_list)
 
     if not _llm_model_list:
-        return  # Exit if no models are available
+        return
+
+    health_check_retries = 0
 
     while use_background_health_checks:
-        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-            model_list=_llm_model_list, details=health_check_details
-        )
+        try:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                model_list=_llm_model_list, details=health_check_details
+            )
 
-        # Update global health check results
-        health_check_results.update({
-            "healthy_endpoints": healthy_endpoints,
-            "unhealthy_endpoints": unhealthy_endpoints,
-            "healthy_count": len(healthy_endpoints),
-            "unhealthy_count": len(unhealthy_endpoints),
-        })
+            health_check_results.update({
+                "healthy_endpoints": healthy_endpoints,
+                "unhealthy_endpoints": unhealthy_endpoints,
+                "healthy_count": len(healthy_endpoints),
+                "unhealthy_count": len(unhealthy_endpoints),
+            })
 
-        # Pause between checks if interval is set
+            if not unhealthy_endpoints:
+                break
+
+            health_check_retries += 1
+            if health_check_retries >= MAX_HEALTH_CHECK_RETRIES:
+                break
+
+        except Exception:
+            pass
+
         if isinstance(health_check_interval, float):
             await asyncio.sleep(health_check_interval)
 
