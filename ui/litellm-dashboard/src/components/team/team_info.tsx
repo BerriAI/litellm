@@ -52,7 +52,9 @@ interface TeamData {
     max_parallel_requests: number | null;
     budget_reset_at: string | null;
     model_id: string | null;
-    litellm_model_table: string | null;
+    litellm_model_table: {
+      model_aliases: Record<string, string>;
+    } | null;
     created_at: string;
   };
   keys: any[];
@@ -640,7 +642,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               )}
             </Card>
 
-            {/* Add Model Aliases Card */}
             <ModelAliasesCard
               teamId={teamId}
               accessToken={accessToken}
