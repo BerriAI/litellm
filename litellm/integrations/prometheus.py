@@ -423,6 +423,7 @@ class PrometheusLogger(CustomLogger):
             team=user_api_team,
             team_alias=user_api_team_alias,
             user=user_id,
+            user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
             model=model,
             litellm_model_name=model,
@@ -806,6 +807,7 @@ class PrometheusLogger(CustomLogger):
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 hashed_api_key=user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
@@ -853,6 +855,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 user=user_api_key_dict.user_id,
+                user_email=user_api_key_dict.user_email,
                 status_code="200",
             )
             _labels = prometheus_label_factory(
