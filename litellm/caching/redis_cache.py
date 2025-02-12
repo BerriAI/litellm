@@ -390,7 +390,6 @@ class RedisCache(BaseCache):
         # don't waste a network request if there's nothing to set
         if len(cache_list) == 0:
             return
-        from redis.asyncio import Redis
 
         _redis_client = self.init_async_client()
         start_time = time.time()
