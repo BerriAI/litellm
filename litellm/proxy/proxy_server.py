@@ -31,18 +31,15 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-
 def showwarning(message, category, filename, lineno, file=None, line=None):
     traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
     if file is not None:
         file.write(traceback_info)
 
-
 warnings.showwarning = showwarning
 warnings.filterwarnings("default", category=UserWarning)
 
 # Your client code here
-
 
 messages: list = []
 sys.path.insert(
@@ -71,7 +68,6 @@ list_of_messages = [
     "'I get frustrated when the product...'",
 ]
 
-
 def generate_feedback_box():
     box_width = 60
 
@@ -98,7 +94,6 @@ def generate_feedback_box():
     )  # noqa
     print()  # noqa
     print()  # noqa
-
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -374,7 +369,6 @@ _description = (
     else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
 )
 
-
 def cleanup_router_config_variables():
     global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, prisma_client
 
@@ -389,7 +383,6 @@ def cleanup_router_config_variables():
     use_background_health_checks = None
     health_check_interval = None
     prisma_client = None
-
 
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
@@ -420,7 +413,6 @@ async def proxy_shutdown_event():
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
-
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
@@ -542,7 +534,6 @@ async def proxy_startup_event(app: FastAPI):
     # Shutdown event
     await proxy_shutdown_event()
 
-
 app = FastAPI(
     docs_url=_get_docs_url(),
     redoc_url=_get_redoc_url(),
@@ -553,11 +544,9 @@ app = FastAPI(
     lifespan=proxy_startup_event,
 )
 
-
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
 from fastapi.routing import APIWebSocketRoute
-
 
 def get_openapi_schema():
     if app.openapi_schema:
@@ -609,7 +598,6 @@ def get_openapi_schema():
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
-
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -625,14 +613,11 @@ def custom_openapi():
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
-
 if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
     app.openapi = custom_openapi  # type: ignore
 
-
 class UserAPIKeyCacheTTLEnum(enum.Enum):
     in_memory_cache_ttl = 60  # 1 min ttl ## configure via `general_settings::user_api_key_cache_ttl: <your-value>`
-
 
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
@@ -652,7 +637,6 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
         },
         headers=headers,
     )
-
 
 router = APIRouter()
 origins = ["*"]
@@ -696,7 +680,6 @@ except Exception:
 # # Mount this test directory instead
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -704,7 +687,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 from typing import Dict
 
@@ -773,7 +755,6 @@ celery_fn = None  # Redis Queue for handling requests
 db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
-
 def get_custom_headers(
     *,
     user_api_key_dict: UserAPIKeyAuth,
@@ -836,7 +817,6 @@ def get_custom_headers(
         verbose_proxy_logger.error(f"Error setting custom headers: {e}")
         return {}
 
-
 async def check_request_disconnection(request: Request, llm_api_call_task):
     """
     Asynchronously checks if the request is disconnected at regular intervals.
@@ -865,7 +845,6 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
                 detail="Client disconnected the request",
             )
 
-
 def _resolve_typed_dict_type(typ):
     """Resolve the actual TypedDict class from a potentially wrapped type."""
     from typing_extensions import _TypedDictMeta  # type: ignore
@@ -878,7 +857,6 @@ def _resolve_typed_dict_type(typ):
     elif isinstance(typ, type) and isinstance(typ, dict):
         return typ
     return None
-
 
 def _resolve_pydantic_type(typ) -> List:
     """Resolve the actual TypedDict class from a potentially wrapped type."""
@@ -895,7 +873,6 @@ def _resolve_pydantic_type(typ) -> List:
     elif isinstance(typ, type) and isinstance(typ, BaseModel):
         return [typ]
     return typs
-
 
 def load_from_azure_key_vault(use_azure_key_vault: bool = False):
     if use_azure_key_vault is False:
@@ -927,7 +904,6 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
             _error_str,
         )
 
-
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
@@ -936,7 +912,6 @@ def cost_tracking():
             if (_PROXY_track_cost_callback) not in litellm._async_success_callback:  # type: ignore
                 litellm.logging_callback_manager.add_litellm_async_success_callback(_PROXY_track_cost_callback)  # type: ignore
 
-
 def error_tracking():
     global prisma_client
     if prisma_client is not None:
@@ -944,7 +919,6 @@ def error_tracking():
             verbose_proxy_logger.debug("setting litellm failure callback to track cost")
             if (_PROXY_failure_handler) not in litellm.failure_callback:  # type: ignore
                 litellm.logging_callback_manager.add_litellm_failure_callback(_PROXY_failure_handler)  # type: ignore
-
 
 def _set_spend_logs_payload(
     payload: Union[dict, SpendLogsPayload],
@@ -960,7 +934,6 @@ def _set_spend_logs_payload(
     elif prisma_client is not None:
         prisma_client.spend_log_transactions.append(payload)
     return prisma_client
-
 
 async def update_database(  # noqa: PLR0915
     token,
@@ -1141,7 +1114,6 @@ async def update_database(  # noqa: PLR0915
         verbose_proxy_logger.debug(
             f"Error updating Prisma database: {traceback.format_exc()}"
         )
-
 
 async def update_cache(  # noqa: PLR0915
     token: Optional[str],
@@ -1392,7 +1364,6 @@ async def update_cache(  # noqa: PLR0915
         )
     )
 
-
 def run_ollama_serve():
     try:
         command = ["ollama", "serve"]
@@ -1405,7 +1376,6 @@ def run_ollama_serve():
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """
         )
-
 
 async def _run_background_health_check():
     """
@@ -1436,7 +1406,6 @@ async def _run_background_health_check():
             health_check_interval, float
         ):
             await asyncio.sleep(health_check_interval)
-
 
 class ProxyConfig:
     """
@@ -2814,15 +2783,12 @@ class ProxyConfig:
                 )
             )
 
-
 proxy_config = ProxyConfig()
-
 
 def save_worker_config(**data):
     import json
 
     os.environ["WORKER_CONFIG"] = json.dumps(data)
-
 
 async def initialize(  # noqa: PLR0915
     model=None,
@@ -2941,7 +2907,6 @@ async def initialize(  # noqa: PLR0915
         pass
     user_telemetry = telemetry
 
-
 # for streaming
 def data_generator(response):
     verbose_proxy_logger.debug("inside generator")
@@ -2951,7 +2916,6 @@ def data_generator(response):
             yield f"data: {json.dumps(chunk.dict())}\n\n"
         except Exception:
             yield f"data: {json.dumps(chunk)}\n\n"
-
 
 async def async_assistants_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
@@ -3005,7 +2969,6 @@ async def async_assistants_data_generator(
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
-
 
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
@@ -3063,7 +3026,6 @@ async def async_data_generator(
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
 
-
 async def async_data_generator_anthropic(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -3115,7 +3077,6 @@ async def async_data_generator_anthropic(
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
 
-
 def select_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -3124,7 +3085,6 @@ def select_data_generator(
         user_api_key_dict=user_api_key_dict,
         request_data=request_data,
     )
-
 
 def get_litellm_model_info(model: dict = {}):
     model_info = model.get("model_info", {})
@@ -3139,11 +3099,9 @@ def get_litellm_model_info(model: dict = {}):
         # if litellm does not have info on the model it should return {}
         return {}
 
-
 def on_backoff(details):
     # The 'tries' key in the details dictionary contains the number of completed tries
     verbose_proxy_logger.debug("Backing off... this was attempt # %s", details["tries"])
-
 
 def giveup(e):
     result = not (
@@ -3162,7 +3120,6 @@ def giveup(e):
     if result:
         verbose_proxy_logger.info(json.dumps({"event": "giveup", "exception": str(e)}))
     return result
-
 
 class ProxyStartupEvent:
     @classmethod
@@ -3385,7 +3342,6 @@ class ProxyStartupEvent:
 
             ddtrace.patch_all(logging=True, openai=False)
 
-
 #### API ENDPOINTS ####
 @router.get(
     "/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -3442,7 +3398,6 @@ async def model_list(
         ],
         object="list",
     )
-
 
 @router.post(
     "/v1/chat/completions",
@@ -3746,7 +3701,6 @@ async def chat_completion(  # noqa: PLR0915
             headers=headers,
         )
 
-
 @router.post(
     "/v1/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"]
 )
@@ -3958,7 +3912,6 @@ async def completion(  # noqa: PLR0915
             code=getattr(e, "status_code", 500),
         )
 
-
 @router.post(
     "/v1/embeddings",
     dependencies=[Depends(user_api_key_auth)],
@@ -4167,7 +4120,6 @@ async def embeddings(  # noqa: PLR0915
                 code=getattr(e, "status_code", 500),
             )
 
-
 @router.post(
     "/v1/images/generations",
     dependencies=[Depends(user_api_key_auth)],
@@ -4286,7 +4238,6 @@ async def image_generation(
                 code=getattr(e, "status_code", 500),
             )
 
-
 @router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
@@ -4396,7 +4347,6 @@ async def audio_speech(
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
-
 
 @router.post(
     "/v1/audio/transcriptions",
@@ -4547,7 +4497,6 @@ async def audio_transcriptions(
                 code=getattr(e, "status_code", 500),
             )
 
-
 ######################################################################
 
 #                          /v1/realtime Endpoints
@@ -4556,7 +4505,6 @@ async def audio_transcriptions(
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from litellm import _arealtime
-
 
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
@@ -4591,14 +4539,11 @@ async def websocket_endpoint(
         verbose_proxy_logger.exception("Internal server error")
         await websocket.close(code=1011, reason="Internal server error")
 
-
 ######################################################################
 
 #                          /v1/assistant Endpoints
 
-
 ######################################################################
-
 
 @router.get(
     "/v1/assistants",
@@ -4695,7 +4640,6 @@ async def get_assistants(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-
 
 @router.post(
     "/v1/assistants",
@@ -4794,7 +4738,6 @@ async def create_assistant(
                 code=getattr(e, "status_code", 500),
             )
 
-
 @router.delete(
     "/v1/assistants/{assistant_id:path}",
     dependencies=[Depends(user_api_key_auth)],
@@ -4890,7 +4833,6 @@ async def delete_assistant(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-
 
 @router.post(
     "/v1/threads",
@@ -4988,7 +4930,6 @@ async def create_threads(
                 code=getattr(e, "status_code", 500),
             )
 
-
 @router.get(
     "/v1/threads/{thread_id}",
     dependencies=[Depends(user_api_key_auth)],
@@ -5083,7 +5024,6 @@ async def get_thread(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-
 
 @router.post(
     "/v1/threads/{thread_id}/messages",
@@ -5183,7 +5123,6 @@ async def add_messages(
                 code=getattr(e, "status_code", 500),
             )
 
-
 @router.get(
     "/v1/threads/{thread_id}/messages",
     dependencies=[Depends(user_api_key_auth)],
@@ -5277,7 +5216,6 @@ async def get_messages(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-
 
 @router.post(
     "/v1/threads/{thread_id}/runs",
@@ -5386,7 +5324,6 @@ async def run_thread(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-
 
 @router.post(
     "/v1/moderations",
@@ -5509,9 +5446,7 @@ async def moderations(
                 code=getattr(e, "status_code", 500),
             )
 
-
 #### ANTHROPIC ENDPOINTS ####
-
 
 @router.post(
     "/v1/messages",
@@ -5727,7 +5662,6 @@ async def anthropic_response(  # noqa: PLR0915
             code=getattr(e, "status_code", 500),
         )
 
-
 #### DEV UTILS ####
 
 # @router.get(
@@ -5736,7 +5670,6 @@ async def anthropic_response(  # noqa: PLR0915
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
-
 
 @router.post(
     "/utils/token_counter",
@@ -5804,7 +5737,6 @@ async def token_counter(request: TokenCountRequest):
         tokenizer_type=tokenizer_used,
     )
 
-
 @router.get(
     "/utils/supported_openai_params",
     tags=["llm utils"],
@@ -5812,11 +5744,11 @@ async def token_counter(request: TokenCountRequest):
 )
 async def supported_openai_params(model: str):
     """
-    Returns supported openai params for a given litellm model name 
+    Returns supported openai params for a given litellm model name
 
-    e.g. `gpt-4` vs `gpt-3.5-turbo` 
+    e.g. `gpt-4` vs `gpt-3.5-turbo`
 
-    Example curl: 
+    Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
         --header 'Authorization: Bearer sk-1234'
@@ -5834,9 +5766,7 @@ async def supported_openai_params(model: str):
             status_code=400, detail={"error": "Could not map model={}".format(model)}
         )
 
-
 #### MODEL MANAGEMENT ####
-
 
 async def _add_model_to_db(
     model_params: Deployment,
@@ -5865,7 +5795,6 @@ async def _add_model_to_db(
         data=_data  # type: ignore
     )
     return model_response
-
 
 async def _add_team_model_to_db(
     model_params: Deployment,
@@ -5907,7 +5836,6 @@ async def _add_team_model_to_db(
 
     return model_response
 
-
 def check_if_team_id_matches_key(
     team_id: Optional[str], user_api_key_dict: UserAPIKeyAuth
 ) -> bool:
@@ -5924,7 +5852,6 @@ def check_if_team_id_matches_key(
         if user_api_key_dict.team_id != team_id:
             can_make_call = False
     return can_make_call
-
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
@@ -6032,7 +5959,6 @@ async def add_new_model(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
 
 #### MODEL MANAGEMENT ####
 @router.post(
@@ -6154,7 +6080,6 @@ async def update_model(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-
 @router.get(
     "/v2/model/info",
     description="v2 - returns all the models set on the config.yaml, shows 'user_access' = True if the user has access to the model. Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)",
@@ -6256,7 +6181,6 @@ async def model_info_v2(
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
 
-
 @router.get(
     "/model/streaming_metrics",
     description="View time to first token for models in spend logs",
@@ -6354,7 +6278,7 @@ async def model_streaming_metrics(
                 if _day not in _daily_entries:
                     _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if _api_base is not None and "https://" in _api_base:
+            if _api_base and "https://" in _api_base:
                 _combined_model_name = str(_api_base)
             if "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
@@ -6387,7 +6311,6 @@ async def model_streaming_metrics(
             "data": response,
             "all_api_bases": list(_all_api_bases),
         }
-
 
 @router.get(
     "/model/metrics",
@@ -6470,7 +6393,7 @@ async def model_metrics(
             if _day not in _daily_entries:
                 _daily_entries[_day] = {}
             _combined_model_name = str(_model)
-            if _api_base is not None and "https://" in _api_base:
+            if _api_base and "https://" in _api_base:
                 _combined_model_name = str(_api_base)
             if "/openai/" in _combined_model_name:
                 _combined_model_name = _combined_model_name.split("/openai/")[0]
@@ -6502,7 +6425,6 @@ async def model_metrics(
             "data": response,
             "all_api_bases": list(_all_api_bases),
         }
-
 
 @router.get(
     "/model/metrics/slow_responses",
@@ -6592,7 +6514,6 @@ ORDER BY
             row["api_base"] = _api_base
     return db_response
 
-
 @router.get(
     "/model/metrics/exceptions",
     description="View number of failed requests per model on config.yaml",
@@ -6627,18 +6548,18 @@ async def model_metrics_exceptions(
     """
     sql_query = """
         WITH cte AS (
-            SELECT 
+            SELECT
                 CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
                 exception_type,
                 COUNT(*) AS num_rate_limit_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE 
-                "startTime" >= $1::timestamp 
-                AND "endTime" <= $2::timestamp 
+            WHERE
+                "startTime" >= $1::timestamp
+                AND "endTime" <= $2::timestamp
                 AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
-        SELECT 
+        SELECT
             combined_model_api_base,
             COUNT(*) AS total_exceptions,
             json_object_agg(exception_type, num_rate_limit_exceptions) AS exception_counts
@@ -6680,7 +6601,6 @@ async def model_metrics_exceptions(
 
     return {"data": response, "exception_types": list(exception_types)}
 
-
 def _get_proxy_model_info(model: dict) -> dict:
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
@@ -6720,7 +6640,6 @@ def _get_proxy_model_info(model: dict) -> dict:
     model = remove_sensitive_info_from_deployment(deployment_dict=model)
 
     return model
-
 
 @router.get(
     "/model/info",
@@ -6863,7 +6782,6 @@ async def model_info_v1(  # noqa: PLR0915
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
 
-
 def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
 ) -> List[ModelGroupInfo]:
@@ -6876,7 +6794,6 @@ def _get_model_group_info(
         if _model_group_info is not None:
             model_groups.append(_model_group_info)
     return model_groups
-
 
 @router.get(
     "/model_group/info",
@@ -6892,8 +6809,6 @@ async def model_group_info(
 
     - /model_group/info returns all model groups. End users of proxy should use /model_group/info since those models will be used for /chat/completions, /embeddings, etc.
     - /model_group/info?model_group=rerank-english-v3.0 returns all model groups for a specific model group (`model_name` in config.yaml)
-
-    
 
     Example Request (All Models):
     ```shell
@@ -6911,10 +6826,10 @@ async def model_group_info(
     -H 'Authorization: Bearer sk-1234'
     ```
 
-    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml) 
+    Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
     ```shell
     curl -X 'GET' \
-    'http://localhost:4000/model_group/info?model_group=openai/tts-1' 
+    'http://localhost:4000/model_group/info?model_group=openai/tts-1'
     -H 'accept: application/json' \
     -H 'Authorization: Bearersk-1234'
     ```
@@ -7079,7 +6994,6 @@ async def model_group_info(
 
     return {"data": model_groups}
 
-
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -7154,7 +7068,6 @@ async def delete_model(model_info: ModelInfoDelete):
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-
 @router.get(
     "/model/settings",
     description="Returns provider name, description, and required parameters for each provider",
@@ -7184,9 +7097,7 @@ async def model_settings():
 
     return returned_list
 
-
 #### ALERTING MANAGEMENT ENDPOINTS ####
-
 
 @router.get(
     "/alerting/settings",
@@ -7296,7 +7207,6 @@ async def alerting_settings(
             )
             return_val.append(_response_obj)
     return return_val
-
 
 #### EXPERIMENTAL QUEUING ####
 @router.post(
@@ -7414,7 +7324,6 @@ async def async_queue_request(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-
 @app.get("/fallback/login", tags=["experimental"], include_in_schema=False)
 async def fallback_login(request: Request):
     """
@@ -7440,7 +7349,6 @@ async def fallback_login(request: Request):
         from fastapi.responses import HTMLResponse
 
         return HTMLResponse(content=html_form, status_code=200)
-
 
 @router.post(
     "/login", include_in_schema=False
@@ -7492,7 +7400,7 @@ async def login(request: Request):  # noqa: PLR0915
         get_disabled_non_admin_personal_key_creation()
     )
     """
-    To login to Admin UI, we support the following 
+    To login to Admin UI, we support the following
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
@@ -7656,7 +7564,6 @@ async def login(request: Request):  # noqa: PLR0915
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str):
     """
@@ -7773,7 +7680,6 @@ async def onboarding(invite_link: str):
         "user_email": user_email,
     }
 
-
 @app.post("/onboarding/claim_token", include_in_schema=False)
 async def claim_onboarding_link(data: InvitationClaim):
     """
@@ -7849,7 +7755,6 @@ async def claim_onboarding_link(data: InvitationClaim):
 
     return user_obj
 
-
 @app.get("/get_image", include_in_schema=False)
 def get_image():
     """Get logo to show on admin UI"""
@@ -7881,9 +7786,7 @@ def get_image():
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
         return FileResponse(logo_path, media_type="image/jpeg")
 
-
 #### INVITATION MANAGEMENT ####
-
 
 @router.post(
     "/invitation/new",
@@ -7950,7 +7853,6 @@ async def new_invitation(
             )
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
-
 @router.get(
     "/invitation/info",
     tags=["Invite Links"],
@@ -8002,7 +7904,6 @@ async def invitation_info(
         )
     return response
 
-
 @router.post(
     "/invitation/update",
     tags=["Invite Links"],
@@ -8016,7 +7917,7 @@ async def invitation_update(
 ):
     """
     Update when invitation is accepted
-    
+
     ```
     curl -X POST 'http://localhost:4000/invitation/update' \
         -H 'Content-Type: application/json' \
@@ -8063,7 +7964,6 @@ async def invitation_update(
         )
     return response
 
-
 @router.post(
     "/invitation/delete",
     tags=["Invite Links"],
@@ -8077,7 +7977,7 @@ async def invitation_delete(
 ):
     """
     Delete invitation link
-    
+
     ```
     curl -X POST 'http://localhost:4000/invitation/delete' \
         -H 'Content-Type: application/json' \
@@ -8115,7 +8015,6 @@ async def invitation_delete(
             detail={"error": "Invitation id does not exist in the database."},
         )
     return response
-
 
 #### CONFIG MANAGEMENT ####
 @router.post(
@@ -8261,7 +8160,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-
 ### CONFIG GENERAL SETTINGS
 """
 - Update config settings
@@ -8269,7 +8167,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
 
 Keep it more precise, to prevent overwrite other values unintentially
 """
-
 
 @router.post(
     "/config/field/update",
@@ -8289,8 +8186,8 @@ async def update_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
-    - Check if config value is valid type 
+    - Check if param in general settings
+    - Check if config value is valid type
     """
 
     if prisma_client is None:
@@ -8348,7 +8245,6 @@ async def update_config_general_settings(
 
     return response
 
-
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -8366,7 +8262,7 @@ async def get_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
+    - Check if param in general settings
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8410,7 +8306,6 @@ async def get_config_general_settings(
                 detail={"error": "Field name={} not in DB".format(field_name)},
             )
 
-
 @router.get(
     "/config/list",
     tags=["config.yaml"],
@@ -8430,7 +8325,7 @@ async def get_config_list(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
+    - Check if param in general settings
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8548,7 +8443,6 @@ async def get_config_list(
 
     return return_val
 
-
 @router.post(
     "/config/field/delete",
     tags=["config.yaml"],
@@ -8567,7 +8461,7 @@ async def delete_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
+    - Check if param in general settings
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8620,7 +8514,6 @@ async def delete_config_general_settings(
 
     return response
 
-
 @router.get(
     "/get/config/callbacks",
     tags=["config.yaml"],
@@ -8658,7 +8551,7 @@ async def get_config():  # noqa: PLR0915
                 },
             }
         ]
-        
+
         """
         for _callback in _success_callbacks:
             if _callback != "langfuse":
@@ -8811,7 +8704,6 @@ async def get_config():  # noqa: PLR0915
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-
 @router.get(
     "/config/yaml",
     tags=["config.yaml"],
@@ -8837,7 +8729,6 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     """
     return {"hello": "world"}
 
-
 @router.get(
     "/get/litellm_model_cost_map",
     include_in_schema=False,
@@ -8853,11 +8744,9 @@ async def get_litellm_model_cost_map():
             detail=f"Internal Server Error ({str(e)})",
         )
 
-
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
-
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
 async def get_routes():
@@ -8882,7 +8771,6 @@ async def get_routes():
 
     return {"routes": routes}
 
-
 #### TEST ENDPOINTS ####
 # @router.get(
 #     "/token/generate",
@@ -8906,7 +8794,6 @@ async def get_routes():
 #     token = auth_jwt_sso.create_access_token()
 
 #     return {"token": token}
-
 
 app.include_router(router)
 app.include_router(batches_router)

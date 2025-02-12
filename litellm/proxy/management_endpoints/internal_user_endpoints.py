@@ -442,16 +442,7 @@ async def _get_user_info_for_proxy_admin():
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
-    if not results or not len(results):
-        return UserInfoResponse(
-            user_id=None,
-            user_info=None,
-            keys=[],
-            teams=[],
-        )
-
-    _keys_in_db: List[str] = results[0].get("keys", []) or []
-
+    _keys_in_db: List = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db = []
     for key in _keys_in_db:
