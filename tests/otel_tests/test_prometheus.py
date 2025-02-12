@@ -559,11 +559,11 @@ async def test_user_email_metrics():
         user_data = {
             "user_email": "test@example.com",
         }
-        user_id = await create_test_user(session, user_data)
-        print("user_id", user_id)
+        user_info = await create_test_user(session, user_data)
+        key = user_info["key"]
 
         # Initialize OpenAI client with the user's email
-        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key="sk-1234")
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=key)
 
         # Make initial request and check budget
         await client.chat.completions.create(
