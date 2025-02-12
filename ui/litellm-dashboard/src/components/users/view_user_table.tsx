@@ -66,16 +66,18 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
     searchValue: string,
     searchType: 'email' | 'user_id'
   ) => {
+    console.log("fetching users", page, searchValue, searchType);
     setIsLoading(true);
     setError(null);
     const params = new URLSearchParams();
+
+    let userEmail = null;
+    let userId = null;
     
-    if (searchValue.trim()) {
-      if (searchType === 'email') {
-        params.append("user_email", searchValue.trim());
-      } else {
-        params.append("user_id", searchValue.trim());
-      }
+    if (searchType === 'email') {
+      userEmail = searchValue.trim();
+    } else {
+      userId = searchValue.trim();
     }
     params.append("page", page.toString());
     params.append("page_size", defaultPageSize.toString());
@@ -85,7 +87,7 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
     }
 
     try {
-      const response = await userFilterUICall(accessToken, params);
+      const response = await userFilterUICall(accessToken, userEmail, userId, page, defaultPageSize);
       setUsers(response.users || []);
       setTotalPages(response.total_pages);
     } catch (err) {
