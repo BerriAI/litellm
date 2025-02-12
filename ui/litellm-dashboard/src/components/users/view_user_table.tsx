@@ -14,7 +14,6 @@ import {
   Button,
 } from "@tremor/react";
 import { PencilAltIcon, TrashIcon, SearchIcon } from "@heroicons/react/outline";
-
 import { userFilterUICall } from '../networking';
 
 interface User {
@@ -159,58 +158,60 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
         </div>
       )}
 
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableHeaderCell>User ID</TableHeaderCell>
-            <TableHeaderCell>User Email</TableHeaderCell>
-            <TableHeaderCell>Role</TableHeaderCell>
-            <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-            <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-            <TableHeaderCell>API Keys</TableHeaderCell>
-            <TableHeaderCell></TableHeaderCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {users.map((user) => (
-            <TableRow key={user.user_id}>
-              <TableCell>{user.user_id || "-"}</TableCell>
-              <TableCell>{user.user_email || "-"}</TableCell>
-              <TableCell>
-                {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
-              </TableCell>
-              <TableCell>
-                {user.spend ? user.spend?.toFixed(2) : "-"}
-              </TableCell>
-              <TableCell>
-                {user.max_budget !== null ? user.max_budget : "Unlimited"}
-              </TableCell>
-              <TableCell>
-                <Badge 
-                  size="xs" 
-                  color={user.key_count > 0 ? "indigo" : "gray"}
-                >
-                  {user.key_count > 0 ? `${user.key_count} Keys` : "No Keys"}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <div className="flex gap-2">
-                  <Icon
-                    icon={PencilAltIcon}
-                    onClick={() => onEdit(user)}
-                    className="cursor-pointer"
-                  />
-                  <Icon
-                    icon={TrashIcon}
-                    onClick={() => onDelete(user.user_id)}
-                    className="cursor-pointer"
-                  />
-                </div>
-              </TableCell>
+      <div className="overflow-auto h-[calc(100vh-300px)] border rounded-lg">
+        <Table>
+          <TableHead className="sticky top-0 bg-white z-10">
+            <TableRow>
+              <TableHeaderCell>User ID</TableHeaderCell>
+              <TableHeaderCell>User Email</TableHeaderCell>
+              <TableHeaderCell>Role</TableHeaderCell>
+              <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
+              <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
+              <TableHeaderCell>API Keys</TableHeaderCell>
+              <TableHeaderCell></TableHeaderCell>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHead>
+          <TableBody>
+            {users.map((user) => (
+              <TableRow key={user.user_id}>
+                <TableCell>{user.user_id || "-"}</TableCell>
+                <TableCell>{user.user_email || "-"}</TableCell>
+                <TableCell>
+                  {possibleUIRoles?.[user?.user_role]?.ui_label || "-"}
+                </TableCell>
+                <TableCell>
+                  {user.spend ? user.spend?.toFixed(2) : "-"}
+                </TableCell>
+                <TableCell>
+                  {user.max_budget !== null ? user.max_budget : "Unlimited"}
+                </TableCell>
+                <TableCell>
+                  <Badge 
+                    size="xs" 
+                    color={user.key_count > 0 ? "indigo" : "gray"}
+                  >
+                    {user.key_count > 0 ? `${user.key_count} Keys` : "No Keys"}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <div className="flex gap-2">
+                    <Icon
+                      icon={PencilAltIcon}
+                      onClick={() => onEdit(user)}
+                      className="cursor-pointer"
+                    />
+                    <Icon
+                      icon={TrashIcon}
+                      onClick={() => onDelete(user.user_id)}
+                      className="cursor-pointer"
+                    />
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
       
       {users.length === 0 && !isLoading && (
         <div className="text-center py-4 text-gray-500">

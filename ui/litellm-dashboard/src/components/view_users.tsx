@@ -259,7 +259,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
   return (
     <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
+      <Grid className="gap-2 p-2">
         <CreateUser
           userID={userID}
           accessToken={accessToken}
@@ -267,7 +267,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           possibleUIRoles={possibleUIRoles}
         />
         <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
-          <div className="mb-4 mt-1"></div>
           <FilterableUserTable  
             accessToken={accessToken}
             possibleUIRoles={possibleUIRoles}
