@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 else:
     DynamicLoggingCache = Any
 
-
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
@@ -181,6 +180,7 @@ class LangFuseLogger:
         """
         Logs a success or error event on Langfuse
         """
+        trace_id = None
         try:
             verbose_logger.debug(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
@@ -226,7 +226,6 @@ class LangFuseLogger:
             verbose_logger.debug(
                 f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}"
             )
-            trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
                 trace_id, generation_id = self._log_langfuse_v2(
@@ -809,7 +808,6 @@ class LangFuseLogger:
         """
         return int(os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval)
 
-
 def _add_prompt_to_generation_params(
     generation_params: dict,
     clean_metadata: dict,
@@ -898,7 +896,6 @@ def _add_prompt_to_generation_params(
 
     return generation_params
 
-
 def log_provider_specific_information_as_span(
     trace,
     clean_metadata,
@@ -941,7 +938,6 @@ def log_provider_specific_information_as_span(
                 name="vertex_ai_grounding_metadata",
                 input=vertex_ai_grounding_metadata,
             )
-
 
 def log_requester_metadata(clean_metadata: dict):
     returned_metadata = {}
