@@ -54,15 +54,15 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
       }
       const response = await userFilterUICall(accessToken, params);
       
-        const data: User[] = response
-        const options: UserOption[] = data.map(user => ({
-            label: fieldName === 'user_email' 
-                ? `${user.user_email}`
-                : `${user.user_id}`,
-            value: fieldName === 'user_email' ? user.user_email : user.user_id,
-            user
-         }));
-        setUserOptions(options);
+      const data: User[] = response.users
+      const options: UserOption[] = data.map(user => ({
+          label: fieldName === 'user_email' 
+              ? `${user.user_email}`
+              : `${user.user_id}`,
+          value: fieldName === 'user_email' ? user.user_email : user.user_id,
+          user
+        }));
+      setUserOptions(options);
     } catch (error) {
       console.error('Error fetching users:', error);
     } finally {
