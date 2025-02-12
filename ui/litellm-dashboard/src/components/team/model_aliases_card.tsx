@@ -63,8 +63,8 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
         <div className="flex justify-between items-center mb-6">
           <div>
             <div className="flex space-x-4 text-gray-600">
-              <div className="w-64">ALIAS</div>
-              <div>POINTS TO</div>
+              <Text className="font-mono w-64">ALIAS</Text>
+              <Text className="font-mono w-64">POINTS TO</Text>
             </div>
           </div>
           <TremorButton
@@ -80,12 +80,12 @@ const ModelAliasesCard: React.FC<ModelAliasesCardProps> = ({
           {Object.entries(currentAliases).map(([aliasName, originalModel], index) => (
             <div key={index} className="flex space-x-4 border-t border-gray-200 pt-4">
               <div className="w-64">
-                <span className="bg-gray-100 px-2 py-1 rounded font-mono text-sm text-gray-700">
+                <span className=" px-2 py-1 rounded font-mono text-sm text-gray-700">
                   {aliasName}
                 </span>
               </div>
               <div>
-                <span className="bg-gray-100 px-2 py-1 rounded font-mono text-sm text-gray-700">
+                <span className=" px-2 py-1 rounded font-mono text-sm text-gray-700">
                   {originalModel}
                 </span>
               </div>

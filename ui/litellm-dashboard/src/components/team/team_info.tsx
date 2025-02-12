@@ -71,11 +71,11 @@ interface TeamInfoProps {
   editTeam: boolean;
 }
 
-const TeamInfoView: React.FC<TeamInfoProps> = ({ 
-  teamId, 
-  onClose, 
-  accessToken, 
-  is_team_admin, 
+const TeamInfoView: React.FC<TeamInfoProps> = ({
+  teamId,
+  onClose,
+  accessToken,
+  is_team_admin,
   is_proxy_admin,
   userModels,
   editTeam
@@ -190,9 +190,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           guardrails: values.guardrails || []
         }
       };
-      
+
       const response = await teamUpdateCall(accessToken, updateData);
-      
+
       message.success("Team settings updated successfully");
       setIsEditing(false);
       fetchTeamInfo();
@@ -289,7 +289,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           >
             <Input />
           </Form.Item>
-          
+
           <Form.Item label="Models" name="models">
             <Select2
               mode="multiple"
@@ -335,9 +335,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <span>
                 Guardrails{' '}
                 <Tooltip title="Setup your first guardrail">
-                  <a 
-                    href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                    target="_blank" 
+                  <a
+                    href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                    target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -380,11 +380,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   return (
     <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button onClick={onClose} className="mb-4">← Back</Button>
-          <Title>{info.team_alias}</Title>
-          <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <Button onClick={onClose}>←</Button>
+          <div>
+            <Title className="text-2xl/7">{info.team_alias}</Title>
+            <Text className="text-gray-500 font-mono">Team Id: {info.team_id}</Text>
+            <Text className="text-gray-500 font-mono">Created At: {info.created_at}</Text>
+
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Text className="font-medium text-[14px]">Status:</Text>
+          <Badge color={info.blocked ? 'red' : 'green'}>
+            {info.blocked ? 'Blocked' : 'Active'}
+          </Badge>
         </div>
       </div>
 
@@ -496,7 +506,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <div className="flex justify-between items-center mb-4">
                 <Title>Team Settings</Title>
                 {(canEditTeam && !isEditing) && (
-                  <TremorButton 
+                  <TremorButton
                     onClick={() => setIsEditing(true)}
                   >
                     Edit Settings
@@ -525,9 +535,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="team_alias"
                     rules={[{ required: true, message: "Please input a team name" }]}
                   >
-                    <Input type=""/>
+                    <Input type="" />
                   </Form.Item>
-                  
+
                   <Form.Item label="Models" name="models">
                     <Select
                       mode="multiple"
@@ -569,9 +579,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <span>
                         Guardrails{' '}
                         <Tooltip title="Setup your first guardrail">
-                          <a 
-                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                            target="_blank" 
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                            target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -599,44 +609,34 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                 </Form>
               ) : (
-                <div className="space-y-4">
-                  <div>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="p-4 border rounded-lg">
                     <Text className="font-medium">Team Name</Text>
-                    <div>{info.team_alias}</div>
+                    <div className="mt-2">{info.team_alias}</div>
                   </div>
-                  <div>
-                    <Text className="font-medium">Team ID</Text>
-                    <div className="font-mono">{info.team_id}</div>
+                  <div className="p-4 border rounded-lg">
+                    <Text className="font-medium">Rate Limits</Text>
+                    <div className="mt-2">
+                      <div>TPM: {info.tpm_limit || 'Unlimited'}</div>
+                      <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
+                    </div>
                   </div>
-                  <div>
-                    <Text className="font-medium">Created At</Text>
-                    <div>{new Date(info.created_at).toLocaleString()}</div>
+                  <div className="p-4 border rounded-lg">
+                    <Text className="font-medium">Budget</Text>
+                    <div className="mt-2">
+                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
+                      <div>Reset: {info.budget_duration || 'Never'}</div>
+                    </div>
                   </div>
-                  <div>
+                  <div className="p-4 border rounded-lg">
                     <Text className="font-medium">Models</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
+                    <div className="flex flex-wrap gap-2 mt-2">
                       {info.models.map((model, index) => (
-                        <Badge key={index} color="red">
+                        <Badge key={index} color="gray">
                           {model}
                         </Badge>
                       ))}
                     </div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Rate Limits</Text>
-                    <div>TPM: {info.tpm_limit || 'Unlimited'}</div>
-                    <div>RPM: {info.rpm_limit || 'Unlimited'}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Budget</Text>
-                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {info.budget_duration || 'Never'}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Status</Text>
-                    <Badge color={info.blocked ? 'red' : 'green'}>
-                      {info.blocked ? 'Blocked' : 'Active'}
-                    </Badge>
                   </div>
                 </div>
               )}
