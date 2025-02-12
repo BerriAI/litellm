@@ -1431,6 +1431,7 @@ class UserAPIKeyAuth(
     tpm_limit_per_model: Optional[Dict[str, int]] = None
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
+    user_email: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
