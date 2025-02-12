@@ -29,6 +29,7 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import TeamMemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import ModelAliasesCard from "./model_aliases_card";
 
 
 interface TeamData {
@@ -51,7 +52,9 @@ interface TeamData {
     max_parallel_requests: number | null;
     budget_reset_at: string | null;
     model_id: string | null;
-    litellm_model_table: string | null;
+    litellm_model_table: {
+      model_aliases: Record<string, string>;
+    } | null;
     created_at: string;
   };
   keys: any[];
@@ -586,7 +589,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-end gap-2 mt-6">
                     <Button onClick={() => setIsEditing(false)}>
                       Cancel
                     </Button>
@@ -638,6 +641,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               )}
             </Card>
+
+            <ModelAliasesCard
+              teamId={teamId}
+              accessToken={accessToken}
+              currentAliases={teamData?.team_info?.litellm_model_table?.model_aliases || {}}
+              availableModels={userModels}
+              onUpdate={fetchTeamInfo}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
