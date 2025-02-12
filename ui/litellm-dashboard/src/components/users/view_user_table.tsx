@@ -11,8 +11,10 @@ import {
   TextInput,
   Select,
   SelectItem,
+  Button,
 } from "@tremor/react";
 import { PencilAltIcon, TrashIcon, SearchIcon } from "@heroicons/react/outline";
+
 import { userFilterUICall } from '../networking';
 
 interface User {
@@ -85,7 +87,6 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
 
     try {
       const response = await userFilterUICall(accessToken, params);
-      console.log("response from ui filter call", response);
       setUsers(response.users || []);
       setTotalPages(response.total_pages);
     } catch (err) {
@@ -139,12 +140,13 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
             className="w-full"
           />
         </div>
-        <button
+        <Button
           onClick={handleSearch}
-          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+          size="md"
+          className="px-6"
         >
           Search
-        </button>
+        </Button>
       </div>
 
       {isLoading && (
@@ -217,24 +219,28 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
       )}
 
       <div className="flex justify-between items-center mt-4">
-        <div>
+        <div className="text-gray-600">
           Showing Page {currentPage} of {totalPages}
         </div>
         <div className="flex gap-2">
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+          <Button
             onClick={() => setCurrentPage(currentPage - 1)}
             disabled={currentPage === 1 || isLoading}
+            variant="secondary"
+            size="md"
+            className="px-6"
           >
             Previous
-          </button>
-          <button
-            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+          </Button>
+          <Button
             onClick={() => setCurrentPage(currentPage + 1)}
             disabled={currentPage === totalPages || isLoading}
+            variant="secondary"
+            size="md"
+            className="px-6"
           >
             Next
-          </button>
+          </Button>
         </div>
       </div>
     </div>
