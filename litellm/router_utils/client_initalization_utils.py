@@ -194,25 +194,8 @@ class InitalizeOpenAISDKClient:
                 organization_env_name = organization.replace("os.environ/", "")
                 organization = get_secret_str(organization_env_name)
                 litellm_params["organization"] = organization
-            azure_ad_token_provider: Optional[Callable[[], str]] = litellm_params.get("azure_ad_token_provider")
-            if azure_ad_token_provider is None:
-                if litellm_params.get("tenant_id"):
-                    verbose_router_logger.debug(
-                        "Using Azure AD Token Provider for Azure Auth"
-                    )
-                    azure_ad_token_provider = get_azure_ad_token_from_entrata_id(
-                        tenant_id=litellm_params.get("tenant_id"),
-                        client_id=litellm_params.get("client_id"),
-                        client_secret=litellm_params.get("client_secret"),
-                    )
-                if litellm_params.get("azure_username") and litellm_params.get(
-                    "azure_password"
-                ):
-                    azure_ad_token_provider = get_azure_ad_token_from_username_password(
-                        azure_username=litellm_params.get("azure_username"),
-                        azure_password=litellm_params.get("azure_password"),
-                        client_id=litellm_params.get("client_id"),
-                    )
+
+            azure_ad_token_provider = _get_azure_ad_token_provider(litellm_params)
 
             if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
                 if api_base is None or not isinstance(api_base, str):
@@ -560,3 +543,28 @@ class InitalizeOpenAISDKClient:
                         ttl=client_ttl,
                         local_only=True,
                     )  # cache for 1 hr
+
+def _get_azure_ad_token_provider(litellm_params: dict) -> Optional[Callable[[], str]]:
+    """Retrieves an Azure AD token provider callable based on the provided parameters."""
+
+    if (token_provider := litellm_params.get("azure_ad_token_provider")) is not None:
+        return token_provider
+
+    if litellm_params.get("tenant_id"):
+        verbose_router_logger.debug(
+            "Using Azure AD Token Provider for Azure Auth"
+        )
+        return get_azure_ad_token_from_entrata_id(
+            tenant_id=litellm_params.get("tenant_id"),
+            client_id=litellm_params.get("client_id"),
+            client_secret=litellm_params.get("client_secret"),
+        )
+    if litellm_params.get("azure_username") and litellm_params.get(
+        "azure_password"
+    ):
+        return get_azure_ad_token_from_username_password(
+            azure_username=litellm_params.get("azure_username"),
+            azure_password=litellm_params.get("azure_password"),
+            client_id=litellm_params.get("client_id"),
+        )
+    return None
