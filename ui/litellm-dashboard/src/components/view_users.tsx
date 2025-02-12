@@ -258,78 +258,74 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   }
 
   return (
-    <div style={{ width: "100%" }}>
-      <Grid className="gap-2 p-2">
-        <CreateUser
-          userID={userID}
+    <Grid className="gap-2 p-2 h-[90vh] w-full mt-8">
+      <CreateUser
+        userID={userID}
+        accessToken={accessToken}
+        teams={teams}
+        possibleUIRoles={possibleUIRoles}
+      />
+      <FilterableUserTable  
           accessToken={accessToken}
-          teams={teams}
           possibleUIRoles={possibleUIRoles}
+          onEdit={() => {}}
+          onDelete={() => {}}
         />
-        <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[90vh] mb-4">
-          <FilterableUserTable  
-            accessToken={accessToken}
-            possibleUIRoles={possibleUIRoles}
-            onEdit={() => {}}
-            onDelete={() => {}}
-          />
-          <EditUserModal
-            visible={editModalVisible}
-            possibleUIRoles={possibleUIRoles}
-            onCancel={handleEditCancel}
-            user={selectedUser}
-            onSubmit={handleEditSubmit}
-          />
-          {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div
-              className="fixed inset-0 transition-opacity"
-              aria-hidden="true"
-            >
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
+        <EditUserModal
+          visible={editModalVisible}
+          possibleUIRoles={possibleUIRoles}
+          onCancel={handleEditCancel}
+          user={selectedUser}
+          onSubmit={handleEditSubmit}
+        />
+        {isDeleteModalOpen && (
+      <div className="fixed z-10 inset-0 overflow-y-auto">
+        <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+          <div
+            className="fixed inset-0 transition-opacity"
+            aria-hidden="true"
+          >
+            <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+          </div>
 
-            {/* Modal Panel */}
-            <span
-              className="hidden sm:inline-block sm:align-middle sm:h-screen"
-              aria-hidden="true"
-            >
-              &#8203;
-            </span>
+          {/* Modal Panel */}
+          <span
+            className="hidden sm:inline-block sm:align-middle sm:h-screen"
+            aria-hidden="true"
+          >
+            &#8203;
+          </span>
 
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">
-                      Delete User
-                    </h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">
-                        Are you sure you want to delete this user?
-                      </p>
-                      <p className="text-sm font-medium text-gray-900 mt-2">
-                        User ID: {userToDelete}
-                      </p>
-                    </div>
+          {/* Confirmation Modal Content */}
+          <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+              <div className="sm:flex sm:items-start">
+                <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">
+                    Delete User
+                  </h3>
+                  <div className="mt-2">
+                    <p className="text-sm text-gray-500">
+                      Are you sure you want to delete this user?
+                    </p>
+                    <p className="text-sm font-medium text-gray-900 mt-2">
+                      User ID: {userToDelete}
+                    </p>
                   </div>
                 </div>
               </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
+            </div>
+            <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+              <Button onClick={confirmDelete} color="red" className="ml-2">
+                Delete
+              </Button>
+              <Button onClick={cancelDelete}>Cancel</Button>
             </div>
           </div>
         </div>
-      )}
-        </Card>
-      </Grid>
-    </div>
+      </div>
+    )}
+    </Grid>
   );
 };
 

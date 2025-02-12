@@ -162,13 +162,13 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
         <Table>
           <TableHead className="sticky top-0 bg-white z-10">
             <TableRow>
-              <TableHeaderCell>User ID</TableHeaderCell>
-              <TableHeaderCell>User Email</TableHeaderCell>
-              <TableHeaderCell>Role</TableHeaderCell>
-              <TableHeaderCell>User Spend ($ USD)</TableHeaderCell>
-              <TableHeaderCell>User Max Budget ($ USD)</TableHeaderCell>
-              <TableHeaderCell>API Keys</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
+              <TableHeaderCell className="py-2">User ID</TableHeaderCell>
+              <TableHeaderCell className="py-2">User Email</TableHeaderCell>
+              <TableHeaderCell className="py-2">Role</TableHeaderCell>
+              <TableHeaderCell className="py-2">User Spend ($ USD)</TableHeaderCell>
+              <TableHeaderCell className="py-2">User Max Budget ($ USD)</TableHeaderCell>
+              <TableHeaderCell className="py-2">API Keys</TableHeaderCell>
+              <TableHeaderCell className="py-2"></TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
