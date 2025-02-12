@@ -1053,6 +1053,7 @@ class VertexLLM(VertexBase):
             messages=messages,
             optional_params=optional_params,
         )
+        headers["Connection"] = "close"
 
         request_body = await async_transform_request_body(**data)  # type: ignore
         _async_client_params = {}
