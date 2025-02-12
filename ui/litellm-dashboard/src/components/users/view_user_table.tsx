@@ -160,7 +160,7 @@ const FilterableUserTable: React.FC<FilterableUserTableProps> = ({
 
       <div className="overflow-auto h-[calc(100vh-300px)] border rounded-lg">
         <Table>
-          <TableHead className="sticky top-0 bg-white z-10">
+          <TableHead>
             <TableRow>
               <TableHeaderCell className="py-2">User ID</TableHeaderCell>
               <TableHeaderCell className="py-2">User Email</TableHeaderCell>
