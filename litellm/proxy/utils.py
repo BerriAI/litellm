@@ -1610,7 +1610,15 @@ class PrismaClient:
                 if query_type == "find_all":
                     response = await self.db.litellm_budgettable.find_many(
                         where={  # type:ignore
-                            "budget_reset_at": {"lt": reset_at}
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ]
                         }
                     )
                     return response
@@ -2566,8 +2574,19 @@ async def reset_budget(prisma_client: PrismaClient):
         budget_id_list_to_reset_enduser = []
         if budgets_to_reset is not None and len(budgets_to_reset) > 0:
             for budget in budgets_to_reset:
-                budget_id_list_to_reset_enduser.append(budget.budget_id)
                 duration_s = duration_in_seconds(duration=budget.budget_duration)
+
+                # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account
+                if (
+                    budget.budget_reset_at is None
+                    and budget.created_at + timedelta(seconds=duration_s) > now
+                ):
+                    budget.budget_reset_at = budget.created_at + timedelta(
+                        seconds=duration_s
+                    )
+                    continue
+
+                budget_id_list_to_reset_enduser.append(budget.budget_id)
                 budget.budget_reset_at = now + timedelta(seconds=duration_s)
             await prisma_client.update_data(
                 query_type="update_many",

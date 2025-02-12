@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1806,7 +1806,7 @@ async def test_reset_budget_for_endusers(prisma_client, budget_and_enduser_setup
     updated_budgets = await prisma_client.get_data(
         table_name="budget",
         query_type="find_all",
-        reset_at=datetime.now() + timedelta(days=31),
+        reset_at=datetime.now(timezone.utc) + timedelta(days=31),
     )
 
     # Assertions for end users
