@@ -8179,8 +8179,7 @@
         "input_cost_per_token": 0.000001, 
         "output_cost_per_token": 0.000001,  
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/sonar-pro": { 
         "max_tokens": 200000,
@@ -8189,8 +8188,7 @@
         "input_cost_per_token": 0.000003, 
         "output_cost_per_token": 0.000015,  
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192,
