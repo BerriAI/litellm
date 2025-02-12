@@ -1348,7 +1348,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Optional[str] = None
+    expires: Optional[Union[str, datetime]] = None
     models: List = []
     aliases: Dict = {}
     config: Dict = {}

@@ -1690,13 +1690,14 @@ async def list_keys(
     user_id: Optional[str] = Query(None, description="Filter keys by user ID"),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+    return_full_object: bool = Query(False, description="Return full key object"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user or team.
 
     Returns:
         {
-            "keys": List[str],
+            "keys": List[str] or List[UserAPIKeyAuth],
             "total_count": int,
             "current_page": int,
             "total_pages": int,
@@ -1706,7 +1707,14 @@ async def list_keys(
         from litellm.proxy.proxy_server import prisma_client
 
         # Check for unsupported parameters
-        supported_params = {"page", "size", "user_id", "team_id", "key_alias"}
+        supported_params = {
+            "page",
+            "size",
+            "user_id",
+            "team_id",
+            "key_alias",
+            "return_full_object",
+        }
         unsupported_params = set(request.query_params.keys()) - supported_params
         if unsupported_params:
             raise ProxyException(
@@ -1729,6 +1737,7 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
+            return_full_object=return_full_object,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -1736,6 +1745,7 @@ async def list_keys(
         return response
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error in list_keys: {e}")
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"error({str(e)})"),
