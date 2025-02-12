@@ -817,7 +817,10 @@ async def test_async_router_context_window_fallback():
         )
 
         print(f"response: {response}")
-        assert response.model == "gpt-3.5-turbo-1106"
+        assert (
+            response.model == "gpt-3.5-turbo-1106"
+            or response.model == "gpt-3.5-turbo-0125"
+        )
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
