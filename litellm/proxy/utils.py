@@ -2322,12 +2322,6 @@ async def send_email(receiver_email, subject, html):
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
 
-    if smtp_username is None:
-        raise ValueError("Trying to use SMTP, but SMTP_USERNAME is not set")
-
-    if smtp_password is None:
-        raise ValueError("Trying to use SMTP, but SMTP_PASSWORD is not set")
-
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
 
@@ -2337,8 +2331,9 @@ async def send_email(receiver_email, subject, html):
             if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
-            # Login to your email account
-            server.login(smtp_username, smtp_password)  # type: ignore
+            # Login to your email account only if smtp_username and smtp_password are provided
+            if smtp_username and smtp_password:
+                server.login(smtp_username, smtp_password)  # type: ignore
 
             # Send the email
             server.send_message(email_message)
