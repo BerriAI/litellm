@@ -271,7 +271,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
             setSelectedUser(user);
             setEditModalVisible(true);
           }}
-          onDelete={() => {}}
+          onDelete={(userId) => {handleDelete(userId)}}
         />
         <EditUserModal
           visible={editModalVisible}
