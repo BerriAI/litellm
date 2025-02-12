@@ -42,8 +42,8 @@ class AporiaGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
-        self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]
+        self.aporia_api_key = api_key or os.environ["APORIA_API_KEY"]
+        self.aporia_api_base = api_base or os.environ["APORIA_API_BASE"]
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
@@ -94,10 +94,10 @@ class AporiaGuardrail(CustomGuardrail):
         _json_data = json.dumps(data)
 
         """
-        export APORIO_API_KEY=<your key>
+        export APORIA_API_KEY=<your key>
         curl https://gr-prd-trial.aporia.com/some-id \
             -X POST \
-            -H "X-APORIA-API-KEY: $APORIO_API_KEY" \
+            -H "X-APORIA-API-KEY: $APORIA_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{
                 "messages": [
