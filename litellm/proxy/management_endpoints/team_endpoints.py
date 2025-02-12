@@ -1516,7 +1516,11 @@ async def list_team(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    response = await prisma_client.db.litellm_teamtable.find_many()
+    response = await prisma_client.db.litellm_teamtable.find_many(
+        include={
+            "litellm_model_table": True,
+        }
+    )
 
     filtered_response = []
     if user_id:

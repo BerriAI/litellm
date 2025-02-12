@@ -1022,3 +1022,82 @@ async def test_key_generate_always_db_team(mock_get_team_object):
 
     mock_get_team_object.assert_called_once()
     assert mock_get_team_object.call_args.kwargs["check_db_only"] == True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, should_pass",
+    [
+        ("gpt-4o", True),  # Should pass - exact match in aliases
+        ("gpt-4o-team1", True),  # Should pass - team has access to this deployment
+        ("gpt-4o-mini", False),  # Should fail - not in aliases
+        ("o-3", False),  # Should fail - not in aliases
+    ],
+)
+async def test_team_model_alias(prisma_client, requested_model, should_pass):
+    """
+    Test team model alias functionality:
+    1. Create team with model alias = `{gpt-4o: gpt-4o-team1}`
+    2. Generate key for that team with model = `gpt-4o`
+    3. Verify chat completion request works with aliased model = `gpt-4o`
+    """
+    litellm.set_verbose = True
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+
+    # Create team with model alias
+    team_id = f"test_team_{uuid.uuid4()}"
+    await new_team(
+        data=NewTeamRequest(
+            team_id=team_id,
+            team_alias=f"test_team_alias_{uuid.uuid4()}",
+            models=["gpt-4o-team1"],
+            model_aliases={"gpt-4o": "gpt-4o-team1"},
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    # Generate key for the team
+    new_key = await generate_key_fn(
+        data=GenerateKeyRequest(
+            team_id=team_id,
+            models=["gpt-4o-team1"],
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="admin"
+        ),
+    )
+
+    generated_key = new_key.key
+
+    # Test chat completion request
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        return_string = f'{{"model": "{requested_model}"}}'
+        return return_string.encode()
+
+    request.body = return_body
+
+    if should_pass:
+        # Verify the key works with the aliased model
+        result = await user_api_key_auth(
+            request=request, api_key=f"Bearer {generated_key}"
+        )
+
+        assert result.models == [
+            "gpt-4o-team1"
+        ], "Expected model list to contain aliased model"
+        assert result.team_model_aliases == {
+            "gpt-4o": "gpt-4o-team1"
+        }, "Expected model aliases to be present"
+    else:
+        # Verify the key fails with non-aliased models
+        with pytest.raises(Exception) as exc_info:
+            await user_api_key_auth(request=request, api_key=f"Bearer {generated_key}")
+        assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied

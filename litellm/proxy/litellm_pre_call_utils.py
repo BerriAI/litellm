@@ -312,6 +312,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_user_email=user_api_key_dict.user_email,
         )
         return user_api_key_logged_metadata
 
@@ -635,6 +636,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Team Model Aliases
+    _update_model_if_team_alias_exists(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
@@ -662,6 +669,32 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     return data
+
+
+def _update_model_if_team_alias_exists(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Update the model if the team alias exists
+
+    If a alias map has been set on a team, then we want to make the request with the model the team alias is pointing to
+
+    eg.
+        - user calls `gpt-4o`
+        - team.model_alias_map = {
+            "gpt-4o": "gpt-4o-team-1"
+        }
+        - requested_model = "gpt-4o-team-1"
+    """
+    _model = data.get("model")
+    if (
+        _model
+        and user_api_key_dict.team_model_aliases
+        and _model in user_api_key_dict.team_model_aliases
+    ):
+        data["model"] = user_api_key_dict.team_model_aliases[_model]
+    return
 
 
 def _get_enforced_params(
