@@ -67,11 +67,20 @@ async def test_team_model_alias():
     key = key_response.json()["key"]
 
     # Make request with model alias
-    client = AsyncOpenAI(api_key=key, base_url=f"{PROXY_BASE_URL}/v1")
+    openai_client = AsyncOpenAI(api_key=key, base_url=f"{PROXY_BASE_URL}/v1")
 
-    response = await client.chat.completions.create(
+    response = await openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": f"Test message {uuid.uuid4()}"}],
     )
 
     assert response is not None, "Should get valid response when using model alias"
+
+    # Cleanup - delete the model
+    model_id = model_response.json()["model_info"]["id"]
+    delete_response = await client.post(
+        "/model/delete",
+        json={"id": model_id},
+        headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
+    )
+    assert delete_response.status_code == 200
