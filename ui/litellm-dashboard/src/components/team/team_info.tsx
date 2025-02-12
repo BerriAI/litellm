@@ -29,6 +29,7 @@ import { PencilAltIcon, PlusIcon, TrashIcon } from "@heroicons/react/outline";
 import TeamMemberModal from "./edit_membership";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import ModelAliasesCard from "./model_aliases_card";
 
 
 interface TeamData {
@@ -51,7 +52,9 @@ interface TeamData {
     max_parallel_requests: number | null;
     budget_reset_at: string | null;
     model_id: string | null;
-    litellm_model_table: string | null;
+    litellm_model_table: {
+      model_aliases: Record<string, string>;
+    } | null;
     created_at: string;
   };
   keys: any[];
@@ -492,14 +495,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Team Settings</Title>
-                {canEditTeam && (
-                  <Button 
-                    type="primary"
-                    className="bg-blue-500"
+                {(canEditTeam && !isEditing) && (
+                  <TremorButton 
                     onClick={() => setIsEditing(true)}
                   >
                     Edit Settings
-                  </Button>
+                  </TremorButton>
                 )}
               </div>
 
@@ -524,7 +525,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="team_alias"
                     rules={[{ required: true, message: "Please input a team name" }]}
                   >
-                    <Input />
+                    <Input type=""/>
                   </Form.Item>
                   
                   <Form.Item label="Models" name="models">
@@ -588,13 +589,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </Form.Item>
 
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-end gap-2 mt-6">
                     <Button onClick={() => setIsEditing(false)}>
                       Cancel
                     </Button>
-                    <Button type="primary" htmlType="submit" className="bg-blue-500">
+                    <TremorButton>
                       Save Changes
-                    </Button>
+                    </TremorButton>
                   </div>
                 </Form>
               ) : (
@@ -628,7 +629,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Budget</Text>
-                    <div>Max: ${info.max_budget || 'Unlimited'}</div>
+                      <div>Max: {info.max_budget !== null ? `$${info.max_budget}` : 'No Limit'}</div>
                     <div>Reset: {info.budget_duration || 'Never'}</div>
                   </div>
                   <div>
@@ -640,6 +641,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               )}
             </Card>
+
+            <ModelAliasesCard
+              teamId={teamId}
+              accessToken={accessToken}
+              currentAliases={teamData?.team_info?.litellm_model_table?.model_aliases || {}}
+              availableModels={userModels}
+              onUpdate={fetchTeamInfo}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>

@@ -4,6 +4,7 @@ import {
   keyDeleteCall,
   modelAvailableCall,
   getGuardrailsList,
+  Organization,
 } from "./networking";
 import { add } from "date-fns";
 import {
@@ -101,6 +102,7 @@ interface ViewKeyTableProps {
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: any[] | null;
   premiumUser: boolean;
+  currentOrg: Organization | null;
 }
 
 interface ItemData {
@@ -132,6 +134,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   setData,
   teams,
   premiumUser,
+  currentOrg
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -167,55 +170,64 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   // Combine all keys that user should have access to
   const all_keys_to_display = React.useMemo(() => {
+    if (!data) return [];
+
+    // Helper function for default team org check
+    const matchesDefaultTeamOrg = (key: any) => {
+      console.log(`Checking if key matches default team org: ${JSON.stringify(key)}, currentOrg: ${JSON.stringify(currentOrg)}`)
+      if (!currentOrg || currentOrg.organization_id === null) {
+          return !('organization_id' in key) || key.organization_id === null;
+      }
+      return key.organization_id === currentOrg.organization_id;
+    };
+
     let allKeys: any[] = [];
 
-    // If no teams, return personal keys
-    if (!teams || teams.length === 0) {
-      return data;
-    }
+    // Handle no team selected or Default Team case
+    if (!selectedTeam || selectedTeam.team_alias === "Default Team") {
 
-    teams.forEach((team) => {
-      // For default team or when user is not admin, use personal keys (data)
-      if (team.team_id === "default-team" || !isUserTeamAdmin(team)) {
-        if (selectedTeam && selectedTeam.team_id === team.team_id && data) {
-          allKeys = [
-            ...allKeys,
-            ...data.filter((key) => key.team_id === team.team_id),
-          ];
-        }
-      }
-      // For teams where user is admin, use team keys
-      else if (isUserTeamAdmin(team)) {
-        if (selectedTeam && selectedTeam.team_id === team.team_id) {
-          allKeys = [
-            ...allKeys,
-            ...(data?.filter((key) => key?.team_id === team?.team_id) || []),
-          ];
-        }
-      }
-    });
-
-    // If no team is selected, show all accessible keys
-    if ((!selectedTeam || selectedTeam.team_alias === "Default Team") && data) {
-      const personalKeys = data.filter(
-        (key) => !key.team_id || key.team_id === "default-team"
+      console.log(`inside personal keys`)
+      // Get personal keys (with org check)
+      const personalKeys = data.filter(key => 
+        key.team_id == null && 
+        matchesDefaultTeamOrg(key)
       );
-      const adminTeamKeys = teams
-        .filter((team) => isUserTeamAdmin(team))
-        .flatMap((team) => team.keys || []);
+
+      console.log(`personalKeys: ${JSON.stringify(personalKeys)}`)
+      
+      // Get admin team keys (no org check)
+      const adminTeamKeys = data.filter(key => {
+        const keyTeam = teams?.find(team => team.team_id === key.team_id);
+        return keyTeam && isUserTeamAdmin(keyTeam) && key.team_id !== "default-team";
+      });
+
+      console.log(`adminTeamKeys: ${JSON.stringify(adminTeamKeys)}`)
+
       allKeys = [...personalKeys, ...adminTeamKeys];
     }
+    // Handle specific team selected
+    else {
+      const selectedTeamData = teams?.find(t => t.team_id === selectedTeam.team_id);
+      if (selectedTeamData) {
+        const teamKeys = data.filter(key => {
+          if (selectedTeamData.team_id === "default-team") {
+            return key.team_id == null && matchesDefaultTeamOrg(key);
+          }
+          return key.team_id === selectedTeamData.team_id;
+        });
+        allKeys = teamKeys;
+      }
+    }
 
-    // Filter out litellm-dashboard keys
-    allKeys = allKeys.filter((key) => key.team_id !== "litellm-dashboard");
-
-    // Remove duplicates based on token
-    const uniqueKeys = Array.from(
-      new Map(allKeys.map((key) => [key.token, key])).values()
+    // Final filtering and deduplication
+    return Array.from(
+      new Map(
+        allKeys
+          .filter(key => key.team_id !== "litellm-dashboard")
+          .map(key => [key.token, key])
+      ).values()
     );
-
-    return uniqueKeys;
-  }, [data, teams, selectedTeam, userID]);
+  }, [data, teams, selectedTeam, currentOrg]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
