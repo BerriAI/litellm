@@ -633,3 +633,52 @@ async def test_get_fuzzy_user_object():
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
     )
+
+
+@pytest.mark.parametrize(
+    "model, alias_map, expect_to_work",
+    [
+        ("gpt-4", {"gpt-4": "gpt-4-team1"}, True),  # model matches alias value
+        ("gpt-5", {"gpt-4": "gpt-4-team1"}, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work):
+    """
+    Test if can_key_call_model correctly handles model aliases in the token
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    llm_model_list = [
+        {
+            "model_name": "gpt-4-team1",
+            "litellm_params": {
+                "model": "gpt-4",
+                "api_key": "test-api-key",
+            },
+        }
+    ]
+    router = litellm.Router(model_list=llm_model_list)
+
+    user_api_key_object = UserAPIKeyAuth(
+        models=[
+            "gpt-4-team1",
+        ],
+        team_model_aliases=alias_map,
+    )
+
+    if expect_to_work:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_object,
+            llm_router=router,
+        )
+    else:
+        with pytest.raises(Exception) as e:
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_model_list,
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
