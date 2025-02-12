@@ -268,7 +268,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       <FilterableUserTable  
           accessToken={accessToken}
           onEdit={(user) => {
-            setSelectedUser(user);
+            setSelectedUser(user as any);
             setEditModalVisible(true);
           }}
           onDelete={(userId) => {handleDelete(userId)}}
