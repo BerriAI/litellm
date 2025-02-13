@@ -573,20 +573,32 @@ class Router:
             litellm.amoderation, call_type="moderation"
         )
 
-
     def discard(self):
         """
         Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
         For now, unhook router's callbacks from all lists
         """
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.failure_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
-
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm._async_success_callback, self
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.success_callback, self
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm._async_failure_callback, self
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.failure_callback, self
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.input_callback, self
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.service_callback, self
+        )
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, self
+        )
 
     def _update_redis_cache(self, cache: RedisCache):
         """
@@ -601,7 +613,6 @@ class Router:
         """
         if self.cache.redis_cache is None:
             self.cache.redis_cache = cache
-
 
     def initialize_assistants_endpoint(self):
         ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
@@ -902,6 +913,9 @@ class Router:
         - in the semaphore,  make a check against it's local rpm before running
         """
         model_name = None
+        _timeout_debug_deployment_dict = (
+            {}
+        )  # this is a temporary dict to debug timeout issues
         try:
             verbose_router_logger.debug(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
@@ -914,6 +928,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            _timeout_debug_deployment_dict = deployment
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1009,6 +1024,15 @@ class Router:
             )
 
             return response
+        except litellm.Timeout as e:
+            deployment_request_timeout_param = _timeout_debug_deployment_dict.get(
+                "litellm_params", {}
+            ).get("request_timeout", None)
+            deployment_timeout_param = _timeout_debug_deployment_dict.get(
+                "litellm_params", {}
+            ).get("timeout", None)
+            e.message += f"\n\nDeployment Info: request_timeout: {deployment_request_timeout_param}\ntimeout: {deployment_timeout_param}"
+            raise e
         except Exception as e:
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[31m Exception {str(e)}\033[0m"
@@ -3307,6 +3331,7 @@ class Router:
         _num_healthy_deployments = 0
         if healthy_deployments is not None and isinstance(healthy_deployments, list):
             _num_healthy_deployments = len(healthy_deployments)
+
         _num_all_deployments = 0
         if all_deployments is not None and isinstance(all_deployments, list):
             _num_all_deployments = len(all_deployments)
