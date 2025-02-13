@@ -496,7 +496,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   return (
     <div className="w-full m-2 mt-2 p-8">
       <Title level={4}>Admin Access </Title>
-      <Paragraph>Go to 'Internal Users' page to add other admins.</Paragraph>
+      <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
       <Grid >
         <Card>
         <Title level={4}> ✨ Security Settings</Title>
