@@ -1,13 +1,13 @@
 import moment from "moment";
-import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, uiSpendLogDetailsCall } from "../networking";
+import { uiSpendLogsCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
-import { RequestViewer } from "./request_viewer";
+import { Row } from "@tanstack/react-table";
 import { prefetchLogDetails } from "./prefetch";
-
 interface SpendLogsTableProps {
   accessToken: string | null;
   token: string | null;
@@ -21,6 +21,11 @@ interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+interface PrefetchedLog {
+  messages: any[];
+  response: any;
 }
 
 export default function SpendLogsTable({
@@ -85,7 +90,6 @@ export default function SpendLogsTable({
       document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Update the logs query to use the imported prefetchLogDetails
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -109,20 +113,12 @@ export default function SpendLogsTable({
         };
       }
 
-      console.log("Fetching logs with params:", {
-        startTime,
-        endTime,
-        selectedTeamId,
-        selectedKeyHash,
-        currentPage,
-        pageSize
-      });
-
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate 
         ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
+      // Get base response from API
       const response = await uiSpendLogsCall(
         accessToken,
         selectedKeyHash || undefined,
@@ -134,10 +130,27 @@ export default function SpendLogsTable({
         pageSize
       );
 
-      console.log("Received logs response:", response);
+      // Trigger prefetch for all logs
+      await prefetchLogDetails(
+        response.data,
+        formattedStartTime,
+        accessToken,
+        queryClient
+      );
 
-      // Update prefetchLogDetails call with new parameters
-      prefetchLogDetails(response.data, formattedStartTime, accessToken, queryClient);
+      // Update logs with prefetched data if available
+      response.data = response.data.map((log: LogEntry) => {
+        const prefetchedData = queryClient.getQueryData<PrefetchedLog>(
+          ["logDetails", log.request_id, formattedStartTime]
+        );
+
+        if (prefetchedData?.messages && prefetchedData?.response) {
+          log.messages = prefetchedData.messages;
+          log.response = prefetchedData.response;
+          return log;
+        }
+        return log;
+      });
 
       return response;
     },
@@ -146,49 +159,24 @@ export default function SpendLogsTable({
     refetchIntervalInBackground: true,
   });
 
-  // Move useQueries before the early return
-  const logDetailsQueries = useQueries({
-    queries: logs.data?.data?.map((log) => ({
-      queryKey: ["logDetails", log.request_id, moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")],
-      queryFn: () => uiSpendLogDetailsCall(accessToken!, log.request_id, moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")),
-      staleTime: 10 * 60 * 1000,
-      cacheTime: 10 * 60 * 1000,
-      enabled: !!log.request_id,
-    })) || []
-  });
-
   if (!accessToken || !token || !userRole || !userID) {
-    console.log("got None values for one of accessToken, token, userRole, userID");
+    console.log(
+      "got None values for one of accessToken, token, userRole, userID",
+    );
     return null;
   }
 
-  // Consolidate log details from queries
-  const logDetails: Record<string, any> = {};
-  logDetailsQueries.forEach((q, index) => {
-    const log = logs.data?.data[index];
-    if (log && q.data) {
-      logDetails[log.request_id] = q.data;
-    }
-  });
-
-  // Modify the filtered data to include log details
   const filteredData =
-    logs.data?.data
-      ?.filter((log) => {
-        const matchesSearch =
-          !searchTerm ||
-          log.request_id.includes(searchTerm) ||
-          log.model.includes(searchTerm) ||
-          (log.user && log.user.includes(searchTerm));
-        
-        return matchesSearch;
-      })
-      .map(log => ({
-        ...log,
-        // Include messages/response from cached details
-        messages: logDetails[log.request_id]?.messages || [],
-        response: logDetails[log.request_id]?.response || {},
-      })) || [];
+    logs.data?.data?.filter((log) => {
+      const matchesSearch =
+        !searchTerm ||
+        log.request_id.includes(searchTerm) ||
+        log.model.includes(searchTerm) ||
+        (log.user && log.user.includes(searchTerm));
+      
+      // No need for additional filtering since we're now handling this in the API call
+      return matchesSearch;
+    }) || [];
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
@@ -570,6 +558,158 @@ export default function SpendLogsTable({
           getRowCanExpand={() => true}
         />
       </div>
+    </div>
+  );
+}
+
+function RequestViewer({ row }: { row: Row<LogEntry> }) {
+  const formatData = (input: any) => {
+    if (typeof input === "string") {
+      try {
+        return JSON.parse(input);
+      } catch {
+        return input;
+      }
+    }
+    return input;
+  };
+
+  return (
+    <div className="p-6 bg-gray-50 space-y-6">
+      {/* Combined Info Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="p-4 border-b">
+          <h3 className="text-lg font-medium ">Request Details</h3>
+        </div>
+        <div className="space-y-2 p-4 ">
+          <div className="flex">
+            <span className="font-medium w-1/3">Request ID:</span>
+            <span>{row.original.request_id}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Api Key:</span>
+            <span>{row.original.api_key}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Team ID:</span>
+            <span>{row.original.team_id}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Model:</span>
+            <span>{row.original.model}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Api Base:</span>
+            <span>{row.original.api_base}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Call Type:</span>
+            <span>{row.original.call_type}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Spend:</span>
+            <span>{row.original.spend}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Total Tokens:</span>
+            <span>{row.original.total_tokens}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Prompt Tokens:</span>
+            <span>{row.original.prompt_tokens}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Completion Tokens:</span>
+            <span>{row.original.completion_tokens}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Start Time:</span>
+            <span>{row.original.startTime}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">End Time:</span>
+            <span>{row.original.endTime}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Cache Hit:</span>
+            <span>{row.original.cache_hit}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Cache Key:</span>
+            <span>{row.original.cache_key}</span>
+          </div>
+          {row?.original?.requester_ip_address && (
+            <div className="flex">
+              <span className="font-medium w-1/3">Request IP Address:</span>
+              <span>{row?.original?.requester_ip_address}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Request Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="flex justify-between items-center p-4 border-b">
+          <h3 className="text-lg font-medium">Request Tags</h3>
+        </div>
+        <pre className="p-4  text-wrap overflow-auto text-sm">
+          {JSON.stringify(formatData(row.original.request_tags), null, 2)}
+        </pre>
+      </div>
+
+      {/* Request Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="flex justify-between items-center p-4 border-b">
+          <h3 className="text-lg font-medium">Request</h3>
+          {/* <div>
+            <button className="mr-2 px-3 py-1 text-sm border rounded hover:bg-gray-50">
+              Expand
+            </button>
+            <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
+              JSON
+            </button>
+          </div> */}
+        </div>
+        <pre className="p-4  text-wrap overflow-auto text-sm">
+          {JSON.stringify(formatData(row.original.messages), null, 2)}
+        </pre>
+      </div>
+
+      {/* Response Card */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="flex justify-between items-center p-4 border-b">
+          <h3 className="text-lg font-medium">Response</h3>
+          <div>
+            {/* <button className="mr-2 px-3 py-1 text-sm border rounded hover:bg-gray-50">
+              Expand
+            </button>
+            <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
+              JSON
+            </button> */}
+          </div>
+        </div>
+        <pre className="p-4 text-wrap overflow-auto text-sm">
+          {JSON.stringify(formatData(row.original.response), null, 2)}
+        </pre>
+      </div>
+
+      {/* Metadata Card */}
+      {row.original.metadata &&
+        Object.keys(row.original.metadata).length > 0 && (
+          <div className="bg-white rounded-lg shadow">
+            <div className="flex justify-between items-center p-4 border-b">
+              <h3 className="text-lg font-medium">Metadata</h3>
+              {/* <div>
+                <button className="px-3 py-1 text-sm border rounded hover:bg-gray-50">
+                  JSON
+                </button>
+              </div> */}
+            </div>
+            <pre className="p-4 text-wrap  overflow-auto text-sm ">
+              {JSON.stringify(row.original.metadata, null, 2)}
+            </pre>
+          </div>
+        )}
     </div>
   );
 }
