@@ -1014,7 +1014,7 @@ async def test_service_unavailable_fallbacks(sync_mode):
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
-    assert response.model == "gpt-35-turbo"
+    assert response.model == "gpt-3.5-turbo-0125"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
