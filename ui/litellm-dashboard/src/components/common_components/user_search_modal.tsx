@@ -163,7 +163,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         </Form.Item>
 
         <div className="text-right mt-4">
-          <Button type="primary" htmlType="submit">
+          <Button type="default" htmlType="submit">
             Add Member
           </Button>
         </div>
