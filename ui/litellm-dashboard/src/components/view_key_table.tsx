@@ -127,6 +127,19 @@ interface ItemData {
   // Add any other properties that exist in the item data
 }
 
+interface ModelLimits {
+  [key: string]: number;  // Index signature allowing string keys
+}
+
+interface CombinedLimit {
+  tpm: number;
+  rpm: number;
+}
+
+interface CombinedLimits {
+  [key: string]: CombinedLimit;  // Index signature allowing string keys
+}
+
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
@@ -608,13 +621,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       if (token.metadata) {
         const tpmLimits = token.metadata.model_tpm_limit || {};
         const rpmLimits = token.metadata.model_rpm_limit || {};
-        const combinedLimits: { [key: string]: { tpm: number; rpm: number } } =
-          {};
+        const combinedLimits: CombinedLimits = {};
 
         Object.keys({ ...tpmLimits, ...rpmLimits }).forEach((model) => {
           combinedLimits[model] = {
-            tpm: tpmLimits[model] || 0,
-            rpm: rpmLimits[model] || 0,
+            tpm: (tpmLimits as ModelLimits)[model] || 0,
+            rpm: (rpmLimits as ModelLimits)[model] || 0,
           };
         });
 
