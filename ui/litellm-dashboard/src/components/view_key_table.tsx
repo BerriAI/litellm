@@ -999,10 +999,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
   };
 
-  if (data == null) {
-    return;
-  }
-  console.log("RERENDER TRIGGERED");
   return (
     <div>
       <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
