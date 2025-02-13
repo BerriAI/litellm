@@ -2268,8 +2268,9 @@ class BedrockImageProcessor:
             ]
 
             if not valid_extensions:
+                document_type = mime_type.split('/')[-1].upper()  # e.g., "PDF" from "application/pdf"
                 raise ValueError(
-                    f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
+                    f"Client error '400 Bad Request': {document_type} files are not supported. Supported formats are: {supported_doc_formats}"
                 )
 
             # Use first valid extension instead of provided image_format
@@ -2277,7 +2278,7 @@ class BedrockImageProcessor:
         else:
             if image_format not in supported_image_formats:
                 raise ValueError(
-                    f"Unsupported image format: {image_format}. Supported formats: {supported_image_formats}"
+                    f"Client error '400 Bad Request': Unsupported image format: {image_format}. Supported formats are: {supported_image_formats}"
                 )
             return image_format
 

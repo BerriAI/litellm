@@ -834,6 +834,21 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                     )
                 elif (
+                    "Client error '400 Bad Request'" in error_str
+                    and (
+                        "files are not supported" in error_str 
+                        or "Unsupported image format" in error_str
+                        or "Supported formats are:" in error_str
+                    )
+                ):
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"BedrockException - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                        response=getattr(original_exception, "response", None),
+                    )
+                elif (
                     "Unable to locate credentials" in error_str
                     or "The security token included in the request is invalid"
                     in error_str
