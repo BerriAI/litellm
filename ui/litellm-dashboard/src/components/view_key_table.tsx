@@ -70,7 +70,9 @@ import {
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import TextArea from "antd/es/input/TextArea";
 import useKeyList from "./key_team_helpers/key_list";
+import { KeyResponse } from "./key_team_helpers/key_list";
 const { Option } = Select;
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -87,7 +89,7 @@ interface EditKeyModalProps {
 interface ModelLimitModalProps {
   visible: boolean;
   onCancel: () => void;
-  token: ItemData;
+  token: KeyResponse;
   onSubmit: (updatedMetadata: any) => void;
   accessToken: string;
 }
@@ -139,7 +141,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
-  const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
+  const [selectedItem, setSelectedItem] = useState<KeyResponse | null>(null);
   const [spendData, setSpendData] = useState<
     { day: string; spend: number }[] | null
   >(null);
@@ -154,7 +156,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [infoDialogVisible, setInfoDialogVisible] = useState(false);
-  const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
+  const [selectedToken, setSelectedToken] = useState<KeyResponse | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
@@ -236,7 +238,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
-  const handleModelLimitClick = (token: ItemData) => {
+  const handleModelLimitClick = (token: KeyResponse) => {
     setSelectedToken(token);
     setModelLimitModalVisible(true);
   };

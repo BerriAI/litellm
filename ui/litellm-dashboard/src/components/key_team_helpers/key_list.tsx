@@ -5,7 +5,7 @@ team_id: string;
 team_alias: string;
 }
 
-interface KeyResponse {
+export interface KeyResponse {
 token: string;
 key_name: string;
 key_alias: string;
