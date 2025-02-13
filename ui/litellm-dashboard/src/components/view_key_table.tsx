@@ -1029,9 +1029,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   /**
                    * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
                    */
-                  console.log(
-                    `item team id: ${item.team_id}, knownTeamIDs.has(item.team_id): ${knownTeamIDs.has(item.team_id)}, selectedTeam id: ${selectedTeam.team_id}`
-                  );
+
                   if (
                     selectedTeam.team_id == null &&
                     item.team_id !== null &&
