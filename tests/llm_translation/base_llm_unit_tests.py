@@ -636,6 +636,8 @@ class BaseLLMChatTest(ABC):
 
     def test_basic_tool_calling(self):
         try:
+            from litellm import completion, ModelResponse
+
             litellm.set_verbose = True
             litellm._turn_on_debug()
             from litellm.utils import supports_function_calling
