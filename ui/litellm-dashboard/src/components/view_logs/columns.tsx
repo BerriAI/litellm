@@ -98,10 +98,10 @@ export const columns: ColumnDef<LogEntry>[] = [
           displayText = formatMessage(content);
         }
 
-        return <span className="truncate max-w-md text-sm">{displayText}</span>;
+        return <span className="truncate block w-[200px] text-sm">{displayText}</span>;
       } catch (e) {
         return (
-          <span className="truncate max-w-md text-sm">
+          <span className="truncate block w-[200px] text-sm">
             {formatMessage(messages)}
           </span>
         );
