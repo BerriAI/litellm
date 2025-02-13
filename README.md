@@ -25,6 +25,9 @@
     <a href="https://wa.link/huol9n">
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square" alt="Whatsapp">
     </a>
+    <a href="https://x.com/intent/follow?screen_name=LiteLLM" target="_blank">
+        <img src="https://img.shields.io/twitter/follow/LiteLLM?logo=X&color=%20%23f5f5f5">
+    </a>
     <a href="https://discord.gg/wuPM9dRgDw">
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
     </a>
