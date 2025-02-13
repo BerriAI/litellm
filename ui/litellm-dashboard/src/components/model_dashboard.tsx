@@ -46,7 +46,6 @@ import {
   Model,
   modelCostMap,
   modelDeleteCall,
-  healthCheckCall,
   modelUpdateCall,
   modelMetricsCall,
   streamingModelMetricsCall,
@@ -101,6 +100,7 @@ import TimeToFirstToken from "./model_metrics/time_to_first_token";
 import DynamicFields from "./model_add/dynamic_form";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
+import HealthCheck from "./health_check";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -180,7 +180,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     []
   );
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
-  const [healthCheckResponse, setHealthCheckResponse] = useState<string>("");
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
   const [infoModalVisible, setInfoModalVisible] = useState<boolean>(false);
 
@@ -809,17 +808,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   }
 
-  const runHealthCheck = async () => {
-    try {
-      message.info("Running health check...");
-      setHealthCheckResponse("");
-      const response = await healthCheckCall(accessToken);
-      setHealthCheckResponse(response);
-    } catch (error) {
-      console.error("Error running health check:", error);
-      setHealthCheckResponse("Error running health check");
-    }
-  };
 
   const FilterByContent = (
       <div >
@@ -1576,17 +1564,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </Card>
           </TabPanel>
           <TabPanel>
-            <Card>
-              <Text>
-                `/health` will run a very small request through your models
-                configured on litellm
-              </Text>
-
-              <Button onClick={runHealthCheck}>Run `/health`</Button>
-              {healthCheckResponse && (
-                <pre>{JSON.stringify(healthCheckResponse, null, 2)}</pre>
-              )}
-            </Card>
+            <HealthCheck accessToken={accessToken} />
           </TabPanel>
           <TabPanel>
             <Grid numItems={4} className="mt-2 mb-2">
