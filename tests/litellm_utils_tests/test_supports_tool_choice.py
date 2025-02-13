@@ -52,6 +52,8 @@ def test_supports_tool_choice_simple_tests():
         is False
     )
 
+    assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
+
 
 def test_check_provider_match():
     """

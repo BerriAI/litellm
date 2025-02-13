@@ -4,7 +4,7 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
+import { defaultOrg } from "@/components/common_components/default_org";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
@@ -25,7 +25,7 @@ import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import { Organization } from "@/components/networking";
-
+import GuardrailsPanel from "@/components/guardrails";
 function getCookie(name: string) {
   const cookieValue = document.cookie
     .split("; ")
@@ -78,7 +78,7 @@ export default function CreateKeyPage() {
   const [userEmail, setUserEmail] = useState<null | string>(null);
   const [teams, setTeams] = useState<null | any[]>(null);
   const [keys, setKeys] = useState<null | any[]>(null);
-  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
+  const [currentOrg, setCurrentOrg] = useState<Organization>(defaultOrg);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
@@ -183,6 +183,7 @@ export default function CreateKeyPage() {
         }
       }
     }
+    setTeams(null);
   }
 
   return (
@@ -201,6 +202,7 @@ export default function CreateKeyPage() {
             setTeams={setTeams}
             setKeys={setKeys}
             setOrganizations={setOrganizations}
+            currentOrg={currentOrg}
           />
         ) : (
           <div className="flex flex-col min-h-screen">
@@ -237,6 +239,7 @@ export default function CreateKeyPage() {
                   setTeams={setTeams}
                   setKeys={setKeys}
                   setOrganizations={setOrganizations}
+                  currentOrg={currentOrg}
                 />
               ) : page == "models" ? (
                 <ModelDashboard
@@ -306,6 +309,8 @@ export default function CreateKeyPage() {
                 />
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
+              ) : page == "guardrails" ? (
+                <GuardrailsPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
                   userID={userID}

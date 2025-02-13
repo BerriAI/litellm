@@ -2,9 +2,8 @@ import Link from "next/link";
 import React from "react";
 import type { MenuProps } from "antd";
 import { Dropdown } from "antd";
-import { CogIcon } from "@heroicons/react/outline";
 import { Organization } from "@/components/networking";
-
+import { defaultOrg } from "@/components/common_components/default_org";
 interface NavbarProps {
   userID: string | null;
   userRole: string | null;
@@ -59,46 +58,42 @@ const Navbar: React.FC<NavbarProps> = ({
   ];
 
   const orgMenuItems: MenuProps["items"] = [
-    ...(userRole === "Admin" 
-      ? [{
-          key: 'global',
-          label: (
-            <div className="flex items-center justify-between py-1">
-              <span className="text-sm">Global View</span>
-            </div>
-          ),
-          onClick: () => onOrgChange({ organization_id: "global", organization_alias: "Global View" } as Organization)
-        }]
-      : [
-          {
-            key: 'header',
-            label: 'Organizations',
-            type: 'group' as const,
-            style: { 
-              color: '#6B7280',
-              fontSize: '0.875rem'
-            }
-          },
-          ...organizations.map(org => ({
-            key: org.organization_id,
-            label: (
-              <div className="flex items-center justify-between py-1">
-                <span className="text-sm">{org.organization_alias}</span>
-              </div>
-            ),
-            onClick: () => onOrgChange(org)
-          })),
-          {
-            key: "note",
-            label: (
-              <div className="flex items-center justify-between py-1 px-2 bg-gray-50 text-gray-500 text-xs italic">
-                <span>Switching between organizations on the UI is currently in beta.</span>
-              </div>
-            ),
-            disabled: true
-          }
-        ]
-    )
+    {
+      key: 'header',
+      label: 'Organizations',
+      type: 'group' as const,
+      style: { 
+        color: '#6B7280',
+        fontSize: '0.875rem'
+      }
+    },
+    {
+      key: "default",
+      label: (
+        <div className="flex items-center justify-between py-1">
+          <span className="text-sm">Default Organization</span>
+        </div>
+      ),
+      onClick: () => onOrgChange(defaultOrg)
+    },
+    ...organizations.filter(org => org.organization_id !== null).map(org => ({
+      key: org.organization_id ?? "default",
+      label: (
+        <div className="flex items-center justify-between py-1">
+          <span className="text-sm">{org.organization_alias}</span>
+        </div>
+      ),
+      onClick: () => onOrgChange(org)
+    })),
+    {
+      key: "note",
+      label: (
+        <div className="flex items-center justify-between py-1 px-2 bg-gray-50 text-gray-500 text-xs italic">
+          <span>Switching between organizations on the UI is currently in beta.</span>
+        </div>
+      ),
+      disabled: true
+    }
   ];
 
   return (

@@ -90,3 +90,24 @@ def test_guardrail_list_of_event_hooks():
     assert not cg.should_run_guardrail(
         data=data, event_type=GuardrailEventHooks.during_call
     )
+
+
+def test_guardrail_info_response():
+    from litellm.types.guardrails import GuardrailInfoResponse, LitellmParams
+
+    guardrail_info = GuardrailInfoResponse(
+        guardrail_name="aporia-pre-guard",
+        litellm_params=LitellmParams(
+            guardrail="aporia",
+            mode="pre_call",
+        ),
+        guardrail_info={
+            "guardrail_name": "aporia-pre-guard",
+            "litellm_params": {
+                "guardrail": "aporia",
+                "mode": "always_on",
+            },
+        },
+    )
+
+    assert guardrail_info.litellm_params.default_on == False

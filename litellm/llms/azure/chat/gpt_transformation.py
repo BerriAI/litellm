@@ -113,6 +113,17 @@ class AzureOpenAIConfig(BaseConfig):
 
         return False
 
+    def _is_response_format_supported_api_version(
+        self, api_version_year: str, api_version_month: str
+    ) -> bool:
+        """
+        - check if api_version is supported for response_format
+        """
+
+        is_supported = int(api_version_year) <= 2024 and int(api_version_month) >= 8
+
+        return is_supported
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -171,13 +182,20 @@ class AzureOpenAIConfig(BaseConfig):
                 _is_response_format_supported_model = (
                     self._is_response_format_supported_model(model)
                 )
-                should_convert_response_format_to_tool = (
-                    api_version_year <= "2024" and api_version_month < "08"
-                ) or not _is_response_format_supported_model
+
+                is_response_format_supported_api_version = (
+                    self._is_response_format_supported_api_version(
+                        api_version_year, api_version_month
+                    )
+                )
+                is_response_format_supported = (
+                    is_response_format_supported_api_version
+                    and _is_response_format_supported_model
+                )
                 optional_params = self._add_response_format_to_tools(
                     optional_params=optional_params,
                     value=value,
-                    should_convert_response_format_to_tool=should_convert_response_format_to_tool,
+                    is_response_format_supported=is_response_format_supported,
                 )
             elif param == "tools" and isinstance(value, list):
                 optional_params.setdefault("tools", [])

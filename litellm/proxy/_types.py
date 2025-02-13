@@ -268,10 +268,11 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
+        "/key/list",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes = ["/global/spend/reset", "/key/list"]
+    master_key_only_routes = ["/global/spend/reset"]
 
     management_routes = [  # key
         "/key/generate",
@@ -280,6 +281,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/delete",
         "/key/info",
         "/key/health",
+        "/key/list",
         # user
         "/user/new",
         "/user/update",
@@ -1042,6 +1044,9 @@ class LiteLLM_TeamTable(TeamBase):
             "model_aliases",
         ]
 
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+
         if (
             isinstance(values.get("members_with_roles"), dict)
             and not values["members_with_roles"]
@@ -1345,7 +1350,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Optional[str] = None
+    expires: Optional[Union[str, datetime]] = None
     models: List = []
     aliases: Dict = {}
     config: Dict = {}
@@ -1428,6 +1433,7 @@ class UserAPIKeyAuth(
     tpm_limit_per_model: Optional[Dict[str, int]] = None
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
+    user_email: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -1489,6 +1495,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     members: List[LiteLLM_OrganizationMembershipTable]
+    teams: List[LiteLLM_TeamTable]
 
 
 class NewOrganizationResponse(LiteLLM_OrganizationTable):
@@ -1790,6 +1797,7 @@ class SpendLogsMetadata(TypedDict):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    applied_guardrails: Optional[List[str]]
 
 
 class SpendLogsPayload(TypedDict):
@@ -2424,3 +2432,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_info: str
     updated_at: str
     updated_by: str
+
+
+class SpecialManagementEndpointEnums(enum.Enum):
+    DEFAULT_ORGANIZATION = "default_organization"
