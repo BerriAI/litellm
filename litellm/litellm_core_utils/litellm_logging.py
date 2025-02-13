@@ -199,6 +199,7 @@ class Logging(LiteLLMLoggingBaseClass):
         dynamic_async_failure_callbacks: Optional[
             List[Union[str, Callable, CustomLogger]]
         ] = None,
+        applied_guardrails: Optional[List[str]] = None,
         kwargs: Optional[Dict] = None,
     ):
         _input: Optional[str] = messages  # save original value of messages
@@ -271,6 +272,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_call_id": litellm_call_id,
             "input": _input,
             "litellm_params": litellm_params,
+            "applied_guardrails": applied_guardrails,
         }
 
     def process_dynamic_callbacks(self):
@@ -1247,13 +1249,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
                         if langfuse_logger_to_use is not None:
-                            _response = langfuse_logger_to_use._old_log_event(
+                            _response = langfuse_logger_to_use.log_event_on_langfuse(
                                 kwargs=kwargs,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                                 user_id=kwargs.get("user", None),
-                                print_verbose=print_verbose,
                             )
                             if _response is not None and isinstance(_response, dict):
                                 _trace_id = _response.get("trace_id", None)
@@ -1957,12 +1958,11 @@ class Logging(LiteLLMLoggingBaseClass):
                             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
                             in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                         )
-                        _response = langfuse_logger_to_use._old_log_event(
+                        _response = langfuse_logger_to_use.log_event_on_langfuse(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
                             user_id=kwargs.get("user", None),
-                            print_verbose=print_verbose,
                             status_message=str(exception),
                             level="ERROR",
                             kwargs=self.model_call_details,
@@ -2854,6 +2854,7 @@ class StandardLoggingPayloadSetup:
         metadata: Optional[Dict[str, Any]],
         litellm_params: Optional[dict] = None,
         prompt_integration: Optional[str] = None,
+        applied_guardrails: Optional[List[str]] = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -2868,6 +2869,7 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+
         prompt_management_metadata: Optional[
             StandardLoggingPromptManagementMetadata
         ] = None
@@ -2892,11 +2894,13 @@ class StandardLoggingPayloadSetup:
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
+            user_api_key_user_email=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
             user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
+            applied_guardrails=applied_guardrails,
         )
         if isinstance(metadata, dict):
             # Filter the metadata dictionary to include only the specified keys
@@ -3195,6 +3199,7 @@ def get_standard_logging_object_payload(
             metadata=metadata,
             litellm_params=litellm_params,
             prompt_integration=kwargs.get("prompt_integration", None),
+            applied_guardrails=kwargs.get("applied_guardrails", None),
         )
 
         _request_body = proxy_server_request.get("body", {})
@@ -3324,12 +3329,14 @@ def get_standard_logging_metadata(
         user_api_key_team_id=None,
         user_api_key_org_id=None,
         user_api_key_user_id=None,
+        user_api_key_user_email=None,
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
         requester_ip_address=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,
+        applied_guardrails=None,
     )
     if isinstance(metadata, dict):
         # Filter the metadata dictionary to include only the specified keys

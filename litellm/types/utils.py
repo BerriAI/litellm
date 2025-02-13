@@ -551,6 +551,7 @@ class Delta(OpenAIObject):
     ):
         super(Delta, self).__init__(**params)
         provider_specific_fields: Dict[str, Any] = {}
+
         if "reasoning_content" in params:
             provider_specific_fields["reasoning_content"] = params["reasoning_content"]
             setattr(self, "reasoning_content", params["reasoning_content"])
@@ -1503,6 +1504,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
+    user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
 
@@ -1524,6 +1526,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     requester_ip_address: Optional[str]
     requester_metadata: Optional[dict]
     prompt_management_metadata: Optional[StandardLoggingPromptManagementMetadata]
+    applied_guardrails: Optional[List[str]]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1870,6 +1873,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    ASSEMBLYAI = "assemblyai"
 
 
 # Create a set of all provider values for quick lookup

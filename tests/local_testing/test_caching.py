@@ -21,7 +21,8 @@ import pytest
 import litellm
 from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
-
+from redis.asyncio import RedisCluster
+from litellm.caching.redis_cluster_cache import RedisClusterCache
 from unittest.mock import AsyncMock, patch, MagicMock, call
 import datetime
 from datetime import timedelta
@@ -2328,8 +2329,12 @@ async def test_redis_caching_ttl_pipeline():
         # Verify that the set method was called on the mock Redis instance
         mock_set.assert_has_calls(
             [
-                call.set("test_key1", '"test_value1"', ex=expected_timedelta),
-                call.set("test_key2", '"test_value2"', ex=expected_timedelta),
+                call.set(
+                    name="test_key1", value='"test_value1"', ex=expected_timedelta
+                ),
+                call.set(
+                    name="test_key2", value='"test_value2"', ex=expected_timedelta
+                ),
             ]
         )
 
@@ -2388,6 +2393,7 @@ async def test_redis_increment_pipeline():
         from litellm.caching.redis_cache import RedisCache
 
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         redis_cache = RedisCache(
             host=os.environ["REDIS_HOST"],
             port=os.environ["REDIS_PORT"],

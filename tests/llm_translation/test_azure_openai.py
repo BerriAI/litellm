@@ -285,11 +285,26 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
         assert "tool_calls" not in mock_post.call_args.kwargs
 
 
-def test_azure_gpt_4o_with_tool_call_and_response_format():
+@pytest.mark.parametrize(
+    "api_version",
+    [
+        "2024-10-21",
+        # "2024-02-15-preview",
+    ],
+)
+def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     from litellm import completion
     from typing import Optional
     from pydantic import BaseModel
     import litellm
+
+    from openai import AzureOpenAI
+
+    client = AzureOpenAI(
+        api_key="fake-key",
+        base_url="https://fake-azure.openai.azure.com",
+        api_version=api_version,
+    )
 
     class InvestigationOutput(BaseModel):
         alert_explanation: Optional[str] = None
@@ -322,25 +337,34 @@ def test_azure_gpt_4o_with_tool_call_and_response_format():
         }
     ]
 
-    response = litellm.completion(
-        model="azure/gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a tool-calling AI assist provided with common devops and IT tools that you can use to troubleshoot problems or answer questions.\nWhenever possible you MUST first use tools to investigate then answer the question.",
-            },
-            {"role": "user", "content": "What is the current date and time in NYC?"},
-        ],
-        drop_params=True,
-        temperature=0.00000001,
-        tools=tools,
-        tool_choice="auto",
-        response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
-    )
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+        response = litellm.completion(
+            model="azure/gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a tool-calling AI assist provided with common devops and IT tools that you can use to troubleshoot problems or answer questions.\nWhenever possible you MUST first use tools to investigate then answer the question.",
+                },
+                {
+                    "role": "user",
+                    "content": "What is the current date and time in NYC?",
+                },
+            ],
+            drop_params=True,
+            temperature=0.00000001,
+            tools=tools,
+            tool_choice="auto",
+            response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
+            api_version=api_version,
+            client=client,
+        )
 
-    assert response.choices[0].finish_reason == "tool_calls"
+        mock_post.assert_called_once()
 
-    print(response.to_json())
+        if api_version == "2024-10-21":
+            assert "response_format" in mock_post.call_args.kwargs
+        else:
+            assert "response_format" not in mock_post.call_args.kwargs
 
 
 def test_map_openai_params():
@@ -436,3 +460,130 @@ def test_map_openai_params():
     optional_params = azure_openai_config.map_openai_params(**received_args)
     assert "tools" in optional_params
     assert len(optional_params["tools"]) > 1
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@patch(
+    "litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request"
+)
+def test_azure_max_retries_0(
+    mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
+):
+    from litellm import completion
+
+    try:
+        completion(
+            model="azure/gpt-4o",
+            messages=[{"role": "user", "content": "Hello world"}],
+            max_retries=max_retries,
+            stream=stream,
+        )
+    except Exception as e:
+        print(e)
+
+    mock_make_sync_azure_openai_chat_completion_request.assert_called_once()
+    assert (
+        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs[
+            "azure_client"
+        ].max_retries
+        == max_retries
+    )
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
+@pytest.mark.asyncio
+async def test_async_azure_max_retries_0(
+    make_azure_openai_chat_completion_request, max_retries, stream
+):
+    from litellm import acompletion
+
+    try:
+        await acompletion(
+            model="azure/gpt-4o",
+            messages=[{"role": "user", "content": "Hello world"}],
+            max_retries=max_retries,
+            stream=stream,
+        )
+    except Exception as e:
+        print(e)
+
+    make_azure_openai_chat_completion_request.assert_called_once()
+    assert (
+        make_azure_openai_chat_completion_request.call_args.kwargs[
+            "azure_client"
+        ].max_retries
+        == max_retries
+    )
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@patch("litellm.llms.azure.completion.handler.select_azure_base_url_or_endpoint")
+@pytest.mark.asyncio
+async def test_azure_instruct(
+    mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
+):
+    from litellm import completion, acompletion
+
+    args = {
+        "model": "azure_text/instruct-model",
+        "messages": [
+            {"role": "user", "content": "What is the weather like in Boston?"}
+        ],
+        "max_tokens": 10,
+        "max_retries": max_retries,
+    }
+
+    try:
+        if sync_mode:
+            completion(**args)
+        else:
+            await acompletion(**args)
+    except Exception:
+        pass
+
+    mock_select_azure_base_url_or_endpoint.assert_called_once()
+    assert (
+        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
+            "max_retries"
+        ]
+        == max_retries
+    )
+
+
+@pytest.mark.parametrize("max_retries", [0, 4])
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@patch("litellm.llms.azure.azure.select_azure_base_url_or_endpoint")
+@pytest.mark.asyncio
+async def test_azure_embedding_max_retries_0(
+    mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
+):
+    from litellm import aembedding, embedding
+
+    args = {
+        "model": "azure/azure-embedding-model",
+        "input": "Hello world",
+        "max_retries": max_retries,
+        "stream": stream,
+    }
+
+    try:
+        if sync_mode:
+            embedding(**args)
+        else:
+            await aembedding(**args)
+    except Exception as e:
+        print(e)
+
+    mock_select_azure_base_url_or_endpoint.assert_called_once()
+    assert (
+        mock_select_azure_base_url_or_endpoint.call_args.kwargs["azure_client_params"][
+            "max_retries"
+        ]
+        == max_retries
+    )

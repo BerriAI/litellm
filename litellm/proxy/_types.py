@@ -248,6 +248,7 @@ class LiteLLMRoutes(enum.Enum):
         "/azure",
         "/openai",
         "/assemblyai",
+        "/eu.assemblyai",
     ]
 
     anthropic_routes = [
@@ -259,6 +260,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/health",
         "/team/info",
         "/team/list",
+        "/organization/list",
         "/team/available",
         "/user/info",
         "/model/info",
@@ -266,10 +268,11 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
+        "/key/list",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes = ["/global/spend/reset", "/key/list"]
+    master_key_only_routes = ["/global/spend/reset"]
 
     management_routes = [  # key
         "/key/generate",
@@ -278,6 +281,7 @@ class LiteLLMRoutes(enum.Enum):
         "/key/delete",
         "/key/info",
         "/key/health",
+        "/key/list",
         # user
         "/user/new",
         "/user/update",
@@ -1039,6 +1043,16 @@ class LiteLLM_TeamTable(TeamBase):
             "model_max_budget",
             "model_aliases",
         ]
+
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+
+        if (
+            isinstance(values.get("members_with_roles"), dict)
+            and not values["members_with_roles"]
+        ):
+            values["members_with_roles"] = []
+
         for field in dict_fields:
             value = values.get(field)
             if value is not None and isinstance(value, str):
@@ -1090,24 +1104,6 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_alias: str
     models: List = []
     budget_id: Optional[str] = None
-
-
-class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
-
-    organization_id: Optional[str] = None
-    organization_alias: Optional[str] = None
-    budget_id: str
-    metadata: Optional[dict] = None
-    models: List[str]
-    created_by: str
-    updated_by: str
-
-
-class NewOrganizationResponse(LiteLLM_OrganizationTable):
-    organization_id: str  # type: ignore
-    created_at: datetime
-    updated_at: datetime
 
 
 class OrganizationRequest(LiteLLMPydanticObjectBase):
@@ -1354,7 +1350,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Optional[str] = None
+    expires: Optional[Union[str, datetime]] = None
     models: List = []
     aliases: Dict = {}
     config: Dict = {}
@@ -1437,6 +1433,7 @@ class UserAPIKeyAuth(
     tpm_limit_per_model: Optional[Dict[str, int]] = None
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
+    user_email: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -1482,6 +1479,29 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
+
+    organization_id: Optional[str] = None
+    organization_alias: Optional[str] = None
+    budget_id: str
+    metadata: Optional[dict] = None
+    models: List[str]
+    created_by: str
+    updated_by: str
+
+
+class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
+    members: List[LiteLLM_OrganizationMembershipTable]
+    teams: List[LiteLLM_TeamTable]
+
+
+class NewOrganizationResponse(LiteLLM_OrganizationTable):
+    organization_id: str  # type: ignore
+    created_at: datetime
+    updated_at: datetime
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -1777,6 +1797,7 @@ class SpendLogsMetadata(TypedDict):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    applied_guardrails: Optional[List[str]]
 
 
 class SpendLogsPayload(TypedDict):
@@ -1911,7 +1932,9 @@ class ProxyException(Exception):
 
 
 class CommonProxyErrors(str, enum.Enum):
-    db_not_connected_error = "DB not connected"
+    db_not_connected_error = (
+        "DB not connected. See https://docs.litellm.ai/docs/proxy/virtual_keys"
+    )
     no_llm_router = "No models configured on proxy"
     not_allowed_access = "Admin-only endpoint. Not allowed to access this."
     not_premium_user = "You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. \nPricing: https://www.litellm.ai/#pricing"
@@ -1932,6 +1955,7 @@ class ProxyErrorTypes(str, enum.Enum):
     internal_server_error = "internal_server_error"
     bad_request_error = "bad_request_error"
     not_found_error = "not_found_error"
+    validation_error = "bad_request_error"
 
 
 DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
@@ -2278,10 +2302,13 @@ RBAC_ROLES = Literal[
 ]
 
 
-class RoleBasedPermissions(LiteLLMPydanticObjectBase):
-    role: RBAC_ROLES
+class OIDCPermissions(LiteLLMPydanticObjectBase):
     models: Optional[List[str]] = None
     routes: Optional[List[str]] = None
+
+
+class RoleBasedPermissions(OIDCPermissions):
+    role: RBAC_ROLES
 
     model_config = {
         "extra": "forbid",
@@ -2291,6 +2318,14 @@ class RoleBasedPermissions(LiteLLMPydanticObjectBase):
 class RoleMapping(BaseModel):
     role: str
     internal_role: RBAC_ROLES
+
+
+class ScopeMapping(OIDCPermissions):
+    scope: str
+
+    model_config = {
+        "extra": "forbid",
+    }
 
 
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
@@ -2322,6 +2357,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "info_routes",
     ]
     team_id_jwt_field: Optional[str] = None
+    team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[
@@ -2350,6 +2386,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     object_id_jwt_field: Optional[str] = (
         None  # can be either user / team, inferred from the role mapping
     )
+    scope_mappings: Optional[List[ScopeMapping]] = None
+    enforce_scope_based_access: bool = False
+    enforce_team_based_model_access: bool = False
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
@@ -2360,6 +2399,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         user_allowed_roles = kwargs.get("user_allowed_roles")
         object_id_jwt_field = kwargs.get("object_id_jwt_field")
         role_mappings = kwargs.get("role_mappings")
+        scope_mappings = kwargs.get("scope_mappings")
+        enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
 
         if invalid_keys:
             raise ValueError(
@@ -2377,4 +2418,21 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
                 "if object_id_jwt_field is set, role_mappings must also be set. Needed to infer if the caller is a user or team."
             )
 
+        if scope_mappings is not None and not enforce_scope_based_access:
+            raise ValueError(
+                "scope_mappings must be set if enforce_scope_based_access is true."
+            )
+
         super().__init__(**kwargs)
+
+
+class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
+    model_name: str
+    litellm_params: str
+    model_info: str
+    updated_at: str
+    updated_by: str
+
+
+class SpecialManagementEndpointEnums(enum.Enum):
+    DEFAULT_ORGANIZATION = "default_organization"
