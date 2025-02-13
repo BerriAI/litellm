@@ -23,6 +23,7 @@ class AthinaLogger:
             "context",
             "expected_response",
             "user_query",
+            "custom_attributes",
         ]
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
