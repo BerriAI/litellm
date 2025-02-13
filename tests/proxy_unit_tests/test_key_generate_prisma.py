@@ -3359,6 +3359,7 @@ async def test_list_keys(prisma_client):
     from fastapi import Query
 
     from litellm.proxy.proxy_server import hash_token
+    from litellm.proxy._types import LitellmUserRoles
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -3368,7 +3369,9 @@ async def test_list_keys(prisma_client):
     request = Request(scope={"type": "http", "query_string": b""})
     response = await list_keys(
         request,
-        UserAPIKeyAuth(),
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
         page=1,
         size=10,
     )
@@ -3380,7 +3383,12 @@ async def test_list_keys(prisma_client):
     assert "total_pages" in response
 
     # Test pagination
-    response = await list_keys(request, UserAPIKeyAuth(), page=1, size=2)
+    response = await list_keys(
+        request,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        page=1,
+        size=2,
+    )
     print("pagination response=", response)
     assert len(response["keys"]) == 2
     assert response["current_page"] == 1
@@ -3406,7 +3414,11 @@ async def test_list_keys(prisma_client):
 
     # Test filtering by user_id
     response = await list_keys(
-        request, UserAPIKeyAuth(), user_id=user_id, page=1, size=10
+        request,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        user_id=user_id,
+        page=1,
+        size=10,
     )
     print("filtered user_id response=", response)
     assert len(response["keys"]) == 1
@@ -3414,7 +3426,11 @@ async def test_list_keys(prisma_client):
 
     # Test filtering by key_alias
     response = await list_keys(
-        request, UserAPIKeyAuth(), key_alias=key_alias, page=1, size=10
+        request,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        key_alias=key_alias,
+        page=1,
+        size=10,
     )
     assert len(response["keys"]) == 1
     assert _key in response["keys"]
@@ -3436,7 +3452,12 @@ async def test_key_list_unsupported_params(prisma_client):
     request = Request(scope={"type": "http", "query_string": b"alias=foo"})
 
     try:
-        await list_keys(request, UserAPIKeyAuth(), page=1, size=10)
+        await list_keys(
+            request,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
+            page=1,
+            size=10,
+        )
         pytest.fail("Expected this call to fail")
     except Exception as e:
         print("error str=", str(e.message))
