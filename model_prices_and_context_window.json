@@ -8108,8 +8108,7 @@
         "input_cost_per_token": 0.00000035, 
         "output_cost_per_token": 0.00000140,  
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/codellama-70b-instruct": { 
         "max_tokens": 16384,
@@ -8118,8 +8117,7 @@
         "input_cost_per_token": 0.00000070, 
         "output_cost_per_token": 0.00000280,  
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/llama-3.1-70b-instruct": { 
         "max_tokens": 131072,
@@ -8128,8 +8126,7 @@
         "input_cost_per_token": 0.000001, 
         "output_cost_per_token": 0.000001,
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/llama-3.1-8b-instruct": { 
         "max_tokens": 131072,
@@ -8138,8 +8135,7 @@
         "input_cost_per_token": 0.0000002, 
         "output_cost_per_token": 0.0000002,  
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/llama-3.1-sonar-huge-128k-online": { 
         "max_tokens": 127072,
@@ -8149,8 +8145,7 @@
         "output_cost_per_token": 0.000005,
         "litellm_provider": "perplexity", 
         "mode": "chat",
-        "deprecation_date": "2025-02-22",
-        "supports_tool_choice": true
+        "deprecation_date": "2025-02-22"
     },
     "perplexity/llama-3.1-sonar-large-128k-online": { 
         "max_tokens": 127072,
@@ -8160,8 +8155,7 @@
         "output_cost_per_token": 0.000001,
         "litellm_provider": "perplexity", 
         "mode": "chat",
-        "deprecation_date": "2025-02-22",
-        "supports_tool_choice": true
+        "deprecation_date": "2025-02-22"
     },
     "perplexity/llama-3.1-sonar-large-128k-chat": { 
         "max_tokens": 131072,
@@ -8171,8 +8165,7 @@
         "output_cost_per_token": 0.000001,
         "litellm_provider": "perplexity", 
         "mode": "chat",
-        "deprecation_date": "2025-02-22",
-        "supports_tool_choice": true
+        "deprecation_date": "2025-02-22"
     },
     "perplexity/llama-3.1-sonar-small-128k-chat": { 
         "max_tokens": 131072,
@@ -8182,8 +8175,7 @@
         "output_cost_per_token": 0.0000002,  
         "litellm_provider": "perplexity", 
         "mode": "chat",
-        "deprecation_date": "2025-02-22",
-        "supports_tool_choice": true
+        "deprecation_date": "2025-02-22"
     },
     "perplexity/llama-3.1-sonar-small-128k-online": { 
         "max_tokens": 127072,
@@ -8193,8 +8185,25 @@
         "output_cost_per_token": 0.0000002,  
         "litellm_provider": "perplexity", 
         "mode": "chat" ,
-        "deprecation_date": "2025-02-22",
-        "supports_tool_choice": true
+        "deprecation_date": "2025-02-22"
+    },
+    "perplexity/sonar": { 
+        "max_tokens": 127072,
+        "max_input_tokens": 127072,
+        "max_output_tokens": 127072,
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+    },
+    "perplexity/sonar-pro": { 
+        "max_tokens": 200000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8096,
+        "input_cost_per_token": 0.000003, 
+        "output_cost_per_token": 0.000015,  
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
     },
     "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192,
@@ -8203,8 +8212,7 @@
         "input_cost_per_token": 0.00000007, 
         "output_cost_per_token": 0.00000028, 
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/pplx-70b-chat": {  
         "max_tokens": 4096,
@@ -8213,8 +8221,7 @@
         "input_cost_per_token": 0.00000070, 
         "output_cost_per_token": 0.00000280, 
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/pplx-7b-online": { 
         "max_tokens": 4096,
@@ -8224,8 +8231,7 @@
         "output_cost_per_token": 0.00000028, 
         "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/pplx-70b-online": { 
         "max_tokens": 4096,
@@ -8235,8 +8241,7 @@
         "output_cost_per_token": 0.00000280, 
         "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/llama-2-70b-chat": { 
         "max_tokens": 4096,
@@ -8245,8 +8250,7 @@
         "input_cost_per_token": 0.00000070, 
         "output_cost_per_token": 0.00000280,
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/mistral-7b-instruct": { 
         "max_tokens": 4096,
@@ -8255,8 +8259,7 @@
         "input_cost_per_token": 0.00000007,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "perplexity", 
-        "mode": "chat" ,
-        "supports_tool_choice": true
+        "mode": "chat" 
     },
     "perplexity/mixtral-8x7b-instruct": {
         "max_tokens": 4096,
@@ -8265,8 +8268,7 @@
         "input_cost_per_token": 0.00000007,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "perplexity",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "perplexity/sonar-small-chat": {
         "max_tokens": 16384,
@@ -8275,8 +8277,7 @@
         "input_cost_per_token": 0.00000007,
         "output_cost_per_token": 0.00000028,
         "litellm_provider": "perplexity",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "perplexity/sonar-small-online": {
         "max_tokens": 12000,
@@ -8286,8 +8287,7 @@
         "output_cost_per_token": 0.00000028,
         "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "perplexity/sonar-medium-chat": {
         "max_tokens": 16384,
@@ -8296,8 +8296,7 @@
         "input_cost_per_token": 0.0000006,
         "output_cost_per_token": 0.0000018,
         "litellm_provider": "perplexity",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "perplexity/sonar-medium-online": {
         "max_tokens": 12000,
@@ -8307,8 +8306,7 @@
         "output_cost_per_token": 0.0000018,
         "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity",
-        "mode": "chat",
-        "supports_tool_choice": true
+        "mode": "chat"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": {
         "max_tokens": 16384,
