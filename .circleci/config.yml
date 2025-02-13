@@ -72,6 +72,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "websockets==10.4"
+            pip uninstall posthog -y
       - save_cache:
           paths:
             - ./venv
@@ -1517,6 +1518,117 @@ jobs:
       - store_test_results:
           path: test-results
 
+  proxy_multi_instance_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest-asyncio==0.21.1"
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+      - run:
+          name: Run Docker container 1
+          # intentionally give bad redis credentials here
+          # the OTEL test - should get this as a trace
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
+              --name my-app \
+              -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Run Docker container 2
+          command: |
+            docker run -d \
+              -p 4001:4001 \
+              -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e REDIS_HOST=$REDIS_HOST \
+              -e REDIS_PASSWORD=$REDIS_PASSWORD \
+              -e REDIS_PORT=$REDIS_PORT \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              -e USE_DDTRACE=True \
+              -e DD_API_KEY=$DD_API_KEY \
+              -e DD_SITE=$DD_SITE \
+              --name my-app-2 \
+              -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4001 \
+              --detailed_debug
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for instance 1 to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Wait for instance 2 to be ready
+          command: dockerize -wait http://localhost:4001 -timeout 5m
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/multi_instance_e2e_tests -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout:
+            120m
+            # Clean up first container
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   proxy_store_model_in_db_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -1905,7 +2017,7 @@ jobs:
                 circleci step halt
             fi
       - run:
-          name: Trigger Github Action for new Docker Container + Trigger Stable Release Testing
+          name: Trigger Github Action for new Docker Container + Trigger Load Testing
           command: |
             echo "Install TOML package."
             python3 -m pip install toml
@@ -1915,9 +2027,9 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
-            echo "triggering stable release server for version ${VERSION} and commit ${CIRCLE_SHA1}"
-            curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}"
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+            echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
+            curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
   e2e_ui_testing:
     machine:
@@ -2172,6 +2284,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - proxy_multi_instance_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - proxy_store_model_in_db_tests:
           filters:
             branches:
@@ -2303,6 +2421,7 @@ workflows:
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
+            - proxy_multi_instance_tests
             - proxy_store_model_in_db_tests
             - proxy_build_from_pip_tests
             - proxy_pass_through_endpoint_tests

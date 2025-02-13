@@ -809,7 +809,10 @@ class CustomStreamWrapper:
                     if self.sent_first_chunk is False:
                         completion_obj["role"] = "assistant"
                         self.sent_first_chunk = True
-
+                    if response_obj.get("provider_specific_fields") is not None:
+                        completion_obj["provider_specific_fields"] = response_obj[
+                            "provider_specific_fields"
+                        ]
                     model_response.choices[0].delta = Delta(**completion_obj)
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:

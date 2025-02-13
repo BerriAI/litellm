@@ -160,6 +160,7 @@ async def new_organization(
                         "error": f"User not allowed to give access to model={m}. Models you have access to = {user_api_key_dict.models}"
                     },
                 )
+
     organization_row = LiteLLM_OrganizationTable(
         **data.json(exclude_none=True),
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -201,6 +202,7 @@ async def delete_organization():
     "/organization/list",
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=List[LiteLLM_OrganizationTableWithMembers],
 )
 async def list_organization(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -216,24 +218,34 @@ async def list_organization(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    if (
-        user_api_key_dict.user_role is None
-        or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": f"Only admins can list orgs. Your role is = {user_api_key_dict.user_role}"
-            },
-        )
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
-    response = await prisma_client.db.litellm_organizationtable.find_many(
-        include={"members": True}
-    )
+
+    # if proxy admin - get all orgs
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        response = await prisma_client.db.litellm_organizationtable.find_many(
+            include={"members": True, "teams": True}
+        )
+    # if internal user - get orgs they are a member of
+    else:
+        org_memberships = (
+            await prisma_client.db.litellm_organizationmembership.find_many(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+        )
+        org_objects = await prisma_client.db.litellm_organizationtable.find_many(
+            where={
+                "organization_id": {
+                    "in": [membership.organization_id for membership in org_memberships]
+                }
+            },
+            include={"members": True, "teams": True},
+        )
+
+        response = org_objects
 
     return response
 

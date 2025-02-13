@@ -4,6 +4,7 @@ import {
   keyDeleteCall,
   modelAvailableCall,
   getGuardrailsList,
+  Organization,
 } from "./networking";
 import { add } from "date-fns";
 import {
@@ -68,8 +69,10 @@ import {
 
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import TextArea from "antd/es/input/TextArea";
-
+import useKeyList from "./key_team_helpers/key_list";
+import { KeyResponse } from "./key_team_helpers/key_list";
 const { Option } = Select;
+
 const isLocal = process.env.NODE_ENV === "development";
 const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
 if (isLocal != true) {
@@ -86,7 +89,7 @@ interface EditKeyModalProps {
 interface ModelLimitModalProps {
   visible: boolean;
   onCancel: () => void;
-  token: ItemData;
+  token: KeyResponse;
   onSubmit: (updatedMetadata: any) => void;
   accessToken: string;
 }
@@ -101,6 +104,7 @@ interface ViewKeyTableProps {
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: any[] | null;
   premiumUser: boolean;
+  currentOrg: Organization | null;
 }
 
 interface ItemData {
@@ -123,6 +127,19 @@ interface ItemData {
   // Add any other properties that exist in the item data
 }
 
+interface ModelLimits {
+  [key: string]: number;  // Index signature allowing string keys
+}
+
+interface CombinedLimit {
+  tpm: number;
+  rpm: number;
+}
+
+interface CombinedLimits {
+  [key: string]: CombinedLimit;  // Index signature allowing string keys
+}
+
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
@@ -132,19 +149,27 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   setData,
   teams,
   premiumUser,
+  currentOrg
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
-  const [selectedItem, setSelectedItem] = useState<ItemData | null>(null);
+  const [selectedItem, setSelectedItem] = useState<KeyResponse | null>(null);
   const [spendData, setSpendData] = useState<
     { day: string; spend: number }[] | null
   >(null);
-  const [predictedSpendString, setPredictedSpendString] = useState("");
+  
+  const { keys, isLoading, error, refresh } = useKeyList({
+    selectedTeam,
+    currentOrg,
+    accessToken
+  });
+
+  console.log("keys", keys);
 
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [infoDialogVisible, setInfoDialogVisible] = useState(false);
-  const [selectedToken, setSelectedToken] = useState<ItemData | null>(null);
+  const [selectedToken, setSelectedToken] = useState<KeyResponse | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const initialKnownTeamIDs: Set<string> = new Set();
   const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
@@ -156,66 +181,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-
-  // Function to check if user is admin of a team
-  const isUserTeamAdmin = (team: any) => {
-    if (!team.members_with_roles) return false;
-    return team.members_with_roles.some(
-      (member: any) => member.role === "admin" && member.user_id === userID
-    );
-  };
-
-  // Combine all keys that user should have access to
-  const all_keys_to_display = React.useMemo(() => {
-    let allKeys: any[] = [];
-
-    // If no teams, return personal keys
-    if (!teams || teams.length === 0) {
-      return data;
-    }
-
-    teams.forEach((team) => {
-      // For default team or when user is not admin, use personal keys (data)
-      if (team.team_id === "default-team" || !isUserTeamAdmin(team)) {
-        if (selectedTeam && selectedTeam.team_id === team.team_id && data) {
-          allKeys = [
-            ...allKeys,
-            ...data.filter((key) => key.team_id === team.team_id),
-          ];
-        }
-      }
-      // For teams where user is admin, use team keys
-      else if (isUserTeamAdmin(team)) {
-        if (selectedTeam && selectedTeam.team_id === team.team_id) {
-          allKeys = [
-            ...allKeys,
-            ...(data?.filter((key) => key?.team_id === team?.team_id) || []),
-          ];
-        }
-      }
-    });
-
-    // If no team is selected, show all accessible keys
-    if ((!selectedTeam || selectedTeam.team_alias === "Default Team") && data) {
-      const personalKeys = data.filter(
-        (key) => !key.team_id || key.team_id === "default-team"
-      );
-      const adminTeamKeys = teams
-        .filter((team) => isUserTeamAdmin(team))
-        .flatMap((team) => team.keys || []);
-      allKeys = [...personalKeys, ...adminTeamKeys];
-    }
-
-    // Filter out litellm-dashboard keys
-    allKeys = allKeys.filter((key) => key.team_id !== "litellm-dashboard");
-
-    // Remove duplicates based on token
-    const uniqueKeys = Array.from(
-      new Map(allKeys.map((key) => [key.token, key])).values()
-    );
-
-    return uniqueKeys;
-  }, [data, teams, selectedTeam, userID]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
@@ -286,7 +251,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
-  const handleModelLimitClick = (token: ItemData) => {
+  const handleModelLimitClick = (token: KeyResponse) => {
     setSelectedToken(token);
     setModelLimitModalVisible(true);
   };
@@ -656,13 +621,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       if (token.metadata) {
         const tpmLimits = token.metadata.model_tpm_limit || {};
         const rpmLimits = token.metadata.model_rpm_limit || {};
-        const combinedLimits: { [key: string]: { tpm: number; rpm: number } } =
-          {};
+        const combinedLimits: CombinedLimits = {};
 
         Object.keys({ ...tpmLimits, ...rpmLimits }).forEach((model) => {
           combinedLimits[model] = {
-            tpm: tpmLimits[model] || 0,
-            rpm: rpmLimits[model] || 0,
+            tpm: (tpmLimits as ModelLimits)[model] || 0,
+            rpm: (rpmLimits as ModelLimits)[model] || 0,
           };
         });
 
@@ -1049,10 +1013,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
   };
 
-  if (data == null) {
-    return;
-  }
-  console.log("RERENDER TRIGGERED");
   return (
     <div>
       <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh] mb-4 mt-2">
@@ -1072,8 +1032,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
             </TableRow>
           </TableHead>
           <TableBody>
-            {all_keys_to_display &&
-              all_keys_to_display.map((item) => {
+            {keys &&
+              keys.map((item) => {
                 console.log(item);
                 // skip item if item.team_id == "litellm-dashboard"
                 if (item.team_id === "litellm-dashboard") {
@@ -1083,9 +1043,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   /**
                    * if selected team id is null -> show the keys with no team id or team id's that don't exist in db
                    */
-                  console.log(
-                    `item team id: ${item.team_id}, knownTeamIDs.has(item.team_id): ${knownTeamIDs.has(item.team_id)}, selectedTeam id: ${selectedTeam.team_id}`
-                  );
+
                   if (
                     selectedTeam.team_id == null &&
                     item.team_id !== null &&
@@ -1135,7 +1093,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       <Text>
                         {(() => {
                           try {
-                            return parseFloat(item.spend).toFixed(4);
+                            return item.spend.toFixed(4);
                           } catch (error) {
                             return item.spend;
                           }
@@ -1312,9 +1270,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                                   <p className="text-tremor font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
                                     {(() => {
                                       try {
-                                        return parseFloat(
-                                          selectedToken.spend
-                                        ).toFixed(4);
+                                        return selectedToken.spend.toFixed(4);
                                       } catch (error) {
                                         return selectedToken.spend;
                                       }
@@ -1322,7 +1278,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                                   </p>
                                 </div>
                               </Card>
-                              <Card key={item.name}>
+                              <Card key={item.key_name}>
                                 <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
                                   Budget
                                 </p>
@@ -1347,7 +1303,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                                   </p>
                                 </div>
                               </Card>
-                              <Card key={item.name}>
+                              <Card key={item.key_name}>
                                 <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
                                   Expires
                                 </p>

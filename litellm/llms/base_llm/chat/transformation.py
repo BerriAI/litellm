@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolChoiceFunctionParam,
@@ -27,9 +28,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -163,7 +161,7 @@ class BaseConfig(ABC):
         self,
         optional_params: dict,
         value: dict,
-        should_convert_response_format_to_tool: bool,
+        is_response_format_supported: bool,
     ) -> dict:
         """
         Follow similar approach to anthropic - translate to a single tool call.
@@ -183,7 +181,8 @@ class BaseConfig(ABC):
         elif "json_schema" in value:
             json_schema = value["json_schema"]["schema"]
 
-        if json_schema and should_convert_response_format_to_tool:
+        if json_schema and not is_response_format_supported:
+
             _tool_choice = ChatCompletionToolChoiceObjectParam(
                 type="function",
                 function=ChatCompletionToolChoiceFunctionParam(
